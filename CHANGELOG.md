@@ -4,11 +4,42 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
+  Vim mode toggle, off by default. Code editors then open in Normal mode,
+  where `h`/`j`/`k`/`l` and `Enter` move, `i` enters Insert mode, `x` deletes
+  a character and `u` undoes; `Escape` closes an open completion menu or
+  returns to Normal mode. Normal mode inserts no text from any key, paste, or
+  input method, and application shortcuts keep working. A strip under the
+  editor shows `NORMAL` or `INSERT`.
+
 ### Changed
 
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
+
+* `F5` now refreshes the focused document (table data, bucket list, object
+  listing, key browser), and the audit viewer's `r` refreshes the audit list
+  instead of the connection schema. The buckets empty state showed `r refresh`,
+  but `r` renames in that view; the hint now shows the key the keymap binds.
+
+* Refreshing a table or collection grid with unsaved cell edits no longer
+  drops them: the refresh key, the toolbar button and the command palette show
+  a warning to save or revert first, and auto-refresh skips its tick.
+
+* UI automation: `set_text` and `set_value` now fill a text input addressed by
+  its element id, and `click_element` accepts text inputs and focuses them for
+  `type_text`. Previously both failed on every input, `set_text` with a
+  misleading document-range error, so filling a form needed coordinates.
+
+* **Extra hook inputs in the Connection Manager** — the Hooks section of the
+  Settings tab shows the "Extra pre-connect" (and post-connect, pre-disconnect,
+  post-disconnect) input next to its label again, so extra hooks can be bound
+  from the form. Each input takes comma-separated hook IDs or names, shows the
+  extras already bound when a connection is edited, is reachable with j/k, and
+  is addressable as `cm-setting-<phase>_hook_extra`.
 
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
@@ -18,7 +49,18 @@ All notable changes to DBFlux will be documented in this file.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
+* **Chart controls for missing features removed** — the chart toolbar's PNG
+  button, the dashboard Configure popover's Export PNG action, and the point
+  inspector's Annotate and Copy as query buttons are gone. They only showed a
+  "coming in v0.7" toast or a disabled "Coming soon" label for features that
+  do not exist. The point inspector keeps its Show in tree action.
+
 * **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
+
+* **Audit degraded status** — Settings → Audit now shows a warning-colored dot
+  when the audit database could not be opened, instead of the green "enabled"
+  dot, and tells you to restart DBFlux. The copied "Audit cannot be enabled"
+  error no longer repeats its prefix.
 
 * The Redis key browser now fills each page across `SCAN` batches (and across
   masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
@@ -30,6 +72,50 @@ All notable changes to DBFlux will be documented in this file.
   as a glob, so a prefix search such as `leaderboard*` works; plain text still
   matches anywhere in the key. The header count now reads as the number of
   keys on the current page instead of implying a total.
+
+* **Sidebar menus and failed connections** — the Databases folder, the
+  instance metric and inspector folders, and the metric, inspector and
+  Instance Overview leaves now open their context menu from right click and
+  the row button, as `m` already did, and **Open** on those leaves opens them.
+  A failed connect now leaves a red error icon on the connection row, with the
+  error in its tooltip and **Retry** in its menu, until a new attempt starts,
+  the connection succeeds, or the connection is edited. The Saved Charts
+  folder no longer offers a **New Saved Chart…** entry that did nothing, and
+  index, foreign key and custom type rows offer no menu when the driver
+  cannot generate SQL for them.
+
+* **Driver picker arrow keys land on the card you see** — Up and Down in the
+  Connection Manager driver picker moved four cards at a time while the window
+  showed two per row, so the cursor landed on an unrelated driver. Each
+  category section now uses a fixed two-column grid that fits the window, and
+  Up/Down move to the card above or below, crossing into the neighboring
+  section's matching column.
+
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
+
+* **Proxy details show readable labels** — the Access tab's proxy details
+  card printed the proxy type and authentication as Rust debug output, such
+  as `Http` and `Basic { username: "..." }`. It now shows translated labels:
+  HTTP, HTTPS or SOCKS5, and None or Basic with the username.
+
+* **Document tree and schema diagram keys in the keymap** — the document tree's
+  keys and the schema diagram's zoom, pan, selection, table-move and layout
+  keys now come from the app keymap instead of being hard-coded in each view,
+  so Settings → Keybindings lists them under Document Tree and Schema Viz.
+  The default keys are unchanged. The tree's `d d` delete sequence stays built
+  into the tree, because a keymap entry holds a single keystroke.
+
+* **The new-connection shortcut shown in the empty workspace works** — the
+  empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
+  was bound to it. `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS) now opens the
+  Connection Manager, and every empty-state hint reads its chord from the
+  keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
 
 ### Added
@@ -212,6 +298,12 @@ All notable changes to DBFlux will be documented in this file.
   Document tabs and Connection Manager tabs are exposed as tabs inside a tab
   list, with the active tab reported as selected, instead of as buttons.
 
+* UI automation: screenshots now wait until DBFlux has presented the frame that
+  follows an action and, on Linux, until two consecutive captures match, so they
+  no longer show the previous frame. The new `wait_for_idle` tool waits until
+  the element tree stops changing and the window draws at most one frame per
+  500 ms.
+
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
   from the close button in its header, with Escape, or with a click on the
@@ -242,6 +334,14 @@ All notable changes to DBFlux will be documented in this file.
   itself and leaves one that was already open, and the error says which of the
   two happened.
 
+* Connection Manager forms: long field labels (such as Redis "Sentinel Master
+  Name" and the InfluxDB default bucket/database) now wrap inside the label
+  column instead of running into their input, single-choice options such as
+  the Redis topology render as radio buttons instead of checkboxes, the secret
+  input's placeholder follows its label (InfluxDB v2 shows "API Token", not
+  "Password"), and the secret input sits where the driver form places it, so
+  the S3 Secret Access Key follows the Access Key ID.
+
 * **`ON COMMIT` no longer shows as a syntax error** — the editor flagged
   PostgreSQL's `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` clause on
   `CREATE TEMP TABLE` as `Unexpected`, because the bundled SQL grammar has no
@@ -266,6 +366,14 @@ All notable changes to DBFlux will be documented in this file.
   letters now reach the input; list navigation stays on the arrow keys, with
   Enter to run and Escape to close unchanged.
 
+* **AWS login and SSO wizard labels** — the login modal captioned the
+  verification URL as "Start URL"; it now reads "Verification URL" and shows a
+  loading indicator while it waits for the browser. The SSO wizard's first-step
+  inputs now have visible labels, which are also their accessible names, and
+  stable `sso-field-*` ids. Its steps appear in the shared wizard rail instead
+  of "Step N:" text, and long account and role lists scroll inside a
+  fixed-height box, so the Back and Next buttons stay in view.
+
 * **Composite foreign keys keep the constraint's own column order** — the referenced
   columns came from a join between two catalog views that matched the constraint as a
   set rather than by position, so a key spanning more than one column kept its pairing
@@ -289,6 +397,14 @@ All notable changes to DBFlux will be documented in this file.
   common case) silently fell back to a grid and the Left-Right choice made no
   difference. Layers are assigned on the graph's strongly connected components now,
   and the tables inside each layer are ordered to reduce crossings.
+
+* **A running import can be cancelled** — the import wizard's running step
+  had no Cancel button, while export and migration did. Cancel now stops the
+  import after the chunk being written, ends its Tasks panel entry as
+  cancelled rather than failed, and reports how many rows were already
+  imported. The import's row counter now also advances while it runs, import
+  and export show the migration wizard's progress bar when the row total is
+  known, and the three data wizards open at the same size.
 
 * **Switching diagram layouts no longer panics** — two tables closer together than
   the gap the edge anchors need — dragged by hand, or placed by the radial layout —
@@ -316,6 +432,16 @@ All notable changes to DBFlux will be documented in this file.
   or stalled volume froze the window for as long as it took to answer. Those
   three steps now run off the UI thread, and the cleanup still fails closed: a
   file another process wrote into is left alone.
+
+* **Remaining English-only labels are translated** — the command palette
+  footer and its "no saved charts" warning, the key-value encoding picker and
+  size labels, the audit viewer's filter options, time zone, placeholders and
+  row range, the time-range "Custom…" picker, the visual query builder section
+  titles, the theme, audit log level and MCP client badges in Settings, the
+  object preview's text kind, and the MCP approvals requester and actor lines
+  now follow the selected language. SQL keywords in section titles keep their
+  SQL spelling. The palette footer no longer advertises an "open in new tab"
+  shortcut that did nothing.
 
 * **Closing an untitled buffer asks before it drops the edits** — a buffer
   with no file yet (a new query before its first save, or a restored scratch

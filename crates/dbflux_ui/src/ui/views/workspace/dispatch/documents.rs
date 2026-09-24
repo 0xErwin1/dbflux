@@ -76,6 +76,33 @@ impl Workspace {
                 Some(true)
             }
 
+            // Document tree and schema diagram commands only mean something
+            // to the active document, which reports whether it handled them.
+            Command::PreviewDocument
+            | Command::ToggleRawView
+            | Command::NextMatch
+            | Command::PrevMatch
+            | Command::ZoomIn
+            | Command::ZoomOut
+            | Command::PanLeft
+            | Command::PanRight
+            | Command::PanUp
+            | Command::PanDown
+            | Command::SelectTableLeft
+            | Command::SelectTableRight
+            | Command::SelectTableUp
+            | Command::SelectTableDown
+            | Command::MoveTableLeft
+            | Command::MoveTableRight
+            | Command::MoveTableUp
+            | Command::MoveTableDown
+            | Command::LayoutLeftRight
+            | Command::LayoutSnowflake
+            | Command::LayoutCompact => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
+
             _ => None,
         }
     }

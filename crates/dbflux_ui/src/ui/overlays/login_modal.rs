@@ -3,7 +3,7 @@ use crate::ui::labels::{
     login_browser_open_failed_message, login_elapsed_message, login_sign_in_prompt,
 };
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::PipelineState;
 use dbflux_ui_base::modal_frame::ModalFrame;
@@ -303,12 +303,23 @@ impl Render for LoginModal {
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(theme.secondary)
-                                .child(Text::caption(dbflux_i18n::t!("login.field.start_url")))
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "login.field.verification_url"
+                                )))
                                 .child(div().mt_1().child(Text::body(url_display))),
                         )
                         .when_some(launch_error.clone(), |el, error| {
                             el.child(Text::caption(error).warning())
                         })
+                        .child(
+                            div()
+                                .id("login-waiting-indicator")
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::XS)
+                                .child(Icon::new(AppIcon::Loader).small().muted())
+                                .child(Text::caption(dbflux_i18n::t!("login.body.waiting"))),
+                        )
                         .child(Text::caption(login_elapsed_message(elapsed)))
                         .child(
                             div()
@@ -410,9 +421,106 @@ impl Render for LoginModal {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{LoginModal, failed_state_shows_open_auth_profiles_button};
+    use dbflux_core::PipelineState;
+    use gpui::{AccessibilityFrame, FrameObserver, TestAppContext};
+    use std::sync::{Arc, Mutex};
 
-    #[::core::prelude::v1::test]
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    fn latest_frame(capture: &FrameCapture) -> AccessibilityFrame {
+        capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame")
+    }
+
+    fn has_node(frame: &AccessibilityFrame, id: &str) -> bool {
+        frame.nodes().any(|(_, node)| node.id() == id)
+    }
+
+    fn frame_shows_text(frame: &AccessibilityFrame, text: &str) -> bool {
+        frame
+            .nodes()
+            .any(|(_, node)| node.content_text().contains(text))
+    }
+
+    /// While the modal waits for the browser it labels the URL it shows as the
+    /// verification URL and shows the waiting indicator. A failed login
+    /// removes the indicator.
+    #[gpui::test]
+    fn waiting_state_labels_the_verification_url_and_shows_progress(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (modal, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            LoginModal::new(window, cx)
+        });
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open_manual(
+                    "AWS SSO",
+                    "dev",
+                    Some("https://device.sso.us-east-1.amazonaws.com/".to_string()),
+                    window,
+                    cx,
+                );
+            });
+            window.refresh();
+        });
+        visual.run_until_parked();
+
+        let waiting = latest_frame(&capture);
+        assert!(
+            has_node(&waiting, "login-waiting-indicator"),
+            "the waiting indicator is rendered while waiting for the browser"
+        );
+        assert!(frame_shows_text(
+            &waiting,
+            &dbflux_i18n::t!("login.field.verification_url")
+        ));
+        assert!(frame_shows_text(
+            &waiting,
+            "https://device.sso.us-east-1.amazonaws.com/"
+        ));
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                let failed = PipelineState::Failed {
+                    stage: "Authenticating".to_string(),
+                    error: "denied".to_string(),
+                };
+                modal.apply_pipeline_state("dev", &failed, window, cx);
+            });
+            window.refresh();
+        });
+        visual.run_until_parked();
+
+        let failed = latest_frame(&capture);
+        assert!(
+            !has_node(&failed, "login-waiting-indicator"),
+            "the waiting indicator is gone once the login failed"
+        );
+        assert!(frame_shows_text(
+            &failed,
+            &dbflux_i18n::t!("login.banner.connection_failed")
+        ));
+    }
+
+    #[test]
     fn failed_state_offers_auth_profiles_recovery_for_provider_backed_login() {
         assert!(failed_state_shows_open_auth_profiles_button(Some(
             "Custom OIDC"
@@ -422,7 +530,7 @@ mod tests {
 
     const LOGIN_CATALOG_KEYS: &[&str] = &[
         "login.window_title",
-        "login.field.start_url",
+        "login.field.verification_url",
         "login.action.open_browser",
         "login.action.copy_url",
         "login.action.cancel",
@@ -433,6 +541,7 @@ mod tests {
         "login.banner.closing",
         "login.body.sign_in_prompt",
         "login.body.instructions",
+        "login.body.waiting",
         "login.body.elapsed",
         "login.body.browser_open_failed",
         "login.error.timed_out",
@@ -440,9 +549,9 @@ mod tests {
         "login.error.no_url_provided",
     ];
 
-    #[::core::prelude::v1::test]
-    fn login_keys_resolve_in_both_locales() {
-        for locale in ["en", "es"] {
+    #[test]
+    fn login_keys_resolve_in_every_locale() {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
             for key in LOGIN_CATALOG_KEYS {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
@@ -460,7 +569,7 @@ mod tests {
         }
     }
 
-    #[::core::prelude::v1::test]
+    #[test]
     fn login_window_title_differs_between_locales() {
         let english = dbflux_i18n::t!("login.window_title", locale = "en");
         let spanish = dbflux_i18n::t!("login.window_title", locale = "es");

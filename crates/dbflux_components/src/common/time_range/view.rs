@@ -182,7 +182,7 @@ impl TimeRangePanel {
             DropdownItem::new("6h"),
             DropdownItem::new("24h"),
             DropdownItem::new("7d"),
-            DropdownItem::new("Custom…"),
+            DropdownItem::new(dbflux_i18n::t!("common.time_range.preset.custom")),
         ]
     }
 
@@ -409,11 +409,14 @@ impl TimeRangePanel {
                 .child(
                     DatePicker::new(&self.custom_date_range_picker)
                         .small()
-                        .placeholder("Select date range")
+                        .placeholder(dbflux_i18n::t!(
+                            "common.time_range.picker.date_range_placeholder"
+                        ))
                         .number_of_months(2),
                 )
                 .into_any_element(),
-            from_label: Text::caption("from").into_any_element(),
+            from_label: Text::caption(dbflux_i18n::t!("common.time_range.picker.from"))
+                .into_any_element(),
             start_hour: div()
                 .w(px(72.0))
                 .child(self.custom_start_hour_dropdown.clone())
@@ -422,7 +425,8 @@ impl TimeRangePanel {
                 .w(px(72.0))
                 .child(self.custom_start_minute_dropdown.clone())
                 .into_any_element(),
-            to_label: Text::caption("to").into_any_element(),
+            to_label: Text::caption(dbflux_i18n::t!("common.time_range.picker.to"))
+                .into_any_element(),
             end_hour: div()
                 .w(px(72.0))
                 .child(self.custom_end_hour_dropdown.clone())

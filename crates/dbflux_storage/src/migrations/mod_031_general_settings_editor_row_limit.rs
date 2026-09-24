@@ -6,7 +6,7 @@ pub struct MigrationImpl;
 
 impl Migration for MigrationImpl {
     fn name(&self) -> &str {
-        "030_general_settings_editor_row_limit"
+        "031_general_settings_editor_row_limit"
     }
 
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {

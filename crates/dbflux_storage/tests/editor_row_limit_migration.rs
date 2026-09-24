@@ -46,9 +46,9 @@ fn editor_row_limit_migration_upgrades_populated_settings_and_rejects_zero() -> 
 
     connection
         .execute_batch("ALTER TABLE cfg_general_settings DROP COLUMN editor_row_limit;")
-        .expect("SQLite must support dropping the added column for the pre-030 fixture");
+        .expect("SQLite must support dropping the added column for the pre-031 fixture");
     connection.execute(
-        "DELETE FROM sys_migrations WHERE name = '030_general_settings_editor_row_limit'",
+        "DELETE FROM sys_migrations WHERE name = '031_general_settings_editor_row_limit'",
         [],
     )?;
     connection.execute(
@@ -58,7 +58,7 @@ fn editor_row_limit_migration_upgrades_populated_settings_and_rejects_zero() -> 
 
     registry
         .run_all(&connection)
-        .expect("migration 030 must upgrade populated settings");
+        .expect("migration 031 must upgrade populated settings");
     let (theme, history_entries, limit): (String, i64, i64) = connection.query_row(
         "SELECT theme, max_history_entries, editor_row_limit FROM cfg_general_settings WHERE id = 1",
         [],
@@ -79,7 +79,8 @@ fn editor_row_limit_migration_upgrades_populated_settings_and_rejects_zero() -> 
         .expect("rerunning the registry must be idempotent");
     for migration in [
         "029_sch_snapshot_creation_metadata",
-        "030_general_settings_editor_row_limit",
+        "030_general_settings_vim_mode",
+        "031_general_settings_editor_row_limit",
     ] {
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM sys_migrations WHERE name = ?1",

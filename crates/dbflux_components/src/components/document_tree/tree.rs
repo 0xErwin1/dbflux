@@ -42,41 +42,19 @@ actions!(
     ]
 );
 
-/// Context string for keybindings.
-const CONTEXT: &str = "DocumentTree";
+/// GPUI key context the tree installs on its root element.
+///
+/// Every single-chord binding in this context is generated from the app
+/// keymap's `DocumentTree` layer by the UI layer, so this domain-free crate
+/// never hard-codes those keys.
+pub const CONTEXT: &str = "DocumentTree";
 
-/// Initialize keybindings for DocumentTree.
+/// Registers the keybindings the app keymap cannot express.
+///
+/// `d d` is a two-keystroke sequence, and a keymap chord describes a single
+/// keystroke, so the sequence stays a native GPUI binding here.
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", MoveUp, Some(CONTEXT)),
-        KeyBinding::new("k", MoveUp, Some(CONTEXT)),
-        KeyBinding::new("down", MoveDown, Some(CONTEXT)),
-        KeyBinding::new("j", MoveDown, Some(CONTEXT)),
-        KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
-        KeyBinding::new("h", MoveLeft, Some(CONTEXT)),
-        KeyBinding::new("right", MoveRight, Some(CONTEXT)),
-        KeyBinding::new("l", MoveRight, Some(CONTEXT)),
-        KeyBinding::new("home", MoveToTop, Some(CONTEXT)),
-        KeyBinding::new("g", MoveToTop, Some(CONTEXT)),
-        KeyBinding::new("end", MoveToBottom, Some(CONTEXT)),
-        KeyBinding::new("shift-g", MoveToBottom, Some(CONTEXT)),
-        KeyBinding::new("pageup", PageUp, Some(CONTEXT)),
-        KeyBinding::new("ctrl-u", PageUp, Some(CONTEXT)),
-        KeyBinding::new("pagedown", PageDown, Some(CONTEXT)),
-        KeyBinding::new("ctrl-d", PageDown, Some(CONTEXT)),
-        KeyBinding::new("space", ToggleExpand, Some(CONTEXT)),
-        KeyBinding::new("enter", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("f2", StartEdit, Some(CONTEXT)),
-        KeyBinding::new("e", OpenPreview, Some(CONTEXT)),
-        KeyBinding::new("d d", DeleteDocument, Some(CONTEXT)),
-        KeyBinding::new("delete", DeleteDocument, Some(CONTEXT)),
-        KeyBinding::new("r", ToggleViewMode, Some(CONTEXT)),
-        KeyBinding::new("ctrl-f", OpenSearch, Some(CONTEXT)),
-        KeyBinding::new("/", OpenSearch, Some(CONTEXT)),
-        KeyBinding::new("n", NextMatch, Some(CONTEXT)),
-        KeyBinding::new("shift-n", PrevMatch, Some(CONTEXT)),
-        KeyBinding::new("escape", CloseSearch, Some(CONTEXT)),
-    ]);
+    cx.bind_keys([KeyBinding::new("d d", DeleteDocument, Some(CONTEXT))]);
 }
 
 /// Document tree component for displaying MongoDB documents.

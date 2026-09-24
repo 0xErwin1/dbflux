@@ -760,6 +760,10 @@ pub struct ConnectionManager {
     slot_revisions: HashMap<(Uuid, String), u64>,
     table_details_revisions: HashMap<(Uuid, String, Option<String>, String), u64>,
     view_refresh_revisions: HashMap<(Uuid, String, String), u64>,
+    /// Message of the most recent failed connect attempt per profile. An
+    /// entry exists only while the failure is the latest outcome: a new
+    /// attempt, a successful connect, or a profile edit removes it.
+    connect_failures: HashMap<Uuid, String>,
     policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
@@ -778,6 +782,7 @@ impl ConnectionManager {
             slot_revisions: HashMap::new(),
             table_details_revisions: HashMap::new(),
             view_refresh_revisions: HashMap::new(),
+            connect_failures: HashMap::new(),
             policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
     }
@@ -885,6 +890,7 @@ impl ConnectionManager {
             .retain(|(profile, ..), _| *profile != id);
         self.pending_operations
             .retain(|operation| operation.profile_id != id);
+        self.connect_failures.remove(&id);
 
         self.connections.insert(
             id,
@@ -1388,6 +1394,24 @@ impl ConnectionManager {
             database: database.map(|s| s.to_string()),
         };
         self.pending_operations.remove(&op);
+    }
+
+    // --- Connect failures ---
+
+    /// Records `message` as the outcome of the latest connect attempt for
+    /// `profile_id`, replacing any earlier failure.
+    pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
+        self.connect_failures.insert(profile_id, message.into());
+    }
+
+    pub fn clear_connect_failure(&mut self, profile_id: Uuid) {
+        self.connect_failures.remove(&profile_id);
+    }
+
+    /// The error of the latest connect attempt, when that attempt failed and
+    /// nothing has cleared it since.
+    pub fn connect_failure(&self, profile_id: Uuid) -> Option<&str> {
+        self.connect_failures.get(&profile_id).map(String::as_str)
     }
 
     // --- Prepare methods ---
@@ -4245,6 +4269,32 @@ mod tests {
         assert!(manager.is_operation_pending(sibling.id, Some("other")));
         assert!(manager.start_pending_operation(profile.id, Some("reporting")));
         manager.finish_pending_operation(profile.id, Some("reporting"));
+    }
+
+    #[test]
+    fn connect_failure_is_kept_per_profile_until_a_successful_connect() {
+        let mut manager = ConnectionManager::new(HashMap::new());
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let sibling = ConnectionProfile::new("other", DbConfig::default_postgres());
+
+        manager.record_connect_failure(profile.id, "first failure");
+        manager.record_connect_failure(profile.id, "timed out");
+        manager.record_connect_failure(sibling.id, "refused");
+        assert_eq!(manager.connect_failure(profile.id), Some("timed out"));
+
+        manager.add_connection(
+            profile.clone(),
+            make_connection(DbKind::Postgres, SchemaLoadingStrategy::SingleDatabase),
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert_eq!(manager.connect_failure(profile.id), None);
+        assert_eq!(manager.connect_failure(sibling.id), Some("refused"));
+
+        manager.clear_connect_failure(sibling.id);
+        assert_eq!(manager.connect_failure(sibling.id), None);
     }
 
     #[test]

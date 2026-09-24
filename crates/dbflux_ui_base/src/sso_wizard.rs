@@ -1,6 +1,7 @@
 use crate::app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
 use crate::modal_frame::ModalFrame;
 use crate::platform;
+use dbflux_components::composites::{RailItem, field_row_vertical, render_wizard_rail};
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
@@ -13,6 +14,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 #[cfg(feature = "aws")]
 use gpui_component::ActiveTheme;
+#[cfg(feature = "aws")]
+use gpui_component::scroll::ScrollableElement;
 use uuid::Uuid;
 
 #[cfg(feature = "aws")]
@@ -20,12 +23,69 @@ use dbflux_aws::{
     AwsSsoAccount, list_sso_account_roles_blocking, list_sso_accounts_blocking, login_sso_blocking,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum WizardStep {
     Start,
     Account,
     Role,
     Confirm,
+}
+
+impl WizardStep {
+    const ALL: [WizardStep; 4] = [
+        WizardStep::Start,
+        WizardStep::Account,
+        WizardStep::Role,
+        WizardStep::Confirm,
+    ];
+
+    fn label(self) -> String {
+        match self {
+            WizardStep::Start => dbflux_i18n::t!("sso_wizard.step.start"),
+            WizardStep::Account => dbflux_i18n::t!("sso_wizard.step.account"),
+            WizardStep::Role => dbflux_i18n::t!("sso_wizard.step.role"),
+            WizardStep::Confirm => dbflux_i18n::t!("sso_wizard.step.confirm"),
+        }
+    }
+}
+
+/// Maximum height of the discovered account and role lists; longer lists
+/// scroll inside it so the wizard buttons stay in view.
+#[cfg(feature = "aws")]
+const DISCOVERED_LIST_MAX_HEIGHT: Pixels = px(240.0);
+
+/// Rail entries for the wizard: steps before `current` are completed. The
+/// rail is display-only because Back already walks the steps in order.
+fn sso_rail_items(current: WizardStep) -> Vec<RailItem> {
+    let current_index = WizardStep::ALL
+        .iter()
+        .position(|step| *step == current)
+        .unwrap_or(0);
+
+    WizardStep::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, step)| RailItem {
+            label: SharedString::from(step.label()),
+            completed: index < current_index,
+            current: index == current_index,
+        })
+        .collect()
+}
+
+/// A step 1 input with its visible label above it. The label is also the
+/// input's accessible name, and `id` keeps the input addressable across runs.
+fn labeled_input(
+    id: &'static str,
+    label: String,
+    state: &Entity<InputState>,
+    cx: &App,
+) -> gpui::Div {
+    field_row_vertical(
+        label.clone(),
+        Input::new(state).id(id).aria_label(label),
+        cx,
+    )
 }
 
 pub struct SsoWizard {
@@ -313,27 +373,36 @@ impl SsoWizard {
             .icon(AppIcon::Lock)
             .width(px(680.0));
 
-        let step_title = match self.step {
-            WizardStep::Start => dbflux_i18n::t!("sso_wizard.step.start"),
-            WizardStep::Account => dbflux_i18n::t!("sso_wizard.step.account"),
-            WizardStep::Role => dbflux_i18n::t!("sso_wizard.step.role"),
-            WizardStep::Confirm => dbflux_i18n::t!("sso_wizard.step.confirm"),
-        };
-
         let body = div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_w(px(0.0))
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .child(Text::body(step_title))
             .child(match self.step {
                 WizardStep::Start => div()
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Input::new(&self.input_profile_name))
-                    .child(Input::new(&self.input_start_url))
-                    .child(Input::new(&self.input_region))
+                    .child(labeled_input(
+                        "sso-field-profile-name",
+                        dbflux_i18n::t!("sso_wizard.field.profile_name"),
+                        &self.input_profile_name,
+                        cx,
+                    ))
+                    .child(labeled_input(
+                        "sso-field-start-url",
+                        dbflux_i18n::t!("sso_wizard.field.start_url"),
+                        &self.input_start_url,
+                        cx,
+                    ))
+                    .child(labeled_input(
+                        "sso-field-region",
+                        dbflux_i18n::t!("sso_wizard.field.region"),
+                        &self.input_region,
+                        cx,
+                    ))
                     .into_any_element(),
                 WizardStep::Account => {
                     #[cfg_attr(not(feature = "aws"), allow(unused_mut))]
@@ -387,33 +456,47 @@ impl SsoWizard {
                                     )))
                                 },
                             )
-                            .child(div().flex().flex_col().gap_1().children(
-                                filtered_accounts.iter().map(|account| {
-                                    let label = format!(
-                                        "{} ({})",
-                                        account.account_name, account.account_id
-                                    );
-                                    let account_id = account.account_id.clone();
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .max_h(DISCOVERED_LIST_MAX_HEIGHT)
+                                    .overflow_y_scrollbar()
+                                    .id("sso-wizard-account-list")
+                                    .children(filtered_accounts.iter().map(|account| {
+                                        let label = format!(
+                                            "{} ({})",
+                                            account.account_name, account.account_id
+                                        );
+                                        let account_id = account.account_id.clone();
 
-                                    div()
-                                        .px(Spacing::SM)
-                                        .py(Spacing::XS)
-                                        .rounded(Radii::SM)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.input_account_id.update(cx, |state, cx| {
-                                                    state.set_value(account_id.clone(), window, cx);
-                                                });
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(label)
-                                }),
-                            ));
+                                        div()
+                                            .px(Spacing::SM)
+                                            .py(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.input_account_id.update(
+                                                        cx,
+                                                        |state, cx| {
+                                                            state.set_value(
+                                                                account_id.clone(),
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child(label)
+                                    })),
+                            );
                     }
 
                     account_step.into_any_element()
@@ -469,29 +552,40 @@ impl SsoWizard {
                                     )))
                                 },
                             )
-                            .child(div().flex().flex_col().gap_1().children(
-                                filtered_roles.iter().map(|role| {
-                                    let role_name = role.clone();
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .max_h(DISCOVERED_LIST_MAX_HEIGHT)
+                                    .overflow_y_scrollbar()
+                                    .id("sso-wizard-role-list")
+                                    .children(filtered_roles.iter().map(|role| {
+                                        let role_name = role.clone();
 
-                                    div()
-                                        .px(Spacing::SM)
-                                        .py(Spacing::XS)
-                                        .rounded(Radii::SM)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .cursor_pointer()
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.input_role_name.update(cx, |state, cx| {
-                                                    state.set_value(role_name.clone(), window, cx);
-                                                });
-                                                cx.notify();
-                                            }),
-                                        )
-                                        .child(role.clone())
-                                }),
-                            ));
+                                        div()
+                                            .px(Spacing::SM)
+                                            .py(Spacing::XS)
+                                            .rounded(Radii::SM)
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.input_role_name.update(cx, |state, cx| {
+                                                        state.set_value(
+                                                            role_name.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    });
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child(role.clone())
+                                    })),
+                            );
                     }
 
                     role_step.into_any_element()
@@ -556,19 +650,227 @@ impl SsoWizard {
                     }),
             );
 
-        frame = frame.child(body);
+        frame = frame.child(
+            div()
+                .flex()
+                .flex_row()
+                .child(render_wizard_rail(
+                    &sso_rail_items(self.step),
+                    None::<fn(usize, &mut Window, &mut App)>,
+                    cx,
+                ))
+                .child(body),
+        );
         frame.render(cx)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "aws")]
+    use super::{AwsSsoAccount, DISCOVERED_LIST_MAX_HEIGHT};
+    use super::{SsoWizard, WizardStep, sso_rail_items};
+    #[cfg(feature = "aws")]
+    use gpui::FrameAction;
+    use gpui::{AccessibilityFrame, FrameObserver, Role, TestAppContext};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Opens the wizard in a test window, moves it to `step`, lets `prepare`
+    /// adjust its state, and returns the latest rendered frame.
+    fn render_wizard(
+        step: WizardStep,
+        prepare: impl FnOnce(&mut SsoWizard) + 'static,
+        cx: &mut TestAppContext,
+    ) -> AccessibilityFrame {
+        cx.update(gpui_component::init);
+        let app_state = crate::object_tree::test_support::test_app_state(cx);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_wizard, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+
+            let mut wizard = SsoWizard::new(app_state, window, cx);
+            wizard.open(window, cx);
+            wizard.step = step;
+            prepare(&mut wizard);
+
+            window.refresh();
+            wizard
+        });
+        visual.run_until_parked();
+
+        capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame")
+    }
+
+    #[gpui::test]
+    fn start_step_inputs_have_visible_labels_ids_and_names(cx: &mut TestAppContext) {
+        let frame = render_wizard(WizardStep::Start, |_| {}, cx);
+
+        let text_inputs: HashMap<String, Option<String>> = frame
+            .nodes()
+            .filter_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == Role::TextInput).then(|| {
+                    (
+                        node.id().to_owned(),
+                        accessible.label().map(ToOwned::to_owned),
+                    )
+                })
+            })
+            .collect();
+
+        let expected = [
+            (
+                "sso-field-profile-name",
+                dbflux_i18n::t!("sso_wizard.field.profile_name"),
+            ),
+            (
+                "sso-field-start-url",
+                dbflux_i18n::t!("sso_wizard.field.start_url"),
+            ),
+            (
+                "sso-field-region",
+                dbflux_i18n::t!("sso_wizard.field.region"),
+            ),
+        ];
+
+        for (id, label) in expected {
+            assert_eq!(
+                text_inputs.get(id),
+                Some(&Some(label.clone())),
+                "input {id} in {text_inputs:?}"
+            );
+            assert!(
+                frame
+                    .nodes()
+                    .any(|(_, node)| node.content_text().contains(label.as_str())),
+                "label {label} is not visible"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn steps_render_in_the_shared_wizard_rail(cx: &mut TestAppContext) {
+        let frame = render_wizard(WizardStep::Role, |_| {}, cx);
+
+        for (index, step) in WizardStep::ALL.iter().enumerate() {
+            let rail_id = format!("wizard-rail-{index}");
+            let entry = frame
+                .nodes()
+                .find(|(_, node)| node.id() == rail_id)
+                .map(|(_, node)| node)
+                .unwrap_or_else(|| panic!("rail entry {rail_id} is rendered"));
+
+            assert!(
+                entry.content_text().contains(step.label().as_str()),
+                "rail entry {rail_id} shows {}",
+                step.label()
+            );
+        }
+    }
+
+    #[test]
+    fn rail_marks_steps_before_the_current_one_completed() {
+        let items = sso_rail_items(WizardStep::Role);
+
+        let states: Vec<(bool, bool)> = items
+            .iter()
+            .map(|item| (item.completed, item.current))
+            .collect();
+
+        assert_eq!(
+            states,
+            vec![(true, false), (true, false), (false, true), (false, false)]
+        );
+    }
+
+    /// Checks that the scrollable list `id`, filled with more rows than fit,
+    /// stops growing at the list height cap and that its scroll area takes
+    /// scrolling.
+    #[cfg(feature = "aws")]
+    fn assert_bounded_scroll_list(frame: &AccessibilityFrame, id: &str) {
+        let node = |node_id: String| {
+            frame
+                .nodes()
+                .map(|(_, node)| node)
+                .find(|node| node.id() == node_id)
+                .unwrap_or_else(|| panic!("{node_id} is rendered"))
+        };
+
+        let list_height = node(id.to_string()).bounds().size.height;
+        assert_eq!(
+            list_height, DISCOVERED_LIST_MAX_HEIGHT,
+            "{id} should fill the height cap and scroll the rest"
+        );
+
+        let area = node(format!("{id}-area"));
+        assert!(
+            area.actions().contains(&FrameAction::Scroll),
+            "{id} does not scroll: {:?}",
+            area.actions()
+        );
+    }
+
+    #[cfg(feature = "aws")]
+    #[gpui::test]
+    fn discovered_accounts_scroll_inside_a_bounded_list(cx: &mut TestAppContext) {
+        let frame = render_wizard(
+            WizardStep::Account,
+            |wizard| {
+                wizard.discovered_accounts = (0..60)
+                    .map(|index| AwsSsoAccount {
+                        account_id: format!("{index:012}"),
+                        account_name: format!("account-{index}"),
+                        email_address: None,
+                    })
+                    .collect();
+            },
+            cx,
+        );
+
+        assert_bounded_scroll_list(&frame, "sso-wizard-account-list");
+    }
+
+    #[cfg(feature = "aws")]
+    #[gpui::test]
+    fn discovered_roles_scroll_inside_a_bounded_list(cx: &mut TestAppContext) {
+        let frame = render_wizard(
+            WizardStep::Role,
+            |wizard| {
+                wizard.discovered_roles = (0..60).map(|index| format!("Role{index}")).collect();
+            },
+            cx,
+        );
+
+        assert_bounded_scroll_list(&frame, "sso-wizard-role-list");
+    }
+
     const SSO_WIZARD_KEYS: &[&str] = &[
         "sso_wizard.title",
         "sso_wizard.step.start",
         "sso_wizard.step.account",
         "sso_wizard.step.role",
         "sso_wizard.step.confirm",
+        "sso_wizard.field.profile_name",
+        "sso_wizard.field.start_url",
+        "sso_wizard.field.region",
         "sso_wizard.account.hint",
         "sso_wizard.account.discovering",
         "sso_wizard.account.discover_button",
@@ -599,14 +901,13 @@ mod tests {
 
     #[test]
     fn sso_wizard_catalog_keys_resolve() {
-        for key in SSO_WIZARD_KEYS.iter().copied() {
-            let english = dbflux_i18n::t!(key);
-            let spanish = dbflux_i18n::t!(key, locale = "es");
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            for key in SSO_WIZARD_KEYS.iter().copied() {
+                let value = dbflux_i18n::t!(key, locale = locale);
 
-            assert!(!english.is_empty(), "empty English translation for {key}");
-            assert_ne!(english, key, "missing English translation for {key}");
-            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
-            assert_ne!(spanish, key, "missing Spanish translation for {key}");
+                assert!(!value.is_empty(), "empty {locale} translation for {key}");
+                assert_ne!(value, key, "missing {locale} translation for {key}");
+            }
         }
     }
 

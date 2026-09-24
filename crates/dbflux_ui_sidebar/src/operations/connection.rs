@@ -274,21 +274,26 @@ impl Sidebar {
                     .and_then(|socket_id| state.external_driver_diagnostic(socket_id))
                     .cloned();
 
-                result
-                    .map(|p| {
+                match result {
+                    Ok(p) => {
                         let name = p.profile.name.clone();
                         let hook_execution =
                             p.prepare_hooks(state.resolve_profile_hooks(&p.profile));
 
-                        (
+                        Ok((
                             p,
                             name,
                             hook_execution.hooks.pre_connect,
                             hook_execution.hooks.post_connect,
                             hook_execution.context,
-                        )
-                    })
-                    .map_err(|error| connect_prepare_error_toast(&error, diagnostic.as_ref()))
+                        ))
+                    }
+                    Err(error) => {
+                        let toast = connect_prepare_error_toast(&error, diagnostic.as_ref());
+                        state.record_connect_failure(profile_id, toast.message.clone());
+                        Err(toast)
+                    }
+                }
             }) {
                 Ok(p) => p,
                 Err(toast) => {
@@ -313,6 +318,7 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            state.clear_connect_failure(profile_id);
             let result = state.start_task(
                 TaskKind::Connect,
                 crate::labels::connecting_task_label(&profile_name),
@@ -352,6 +358,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
+                            state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
                         });
@@ -390,6 +397,10 @@ impl Sidebar {
                             state.fail_task(
                                 task_id,
                                 crate::labels::connection_hook_cancelled_task_label(),
+                            );
+                            state.record_connect_failure(
+                                profile_id,
+                                crate::labels::connection_cancelled_by_hook_toast_label(),
                             );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
@@ -502,6 +513,7 @@ impl Sidebar {
                             }
 
                             state.cancel_detached_hook_tasks(profile_id);
+                            state.record_connect_failure(profile_id, error_clone.clone());
                             state.fail_task(task_id, error_clone);
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
@@ -595,6 +607,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
+                            state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
                         });
@@ -633,6 +646,10 @@ impl Sidebar {
                             state.fail_task(
                                 task_id,
                                 crate::labels::post_connect_hook_cancelled_task_label(),
+                            );
+                            state.record_connect_failure(
+                                profile_id,
+                                crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
                             );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);

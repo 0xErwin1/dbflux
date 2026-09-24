@@ -38,12 +38,15 @@ const MANUAL_ENCODINGS: [Encoding; 5] = [
 
 /// Dropdown items for the encoding override control, in index order:
 /// `Auto`, `Raw`, then one entry per manual encoding.
-pub(super) fn encoding_choice_labels() -> Vec<&'static str> {
-    let mut labels = vec!["Auto", "Raw"];
+pub(super) fn encoding_choice_labels() -> Vec<String> {
+    let mut labels = vec![
+        dbflux_i18n::t!("document.key_value.render.decode.choice.auto"),
+        dbflux_i18n::t!("document.key_value.render.decode.choice.raw"),
+    ];
     labels.extend(
         MANUAL_ENCODINGS
             .iter()
-            .map(|encoding| encoding_name(*encoding)),
+            .map(|encoding| encoding_name(*encoding).to_string()),
     );
     labels
 }
@@ -152,6 +155,24 @@ pub(super) fn decoded_kind_label(payload: &DecodedPayload) -> String {
     }
 }
 
+/// Preview text for a value that decoded to a pass-through image, such as
+/// "2048 bytes (image: png)".
+fn image_size_label(byte_len: usize, format: &str) -> String {
+    if byte_len == 1 {
+        dbflux_i18n::t!(
+            "document.key_value.render.decode.preview.image.one",
+            count = byte_len,
+            format = format
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.key_value.render.decode.preview.image.many",
+            count = byte_len,
+            format = format
+        )
+    }
+}
+
 /// Summary label for the current decode outcome, or `None` when nothing was
 /// detected (the value is shown as raw bytes/text either way).
 pub(super) fn encoding_summary_label(outcome: &DecodeOutcome) -> Option<String> {
@@ -191,12 +212,10 @@ pub(super) fn render_value_preview_with_decode(
     match outcome {
         Some(DecodeOutcome::Decoded(decoded)) => match &decoded.payload {
             DecodedPayload::Text(text) => super::parsing::truncate_preview_text(text),
-            DecodedPayload::Bytes(bytes) => format!("{} bytes (binary)", bytes.len()),
-            DecodedPayload::PassThrough => format!(
-                "{} bytes (image: {})",
-                value.value.len(),
-                encoding_name(decoded.encoding)
-            ),
+            DecodedPayload::Bytes(bytes) => super::parsing::binary_size_label(bytes.len()),
+            DecodedPayload::PassThrough => {
+                image_size_label(value.value.len(), encoding_name(decoded.encoding))
+            }
         },
         _ => super::parsing::render_value_preview(value),
     }
@@ -365,6 +384,30 @@ mod tests {
     #[test]
     fn encoding_choice_labels_match_index_count() {
         assert_eq!(encoding_choice_labels().len(), 2 + MANUAL_ENCODINGS.len());
+    }
+
+    #[test]
+    fn encoding_choice_labels_translate_auto_and_raw() {
+        let labels = encoding_choice_labels();
+
+        assert_eq!(
+            labels[0],
+            dbflux_i18n::t!("document.key_value.render.decode.choice.auto")
+        );
+        assert_eq!(
+            labels[1],
+            dbflux_i18n::t!("document.key_value.render.decode.choice.raw")
+        );
+        assert_ne!(
+            dbflux_i18n::t!(
+                "document.key_value.render.decode.choice.auto",
+                locale = "en"
+            ),
+            dbflux_i18n::t!(
+                "document.key_value.render.decode.choice.auto",
+                locale = "es"
+            )
+        );
     }
 
     #[test]
