@@ -385,6 +385,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Saving, filtering or paging no longer drops other unsaved grid edits** —
+  after saving, inserting or deleting rows, the data grid reloaded and
+  discarded the edits, inserts and deletes still staged on other rows. The
+  reload now carries them over to the reloaded rows by primary key. An edited
+  row that is no longer in the reloaded rows is dropped with a warning, and a
+  result without a primary key keeps its rows and warns instead of reloading.
+  Changing or clearing the filter, the context-menu filters, the row limit and
+  the page keys and buttons are now refused with the same warning as a refresh
+  while unsaved edits exist, and a staged insert or delete on its own now
+  counts as an unsaved edit for every one of these checks.
+
 * **Filters and mutation confirmation samples run on PostgreSQL** — the data
   grid sent visual SELECTs, their row counts and the sample rows of the
   UPDATE / DELETE confirmation dialog as placeholder SQL with separate bound

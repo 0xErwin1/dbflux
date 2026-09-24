@@ -24,6 +24,22 @@ pub(crate) fn grid_refresh_blocked_by_pending_edits() -> String {
     dbflux_i18n::t!("document.data.grid.edit_bar.refresh_blocked")
 }
 
+/// Warning shown when a reload that carries unsaved edits over could not
+/// find `count` of the edited rows in the reloaded rows, so their edits were
+/// dropped.
+pub(crate) fn grid_edits_dropped_on_reload(count: usize) -> String {
+    match count {
+        1 => dbflux_i18n::t!(
+            "document.data.grid.edit_bar.edits_dropped.one",
+            count = count
+        ),
+        _ => dbflux_i18n::t!(
+            "document.data.grid.edit_bar.edits_dropped.many",
+            count = count
+        ),
+    }
+}
+
 /// Label for a [`dbflux_core::RefreshPolicy`]; the mapping lives in
 /// `dbflux_components` so the shared refresh split-button uses it too.
 pub(crate) use dbflux_components::composites::refresh_policy_label;

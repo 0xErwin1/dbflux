@@ -508,6 +508,10 @@ struct GridTableState {
     original_row_order: Option<Vec<usize>>,
     /// Read by the next `rebuild_table` and reset to `Preserve` there.
     reload: TableReload,
+    /// Set when the next reload follows a saved mutation: `rebuild_table`
+    /// carries the edits still staged on other rows over to the reloaded
+    /// rows by primary key instead of dropping them. Reset there.
+    keep_edits_on_reload: bool,
 }
 
 /// The WHERE/LIMIT inputs and refresh-policy dropdown.
@@ -1179,6 +1183,10 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
+                    if this.refresh_blocked_by_pending_edits(cx) {
+                        return;
+                    }
+
                     // A new filter selects a different row set.
                     this.grid_table.reload = TableReload::ResetRows;
                     this.refresh(window, cx);
@@ -1209,6 +1217,10 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
+                    if this.refresh_blocked_by_pending_edits(cx) {
+                        return;
+                    }
+
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -1372,6 +1384,7 @@ impl DataGridPanel {
                 local_sort_state: None,
                 original_row_order: None,
                 reload: TableReload::default(),
+                keep_edits_on_reload: false,
             },
             filter_bar: FilterBarState {
                 filter_input,
@@ -2472,6 +2485,11 @@ impl DataGridPanel {
         // keeping the cursor on the next one.
         let reload = std::mem::take(&mut self.grid_table.reload);
 
+        // A new query result addresses other columns, so its cells cannot
+        // take edits staged on the previous shape.
+        let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload)
+            && reload != TableReload::NewColumns;
+
         // For collections, update pk_columns from result metadata (is_primary_key flag)
         // This allows DynamoDB and other drivers to use their actual primary keys
         // instead of hardcoded "_id"
@@ -2565,7 +2583,9 @@ impl DataGridPanel {
             // A reload reuses the state entity, so column widths, sort, scroll
             // and the record-mode flag survive it. Only the state that
             // addresses the rows being replaced is rebuilt here.
-            table_state.update(cx, |state, cx| {
+            let dropped_rows = table_state.update(cx, |state, cx| {
+                let carried_edits = keep_edits.then(|| state.snapshot_pending_edits());
+
                 // `initial_sort` describes the sort the incoming rows carry,
                 // so an absent one means "unsorted": leaving the previous sort
                 // in place would light up a header arrow the new rows do not
@@ -2590,7 +2610,17 @@ impl DataGridPanel {
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
                 }
+
+                carried_edits.map_or(0, |edits| state.restore_pending_edits(edits, cx))
             });
+
+            if dropped_rows > 0 {
+                dbflux_ui_base::toast::Toast::warning(crate::labels::grid_edits_dropped_on_reload(
+                    dropped_rows,
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
+            }
 
             self.rebuild_result_views(cx);
             return;
@@ -5353,6 +5383,14 @@ mod tests {
         let refresh_was_queued = window.update(|_, app| {
             panel.update(app, |panel, cx| {
                 panel.handle_add_row(0, false, cx);
+
+                // What the insert's success path does before it queues the
+                // reload: the landed row leaves the staged inserts.
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| {
+                    state.edit_buffer_mut().remove_pending_insert_by_idx(0);
+                });
+
                 panel.queue_refresh_after_mutation_success(cx);
                 let refresh_was_queued = panel.pending.refresh;
                 panel.set_result(zero_row_result(), cx);
@@ -5382,7 +5420,7 @@ mod tests {
         );
         assert_eq!(
             pending_inserts, 0,
-            "refresh result should clear the staged insert row"
+            "the landed insert must not come back as a staged row after the reload"
         );
 
         let (row_count, col_count, has_table) = window.update(|_, app| {
@@ -8722,6 +8760,355 @@ mod tests {
         window.run_until_parked();
 
         assert!(handled);
+        assert_eq!(
+            last_toast_title(window),
+            Some(dbflux_i18n::t!(
+                "document.data.grid.error.connection_not_found"
+            ))
+        );
+    }
+
+    // =========================================================================
+    // Reloads keep or refuse to drop pending edits (DBF-262)
+    // =========================================================================
+
+    /// `id` / `name` / `email` result whose rows carry `ids` in the key column.
+    fn keyed_result(ids: &[&str]) -> QueryResult {
+        let rows = ids
+            .iter()
+            .map(|id| {
+                vec![
+                    dbflux_core::Value::Text((*id).to_string()),
+                    dbflux_core::Value::Text("name".to_string()),
+                    dbflux_core::Value::Text("email".to_string()),
+                ]
+            })
+            .collect();
+
+        QueryResult::table(
+            reload_columns(&["id", "name", "email"]),
+            rows,
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    fn keyed_table_panel(
+        window: &mut gpui::VisualTestContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        pk_columns: Vec<String>,
+    ) -> gpui::Entity<DataGridPanel> {
+        window.update(|window, app| {
+            let source = DataSource::Table {
+                profile_id: Uuid::nil(),
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "users"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: Some(2),
+            };
+
+            let panel = app
+                .new(|cx| DataGridPanel::new_internal(source, app_state, pk_columns, window, cx));
+            panel.update(app, |panel, cx| {
+                panel.set_result(keyed_result(&["1", "2"]), cx);
+            });
+            panel
+        })
+    }
+
+    fn stage_name(panel: &DataGridPanel, row: usize, value: &str, cx: &mut gpui::App) {
+        let table_state = panel.grid_table.table_state.clone().expect("table state");
+        table_state.update(cx, |state, _cx| {
+            state.stage_base_cell_value(
+                row,
+                1,
+                dbflux_components::components::data_table::model::CellValue::text(value),
+            );
+        });
+    }
+
+    fn staged_names(panel: &DataGridPanel, cx: &gpui::App) -> Vec<(usize, String)> {
+        let table_state = panel.grid_table.table_state.as_ref().expect("table state");
+        let buffer = table_state.read(cx).edit_buffer();
+
+        let mut staged: Vec<(usize, String)> = buffer
+            .dirty_rows()
+            .into_iter()
+            .flat_map(|row| {
+                buffer
+                    .row_changes(row)
+                    .into_iter()
+                    .map(move |(_, value)| (row, value.display_text().to_string()))
+            })
+            .collect();
+        staged.sort();
+        staged
+    }
+
+    /// Lands the reload a saved mutation queued, with `result` as the rows the
+    /// query returned.
+    fn land_mutation_reload(
+        panel: &mut DataGridPanel,
+        result: QueryResult,
+        cx: &mut gpui::Context<DataGridPanel>,
+    ) {
+        panel.queue_reload_after_mutation(cx);
+        assert!(panel.pending.refresh, "the saved mutation must reload");
+        panel.pending.refresh = false;
+
+        panel.apply_table_result(
+            Uuid::nil(),
+            TableRef::with_schema("public", "users"),
+            Pagination::default(),
+            Vec::new(),
+            Some(2),
+            result,
+            cx,
+        );
+    }
+
+    #[gpui::test]
+    fn a_reload_after_a_save_keeps_edits_on_other_rows(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_name(panel, 1, "bob", cx);
+
+                // The rows come back in another order: the edit must follow
+                // the row with id 2, not stay at index 1.
+                land_mutation_reload(panel, keyed_result(&["2", "1"]), cx);
+            });
+        });
+
+        window.update(|_, app| {
+            assert_eq!(
+                staged_names(panel.read(app), app),
+                vec![(0, "bob".to_string())]
+            );
+        });
+        assert_eq!(last_toast_title(window), None);
+    }
+
+    #[gpui::test]
+    fn a_reload_after_a_save_reports_edits_whose_row_is_gone(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_name(panel, 0, "alice", cx);
+                land_mutation_reload(panel, keyed_result(&["2"]), cx);
+            });
+        });
+
+        window.update(|_, app| {
+            assert!(staged_names(panel.read(app), app).is_empty());
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_edits_dropped_on_reload(1)),
+            "an edit that could not be carried over must not vanish silently"
+        );
+    }
+
+    #[gpui::test]
+    fn a_reload_after_a_save_without_a_primary_key_is_refused(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, Vec::new());
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_name(panel, 1, "bob", cx);
+                panel.queue_reload_after_mutation(cx);
+
+                assert!(
+                    !panel.pending.refresh,
+                    "edits addressed by position cannot survive a reload"
+                );
+                assert!(!panel.grid_table.keep_edits_on_reload);
+            });
+        });
+
+        window.update(|_, app| {
+            assert_eq!(
+                staged_names(panel.read(app), app),
+                vec![(1, "bob".to_string())]
+            );
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+        );
+    }
+
+    #[gpui::test]
+    fn a_reload_after_a_save_without_edits_reloads_as_before(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, Vec::new());
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                land_mutation_reload(panel, keyed_result(&["2"]), cx);
+            });
+        });
+
+        window.update(|_, app| {
+            assert_eq!(panel.read(app).result.row_count(), 1);
+        });
+        assert_eq!(last_toast_title(window), None);
+    }
+
+    #[gpui::test]
+    fn page_change_with_pending_edits_keeps_them_and_skips_the_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        let handled = window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                stage_name(panel, 1, "bob", cx);
+                panel.dispatch_command(Command::ResultsNextPage, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        window.update(|_, app| {
+            let panel = panel.read(app);
+
+            assert_eq!(staged_names(panel, app), vec![(1, "bob".to_string())]);
+            assert_eq!(
+                panel.source.pagination().map(|p| p.offset()),
+                Some(0),
+                "the page must not move"
+            );
+            assert!(panel.refresh.state != GridState::Loading);
+            assert!(!panel.runner.is_primary_active());
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+        );
+    }
+
+    #[gpui::test]
+    fn page_change_without_pending_edits_runs_the_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        let handled = window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.dispatch_command(Command::ResultsNextPage, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        assert_eq!(
+            last_toast_title(window),
+            Some(dbflux_i18n::t!(
+                "document.data.grid.error.connection_not_found"
+            ))
+        );
+    }
+
+    /// A pending delete alone counts as an unsaved edit: the reload would
+    /// drop it just the same.
+    #[gpui::test]
+    fn filter_change_with_a_pending_delete_keeps_the_filter_and_the_delete(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .filter_bar
+                    .filter_input
+                    .update(cx, |input, cx| input.set_value("id = '1'", window, cx));
+
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| state.edit_buffer_mut().mark_for_delete(0));
+
+                panel.replace_filter_and_reload("", window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel.grid_table.table_state.as_ref().expect("table state");
+
+            assert!(table_state.read(app).edit_buffer().is_pending_delete(0));
+            assert_eq!(
+                panel.filter_bar.filter_input.read(app).value().to_string(),
+                "id = '1'",
+                "a refused filter change must leave the filter the rows were loaded with"
+            );
+            assert!(!panel.runner.is_primary_active());
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+        );
+    }
+
+    #[gpui::test]
+    fn filter_change_without_pending_edits_runs_the_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .filter_bar
+                    .filter_input
+                    .update(cx, |input, cx| input.set_value("id = '1'", window, cx));
+
+                panel.replace_filter_and_reload("", window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            assert_eq!(
+                panel
+                    .read(app)
+                    .filter_bar
+                    .filter_input
+                    .read(app)
+                    .value()
+                    .to_string(),
+                ""
+            );
+        });
         assert_eq!(
             last_toast_title(window),
             Some(dbflux_i18n::t!(

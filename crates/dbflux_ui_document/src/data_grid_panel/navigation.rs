@@ -219,7 +219,19 @@ impl DataGridPanel {
 
     // === Pagination ===
 
+    /// Whether a page change must not run: a static result has no pages, and
+    /// unsaved edits are refused like a refresh, since the reload would drop
+    /// them.
+    fn page_change_blocked(&self, cx: &mut Context<Self>) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. })
+            || self.refresh_blocked_by_pending_edits(cx)
+    }
+
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page_change_blocked(cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -268,6 +280,10 @@ impl DataGridPanel {
         let Some(prev) = self.source.pagination().and_then(|p| p.prev_page()) else {
             return;
         };
+
+        if self.page_change_blocked(cx) {
+            return;
+        }
 
         match &self.source {
             DataSource::Table {

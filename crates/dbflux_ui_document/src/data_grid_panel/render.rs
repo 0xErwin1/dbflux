@@ -899,13 +899,8 @@ pub(super) fn render_filter_bar_as_segment(
                                                 .text_color(theme_hover.foreground)
                                         })
                                         .on_click(move |_, window, cx| {
-                                            let filter_input_clone =
-                                                grid.read(cx).filter_bar.filter_input.clone();
-                                            filter_input_clone.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
                                             grid.update(cx, |this, cx| {
-                                                this.refresh(window, cx);
+                                                this.replace_filter_and_reload("", window, cx);
                                             });
                                         })
                                         .child("\u{00d7}"),
@@ -1158,13 +1153,7 @@ impl DataGridPanel {
                                                 d.bg(theme.secondary).text_color(theme.foreground)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_bar.filter_input.update(
-                                                    cx,
-                                                    |input, cx| {
-                                                        input.set_value("", window, cx);
-                                                    },
-                                                );
-                                                this.refresh(window, cx);
+                                                this.replace_filter_and_reload("", window, cx);
                                             }))
                                             .child("\u{00d7}"),
                                     )

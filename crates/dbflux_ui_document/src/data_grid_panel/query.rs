@@ -22,7 +22,19 @@ impl DataGridPanel {
         self.grid_table
             .table_state
             .as_ref()
-            .is_some_and(|table_state| table_state.read(cx).has_pending_changes())
+            .is_some_and(|table_state| table_state.read(cx).has_pending_operations())
+    }
+
+    /// Whether unsaved edits sit on a result without a primary key: they are
+    /// addressed by row position only, so no reload can carry them over.
+    pub(super) fn pending_edits_lack_row_identity(&self, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                let state = table_state.read(cx);
+                state.has_pending_operations() && state.pk_columns().is_empty()
+            })
     }
 
     /// Refuses a user-requested refresh while there are unsaved edits,
@@ -47,6 +59,25 @@ impl DataGridPanel {
             return;
         }
 
+        self.refresh(window, cx);
+    }
+
+    /// Replace the filter text and reload the rows under it (clear buttons,
+    /// context-menu filters). Guarded like [`Self::request_refresh`]: with
+    /// unsaved edits the filter is left untouched and the user is warned.
+    pub(super) fn replace_filter_and_reload(
+        &mut self,
+        filter: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.refresh_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        self.filter_bar
+            .filter_input
+            .update(cx, |input, cx| input.set_value(filter, window, cx));
         self.refresh(window, cx);
     }
 
