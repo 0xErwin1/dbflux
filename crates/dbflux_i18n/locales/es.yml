@@ -1157,7 +1157,10 @@ document:
           many: "%{count} cambios sin guardar"
         save: Guardar
         revert: Descartar
-        refresh_blocked: Guarda o descarta los cambios sin guardar antes de actualizar
+        reload_blocked: Guarda o descarta primero los cambios sin guardar
+        edits_dropped:
+          one: "Se descartaron los cambios sin guardar de %{count} fila: la fila no está en los resultados recargados"
+          many: "Se descartaron los cambios sin guardar de %{count} filas: las filas no están en los resultados recargados"
       toolbar:
         refresh: Actualizar
         builder: Constructor

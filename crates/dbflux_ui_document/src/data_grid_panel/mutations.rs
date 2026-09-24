@@ -148,8 +148,21 @@ impl DataGridPanel {
             self.process_next_batch_op(cx);
         } else {
             self.finish_close_after_apply(cx);
-            self.pending.refresh = true;
+            self.queue_reload_after_mutation(cx);
         }
+    }
+
+    /// Queue the reload that shows a landed mutation. Edits still staged on
+    /// other rows are carried over to the reloaded rows by primary key.
+    /// Without a primary key they could only be dropped, so the reload is
+    /// refused with the same warning as a user refresh instead.
+    pub(super) fn queue_reload_after_mutation(&mut self, cx: &mut Context<Self>) {
+        if self.pending_edits_lack_row_identity(cx) && self.reload_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        self.pending.refresh = true;
+        self.pending.refresh_keeps_edits = true;
     }
 
     fn apply_inline_value_to_result(&mut self, node_id: &NodeId, new_value: &Value) {
@@ -1273,7 +1286,7 @@ impl DataGridPanel {
                                 ),
                                 is_error: false,
                             });
-                            panel.pending.refresh = true;
+                            panel.queue_reload_after_mutation(cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
@@ -1418,7 +1431,7 @@ impl DataGridPanel {
                                 ),
                                 is_error: false,
                             });
-                            panel.pending.refresh = true;
+                            panel.queue_reload_after_mutation(cx);
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
@@ -1510,7 +1523,7 @@ impl DataGridPanel {
     /// intermediate refresh that would destroy the edit buffer.
     pub(super) fn process_next_batch_op(&mut self, cx: &mut Context<Self>) {
         let Some(mut remaining) = self.pending_batch_remaining.take() else {
-            self.pending.refresh = true;
+            self.queue_reload_after_mutation(cx);
             cx.notify();
             return;
         };
@@ -1536,7 +1549,7 @@ impl DataGridPanel {
         // All batch operations complete
         self.finish_close_after_apply(cx);
 
-        self.pending.refresh = true;
+        self.queue_reload_after_mutation(cx);
         cx.notify();
     }
 
@@ -1745,7 +1758,7 @@ impl DataGridPanel {
                             // of staging remaining work, so the pump never runs
                             // and this tail is what reports the batch.
                             panel.finish_close_after_apply(cx);
-                            panel.pending.refresh = true;
+                            panel.queue_reload_after_mutation(cx);
                         }
                     }
                     cx.notify();
@@ -1941,7 +1954,7 @@ impl DataGridPanel {
                             // of staging remaining work, so the pump never runs
                             // and this tail is what reports the batch.
                             panel.finish_close_after_apply(cx);
-                            panel.pending.refresh = true;
+                            panel.queue_reload_after_mutation(cx);
                         }
                     }
                     cx.notify();

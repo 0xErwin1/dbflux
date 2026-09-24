@@ -2334,7 +2334,7 @@ impl DataGridPanel {
                                     ),
                                     is_error: false,
                                 });
-                                panel.pending.refresh = true;
+                                panel.queue_reload_after_mutation(cx);
                             }
                             Err(e) => {
                                 panel.pending.toast = Some(PendingToast {
@@ -2464,7 +2464,7 @@ impl DataGridPanel {
                                 ),
                                 is_error: false,
                             });
-                            panel.pending.refresh = true;
+                            panel.queue_reload_after_mutation(cx);
                         }
                         Err(e) => {
                             panel.pending.toast = Some(PendingToast {
@@ -2843,10 +2843,7 @@ impl DataGridPanel {
             format!("({}) AND ({})", current.trim(), expr)
         };
 
-        self.filter_bar
-            .filter_input
-            .update(cx, |state, cx| state.set_value(&new_filter, window, cx));
-        self.refresh(window, cx);
+        self.replace_filter_and_reload(&new_filter, window, cx);
     }
 
     fn handle_filter_by_value(
@@ -2963,10 +2960,7 @@ impl DataGridPanel {
     }
 
     fn handle_remove_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.filter_bar
-            .filter_input
-            .update(cx, |state, cx| state.set_value("", window, cx));
-        self.refresh(window, cx);
+        self.replace_filter_and_reload("", window, cx);
     }
 
     // === MongoDB filter handlers ===
@@ -3059,10 +3053,7 @@ impl DataGridPanel {
 
         let serialized = serde_json::to_string(&composed).unwrap_or_default();
 
-        self.filter_bar
-            .filter_input
-            .update(cx, |state, cx| state.set_value(&serialized, window, cx));
-        self.refresh(window, cx);
+        self.replace_filter_and_reload(&serialized, window, cx);
     }
 
     fn compose_mongo_and(

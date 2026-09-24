@@ -11,12 +11,75 @@ use std::cmp::Ordering;
 impl DataGridPanel {
     // === Sorting ===
 
+    /// Refuses a server-side sort, which re-queries the rows, while unsaved
+    /// edits exist. The table has already moved its header arrow to the
+    /// requested sort, so a refused request puts back the sort the displayed
+    /// rows were loaded with.
+    fn server_sort_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        let DataSource::Table { order_by, .. } = &self.source else {
+            return false;
+        };
+
+        if !self.reload_blocked_by_pending_edits(cx) {
+            return false;
+        }
+
+        let loaded_sort = order_by.first().and_then(|column| {
+            self.result
+                .columns
+                .iter()
+                .position(|meta| meta.name == column.column.name)
+                .map(|column_ix| TableSortState::new(column_ix, column.direction))
+        });
+
+        self.restore_sort_indicator(loaded_sort, cx);
+        true
+    }
+
+    /// Refuses an in-memory sort that would lose unsaved edits. The sort
+    /// carries edits over by primary key, so it is refused only when the
+    /// result has none and the edits are addressed by row position, which the
+    /// sort reorders. The header arrow goes back to the current order.
+    fn local_sort_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.pending_edits_lack_row_identity(cx) || !self.reload_blocked_by_pending_edits(cx) {
+            return false;
+        }
+
+        let current_sort = self
+            .grid_table
+            .local_sort_state
+            .map(|sort| TableSortState::new(sort.column_ix, sort.direction));
+
+        self.restore_sort_indicator(current_sort, cx);
+        true
+    }
+
+    /// Puts the table's header arrow back to `sort` after a refused sort
+    /// request: the table moves the arrow before it asks the panel to sort.
+    fn restore_sort_indicator(&mut self, sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            match sort {
+                Some(sort) => state.set_sort_without_emit(sort),
+                None => state.clear_sort_without_emit(),
+            }
+            cx.notify();
+        });
+    }
+
     pub(super) fn handle_sort_request(
         &mut self,
         col_ix: usize,
         direction: SortDirection,
         cx: &mut Context<Self>,
     ) {
+        if self.server_sort_blocked(cx) {
+            return;
+        }
+
         let col_name = self
             .result
             .columns
@@ -77,13 +140,17 @@ impl DataGridPanel {
             });
 
             cx.notify();
-        } else {
+        } else if !self.local_sort_blocked(cx) {
             // Client-side sort: sort in memory
             self.apply_local_sort(col_ix, direction, cx);
         }
     }
 
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
+        if self.server_sort_blocked(cx) {
+            return;
+        }
+
         // Extract values before mutating self.source
         let table_info = match &self.source {
             DataSource::Table {
@@ -145,6 +212,10 @@ impl DataGridPanel {
 
             cx.notify();
         } else {
+            if self.local_sort_blocked(cx) {
+                return;
+            }
+
             // Restore original row order
             if let Some(original_order) = self.grid_table.original_row_order.take() {
                 let mut restore_indices: Vec<(usize, usize)> = original_order
@@ -163,6 +234,7 @@ impl DataGridPanel {
 
             self.grid_table.local_sort_state = None;
             self.pending.rebuild = true;
+            self.pending.rebuild_keeps_edits = true;
             cx.notify();
         }
     }
@@ -213,13 +285,27 @@ impl DataGridPanel {
             column_ix: col_ix,
             direction,
         });
+        // The rows only move, so the edits staged on them follow by primary key.
         self.pending.rebuild = true;
+        self.pending.rebuild_keeps_edits = true;
         cx.notify();
     }
 
     // === Pagination ===
 
+    /// Whether a page change must not run: a static result has no pages, and
+    /// unsaved edits are refused like a refresh, since the reload would drop
+    /// them.
+    fn page_change_blocked(&self, cx: &mut Context<Self>) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. })
+            || self.reload_blocked_by_pending_edits(cx)
+    }
+
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page_change_blocked(cx) {
+            return;
+        }
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -268,6 +354,10 @@ impl DataGridPanel {
         let Some(prev) = self.source.pagination().and_then(|p| p.prev_page()) else {
             return;
         };
+
+        if self.page_change_blocked(cx) {
+            return;
+        }
 
         match &self.source {
             DataSource::Table {

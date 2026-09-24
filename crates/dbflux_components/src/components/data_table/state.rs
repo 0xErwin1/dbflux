@@ -9,7 +9,7 @@ use gpui::{
 
 use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
-use super::model::{EditBuffer, TableModel};
+use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
@@ -1170,6 +1170,32 @@ impl DataTableState {
     #[allow(dead_code)]
     pub fn has_pending_changes(&self) -> bool {
         self.edit_buffer.has_changes()
+    }
+
+    /// Whether any cell edit, pending insert or pending delete is unsaved.
+    pub fn has_pending_operations(&self) -> bool {
+        self.edit_buffer.has_pending_operations()
+    }
+
+    /// Lift the pending edits off the current rows, keyed by primary key, so
+    /// [`DataTableState::restore_pending_edits`] can lay them onto the model
+    /// that replaces this one.
+    pub fn snapshot_pending_edits(&self) -> KeyedPendingEdits {
+        self.edit_buffer
+            .snapshot_by_identity(&self.model, &self.pk_columns)
+    }
+
+    /// Lay edits taken with [`DataTableState::snapshot_pending_edits`] onto
+    /// the current model. Returns how many edited rows were dropped because
+    /// the model no longer holds them.
+    pub fn restore_pending_edits(
+        &mut self,
+        edits: KeyedPendingEdits,
+        cx: &mut Context<Self>,
+    ) -> usize {
+        let dropped_rows = self.edit_buffer.restore_by_identity(edits, &self.model);
+        cx.notify();
+        dropped_rows
     }
 
     /// Request saving the current row's changes.

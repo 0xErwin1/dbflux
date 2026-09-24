@@ -243,6 +243,10 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.rebuild) {
+            if std::mem::take(&mut self.pending.rebuild_keeps_edits) {
+                self.grid_table.keep_edits_on_reload = true;
+            }
+
             let sort = self
                 .grid_table
                 .local_sort_state
@@ -251,7 +255,11 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.refresh) {
-            self.refresh(window, cx);
+            if std::mem::take(&mut self.pending.refresh_keeps_edits) {
+                self.refresh_keeping_edits(window, cx);
+            } else {
+                self.refresh(window, cx);
+            }
         }
 
         if self.context_menu.is_none() {
@@ -757,7 +765,9 @@ pub(super) fn render_filter_bar_as_segment(
             let grid = grid_for_chip.clone();
             move |_, window, cx| {
                 grid.update(cx, |this, cx| {
-                    if let Some(spec) = this.builder.builder_draft_spec.clone() {
+                    if let Some(spec) = this.builder.builder_draft_spec.clone()
+                        && !this.reload_blocked_by_pending_edits(cx)
+                    {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -785,7 +795,9 @@ pub(super) fn render_filter_bar_as_segment(
                     } else {
                         None
                     };
-                    if let Some(spec) = partial_spec {
+                    if let Some(spec) = partial_spec
+                        && !this.reload_blocked_by_pending_edits(cx)
+                    {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -892,13 +904,8 @@ pub(super) fn render_filter_bar_as_segment(
                                                 .text_color(theme_hover.foreground)
                                         })
                                         .on_click(move |_, window, cx| {
-                                            let filter_input_clone =
-                                                grid.read(cx).filter_bar.filter_input.clone();
-                                            filter_input_clone.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
                                             grid.update(cx, |this, cx| {
-                                                this.refresh(window, cx);
+                                                this.replace_filter_and_reload("", window, cx);
                                             });
                                         })
                                         .child("\u{00d7}"),
@@ -1054,7 +1061,9 @@ impl DataGridPanel {
             &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
-                if let Some(spec) = this.builder.builder_draft_spec.clone() {
+                if let Some(spec) = this.builder.builder_draft_spec.clone()
+                    && !this.reload_blocked_by_pending_edits(cx)
+                {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
@@ -1077,7 +1086,9 @@ impl DataGridPanel {
                 } else {
                     None
                 };
-                if let Some(spec) = partial_spec {
+                if let Some(spec) = partial_spec
+                    && !this.reload_blocked_by_pending_edits(cx)
+                {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
@@ -1153,13 +1164,7 @@ impl DataGridPanel {
                                                 d.bg(theme.secondary).text_color(theme.foreground)
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
-                                                this.filter_bar.filter_input.update(
-                                                    cx,
-                                                    |input, cx| {
-                                                        input.set_value("", window, cx);
-                                                    },
-                                                );
-                                                this.refresh(window, cx);
+                                                this.replace_filter_and_reload("", window, cx);
                                             }))
                                             .child("\u{00d7}"),
                                     )
@@ -1754,7 +1759,7 @@ impl DataGridPanel {
             on_refresh: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel_for_refresh.upgrade() {
                     panel.update(cx, |this, cx| {
-                        if this.refresh_blocked_by_pending_edits(cx) {
+                        if this.reload_blocked_by_pending_edits(cx) {
                             return;
                         }
 

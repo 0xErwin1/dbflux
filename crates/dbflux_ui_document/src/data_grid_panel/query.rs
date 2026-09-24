@@ -22,18 +22,31 @@ impl DataGridPanel {
         self.grid_table
             .table_state
             .as_ref()
-            .is_some_and(|table_state| table_state.read(cx).has_pending_changes())
+            .is_some_and(|table_state| table_state.read(cx).has_pending_operations())
     }
 
-    /// Refuses a user-requested refresh while there are unsaved edits,
-    /// telling the user to save or revert them first. Returns `true` when the
-    /// refresh must not run.
-    pub(super) fn refresh_blocked_by_pending_edits(&self, cx: &mut Context<Self>) -> bool {
+    /// Whether unsaved edits sit on a result without a primary key: they are
+    /// addressed by row position only, so no reload can carry them over.
+    pub(super) fn pending_edits_lack_row_identity(&self, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| {
+                let state = table_state.read(cx);
+                state.has_pending_operations() && state.pk_columns().is_empty()
+            })
+    }
+
+    /// Refuses a reload of the rows (refresh, filter, limit, page, sort,
+    /// query builder, chart re-run) while there are unsaved edits, telling the
+    /// user to save or revert them first. Returns `true` when the reload must
+    /// not run.
+    pub(super) fn reload_blocked_by_pending_edits(&self, cx: &mut Context<Self>) -> bool {
         if !self.has_pending_edits(cx) {
             return false;
         }
 
-        Toast::warning(crate::labels::grid_refresh_blocked_by_pending_edits())
+        Toast::warning(crate::labels::grid_reload_blocked_by_pending_edits())
             .meta_right(now_hms())
             .push(cx);
         true
@@ -43,10 +56,42 @@ impl DataGridPanel {
     /// palette). Unsaved edits are never dropped: the refresh is refused with
     /// a warning instead.
     pub fn request_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.refresh_blocked_by_pending_edits(cx) {
+        if self.reload_blocked_by_pending_edits(cx) {
             return;
         }
 
+        self.refresh(window, cx);
+    }
+
+    /// Reload after a landed mutation. The request issued here takes the
+    /// keep-edits intent with it, so its result carries the edits still staged
+    /// on other rows over to the reloaded rows by primary key.
+    pub(super) fn refresh_keeping_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.grid_table.keep_edits_on_reload = true;
+        self.refresh(window, cx);
+
+        // A refresh that issued no request (a static result, a missing
+        // connection) leaves the intent unclaimed. It belongs to no result, so
+        // no later rebuild may pick it up.
+        self.grid_table.keep_edits_on_reload = false;
+    }
+
+    /// Replace the filter text and reload the rows under it (clear buttons,
+    /// context-menu filters). Guarded like [`Self::request_refresh`]: with
+    /// unsaved edits the filter is left untouched and the user is warned.
+    pub(super) fn replace_filter_and_reload(
+        &mut self,
+        filter: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.reload_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        self.filter_bar
+            .filter_input
+            .update(cx, |input, cx| input.set_value(filter, window, cx));
         self.refresh(window, cx);
     }
 
@@ -202,6 +247,10 @@ impl DataGridPanel {
         }
         // --- end relational filter gate ---
 
+        // Taken after the gate: a relational filter runs as a visual query,
+        // which takes the intent itself.
+        let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload);
+
         let mut request = TableBrowseRequest::new(table.clone())
             .with_pagination(pagination.clone())
             .with_order_by(order_by.clone());
@@ -314,6 +363,7 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
+                            panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -366,6 +416,10 @@ impl DataGridPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Taken before anything can fail, so a request that never lands does
+        // not leave its intent for an unrelated rebuild.
+        let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload);
+
         let conn = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
@@ -471,6 +525,7 @@ impl DataGridPanel {
                                 .map(|b| b.pk_columns.clone())
                                 .unwrap_or_default();
                             panel.builder.builder_editable_binding = binding;
+                            panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.pending.rebuild = true;
 
                             cx.notify();
@@ -534,6 +589,7 @@ impl DataGridPanel {
         // Taken here so a request that never lands (cancelled or failed) does
         // not leave the next reload with this one's intent.
         let reload = std::mem::take(&mut self.grid_table.reload);
+        let keep_edits = std::mem::take(&mut self.grid_table.keep_edits_on_reload);
 
         let conn = {
             let state = self.app_state.read(cx);
@@ -667,6 +723,7 @@ impl DataGridPanel {
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
+                            panel.grid_table.keep_edits_on_reload = keep_edits;
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
