@@ -1,25 +1,33 @@
+use dbflux_components::chart::spec::group_key;
 use dbflux_components::chart::{AggKind, BindingSpec, ChartDetection};
-use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
+use dbflux_core::{ColumnKind, QueryResult, QueryResultShape};
 
 // `ResultViewMode` now lives in `dbflux_components` so it can be used by
 // `ResultPanel` without a circular dependency. Re-exported here for all
 // callers in `dbflux_ui` that import from this module.
 pub use dbflux_components::result_view::ResultViewMode;
 
+/// Most distinct values the first `Text` column may hold in a result and
+/// still become the default group. Past this the chart starts ungrouped, so a
+/// high-cardinality text field does not open as a wall of lines. A group picked
+/// in the axis bar has no such limit.
+pub const DEFAULT_GROUP_MAX_VALUES: usize = 12;
+
 /// Derive the default `BindingSpec` for a TimeSeries auto-selected chart.
 ///
 /// Called when a `Collection` source with `TimeSeries` category produces a result
-/// with `ChartDetection::Ok`. Uses column indices only — no column name sniffing,
-/// no driver-id branching.
+/// with `ChartDetection::Ok`. Uses column kinds and cell values only — no column
+/// name sniffing, no driver-id branching.
 ///
 /// - X: the detected `time_col` (always a `Timestamp` column)
 /// - Y: only the first numeric column (the user explicitly picks more via AxisBar)
-/// - Group: the first `Text` column if any (covers tag-style grouping)
+/// - Group: the first `Text` column (covers tag-style grouping), when it holds
+///   at most `DEFAULT_GROUP_MAX_VALUES` distinct values in `result`
 /// - Filter / Aggregation: both default to `None`
 pub fn default_bindings_for_time_series(
     time_col: usize,
     numeric_cols: &[usize],
-    columns: &[ColumnMeta],
+    result: &QueryResult,
 ) -> BindingSpec {
     let y = numeric_cols
         .first()
@@ -27,11 +35,11 @@ pub fn default_bindings_for_time_series(
         .map(|idx| vec![idx])
         .unwrap_or_default();
 
-    let group_by = columns
+    let group_by = result
+        .columns
         .iter()
-        .enumerate()
-        .find(|(_, c)| c.kind == ColumnKind::Text)
-        .map(|(i, _)| i);
+        .position(|c| c.kind == ColumnKind::Text)
+        .filter(|&column| distinct_values_within(result, column, DEFAULT_GROUP_MAX_VALUES));
 
     BindingSpec {
         x: time_col,
@@ -40,6 +48,29 @@ pub fn default_bindings_for_time_series(
         filter: None,
         aggregation: AggKind::None,
     }
+}
+
+/// Whether `column` holds at most `limit` distinct values across the rows.
+/// Stops scanning as soon as the limit is passed.
+fn distinct_values_within(result: &QueryResult, column: usize, limit: usize) -> bool {
+    let mut seen: Vec<String> = Vec::new();
+
+    for row in &result.rows {
+        let Some(cell) = row.get(column) else {
+            continue;
+        };
+
+        let key = group_key(cell);
+        if !seen.contains(&key) {
+            seen.push(key);
+
+            if seen.len() > limit {
+                return false;
+            }
+        }
+    }
+
+    true
 }
 
 /// Whether a result with the given `ChartDetection` should auto-select
@@ -91,7 +122,7 @@ mod tests {
         should_auto_select_chart_for_time_series,
     };
     use dbflux_components::chart::{AggKind, ChartDetection};
-    use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, QueryResultShape, Value};
 
     fn make_col(name: &str, kind: ColumnKind) -> ColumnMeta {
         ColumnMeta {
@@ -116,6 +147,96 @@ mod tests {
             should_auto_select_chart_for_time_series(&detection),
             "Ok detection must auto-select Chart for TimeSeries sources"
         );
+    }
+
+    fn empty_result(columns: Vec<ColumnMeta>) -> QueryResult {
+        QueryResult::table(columns, Vec::new(), None, std::time::Duration::ZERO)
+    }
+
+    /// Time, load and host columns with one row per host name given.
+    fn hosts_result(hosts: &[String]) -> QueryResult {
+        QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            hosts
+                .iter()
+                .enumerate()
+                .map(|(i, host)| {
+                    vec![
+                        Value::Int(i as i64),
+                        Value::Float(1.0),
+                        Value::Text(host.clone()),
+                    ]
+                })
+                .collect(),
+            None,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    fn host_names(count: usize) -> Vec<String> {
+        (0..count).map(|i| format!("host-{i}")).collect()
+    }
+
+    #[test]
+    fn default_group_applies_to_a_low_cardinality_tag() {
+        let mut hosts = host_names(3);
+        hosts.extend(host_names(3));
+
+        let bindings = default_bindings_for_time_series(0, &[1], &hosts_result(&hosts));
+
+        assert_eq!(
+            bindings.group_by,
+            Some(2),
+            "3 distinct hosts group the chart"
+        );
+    }
+
+    #[test]
+    fn default_group_applies_up_to_the_limit() {
+        let bindings = default_bindings_for_time_series(
+            0,
+            &[1],
+            &hosts_result(&host_names(super::DEFAULT_GROUP_MAX_VALUES)),
+        );
+
+        assert_eq!(bindings.group_by, Some(2));
+    }
+
+    #[test]
+    fn default_group_is_skipped_past_the_limit() {
+        let bindings = default_bindings_for_time_series(
+            0,
+            &[1],
+            &hosts_result(&host_names(super::DEFAULT_GROUP_MAX_VALUES + 1)),
+        );
+
+        assert_eq!(
+            bindings.group_by, None,
+            "13 distinct values start the chart ungrouped"
+        );
+        assert_eq!(bindings.y, vec![1], "X and Y defaults still apply");
+    }
+
+    #[test]
+    fn a_group_picked_by_hand_is_not_capped() {
+        use dbflux_components::chart::spec::{ChartSpec, ManualChartSelection};
+
+        let result = hosts_result(&host_names(super::DEFAULT_GROUP_MAX_VALUES + 1));
+        let selection = ManualChartSelection {
+            x_col: 0,
+            y_cols: vec![1],
+            group_by: Some(2),
+        };
+
+        let spec = ChartSpec::from_manual_selection(&selection, &result.columns, 10_000)
+            .expect("spec")
+            .with_group_series(&result);
+
+        assert_eq!(spec.series.len(), 13, "every host gets its own line");
     }
 
     fn chartable() -> ChartDetection {
@@ -227,7 +348,7 @@ mod tests {
             make_col("host", ColumnKind::Text),
         ];
 
-        let bindings = default_bindings_for_time_series(0, &[1], &columns);
+        let bindings = default_bindings_for_time_series(0, &[1], &empty_result(columns.clone()));
 
         assert_eq!(bindings.x, 0, "X must be the time column");
         assert_eq!(bindings.y, vec![1], "Y must be the first numeric column");
@@ -248,7 +369,7 @@ mod tests {
             make_col("value", ColumnKind::Float),
         ];
 
-        let bindings = default_bindings_for_time_series(0, &[1], &columns);
+        let bindings = default_bindings_for_time_series(0, &[1], &empty_result(columns.clone()));
 
         assert!(
             bindings.group_by.is_none(),
@@ -266,7 +387,7 @@ mod tests {
             make_col("host", ColumnKind::Text),
         ];
 
-        let bindings = default_bindings_for_time_series(0, &[1, 2], &columns);
+        let bindings = default_bindings_for_time_series(0, &[1, 2], &empty_result(columns.clone()));
 
         assert_eq!(
             bindings.y,
@@ -392,8 +513,10 @@ mod tests {
             make_col("host", ColumnKind::Text),
         ];
 
-        let bindings_first = default_bindings_for_time_series(0, &[1], &columns);
-        let bindings_second = default_bindings_for_time_series(0, &[1], &columns);
+        let bindings_first =
+            default_bindings_for_time_series(0, &[1], &empty_result(columns.clone()));
+        let bindings_second =
+            default_bindings_for_time_series(0, &[1], &empty_result(columns.clone()));
 
         // Same binding on repeated derivation — switching Chart→Table→Chart keeps
         // the same BindingSpec because the inputs (column shape) did not change.

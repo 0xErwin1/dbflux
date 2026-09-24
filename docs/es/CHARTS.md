@@ -46,7 +46,7 @@ Los tipos de chart se definen en el enum `ChartKind` en
 | `Bar`        | Chart de barras.                                                                                                                                                                                                    |
 | `Scatter`    | Chart de dispersión.                                                                                                                                                                                                |
 | `Area`       | Chart de línea con relleno; el área entre la línea de la serie y la base se sombrea. Comparte la geometría y el comportamiento de hover de Line.                                                                    |
-| `StackedBar` | Barras verticales apiladas. Cada posición X muestra una barra por serie, apiladas de forma acumulativa en lugar de agrupadas lado a lado. El eje Y se reescala en tiempo de renderizado a la suma máxima del stack. |
+| `StackedBar` | Barras verticales apiladas. Cada posición X muestra una barra por serie, apiladas de forma acumulativa en lugar de agrupadas lado a lado. Las series se alinean por su valor de X: una serie sin valor en una X no suma nada a esa barra. El eje Y se reescala en tiempo de renderizado a la suma máxima del stack. |
 | `Pie`        | Chart de tarta. Sin ejes X/Y; cada serie visible se convierte en una porción cuyo tamaño es la suma de los valores Y de esa serie.                                                                                  |
 
 `ChartKind` lleva la semántica `#[serde(default)]` en el campo contenedor
@@ -218,7 +218,10 @@ La primera página se abre como chart cuando `detect_chart_columns` devuelve
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
 Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
 ese valor, así que un tag como `host` le da a cada host su propia línea. Lo
-mismo aplica cuando el grupo se elige en la barra de ejes.
+mismo aplica cuando el grupo se elige en la barra de ejes. El grupo por defecto
+solo se aplica cuando esa columna tiene como mucho 12 valores distintos en el
+resultado (`DEFAULT_GROUP_MAX_VALUES`). Si no, el chart empieza sin agrupar. Un
+grupo elegido en la barra de ejes no tiene ese límite.
 Data muestra las filas en la grilla en lugar del árbol de documentos que usan
 las demás colecciones. Un refresco, sea manual, automático o un cambio de
 página, conserva la vista que eligió el usuario, y vuelve a Data solo cuando la

@@ -45,7 +45,7 @@ Chart kinds are defined by the `ChartKind` enum in
 | `Bar` | Bar chart. |
 | `Scatter` | Scatter chart. |
 | `Area` | Filled line chart; the area between the series line and the baseline is shaded. Shares Line's geometry and hover behaviour. |
-| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. The Y axis is re-scaled at render time to the maximum stack sum. |
+| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. Series are aligned on their X values: a series with no value at an X adds nothing to that bar. The Y axis is re-scaled at render time to the maximum stack sum. |
 | `Pie` | Pie chart. No X/Y axes; each visible series becomes one wedge sized by the sum of that series' Y values. |
 
 `ChartKind` carries `#[serde(default)]` semantics on the containing
@@ -208,7 +208,9 @@ opens as a chart when `detect_chart_columns` returns `Ok`, with the axes seeded
 by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
 the first `Text` column as the group). A group draws one line per distinct
 value of its column, labelled by that value, so a tag such as `host` gives each
-host its own line. The same applies when the group is picked in the axis bar.
+host its own line. The default group applies only when that column holds at
+most 12 distinct values in the result (`DEFAULT_GROUP_MAX_VALUES`). Otherwise
+the chart starts ungrouped. A group picked in the axis bar has no such limit.
 Data shows the rows in the grid rather
 than the document tree other collections use. A refresh, whether manual,
 automatic or a page change, keeps the view the user picked, and falls back to

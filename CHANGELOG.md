@@ -30,8 +30,14 @@ All notable changes to DBFlux will be documented in this file.
   before rendering and the chart engine never split series by it, so a
   measurement with tags `host=a` and `host=b` drew one line zigzagging
   between both hosts, and the axis bar showed `Group —`. The first text
-  column now becomes the default group for a time-series collection, and a
-  group, default or picked in the axis bar, draws one line per value.
+  column now becomes the default group for a time-series collection when it
+  holds at most 12 distinct values, and a group, default or picked in the
+  axis bar, draws one line per value.
+
+* **Stacked bars stack by timestamp** — Stacked Bar summed series by point
+  position, so series with different timestamps, such as grouped hosts,
+  piled values from different times into one bar. Bars now stack the values
+  that share an X value, and a series with no value there adds nothing.
 
 * **Time-series measurements open as a chart** — opening a measurement on an
   InfluxDB connection showed a document tree, the toolbar read

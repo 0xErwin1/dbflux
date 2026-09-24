@@ -2415,8 +2415,7 @@ impl DataGridPanel {
                 ref numeric_cols,
             } = detection
         {
-            let bindings =
-                default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
+            let bindings = default_bindings_for_time_series(time_col, numeric_cols, result);
             if let Some(shell) = &self.chart.chart_shell {
                 shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
             }
