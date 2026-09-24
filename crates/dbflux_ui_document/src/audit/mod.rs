@@ -28,7 +28,9 @@ use dbflux_core::{
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter, AuditRepository};
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::SaveTargetOutcome;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1520,6 +1522,11 @@ impl AuditDocument {
         doc
     }
 
+    /// Asks for a destination with the shared save dialog, then fetches the
+    /// filtered events and writes them off the UI thread.
+    ///
+    /// Cancelling the dialog is a no-op. Failures to fetch or write the export
+    /// are reported through `report_error_async` as storage errors.
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
         let AuditDocumentSource::Internal { adapter } = &self.source else {
             self.pending_toast = Some(PendingToast {
@@ -1532,58 +1539,116 @@ impl AuditDocument {
 
         let adapter = adapter.clone();
         let filter = self.active_filter(None, None);
-        let format_for_task = format.clone();
 
-        let task = cx.background_executor().spawn(async move {
-            let event_count = adapter.count_filter(&filter)?;
-            let bytes = adapter.export_filtered(&filter, &format_for_task)?;
-            Ok::<_, String>((event_count, bytes))
-        });
+        let extension = audit_export_extension(&format);
+        let format_name = if extension == "csv" { "CSV" } else { "JSON" };
+        let suggested_name = audit_export_default_file_name(&format, chrono::Local::now());
+        let save_target_override = self.app_state.read(cx).save_target_override();
+        let background = cx.background_executor().clone();
 
-        cx.spawn(async move |this, cx| match task.await {
-            Ok((event_count, bytes)) => {
-                let extension = if format == "csv" { "csv" } else { "json" };
-                let filename = format!("audit_export.{}", extension);
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        cx.spawn(async move |this, cx| {
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &suggested_name,
+                    language_name: format_name,
+                    default_extension: extension,
+                },
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title(crate::labels::context_menu_export_dialog_title(format_name))
+                        .set_file_name(&suggested_name)
+                        .add_filter(format_name, &[extension])
+                        .save_file()
+                        .await
+                        .map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
 
-                let path = if std::fs::create_dir_all(format!("{}/Downloads", home)).is_ok() {
-                    format!("{}/Downloads/{}", home, filename)
-                } else {
-                    format!("{}/{}", home, filename)
-                };
+            let (target_path, used_fallback) = match outcome {
+                SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback,
+                } => (path, used_fallback),
+                SaveTargetOutcome::Cancelled => return,
+                SaveTargetOutcome::Failed(error) => {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            crate::labels::context_menu_export_dialog_fallback_failed_error(&error),
+                        ),
+                        cx,
+                    );
+                    return;
+                }
+            };
 
-                let message = match write_export_file(std::path::Path::new(&path), &bytes) {
-                    Ok(()) => PendingToast {
-                        message: crate::labels::audit_export_exported_toast(event_count, &path),
-                        is_error: false,
-                    },
-                    Err(error) => PendingToast {
-                        message: crate::labels::audit_export_write_failed_error(&error.to_string()),
-                        is_error: true,
-                    },
-                };
+            let write_path = target_path.clone();
+            let export_result = background
+                .spawn(async move {
+                    let event_count = adapter
+                        .count_filter(&filter)
+                        .map_err(|error| crate::labels::audit_export_failed_error(&error))?;
+                    let bytes = adapter
+                        .export_filtered(&filter, &format)
+                        .map_err(|error| crate::labels::audit_export_failed_error(&error))?;
 
-                let _ = cx.update(|cx| {
-                    this.update(cx, |doc, cx| {
-                        doc.pending_toast = Some(message);
-                        cx.notify();
-                    })
+                    write_export_file(&write_path, &bytes).map_err(|error| {
+                        crate::labels::audit_export_write_failed_error(&error.to_string())
+                    })?;
+
+                    Ok::<_, String>(event_count)
+                })
+                .await;
+
+            let event_count = match export_result {
+                Ok(event_count) => event_count,
+                Err(message) => {
+                    report_error_async(UserFacingError::new(ErrorKind::Storage, message), cx);
+                    return;
+                }
+            };
+
+            let path_display = target_path.display().to_string();
+            let message = if used_fallback {
+                crate::labels::context_menu_export_native_picker_fallback_toast(&path_display)
+            } else {
+                crate::labels::audit_export_exported_toast(event_count, &path_display)
+            };
+
+            this.update(cx, |doc, cx| {
+                doc.pending_toast = Some(PendingToast {
+                    message,
+                    is_error: false,
                 });
-            }
-            Err(error) => {
-                let _ = cx.update(|cx| {
-                    this.update(cx, |doc, cx| {
-                        doc.pending_toast = Some(PendingToast {
-                            message: crate::labels::audit_export_failed_error(&error),
-                            is_error: true,
-                        });
-                        cx.notify();
-                    })
-                });
-            }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
+}
+
+/// File extension for an audit export format. Anything other than `csv`
+/// exports as JSON, matching `AuditSourceAdapter::export_filtered`.
+fn audit_export_extension(format: &str) -> &'static str {
+    if format == "csv" { "csv" } else { "json" }
+}
+
+/// Default file name offered by the export dialog:
+/// `audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`, stamped with `now` so repeated
+/// exports do not propose the same name.
+fn audit_export_default_file_name<Tz>(format: &str, now: chrono::DateTime<Tz>) -> String
+where
+    Tz: chrono::TimeZone,
+    Tz::Offset: std::fmt::Display,
+{
+    format!(
+        "audit_export_{}.{}",
+        now.format("%Y%m%d-%H%M%S"),
+        audit_export_extension(format)
+    )
 }
 
 impl Focusable for AuditDocument {
@@ -1730,6 +1795,83 @@ mod tests {
         assert_eq!(event.summary.as_deref(), Some("hello"));
         assert_eq!(event.object_id.as_deref(), Some("event-123"));
         assert_eq!(event.connection_id.as_deref(), Some("source-a"));
+    }
+
+    fn fixed_time(
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) -> chrono::DateTime<chrono::FixedOffset> {
+        use chrono::TimeZone;
+
+        chrono::FixedOffset::east_opt(-3 * 3600)
+            .and_then(|offset| {
+                offset
+                    .with_ymd_and_hms(year, month, day, hour, minute, second)
+                    .single()
+            })
+            .expect("valid fixed timestamp")
+    }
+
+    #[test]
+    fn audit_export_default_file_name_uses_local_timestamp_and_csv_extension() {
+        let name = super::audit_export_default_file_name("csv", fixed_time(2026, 9, 23, 14, 5, 7));
+
+        assert_eq!(name, "audit_export_20260923-140507.csv");
+    }
+
+    #[test]
+    fn audit_export_default_file_name_uses_json_extension_for_json() {
+        let name = super::audit_export_default_file_name("json", fixed_time(2026, 1, 2, 3, 4, 5));
+
+        assert_eq!(name, "audit_export_20260102-030405.json");
+    }
+
+    #[test]
+    fn audit_export_default_file_name_changes_between_seconds() {
+        let first =
+            super::audit_export_default_file_name("csv", fixed_time(2026, 9, 23, 23, 59, 58));
+        let second =
+            super::audit_export_default_file_name("csv", fixed_time(2026, 9, 23, 23, 59, 59));
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn audit_export_extension_defaults_to_json_for_unknown_formats() {
+        assert_eq!(super::audit_export_extension("csv"), "csv");
+        assert_eq!(super::audit_export_extension("json"), "json");
+        assert_eq!(super::audit_export_extension("xml"), "json");
+    }
+
+    /// The export destination comes from the save dialog. A fixed folder under
+    /// the home directory must not come back, so the audit sources are scanned
+    /// for it. The needles are assembled at runtime so this test does not match
+    /// itself.
+    #[test]
+    fn audit_export_does_not_hardcode_home_downloads_path() {
+        let sources = [
+            ("mod.rs", include_str!("mod.rs")),
+            ("render.rs", include_str!("render.rs")),
+            ("commands.rs", include_str!("commands.rs")),
+            ("source_adapter.rs", include_str!("source_adapter.rs")),
+        ];
+        let downloads = ["Down", "loads"].concat();
+        let home_lookup = ["var(\"", "HOME\")"].concat();
+
+        for (file, source) in sources {
+            assert!(
+                !source.contains(&downloads),
+                "{file} must not reference a fixed downloads folder"
+            );
+            assert!(
+                !source.contains(&home_lookup),
+                "{file} must not build export paths from $HOME"
+            );
+        }
     }
 
     #[test]

@@ -192,10 +192,14 @@ the status bar opens the viewer pre-filtered to recent user-facing failures.
 
 ### Export
 
-The **Export** button writes the currently visible events to **CSV** or **JSON**
-in your `~/Downloads` folder (`audit_export.csv` / `audit_export.json`), using the
-extended schema (all fields, including structured details). A success toast
-reports how many events were written and where.
+The **Export** button writes the currently visible events to **CSV** or **JSON**,
+using the extended schema (all fields, including structured details). A save
+dialog asks where to write the file and proposes a timestamped name
+(`audit_export_20260923-140507.csv`), so a second export does not replace the
+first. Cancelling the dialog writes nothing. When no native file picker is
+available, the file goes to `~/.local/share/dbflux/exports/` instead, as with
+the other exports. A success toast reports how many events were written and
+where.
 
 ### Retention
 
