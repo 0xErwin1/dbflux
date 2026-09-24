@@ -60,9 +60,9 @@ impl SelectQuery {
     /// Produces a human-readable SQL string with all parameter placeholders
     /// replaced by their dialect-quoted literal values.
     ///
-    /// The result is intended for display in a read-only editor tab ("Open in
-    /// editor"). It is NOT suitable for execution — the literal substitution
-    /// is for readability only. The substitution respects the dialect's
+    /// Used for the read-only editor tab ("Open in editor"). The text is the
+    /// same SQL that [`SelectQuery::to_query_request`] executes, because
+    /// drivers do not bind params. The substitution respects the dialect's
     /// placeholder style:
     /// - `?` placeholders (SQLite/MySQL): replaced left-to-right.
     /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
@@ -299,9 +299,9 @@ impl GeneratedMutation {
     /// Produces a human-readable SQL string with all parameter placeholders
     /// replaced by their dialect-quoted literal values.
     ///
-    /// Intended for display in the visual builder preview and the mutation
-    /// confirmation dialog. It is NOT suitable for execution — execution must
-    /// use `sql` + `params` so values stay bound. See
+    /// Used for the visual builder preview and the mutation confirmation
+    /// dialog. The mutation executor runs the same inlined text (see
+    /// [`inline_params`]), because drivers do not bind params. See
     /// [`SelectQuery::materialize_for_editor`] for the SELECT counterpart.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
         inline_params(&self.sql, &self.params, dialect)
