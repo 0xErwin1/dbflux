@@ -7493,8 +7493,16 @@ mod tests {
     fn drop_table_statement_cascades_when_asked() {
         assert!(POSTGRES_DIALECT.supports_drop_cascade());
         assert_eq!(
-            POSTGRES_DIALECT.drop_table_statement(Some("public"), "orders", true),
-            "DROP TABLE \"public\".\"orders\" CASCADE"
+            POSTGRES_DIALECT
+                .drop_table_statement(Some("public"), "orders", true, true)
+                .expect("cascade is supported"),
+            "DROP TABLE IF EXISTS \"public\".\"orders\" CASCADE"
+        );
+        assert_eq!(
+            POSTGRES_DIALECT
+                .drop_table_statement(Some("public"), "orders", false, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE \"public\".\"orders\""
         );
     }
 }

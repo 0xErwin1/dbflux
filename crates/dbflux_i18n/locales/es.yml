@@ -2465,6 +2465,7 @@ modals:
     cascade_warning: "También se eliminarán los objetos dependientes (CASCADE):"
     dependents_heading: "Objetos que dependen de esta tabla:"
     delete_warning: Esto eliminará de forma permanente la tabla y cualquier objeto dependiente.
+    delete_warning_table_only: Esto eliminará de forma permanente la tabla.
     relation_kind:
       view: Vista
       materialized_view: Vista mat.

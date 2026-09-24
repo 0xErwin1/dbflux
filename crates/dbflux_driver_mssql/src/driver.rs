@@ -6506,11 +6506,18 @@ mod tests {
     }
 
     #[test]
-    fn drop_table_statement_never_writes_cascade() {
+    fn drop_table_statement_rejects_cascade() {
         assert!(!MSSQL_DIALECT.supports_drop_cascade());
+        assert!(
+            MSSQL_DIALECT
+                .drop_table_statement(Some("dbo"), "orders", true, true)
+                .is_err()
+        );
         assert_eq!(
-            MSSQL_DIALECT.drop_table_statement(Some("dbo"), "orders", true),
-            "DROP TABLE [dbo].[orders]"
+            MSSQL_DIALECT
+                .drop_table_statement(Some("dbo"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS [dbo].[orders]"
         );
     }
 }

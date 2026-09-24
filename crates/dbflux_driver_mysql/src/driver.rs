@@ -5080,11 +5080,18 @@ mod tests {
     }
 
     #[test]
-    fn drop_table_statement_never_writes_cascade() {
+    fn drop_table_statement_rejects_cascade() {
         assert!(!MysqlDialect.supports_drop_cascade());
+        assert!(
+            MysqlDialect
+                .drop_table_statement(Some("shop"), "orders", true, true)
+                .is_err()
+        );
         assert_eq!(
-            MysqlDialect.drop_table_statement(Some("shop"), "orders", true),
-            "DROP TABLE `shop`.`orders`"
+            MysqlDialect
+                .drop_table_statement(Some("shop"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS `shop`.`orders`"
         );
     }
 }

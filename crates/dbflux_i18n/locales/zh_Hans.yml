@@ -2465,6 +2465,7 @@ modals:
     cascade_warning: "依赖对象也将被删除（CASCADE）："
     dependents_heading: "依赖此表的对象："
     delete_warning: 这将永久删除该表及所有依赖对象。
+    delete_warning_table_only: 这将永久删除该表。
     relation_kind:
       view: 视图
       materialized_view: 物化视图

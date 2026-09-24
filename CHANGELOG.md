@@ -289,12 +289,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
-* **The drop table preview only adds CASCADE where the database supports it** —
-  the drop table dialog appended `CASCADE` whenever the table had dependents,
-  which SQL Server and SQLite reject and MySQL ignores. Each SQL dialect now
-  writes the statement: PostgreSQL and Redshift keep `CASCADE`, other
-  databases omit it, and their dialog lists the dependent objects without
-  claiming they will be dropped.
+* **Dropping a table runs the statement the preview shows** — the drop table
+  dialog previewed `DROP TABLE ... CASCADE` whenever the table had dependents,
+  which SQL Server and SQLite reject and MySQL ignores, while the drop itself
+  ran `DROP TABLE IF EXISTS` without `CASCADE` everywhere. Both now come from
+  one dialect-owned builder: the dialog shows the exact statement that runs,
+  `CASCADE` is used only on PostgreSQL and Redshift, and other databases list
+  the dependent objects without claiming they will be dropped. The MCP
+  `drop_table` tool and the generic schema drop use the same builder and
+  return an error when `cascade` is requested on a database without it.
 
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist

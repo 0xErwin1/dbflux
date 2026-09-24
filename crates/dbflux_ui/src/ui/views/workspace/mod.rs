@@ -498,9 +498,9 @@ impl Workspace {
             &modal_drop_table,
             |this, _, outcome: &crate::ui::overlays::modals::DropTableOutcome, cx| {
                 use crate::ui::overlays::modals::DropTableOutcome;
-                if matches!(outcome, DropTableOutcome::Confirmed) {
+                if let DropTableOutcome::Confirmed { if_exists, cascade } = *outcome {
                     this.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.confirm_modal_delete(cx);
+                        sidebar.confirm_modal_drop_table(if_exists, cascade, cx);
                     });
                 } else {
                     this.sidebar.update(cx, |sidebar, cx| {
