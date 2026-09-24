@@ -15,12 +15,6 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
-* **Chart controls for missing features removed** — the chart toolbar's PNG
-  button, the dashboard Configure popover's Export PNG action, and the point
-  inspector's Annotate and Copy as query buttons are gone. They only showed a
-  "coming in v0.7" toast or a disabled "Coming soon" label for features that
-  do not exist. The point inspector keeps its Show in tree action.
-
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -28,6 +22,12 @@ All notable changes to DBFlux will be documented in this file.
   cannot promise these protections on these backends.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
+
+* **Chart controls for missing features removed** — the chart toolbar's PNG
+  button, the dashboard Configure popover's Export PNG action, and the point
+  inspector's Annotate and Copy as query buttons are gone. They only showed a
+  "coming in v0.7" toast or a disabled "Coming soon" label for features that
+  do not exist. The point inspector keeps its Show in tree action.
 
 * **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
 
