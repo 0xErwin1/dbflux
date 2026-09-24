@@ -7,8 +7,9 @@
 #
 # Downloads that commit of themixednuts/gpui-mcp, keeps the gpui-mcp,
 # gpui-mcp-protocol, gpui-mcp-server and gpui-mcp-capture crates and the
-# license, re-applies dbflux-port.patch and leaves .rej files for hunks that no
-# longer apply. See VENDOR.md for what to check afterwards.
+# license, re-applies dbflux-port.patch and text-input-automation.patch in that
+# order and leaves .rej files for hunks that no longer apply. See VENDOR.md for
+# what to check afterwards.
 
 set -euo pipefail
 
@@ -46,9 +47,14 @@ for crate in "${crates[@]}"; do
 done
 cp "$source_dir/LICENSE" "$here/LICENSE"
 
+# text-input-automation.patch is written against the tree dbflux-port.patch produces.
+patches=(dbflux-port.patch text-input-automation.patch)
+
 cd "$repo_root"
-echo "Applying dbflux-port.patch"
-git apply -p1 --directory=vendor/gpui-mcp --reject vendor/gpui-mcp/dbflux-port.patch || true
+for patch in "${patches[@]}"; do
+    echo "Applying $patch"
+    git apply -p1 --directory=vendor/gpui-mcp --reject "vendor/gpui-mcp/$patch" || true
+done
 
 rejects="$(find "$here" -name '*.rej' || true)"
 if [[ -n "$rejects" ]]; then
