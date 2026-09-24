@@ -70,6 +70,11 @@ chart:
 common:
   time_range:
     preset:
+      last_15_minutes: "15分钟"
+      last_hour: "1小时"
+      last_6_hours: "6小时"
+      last_24_hours: "24小时"
+      last_7_days: "7天"
       custom: "自定义…"
     picker:
       date_range_placeholder: "选择日期范围"
@@ -498,6 +503,8 @@ connections:
     manager_title: 连接管理器
     edit_title: 编辑连接
   toast:
+    export_from_menu: "请从连接的菜单中导出"
+    export_from_menu_body: "在侧边栏中右键单击连接，然后选择“导出”。"
     disconnecting: "正在断开与 %{name} 的连接…"
     no_active_connection: 无活动连接
     refreshing_schema: 正在刷新 Schema…
@@ -514,6 +521,24 @@ diagnostics:
   shutdown_flush_timed_out: "部分编辑可能未写入文件：退出时 DBFlux 未能及时保存。它们已保留在会话存储中以便恢复。"
 document:
   audit:
+    title: "审计"
+    category_chip:
+      config: "配置"
+      connection: "连接"
+      query: "查询"
+      hook: "HOOK"
+      script: "脚本"
+      system: "系统"
+      mcp: "MCP"
+      governance: "治理"
+      object_storage: "存储"
+    level_chip:
+      trace: "跟踪"
+      debug: "调试"
+      info: "信息"
+      warn: "警告"
+      error: "错误"
+      fatal: "致命"
     pager:
       range: "第 %{start}-%{end} 条，共 %{total} %{unit}"
     actor:
@@ -563,6 +588,16 @@ document:
       summary: 摘要
       time: 时间
     filter:
+      bar:
+        search: "搜索："
+        time: "时间："
+        timezone: "时区："
+        range: "范围："
+        start_hour: "开始小时："
+        start_minute: "开始分钟："
+        end_hour: "结束小时："
+        end_minute: "结束分钟："
+        auto_refresh: "自动刷新："
       timezone:
         local: "本地"
         utc: "UTC"
@@ -1384,6 +1419,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
     footer:
       back: 返回
       continue: 继续
@@ -1462,6 +1498,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
   instance_inspector:
     task_label: "检查器：%{metric_id}"
     connection_not_found: 未找到连接
@@ -1703,6 +1740,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
     mapping:
       target_placeholder: 目标表
       mode_placeholder: 模式
@@ -2386,6 +2424,7 @@ modals:
   active_query:
     title: 有查询正在执行
     prompt: 此连接上仍有查询在执行。您想怎么做？
+    prompt_shutdown: "%{connections} 上仍有查询在执行。您想怎么做？"
     elapsed: "已执行 %{seconds}s"
     disconnect_anyway: 仍然断开
     quit_anyway: 仍然退出
@@ -2702,6 +2741,9 @@ settings:
       label: 主题
     style:
       label: 样式
+      option:
+        default: "默认"
+        compact: "紧凑"
     language:
       label: 语言
       option:
@@ -3748,6 +3790,8 @@ sso_wizard:
     profile_name: 配置文件名称
     start_url: SSO 起始 URL
     region: 区域
+    account_id: 账户 ID
+    role_name: 角色名称
   account:
     hint: 使用 AWS SSO 账户发现中的账户 ID
     discovering: 正在发现账户…

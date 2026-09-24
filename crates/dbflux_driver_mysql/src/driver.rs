@@ -2070,6 +2070,39 @@ impl Connection for MysqlConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        // Execution-safety preflight: reject requests this driver cannot honor
+        // before any SQL reaches the server, so a rejection never carries side
+        // effects. A requested statement deadline cannot be honored safely yet
+        // (max_execution_time applies to SELECT only; no watchdog and no
+        // session-level SET), and a bounded request cannot reach the
+        // instance-catalog dispatch paths, which run whole buffered catalog
+        // queries with no cap seam.
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "MySQL/MariaDB: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
+            ));
+        }
+        if req.limit.is_some()
+            && let Some(source) = req
+                .execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "MySQL/MariaDB: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "MySQL/MariaDB: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2137,9 +2170,15 @@ impl Connection for MysqlConnection {
         };
 
         let result = if statements.len() > 1 {
-            mysql_execute_script(&mut state.conn, &statements, start, &self.cancelled)
+            mysql_execute_script(
+                &mut state.conn,
+                &statements,
+                start,
+                &self.cancelled,
+                req.limit,
+            )
         } else {
-            mysql_execute_one_statement(&mut state.conn, &req.sql, start, &self.cancelled)
+            mysql_execute_request(&mut state.conn, &req.sql, start, &self.cancelled, req.limit)
         };
 
         result.map_err(|error| {
@@ -3004,7 +3043,11 @@ fn mysql_execute_script(
     statements: &[String],
     start: Instant,
     cancelled: &AtomicBool,
+    limit: Option<u32>,
 ) -> Result<QueryResult, DbError> {
+    if let Some(limit) = limit {
+        return mysql_execute_bounded(conn, "", statements, start, cancelled, limit);
+    }
     let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
     for statement in statements {
         result_sets.push(mysql_execute_one_statement(
@@ -3018,6 +3061,19 @@ fn mysql_execute_script(
     }
 
     Ok(primary)
+}
+
+fn mysql_execute_request(
+    conn: &mut Conn,
+    sql: &str,
+    start: Instant,
+    cancelled: &AtomicBool,
+    limit: Option<u32>,
+) -> Result<QueryResult, DbError> {
+    match limit {
+        Some(limit) => mysql_execute_bounded(conn, sql, &[], start, cancelled, limit),
+        None => mysql_execute_one_statement(conn, sql, start, cancelled),
+    }
 }
 
 /// Whether a statement can leave the session inside a transaction once it
@@ -3207,6 +3263,155 @@ fn mysql_execute_one_statement(
             Err(format_mysql_query_error(&e))
         }
     }
+}
+
+fn mysql_execute_bounded(
+    conn: &mut Conn,
+    sql: &str,
+    statements: &[String],
+    start: Instant,
+    cancelled: &AtomicBool,
+    limit: u32,
+) -> Result<QueryResult, DbError> {
+    let mut remaining = limit as usize;
+
+    // Mirrors the unbounded path: an empty or unsplit request runs as a single
+    // statement (the server rejects it if it is genuinely empty).
+    let mut result_sets: Vec<QueryResult> = Vec::new();
+    if statements.len() > 1 {
+        for statement in statements {
+            result_sets.extend(mysql_execute_statement_sets_bounded(
+                conn,
+                statement,
+                start,
+                cancelled,
+                &mut remaining,
+            )?);
+        }
+    } else {
+        result_sets.extend(mysql_execute_statement_sets_bounded(
+            conn,
+            sql,
+            start,
+            cancelled,
+            &mut remaining,
+        )?);
+    }
+
+    let mut result_sets_iter = result_sets.into_iter();
+    let mut primary = result_sets_iter
+        .next()
+        .ok_or_else(|| DbError::query_failed("bounded execution produced no result set"))?;
+    for extra in result_sets_iter {
+        primary.push_additional_result(extra);
+    }
+    Ok(primary)
+}
+
+/// Streams a single statement's result sets under the shared remaining-row
+/// budget, returning one [`QueryResult`] per server result set in order.
+///
+/// Rows are read lazily through `exec_iter`'s stream instead of being
+/// collected wholesale, so a cap applied during collection actually bounds
+/// retained work. Each set's metadata (its columns, or the completion packet's
+/// affected-row count) is read from the stream result's current set — the
+/// connection-level counter would be stale — before the set's rows are
+/// drained, because exhausting a set's row iterator advances the stream to
+/// the next set. Whether a set is a table or a mutation follows its own
+/// metadata: a set with columns is a table, a set without columns is a
+/// completion packet.
+fn mysql_execute_statement_sets_bounded(
+    conn: &mut Conn,
+    sql: &str,
+    start: Instant,
+    cancelled: &AtomicBool,
+    remaining: &mut usize,
+) -> Result<Vec<QueryResult>, DbError> {
+    // Prepare the statement to get the statement-level column metadata.
+    let stmt = conn.prep(sql).map_err(|e| format_mysql_query_error(&e))?;
+
+    let mut stream = conn.exec_iter(&stmt, ()).map_err(|e| {
+        if cancelled.load(Ordering::SeqCst) {
+            DbError::Cancelled
+        } else {
+            format_mysql_query_error(&e)
+        }
+    })?;
+
+    let mut result_sets: Vec<QueryResult> = Vec::new();
+    loop {
+        // Some while a set (a row stream or a completion packet) is pending;
+        // None once every result set of this statement was handled.
+        let Some(set) = stream.iter() else {
+            break;
+        };
+
+        // Read this set's own metadata before draining its rows: exhausting
+        // the row iterator already advances the stream to the next set.
+        let set_columns: Vec<ColumnMeta> = set
+            .columns()
+            .as_ref()
+            .iter()
+            .map(|col| ColumnMeta {
+                name: col.name_str().to_string(),
+                type_name: mysql_type_to_sql_label(col),
+                kind: mysql_type_to_kind(col.column_type()),
+                nullable: true,
+                is_primary_key: false,
+            })
+            .collect();
+        let affected_rows = if set_columns.is_empty() {
+            Some(set.affected_rows())
+        } else {
+            None
+        };
+
+        let mut rows: Vec<Row> = Vec::new();
+        let mut truncated = false;
+        for row_result in set {
+            match row_result {
+                Ok(row) => {
+                    if *remaining > 0 {
+                        let row_cols = row.columns_ref();
+                        rows.push(
+                            row_cols
+                                .iter()
+                                .enumerate()
+                                .map(|(i, col)| mysql_value_to_value(&row, i, col))
+                                .collect(),
+                        );
+                        *remaining -= 1;
+                    } else {
+                        // Observed and discarded: the set still drains, so the
+                        // command runs to completion on the server.
+                        truncated = true;
+                    }
+                }
+                Err(e) => {
+                    if cancelled.load(Ordering::SeqCst) {
+                        return Err(DbError::Cancelled);
+                    }
+                    return Err(format_mysql_query_error(&e));
+                }
+            }
+        }
+
+        let query_time = start.elapsed();
+        let mut set_result = QueryResult::table(set_columns, rows, affected_rows, query_time);
+        set_result.set_rows_truncated(truncated);
+        result_sets.push(set_result);
+    }
+
+    // Every statement yields at least one set: the stream starts on its first
+    // result set or completion packet, and an errored set surfaces through the
+    // row iterator above rather than disappearing.
+    if result_sets.is_empty() {
+        return Err(DbError::query_failed(
+            "statement stream completed without a result set",
+        ));
+    }
+
+    Ok(result_sets)
 }
 
 fn mysql_value_to_value(row: &mysql::Row, idx: usize, col: &mysql::Column) -> Value {
@@ -4254,7 +4459,75 @@ mod tests {
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
-    use mysql::{Opts, OptsBuilder};
+    use mysql::{Conn, Opts, OptsBuilder};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
+
+    #[test]
+    #[ignore = "requires Docker daemon"]
+    fn mysql_query_safety_refusal_preserves_existing_cancel_signal() -> Result<(), DbError> {
+        use super::{MysqlConnection, QueryConnState};
+        use dbflux_core::{Connection, ExecutionContext, ExecutionSourceContext, QueryRequest};
+        use dbflux_test_support::containers;
+
+        containers::with_mysql_url(|uri| {
+            let opts = Opts::from_url(&uri).expect("disposable MySQL URL should parse");
+            let catalog_conn =
+                containers::retry_db_operation(Duration::from_secs(30), || Conn::new(opts.clone()))
+                    .expect("catalog connection should open");
+            let query_conn =
+                containers::retry_db_operation(Duration::from_secs(30), || Conn::new(opts.clone()))
+                    .expect("query connection should open");
+            let cancelled = Arc::new(AtomicBool::new(true));
+            let connection = MysqlConnection {
+                catalog_conn: Arc::new(Mutex::new(catalog_conn)),
+                query_conn: Mutex::new(QueryConnState {
+                    conn: query_conn,
+                    current_database: Some("testdb".to_string()),
+                }),
+                ssh_catalog_tunnel: None,
+                ssh_query_tunnel: None,
+                query_connection_id: 0,
+                kill_opts: opts,
+                cancelled: cancelled.clone(),
+                kind: DbKind::MySQL,
+            };
+
+            let mut timeout_request = QueryRequest::new("SELECT 1");
+            timeout_request.statement_timeout = Some(Duration::from_secs(1));
+            assert!(matches!(
+                connection.execute(&timeout_request),
+                Err(DbError::NotSupported(_))
+            ));
+            assert!(
+                cancelled.load(Ordering::SeqCst),
+                "timeout refusal erased an existing cancellation"
+            );
+
+            cancelled.store(true, Ordering::SeqCst);
+            let mut metric_request = QueryRequest::new("SELECT 1").with_limit(0);
+            metric_request.execution_context = Some(ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                    metric_id: "test".to_string(),
+                    start_ms: 0,
+                    end_ms: 1,
+                }),
+                ..Default::default()
+            });
+            assert!(matches!(
+                connection.execute(&metric_request),
+                Err(DbError::NotSupported(_))
+            ));
+            assert!(
+                cancelled.load(Ordering::SeqCst),
+                "bounded metric refusal erased an existing cancellation"
+            );
+            Ok(())
+        })
+    }
 
     #[test]
     fn build_and_parse_uri_roundtrip_basics() {

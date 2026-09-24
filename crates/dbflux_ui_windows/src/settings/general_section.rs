@@ -302,9 +302,16 @@ impl GeneralSection {
 
     fn style_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new(AppStyle::Default.label()),
-            DropdownItem::new(AppStyle::Compact.label()),
+            DropdownItem::new(Self::style_label(AppStyle::Default)),
+            DropdownItem::new(Self::style_label(AppStyle::Compact)),
         ]
+    }
+
+    fn style_label(style: AppStyle) -> String {
+        match style {
+            AppStyle::Default => dbflux_i18n::t!("settings.general.style.option.default"),
+            AppStyle::Compact => dbflux_i18n::t!("settings.general.style.option.compact"),
+        }
     }
 
     fn language_items() -> Vec<DropdownItem> {
@@ -534,6 +541,32 @@ mod tests {
             .collect();
 
         assert_eq!(labels, vec!["Default", "Compact"]);
+    }
+
+    #[test]
+    fn style_label_maps_every_variant_to_a_key_in_every_locale() {
+        let cases = [
+            (AppStyle::Default, "settings.general.style.option.default"),
+            (AppStyle::Compact, "settings.general.style.option.compact"),
+        ];
+
+        for (style, key) in cases {
+            assert_eq!(GeneralSection::style_label(style), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+
+        assert_ne!(
+            dbflux_i18n::t!("settings.general.style.option.compact", locale = "en"),
+            dbflux_i18n::t!("settings.general.style.option.compact", locale = "es")
+        );
     }
 
     #[test]
