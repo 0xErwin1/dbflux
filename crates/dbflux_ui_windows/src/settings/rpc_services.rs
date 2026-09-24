@@ -1119,6 +1119,8 @@ impl ServicesSection {
         primary: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let enable_label = dbflux_i18n::t!("settings.rpc_services.field.enable");
+
         div()
             .flex()
             .items_center()
@@ -1135,14 +1137,13 @@ impl ServicesSection {
             .child(
                 Checkbox::new("svc-enabled")
                     .checked(self.svc_enabled)
+                    .aria_label(enable_label.clone())
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.svc_enabled = *checked;
                         cx.notify();
                     })),
             )
-            .child(Body::new(dbflux_i18n::t!(
-                "settings.rpc_services.field.enable"
-            )))
+            .child(Body::new(enable_label))
     }
 
     fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
