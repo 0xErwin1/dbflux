@@ -1040,6 +1040,9 @@ impl DriversSection {
                                     .child(
                                         Checkbox::new("drv-override-refresh-policy")
                                             .checked(self.drv_override_refresh_policy)
+                                            .aria_label(dbflux_i18n::t!(
+                                                "settings.general.refresh_policy.label"
+                                            ))
                                             .on_click(cx.listener(
                                                 |this, checked: &bool, _, cx| {
                                                     this.drv_override_refresh_policy = *checked;
@@ -1129,6 +1132,9 @@ impl DriversSection {
                                     .child(
                                         Checkbox::new("drv-override-refresh-interval")
                                             .checked(self.drv_override_refresh_interval)
+                                            .aria_label(dbflux_i18n::t!(
+                                                "settings.general.refresh_interval.label"
+                                            ))
                                             .on_click(cx.listener(
                                                 |this, checked: &bool, _, cx| {
                                                     this.drv_override_refresh_interval = *checked;
