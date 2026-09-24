@@ -362,13 +362,7 @@ impl ChartView {
         // In log1p mode: bounds and ticks live in log1p space so the canvas
         // projection is a simple linear map of those transformed values.
         // In linear mode: y_log_* mirrors y_min/y_max unchanged.
-        let (y_log_min, y_log_max) = if y_is_log {
-            let lmin = (y_min.max(0.0) + 1.0).ln();
-            let lmax = (y_max.max(0.0) + 1.0).ln();
-            (lmin, lmax)
-        } else {
-            (y_min, y_max)
-        };
+        let (y_log_min, y_log_max) = y_projection_bounds(y_min, y_max, y_is_log);
 
         // --- Axis ticks ---
 
@@ -609,30 +603,64 @@ impl ChartView {
         cx.notify();
     }
 
-    /// The padded Y ceiling used when rendering a `StackedBar` chart.
+    /// The Y range a `StackedBar` chart plots, in data space.
     ///
-    /// `RenderModel.y_max` stores per-series maxima, which underestimate the top
-    /// of a stack. This recomputes the true ceiling by summing the visible
-    /// series at each X value (see `stack_columns`) and adding the same 8%
-    /// headroom render uses, so the render path and the hover hit-test agree on
-    /// the Y scale. It is recomputed from the current hidden set, so toggling
-    /// series off keeps the scale correct.
-    fn stacked_y_max(&self) -> f64 {
+    /// `RenderModel.y_min` / `y_max` hold per-series extremes, which say
+    /// nothing about the height of a stack. Stacks grow from zero, so the range
+    /// starts at zero (or at the lowest value when one is negative) and ends at
+    /// the tallest stack (see `stack_columns`) plus the same 8% headroom plain
+    /// bars get. Render, the tick labels and the hover hit-test all read this
+    /// one range, so bars and ticks agree. It follows the current hidden set,
+    /// so toggling series off rescales the axis.
+    fn stacked_y_range(&self) -> (f64, f64) {
         let model = &self.render_model;
-        let y_min = model.y_min;
+        let lower = model.y_min.min(0.0);
 
-        let stacked_max = stack_columns(&model.decimated, &self.hidden)
+        let tallest = stack_columns(&model.decimated, &self.hidden)
             .iter()
             .map(StackColumn::total)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        let stacked_max = if stacked_max.is_finite() {
-            stacked_max
+        let tallest = if tallest.is_finite() {
+            tallest
         } else {
             model.y_max
         };
 
-        stacked_max + (stacked_max - y_min).abs() * 0.08
+        (lower, tallest + (tallest - lower).abs() * 0.08)
+    }
+
+    /// The Y range the plot area maps to, shared by the series painters, the
+    /// gridlines, the tick labels and the hover hit-test.
+    ///
+    /// Line, Scatter, Area and Pie plot the data range. Bar adds 8% headroom
+    /// above it. StackedBar plots `stacked_y_range`.
+    fn plot_y_range(&self) -> PlotYRange {
+        use crate::chart::spec::ChartKind;
+
+        let model = &self.render_model;
+        let kind = self.spec.kind;
+
+        let stacked = matches!(kind, ChartKind::StackedBar).then(|| self.stacked_y_range());
+
+        let min = stacked.map_or(model.y_min, |(lower, _)| lower);
+        let max = bar_layout_params(
+            kind,
+            model.y_max,
+            (model.y_max - model.y_min).max(1.0),
+            stacked.map(|(_, upper)| upper),
+            &model.decimated,
+        )
+        .y_max_adjusted;
+
+        let (proj_min, proj_max) = y_projection_bounds(min, max, model.y_is_log);
+
+        PlotYRange {
+            min,
+            max,
+            proj_min,
+            proj_range: (proj_max - proj_min).max(1.0),
+        }
     }
 
     /// Re-evaluate which series the cursor hovers over and update
@@ -751,12 +779,18 @@ impl ChartView {
             let cursor_sx = f32::from(hover_x);
             let cursor_sy = f32::from(hover_y);
 
-            // Use the same stacked Y ceiling render uses, not the per-series
-            // RenderModel.y_max, so segment boundaries line up with the bars.
-            let stacked_y_max = self.stacked_y_max();
-            let y_range_local = (stacked_y_max - y_min).max(1.0);
+            // Use the same Y range render paints the bars with, so segment
+            // boundaries line up with what is on screen.
+            let plot_y = self.plot_y_range();
             let data_to_screen_y = |dy: f64| -> f32 {
-                plot_y0 + plot_h - ((dy - y_min) / y_range_local * plot_h as f64) as f32
+                project_y_to_screen(
+                    dy,
+                    plot_y0,
+                    plot_h,
+                    plot_y.proj_min,
+                    plot_y.proj_range,
+                    y_is_log,
+                )
             };
 
             for column in &columns {
@@ -767,10 +801,10 @@ impl ChartView {
 
                 // Cursor is inside this bar column. Find which series segment
                 // the cursor's Y lands in by checking stacked segment boundaries.
-                let baseline = if y_min <= 0.0 && stacked_y_max >= 0.0 {
+                let baseline = if plot_y.min <= 0.0 && plot_y.max >= 0.0 {
                     0.0_f64
                 } else {
-                    y_min
+                    plot_y.min
                 };
                 let mut cumulative = baseline;
 
@@ -1088,27 +1122,24 @@ impl Render for ChartView {
         let x_min = model.x_min;
         let x_max = model.x_max;
         let x_range = (x_max - x_min).max(1.0);
-        let y_min = model.y_min;
-        let y_max = model.y_max;
-        let y_range = (y_max - y_min).max(1.0);
-        let y_log_min = model.y_log_min;
-        let y_log_max = model.y_log_max;
-        let y_log_range = (y_log_max - y_log_min).max(1.0);
         let y_is_log = model.y_is_log;
 
-        let bar_layout = bar_layout_params(
+        // One Y range drives the series, gridlines, tick labels and hit-test,
+        // so a tick sits exactly where a value of that size is drawn.
+        let plot_y = self.plot_y_range();
+        let y_min = plot_y.min;
+        let y_max = plot_y.max;
+        let y_log_min = plot_y.proj_min;
+        let y_log_range = plot_y.proj_range;
+
+        let bar_x_inset_fraction = bar_layout_params(
             kind,
-            y_max,
-            y_range,
-            if matches!(kind, crate::chart::spec::ChartKind::StackedBar) {
-                Some(self.stacked_y_max())
-            } else {
-                None
-            },
+            model.y_max,
+            (model.y_max - model.y_min).max(1.0),
+            None,
             &model.decimated,
-        );
-        let y_max = bar_layout.y_max_adjusted;
-        let bar_x_inset_fraction = bar_layout.bar_x_inset_fraction;
+        )
+        .bar_x_inset_fraction;
 
         let theme = cx.theme();
         let palette: Vec<Hsla> = model
@@ -1382,6 +1413,28 @@ impl Render for ChartView {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The Y range a chart's plot area maps to.
+///
+/// `min` / `max` are in data space and feed the tick generator. `proj_min` /
+/// `proj_range` are the same bounds in projection space (log1p or linear) and
+/// feed `project_y_to_screen` / `project_y_proj_space_to_screen`.
+struct PlotYRange {
+    min: f64,
+    max: f64,
+    proj_min: f64,
+    proj_range: f64,
+}
+
+/// Maps a data-space Y range into projection space: `ln(y + 1)` (values below
+/// zero clamp to zero) in log mode, unchanged in linear mode.
+fn y_projection_bounds(y_min: f64, y_max: f64, y_is_log: bool) -> (f64, f64) {
+    if y_is_log {
+        ((y_min.max(0.0) + 1.0).ln(), (y_max.max(0.0) + 1.0).ln())
+    } else {
+        (y_min, y_max)
+    }
+}
 
 /// Pre-computed bar/stacked-bar layout values derived from the data bounds.
 ///
@@ -3316,13 +3369,116 @@ mod tests {
         spec.kind = crate::chart::spec::ChartKind::StackedBar;
         let view = ChartView::build(&result, spec).expect("build should succeed");
 
-        let y_min = view.render_model.y_min;
-        let expected = 10.0 + (10.0 - y_min).abs() * 0.08;
+        let (lower, upper) = view.stacked_y_range();
+        assert_eq!(lower, 0.0, "stacks grow from zero");
         assert!(
-            (view.stacked_y_max() - expected).abs() < 1e-9,
-            "stacked max {} != {expected}",
-            view.stacked_y_max()
+            (upper - 10.8).abs() < 1e-9,
+            "tallest stack 10 plus 8% headroom, got {upper}"
         );
+    }
+
+    /// Host `a` reports 1 at t=1..6 and host `b` reports 1..6 at the same
+    /// times, so single values stay within 1..6 while the tallest stack is 7.
+    fn stacked_hosts_view(kind: crate::chart::spec::ChartKind) -> ChartView {
+        let rows = (1..=6)
+            .flat_map(|t| {
+                [("a", 1.0), ("b", t as f64)].map(|(host, load)| {
+                    vec![
+                        Value::Int(t * 1_000),
+                        Value::Float(load),
+                        Value::Text(host.to_string()),
+                    ]
+                })
+            })
+            .collect();
+        let result = QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+        spec.kind = kind;
+
+        ChartView::build(&result, spec).expect("build should succeed")
+    }
+
+    #[test]
+    fn stacked_plot_range_and_ticks_follow_the_stacked_max() {
+        let view = stacked_hosts_view(crate::chart::spec::ChartKind::StackedBar);
+        let plot_y = view.plot_y_range();
+        let (stack_min, stack_max) = view.stacked_y_range();
+
+        assert_eq!(view.render_model.y_max, 6.0, "single values stop at 6");
+        assert_eq!((plot_y.min, plot_y.max), (stack_min, stack_max));
+        assert!((stack_max - 7.0 * 1.08).abs() < 1e-9, "tallest stack is 7");
+
+        // Bars and ticks project through the same bounds: the stacked range,
+        // not the per-series 1..6 the model stores.
+        assert_eq!(plot_y.proj_min, stack_min);
+        assert!((plot_y.proj_range - (stack_max - stack_min)).abs() < 1e-9);
+
+        let ticks = ticks_numeric(plot_y.min, plot_y.max, 5);
+        let values: Vec<f64> = ticks.iter().map(|tick| tick.value).collect();
+        assert!(
+            values
+                .iter()
+                .all(|&value| value >= plot_y.min && value <= plot_y.max),
+            "every tick lies inside the plotted range: {values:?}"
+        );
+        assert!(
+            values.last().is_some_and(|&top| top >= 6.0),
+            "ticks reach the stacked max, not the per-series max: {values:?}"
+        );
+        let steps: Vec<f64> = values.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(
+            steps
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() < 1e-9),
+            "ticks are evenly spaced: {values:?}"
+        );
+
+        // A segment top of 4.25 must sit above the "4" tick, as it is drawn.
+        let (plot_y0, plot_h) = (0.0_f32, 400.0_f32);
+        let four_tick = project_y_proj_space_to_screen(
+            4.0,
+            plot_y0,
+            plot_h,
+            plot_y.proj_min,
+            plot_y.proj_range,
+        );
+        let segment_top = project_y_to_screen(
+            4.25,
+            plot_y0,
+            plot_h,
+            plot_y.proj_min,
+            plot_y.proj_range,
+            false,
+        );
+        assert!(segment_top < four_tick, "4.25 is drawn above the 4 tick");
+        assert!(
+            four_tick - segment_top < 20.0,
+            "and only a quarter unit above it, not a whole tick spacing"
+        );
+    }
+
+    #[test]
+    fn bar_plot_range_adds_headroom_and_line_plots_the_data_range() {
+        let bar = stacked_hosts_view(crate::chart::spec::ChartKind::Bar).plot_y_range();
+        assert_eq!(bar.min, 1.0);
+        assert!((bar.max - (6.0 + 5.0 * 0.08)).abs() < 1e-9);
+        assert!((bar.proj_range - (bar.max - bar.min)).abs() < 1e-9);
+
+        let line_view = stacked_hosts_view(crate::chart::spec::ChartKind::Line);
+        let line = line_view.plot_y_range();
+        assert_eq!((line.min, line.max), (1.0, 6.0));
+        assert_eq!(line.proj_min, line_view.render_model.y_log_min);
     }
 
     #[test]

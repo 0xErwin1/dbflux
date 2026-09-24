@@ -39,6 +39,13 @@ All notable changes to DBFlux will be documented in this file.
   piled values from different times into one bar. Bars now stack the values
   that share an X value, and a series with no value there adds nothing.
 
+* **Bar chart ticks match the bars** — Bar and Stacked Bar generated Y tick
+  labels from the padded or stacked range but drew bars and gridlines with
+  the unpadded per-series range, so a Stacked Bar segment of 4.25 appeared
+  above the "4" tick and the labels bunched at the bottom. Bars, gridlines,
+  tick labels and hover now share one Y range. For Stacked Bar it runs from
+  zero to the tallest stack.
+
 * **Time-series measurements open as a chart** — opening a measurement on an
   InfluxDB connection showed a document tree, the toolbar read
   `SELECT * FROM <bucket>.<measurement>` and the status bar `find ...`,

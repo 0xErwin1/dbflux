@@ -45,7 +45,7 @@ Chart kinds are defined by the `ChartKind` enum in
 | `Bar` | Bar chart. |
 | `Scatter` | Scatter chart. |
 | `Area` | Filled line chart; the area between the series line and the baseline is shaded. Shares Line's geometry and hover behaviour. |
-| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. Series are aligned on their X values: a series with no value at an X adds nothing to that bar. The Y axis is re-scaled at render time to the maximum stack sum. |
+| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. Series are aligned on their X values: a series with no value at an X adds nothing to that bar. The Y axis is re-scaled at render time to run from zero to the maximum stack sum, and the tick labels use that same range. |
 | `Pie` | Pie chart. No X/Y axes; each visible series becomes one wedge sized by the sum of that series' Y values. |
 
 `ChartKind` carries `#[serde(default)]` semantics on the containing
