@@ -96,7 +96,7 @@ input it finds no handler; and the frame has no click listener, so `click_elemen
 
 `screenshot-freshness.patch` was written for DBFlux against this directory with the first two
 patches applied, and has no upstream counterpart. It needs no change to `vendor/gpui-pre`.
-Five files, 758 diff lines.
+Six files, 1078 diff lines.
 
 Upstream settles a screenshot on a frame that has finished root paint. GPUI reports that from
 inside `Window::draw`, before `Window::present` hands the frame to the platform window, and on
@@ -113,7 +113,12 @@ could show the previous frame.
   token, and `WaitForFrame` with `presented` waits on that token instead of on root paint.
   Only `Refresh` advances the token.
 - `gpui-mcp-server`: the settle step used before a screenshot and after input (`Refresh` then
-  `WaitForFrame`, twice) waits with `presented`.
+  `WaitForFrame`, twice) waits with `presented`. A new `wait_for_idle` tool checks every
+  250 ms and succeeds once the semantic tree generation has not changed and the window has
+  drawn at most one frame over two consecutive checks, so the 500 ms caret blink of a focused
+  input still counts as idle. Each check waits for a newer tree with `WaitForTree`, so an
+  unchanged tree is not transferred. `timeout_ms` defaults to 5000 and must be between 500
+  and 30000.
 - `gpui-mcp-capture`: on Linux a screenshot samples the window every 16 ms until two
   consecutive captures are identical, within the settle deadline (one second by default, plus
   the measured cost of one readback, as for the Windows freshness samples). At the deadline it
