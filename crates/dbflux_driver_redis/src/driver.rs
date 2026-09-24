@@ -1341,6 +1341,28 @@ impl RedisConnection {
             next_cursor: cursor_state.encode(),
         })
     }
+
+    /// Sums `DBSIZE` over every Redis Cluster master. `DBSIZE` sent through a
+    /// `ClusterConnection` reaches a single node, so each master is routed to
+    /// by address, as `scan_keys_cluster` does for `SCAN`.
+    fn key_count_cluster(&self, keyspace: Option<u32>) -> Result<u64, DbError> {
+        validate_cluster_database(keyspace)?;
+
+        let mut transport = self
+            .connection
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let RedisTransport::Cluster(conn) = &mut *transport else {
+            return Err(DbError::query_failed(
+                "Redis Cluster key count requested on a non-cluster connection".to_string(),
+            ));
+        };
+        let conn: &mut redis::cluster::ClusterConnection = conn.as_mut();
+
+        let masters = fetch_cluster_masters(conn)?;
+        fetch_cluster_key_count(conn, &masters)
+    }
 }
 
 impl Connection for RedisConnection {
@@ -1722,6 +1744,26 @@ impl ConnectionExt for RedisConnection {
 }
 
 impl KeyValueApi for RedisConnection {
+    fn key_count(&self, keyspace: Option<u32>) -> Result<u64, DbError> {
+        let is_cluster = {
+            let transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+            matches!(&*transport, RedisTransport::Cluster(_))
+        };
+
+        if is_cluster {
+            return self.key_count_cluster(keyspace);
+        }
+
+        self.with_connection(keyspace, |conn| {
+            redis::cmd("DBSIZE")
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
         let is_cluster = {
             let transport = self
@@ -2829,6 +2871,32 @@ fn fetch_cluster_keyspace_stats(
     }
 
     Ok(aggregate_keyspace_stats(&per_master))
+}
+
+fn fetch_cluster_key_count(
+    conn: &mut redis::cluster::ClusterConnection,
+    masters: &[(String, u16)],
+) -> Result<u64, DbError> {
+    let mut total: u64 = 0;
+
+    for (host, port) in masters {
+        let reply = conn
+            .route_command(
+                &redis::cmd("DBSIZE"),
+                RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
+                    host: host.clone(),
+                    port: *port,
+                }),
+            )
+            .map_err(|e| format_redis_query_error(&e))?;
+
+        let node_count: u64 = redis::FromRedisValue::from_redis_value(&reply)
+            .map_err(|e| format_redis_query_error(&e))?;
+
+        total = total.saturating_add(node_count);
+    }
+
+    Ok(total)
 }
 
 /// Reports the client identity to the server via `CLIENT SETNAME` so it is

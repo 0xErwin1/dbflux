@@ -254,6 +254,11 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
                 .map(|page| DriverResponseBody::KvScanResult { page })
         }),
 
+        DriverRequestBody::KvKeyCount { keyspace } => dispatch_kv(conn, |kv| {
+            kv.key_count(keyspace)
+                .map(|count| DriverResponseBody::KvKeyCountResult { count })
+        }),
+
         DriverRequestBody::KvGetKey { request } => dispatch_kv(conn, |kv| {
             kv.get_key(&request)
                 .map(|result| DriverResponseBody::KvGetResult { result })

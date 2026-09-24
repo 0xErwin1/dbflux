@@ -1645,6 +1645,7 @@ document:
       keys_count:
         one: "%{count} clave en esta página"
         many: "%{count} claves en esta página"
+      keys_total: "%{count} en total"
       filter:
         keys_placeholder: "Filtrar claves..."
         members_placeholder: "Filtrar miembros..."

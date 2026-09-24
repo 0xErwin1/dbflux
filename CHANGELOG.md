@@ -16,6 +16,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
+
 * MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
 
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
@@ -27,6 +29,10 @@ All notable changes to DBFlux will be documented in this file.
   and in the driver host before the plugin connection runs it. Previously the
   host passed those options through with nothing to guarantee the driver
   honored them. Queries without either option run as before.
+
+* `START TRANSACTION` and `BEGIN` now work from the SQL editor on MySQL,
+  including as the first statement of a script. MySQL 8.4 refused them with
+  "This command is not supported in the prepared statement protocol yet".
 
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
@@ -272,6 +278,13 @@ All notable changes to DBFlux will be documented in this file.
   snapshot table rows (old databases upgrade in place and stay readable), and
   snapshot deduplication no longer discards a fresh capture just because the
   structural fingerprint is unchanged.
+
+* **Key total in the Redis key browser** — with no filter set, the key browser
+  now shows how many keys the whole keyspace holds next to the keys on the
+  current page. Drivers report it through a new defaulted
+  `KeyValueApi::key_count` seam: Redis answers with `DBSIZE`, and a Cluster
+  connection sums `DBSIZE` over every master. External drivers carry it over
+  driver RPC 1.5; against an older host the total is simply not shown.
 
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render

@@ -376,6 +376,16 @@ impl KeyValueApi for IpcConnection {
         }
     }
 
+    fn key_count(&self, keyspace: Option<u32>) -> Result<u64, DbError> {
+        ensure_key_count_supported(self.client.selected_version())?;
+
+        match self.kv_call(DriverRequestBody::KvKeyCount { keyspace })? {
+            DriverResponseBody::KvKeyCountResult { count } => Ok(count),
+            DriverResponseBody::Error(e) => Err(DbError::QueryFailed(e.message.into())),
+            _ => Err(DbError::QueryFailed("Unexpected KV response".into())),
+        }
+    }
+
     fn get_key(&self, request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
         match self.kv_call(DriverRequestBody::KvGetKey {
             request: request.clone(),
@@ -563,13 +573,34 @@ fn ensure_bulk_schema_columns_supported(version: ProtocolVersion) -> Result<(), 
     Ok(())
 }
 
+/// Whether the key count request (`KvKeyCount`) is available on the
+/// negotiated driver RPC version. Introduced in v1.5.
+fn protocol_supports_key_count(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_VERSION.major
+        || (version.major == DRIVER_RPC_VERSION.major && version.minor >= 5)
+}
+
+/// Refuse key counts locally, before anything is sent, when the negotiated
+/// driver RPC version predates the `KvKeyCount` request. An older host cannot
+/// decode the new variant, so the call must never reach it; `NotSupported`
+/// matches the trait default, which consumers already treat as "no total".
+#[allow(clippy::result_large_err)]
+fn ensure_key_count_supported(version: ProtocolVersion) -> Result<(), DbError> {
+    if !protocol_supports_key_count(version) {
+        return Err(DbError::NotSupported(
+            "the negotiated driver RPC protocol does not support key counts".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IpcConnection, ensure_bulk_schema_columns_supported};
+    use super::{IpcConnection, ensure_bulk_schema_columns_supported, ensure_key_count_supported};
     use crate::transport::RpcClient;
     use dbflux_core::{
-        Connection, DatabaseCategory, DbError, DbKind, DriverMetadataBuilder, QueryLanguage,
-        QueryRequest,
+        Connection, DatabaseCategory, DbError, DbKind, DriverMetadataBuilder, KeyValueApi,
+        QueryLanguage, QueryRequest,
     };
     use dbflux_ipc::ProtocolVersion;
     use dbflux_ipc::driver_socket_name;
@@ -676,5 +707,58 @@ mod tests {
     fn bulk_schema_columns_allowed_from_v1_4() {
         assert!(ensure_bulk_schema_columns_supported(ProtocolVersion::new(1, 4)).is_ok());
         assert!(ensure_bulk_schema_columns_supported(ProtocolVersion::new(1, 5)).is_ok());
+    }
+
+    #[test]
+    fn key_count_against_an_older_host_is_not_supported_without_a_frame() {
+        let socket_id = format!("key-count-ipc-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id).with_actions(vec![FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = IpcConnection::new(
+            client,
+            Uuid::nil(),
+            DbKind::Redis,
+            DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::KeyValue,
+                QueryLanguage::RedisCommands,
+            )
+            .build(),
+            dbflux_core::DriverCapabilities::empty(),
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase,
+            dbflux_core::SchemaFeatures::empty(),
+            dbflux_core::CodeGenCapabilities::empty(),
+        );
+
+        assert!(matches!(
+            KeyValueApi::key_count(&connection, None),
+            Err(DbError::NotSupported(_))
+        ));
+        // The scripted pong must remain available: the refused count sent nothing.
+        assert!(connection.ping().is_ok());
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn key_count_refused_below_v1_5() {
+        let result = ensure_key_count_supported(ProtocolVersion::new(1, 4));
+
+        match result {
+            Err(DbError::NotSupported(message)) => {
+                assert!(message.contains("key counts"));
+            }
+            other => panic!("expected NotSupported refusal, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn key_count_allowed_from_v1_5() {
+        assert!(ensure_key_count_supported(ProtocolVersion::new(1, 5)).is_ok());
+        assert!(ensure_key_count_supported(ProtocolVersion::new(1, 6)).is_ok());
     }
 }

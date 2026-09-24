@@ -1645,6 +1645,7 @@ document:
       keys_count:
         one: "%{count} key on this page"
         many: "%{count} keys on this page"
+      keys_total: "%{count} total"
       filter:
         keys_placeholder: "Filter keys..."
         members_placeholder: "Filter members..."

@@ -3184,7 +3184,13 @@ fn mysql_execute_one_statement(
     cancelled: &AtomicBool,
 ) -> Result<QueryResult, DbError> {
     // Prepare the statement to get column metadata
-    let stmt = conn.prep(sql).map_err(|e| format_mysql_query_error(&e))?;
+    let stmt = match conn.prep(sql) {
+        Ok(stmt) => stmt,
+        Err(error) if is_unsupported_in_prepared_protocol(&error) => {
+            return mysql_execute_text_statement(conn, sql, start, cancelled);
+        }
+        Err(error) => return Err(format_mysql_query_error(&error)),
+    };
 
     // Extract column metadata from the prepared statement
     let columns: Vec<ColumnMeta> = stmt
@@ -3265,6 +3271,60 @@ fn mysql_execute_one_statement(
     }
 }
 
+/// Whether a prepare failure is the server refusing the statement in the
+/// prepared-statement protocol (`ER_UNSUPPORTED_PS`, as MySQL 8.4 answers for
+/// `BEGIN` and `START TRANSACTION`).
+///
+/// The refusal comes back from COM_STMT_PREPARE, before the statement runs,
+/// so rerunning it through the text protocol executes it exactly once.
+fn is_unsupported_in_prepared_protocol(error: &mysql::Error) -> bool {
+    matches!(
+        error,
+        mysql::Error::MySqlError(server_error)
+            if server_error.code == mysql::ServerError::ER_UNSUPPORTED_PS as u16
+    )
+}
+
+/// Runs a statement the prepared-statement protocol refuses through the text
+/// protocol, with no row budget, returning its first result set as primary
+/// and any further sets as additional results.
+fn mysql_execute_text_statement(
+    conn: &mut Conn,
+    sql: &str,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let stream = conn
+        .query_iter(sql)
+        .map_err(|error| mysql_stream_error(&error, cancelled))?;
+
+    let mut remaining = usize::MAX;
+    let result_sets = mysql_collect_result_sets(stream, start, cancelled, &mut remaining)?;
+
+    merge_result_sets(result_sets)
+}
+
+fn merge_result_sets(result_sets: Vec<QueryResult>) -> Result<QueryResult, DbError> {
+    let mut result_sets_iter = result_sets.into_iter();
+    let mut primary = result_sets_iter
+        .next()
+        .ok_or_else(|| DbError::query_failed("execution produced no result set"))?;
+
+    for extra in result_sets_iter {
+        primary.push_additional_result(extra);
+    }
+
+    Ok(primary)
+}
+
+fn mysql_stream_error(error: &mysql::Error, cancelled: &AtomicBool) -> DbError {
+    if cancelled.load(Ordering::SeqCst) {
+        DbError::Cancelled
+    } else {
+        format_mysql_query_error(error)
+    }
+}
+
 fn mysql_execute_bounded(
     conn: &mut Conn,
     sql: &str,
@@ -3298,28 +3358,13 @@ fn mysql_execute_bounded(
         )?);
     }
 
-    let mut result_sets_iter = result_sets.into_iter();
-    let mut primary = result_sets_iter
-        .next()
-        .ok_or_else(|| DbError::query_failed("bounded execution produced no result set"))?;
-    for extra in result_sets_iter {
-        primary.push_additional_result(extra);
-    }
-    Ok(primary)
+    merge_result_sets(result_sets)
 }
 
-/// Streams a single statement's result sets under the shared remaining-row
-/// budget, returning one [`QueryResult`] per server result set in order.
-///
-/// Rows are read lazily through `exec_iter`'s stream instead of being
-/// collected wholesale, so a cap applied during collection actually bounds
-/// retained work. Each set's metadata (its columns, or the completion packet's
-/// affected-row count) is read from the stream result's current set — the
-/// connection-level counter would be stale — before the set's rows are
-/// drained, because exhausting a set's row iterator advances the stream to
-/// the next set. Whether a set is a table or a mutation follows its own
-/// metadata: a set with columns is a table, a set without columns is a
-/// completion packet.
+/// Runs a single statement under the shared remaining-row budget, returning
+/// one [`QueryResult`] per server result set in order. A statement the
+/// prepared-statement protocol refuses runs through the text protocol under
+/// the same budget.
 fn mysql_execute_statement_sets_bounded(
     conn: &mut Conn,
     sql: &str,
@@ -3327,17 +3372,42 @@ fn mysql_execute_statement_sets_bounded(
     cancelled: &AtomicBool,
     remaining: &mut usize,
 ) -> Result<Vec<QueryResult>, DbError> {
-    // Prepare the statement to get the statement-level column metadata.
-    let stmt = conn.prep(sql).map_err(|e| format_mysql_query_error(&e))?;
-
-    let mut stream = conn.exec_iter(&stmt, ()).map_err(|e| {
-        if cancelled.load(Ordering::SeqCst) {
-            DbError::Cancelled
-        } else {
-            format_mysql_query_error(&e)
+    let stmt = match conn.prep(sql) {
+        Ok(stmt) => stmt,
+        Err(error) if is_unsupported_in_prepared_protocol(&error) => {
+            let stream = conn
+                .query_iter(sql)
+                .map_err(|error| mysql_stream_error(&error, cancelled))?;
+            return mysql_collect_result_sets(stream, start, cancelled, remaining);
         }
-    })?;
+        Err(error) => return Err(format_mysql_query_error(&error)),
+    };
 
+    let stream = conn
+        .exec_iter(&stmt, ())
+        .map_err(|error| mysql_stream_error(&error, cancelled))?;
+
+    mysql_collect_result_sets(stream, start, cancelled, remaining)
+}
+
+/// Drains a statement's result-set stream under the shared remaining-row
+/// budget, returning one [`QueryResult`] per server result set in order.
+///
+/// Rows are read lazily from the stream instead of being collected
+/// wholesale, so a cap applied during collection actually bounds retained
+/// work. Each set's metadata (its columns, or the completion packet's
+/// affected-row count) is read from the stream result's current set — the
+/// connection-level counter would be stale — before the set's rows are
+/// drained, because exhausting a set's row iterator advances the stream to
+/// the next set. Whether a set is a table or a mutation follows its own
+/// metadata: a set with columns is a table, a set without columns is a
+/// completion packet.
+fn mysql_collect_result_sets<P: mysql::prelude::Protocol>(
+    mut stream: mysql::QueryResult<'_, '_, '_, P>,
+    start: Instant,
+    cancelled: &AtomicBool,
+    remaining: &mut usize,
+) -> Result<Vec<QueryResult>, DbError> {
     let mut result_sets: Vec<QueryResult> = Vec::new();
     loop {
         // Some while a set (a row stream or a completion packet) is pending;
@@ -3387,12 +3457,7 @@ fn mysql_execute_statement_sets_bounded(
                         truncated = true;
                     }
                 }
-                Err(e) => {
-                    if cancelled.load(Ordering::SeqCst) {
-                        return Err(DbError::Cancelled);
-                    }
-                    return Err(format_mysql_query_error(&e));
-                }
+                Err(error) => return Err(mysql_stream_error(&error, cancelled)),
             }
         }
 
