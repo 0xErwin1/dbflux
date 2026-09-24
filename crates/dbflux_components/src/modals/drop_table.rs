@@ -3,7 +3,7 @@ use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Text, surface_raised};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
-use dbflux_core::{LogErr, RelationKind, RelationRef};
+use dbflux_core::{LogErr, RelationKind, RelationRef, SqlDialect};
 use gpui::prelude::*;
 use gpui::{Context, Entity, EventEmitter, Focusable, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -22,33 +22,42 @@ pub enum DropTableOutcome {
 pub struct DropTableRequest {
     /// Short or qualified table name shown in the body.
     pub table_name: String,
-    /// Schema name (for `DROP TABLE "schema"."table"`).
+    /// Schema name, when the table lives in one.
     pub schema_name: Option<String>,
     /// Dependent objects — empty if none.
     pub dependents: Vec<RelationRef>,
+    /// The table reference as the connection's SQL dialect writes it, e.g.
+    /// `"public"."orders"`, `` `shop`.`orders` `` or `[dbo].[orders]`.
+    pub qualified_table: String,
 }
 
 impl DropTableRequest {
+    /// Builds a request whose SQL preview quotes the table the way `dialect`
+    /// does, so the preview matches the connection it will run against.
+    pub fn new(
+        table_name: String,
+        schema_name: Option<String>,
+        dependents: Vec<RelationRef>,
+        dialect: &dyn SqlDialect,
+    ) -> Self {
+        let qualified_table = dialect.qualified_table(schema_name.as_deref(), &table_name);
+
+        Self {
+            table_name,
+            schema_name,
+            dependents,
+            qualified_table,
+        }
+    }
+
     /// Build the SQL preview text for this request.
     pub fn sql_preview(&self) -> String {
-        let has_deps = !self.dependents.is_empty();
-        match &self.schema_name {
-            Some(schema) => {
-                let base = format!("DROP TABLE \"{}\".\"{}\"", schema, self.table_name);
-                if has_deps {
-                    format!("{}\n  CASCADE;", base)
-                } else {
-                    format!("{};", base)
-                }
-            }
-            None => {
-                let base = format!("DROP TABLE \"{}\"", self.table_name);
-                if has_deps {
-                    format!("{}\n  CASCADE;", base)
-                } else {
-                    format!("{};", base)
-                }
-            }
+        let base = format!("DROP TABLE {}", self.qualified_table);
+
+        if self.dependents.is_empty() {
+            format!("{};", base)
+        } else {
+            format!("{}\n  CASCADE;", base)
         }
     }
 }
@@ -340,13 +349,115 @@ impl Render for ModalDropTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::{DefaultSqlDialect, PlaceholderStyle};
 
     fn request(table: &str, schema: Option<&str>, deps: Vec<RelationRef>) -> DropTableRequest {
-        DropTableRequest {
-            table_name: table.to_string(),
-            schema_name: schema.map(str::to_string),
-            dependents: deps,
+        DropTableRequest::new(
+            table.to_string(),
+            schema.map(str::to_string),
+            deps,
+            &DefaultSqlDialect,
+        )
+    }
+
+    /// Quotes identifiers with backticks and keeps the schema, as MySQL does.
+    struct BacktickDialect;
+
+    impl SqlDialect for BacktickDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("`{}`", name.replace('`', "``"))
         }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            match schema {
+                Some(schema) => format!(
+                    "{}.{}",
+                    self.quote_identifier(schema),
+                    self.quote_identifier(table)
+                ),
+                None => self.quote_identifier(table),
+            }
+        }
+
+        fn value_to_literal(&self, _value: &dbflux_core::Value) -> String {
+            String::new()
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            text.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::QuestionMark
+        }
+    }
+
+    /// Quotes identifiers with brackets, as SQL Server does.
+    struct BracketDialect;
+
+    impl SqlDialect for BracketDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("[{}]", name.replace(']', "]]"))
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            match schema {
+                Some(schema) => format!(
+                    "{}.{}",
+                    self.quote_identifier(schema),
+                    self.quote_identifier(table)
+                ),
+                None => self.quote_identifier(table),
+            }
+        }
+
+        fn value_to_literal(&self, _value: &dbflux_core::Value) -> String {
+            String::new()
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            text.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::AtSign
+        }
+    }
+
+    #[test]
+    fn sql_preview_quotes_through_the_connection_dialect() {
+        let postgres = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![],
+            &DefaultSqlDialect,
+        );
+        let mysql = DropTableRequest::new(
+            "orders".to_string(),
+            Some("shop".to_string()),
+            vec![],
+            &BacktickDialect,
+        );
+        let sql_server = DropTableRequest::new(
+            "orders".to_string(),
+            Some("dbo".to_string()),
+            vec![view_dep("dbo.order_view")],
+            &BracketDialect,
+        );
+
+        assert_eq!(postgres.sql_preview(), "DROP TABLE \"public\".\"orders\";");
+        assert_eq!(mysql.sql_preview(), "DROP TABLE `shop`.`orders`;");
+        assert_eq!(
+            sql_server.sql_preview(),
+            "DROP TABLE [dbo].[orders]\n  CASCADE;"
+        );
+    }
+
+    #[test]
+    fn sql_preview_escapes_the_quote_character_inside_a_name() {
+        let request = DropTableRequest::new("odd`name".to_string(), None, vec![], &BacktickDialect);
+
+        assert_eq!(request.sql_preview(), "DROP TABLE `odd``name`;");
     }
 
     fn view_dep(name: &str) -> RelationRef {
@@ -496,11 +607,12 @@ mod keyboard_tests {
 
             modal.update(cx, |modal, cx| {
                 modal.open(
-                    DropTableRequest {
-                        table_name: "orders".to_string(),
-                        schema_name: None,
-                        dependents: Vec::new(),
-                    },
+                    DropTableRequest::new(
+                        "orders".to_string(),
+                        None,
+                        Vec::new(),
+                        &dbflux_core::DefaultSqlDialect,
+                    ),
                     window,
                     cx,
                 );

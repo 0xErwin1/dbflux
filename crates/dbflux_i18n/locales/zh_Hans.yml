@@ -2837,6 +2837,8 @@ settings:
       text_input: 文本输入
       dropdown: 下拉框
       sql_preview_modal: SQL 预览
+      cell_editor_modal: 单元格编辑器
+      document_preview_modal: 文档预览
       context_menu: 上下文菜单
       confirm_modal: 确认
       form_navigation: 表单导航

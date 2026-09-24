@@ -156,7 +156,7 @@ impl Render for DocumentPreviewModal {
         );
 
         ModalFrame::new("document-preview-modal", &self.focus_handle, close)
-            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
+            .key_context(ContextId::DocumentPreviewModal.as_gpui_context())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()))
             .header_leading(Icon::new(AppIcon::Braces).size(Heights::ICON_SM).primary())
             .title(dbflux_i18n::t!("modals.document_preview.title"))

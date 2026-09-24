@@ -2837,6 +2837,8 @@ settings:
       text_input: 텍스트 입력
       dropdown: 드롭다운
       sql_preview_modal: SQL 미리 보기
+      cell_editor_modal: 셀 편집기
+      document_preview_modal: 문서 미리 보기
       context_menu: 상황에 맞는 메뉴
       confirm_modal: 확인
       form_navigation: 양식 탐색
