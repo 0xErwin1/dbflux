@@ -1384,6 +1384,7 @@ document:
       skipped: "%{table}: skipped"
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
+      cancelled: "%{table}: cancelled after %{rows} row(s)"
     footer:
       back: Back
       continue: Continue
@@ -1462,6 +1463,7 @@ document:
       skipped: "%{table}: skipped"
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
+      cancelled: "%{table}: cancelled after %{rows} row(s)"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Connection not found
@@ -1704,6 +1706,7 @@ document:
       skipped: "%{table}: skipped"
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
+      cancelled: "%{table}: cancelled after %{rows} row(s)"
     mapping:
       target_placeholder: Target table
       mode_placeholder: Mode

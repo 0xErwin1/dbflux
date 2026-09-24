@@ -539,7 +539,7 @@ fn resolve_run_outcome(
             report: None,
             toast_success: false,
             summary: dbflux_i18n::t!("document.migrate_wizard.status.cancelled"),
-            warnings: Vec::new(),
+            warnings: MigrateWizard::itemized_status_lines(&outcome.tables, &outcome.warnings),
         },
         Ok(MigrationOutcome::Completed(outcome)) => {
             let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
@@ -991,10 +991,14 @@ fn format_elapsed(elapsed: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{OrderDecision, PlanSummary, build_plan_summary, decide_order, mapping_mode_label};
+    use super::{
+        OrderDecision, PlanSummary, RunTaskAction, build_plan_summary, decide_order,
+        mapping_mode_label, resolve_run_outcome,
+    };
     use crate::migrate_wizard::column_mapping::TableMigrationConfig;
     use dbflux_core::{OrderResult, TableRef, TransferColumn};
-    use dbflux_transfer::TableMappingMode;
+    use dbflux_transfer::migration::{MigratedTable, MigrationOutcome, MigrationRunOutcome};
+    use dbflux_transfer::{TableMappingMode, TableTransferStatus};
 
     fn column(name: &str) -> TransferColumn {
         TransferColumn {
@@ -1164,5 +1168,45 @@ mod tests {
         let summary = build_plan_summary("a".to_string(), "b".to_string(), configs.iter());
 
         assert!(!summary.has_destructive());
+    }
+
+    fn migrated(name: &str, status: TableTransferStatus) -> MigratedTable {
+        MigratedTable {
+            source_table: name.to_string(),
+            target_table: name.to_string(),
+            status,
+        }
+    }
+
+    /// A cancel mid-table lists every planned table on the Done screen: the
+    /// table the cancel stopped reports the rows it kept, and the tables
+    /// after it report that they never started.
+    #[test]
+    fn resolve_run_outcome_cancelled_run_itemizes_the_cancelled_table() {
+        let result = Ok(MigrationOutcome::Completed(MigrationRunOutcome {
+            tables: vec![
+                migrated("users", TableTransferStatus::Completed { rows: 500 }),
+                migrated("orders", TableTransferStatus::Cancelled { rows: 20 }),
+                migrated("line_items", TableTransferStatus::NotStarted),
+            ],
+            warnings: vec!["engine warning".to_string()],
+            cancelled: true,
+        }));
+
+        let resolution = resolve_run_outcome(result);
+
+        assert!(matches!(resolution.task_action, RunTaskAction::Cancel));
+        assert!(resolution.report.is_none());
+        assert!(!resolution.toast_success);
+        assert_eq!(resolution.summary, "Migration cancelled");
+        assert_eq!(
+            resolution.warnings,
+            vec![
+                "users: completed (500 row(s))".to_string(),
+                "orders: cancelled after 20 row(s)".to_string(),
+                "line_items: not attempted".to_string(),
+                "engine warning".to_string(),
+            ]
+        );
     }
 }

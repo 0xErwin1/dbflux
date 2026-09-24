@@ -52,6 +52,15 @@ All notable changes to DBFlux will be documented in this file.
   retained. A result that merely fills its limit is not flagged, and discarded
   stale executions do not raise omission warnings.
 
+* **Cancelled import and migration tables** — after a cancel, the Done screen
+  of the import and migrate wizards lists every table, and the table the
+  cancel stopped shows as cancelled with the rows it kept instead of
+  completed. An import whose connection closed just before the run started
+  now reports the error and returns to the configure step, where it used to
+  sit on a running screen whose Cancel did nothing. The import configure step
+  scrolls its table list, so a bundle with many tables no longer overflows
+  the dialog.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -327,6 +336,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Modal footers no longer cover the body** — the shared modal shell sized its
+  body to its 96 px minimum instead of its content, so the footer covered the
+  end of any taller body, such as the connection name in the Delete connection
+  dialog. The body now grows to fit its content and scrolls only when the
+  dialog reaches its maximum height.
+
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist
   returned an empty structure instead of an error, so the grid showed a blank
@@ -361,6 +376,19 @@ All notable changes to DBFlux will be documented in this file.
   declared scale (`1123.40`), very large or very precise values, and `NaN`,
   `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
   as an unsupported type instead of passing for `NULL`.
+
+* **PostgreSQL values that cannot be decoded no longer show as `NULL`** —
+  `infinity` and `-infinity` dates and timestamps, and any other value the
+  driver could not decode, read back as `NULL` in query results, table
+  browsing, MCP `select_data`, exports, and the rows returned after an insert,
+  update, or delete. Infinite dates and timestamps now show as `infinity` and
+  `-infinity`, as PostgreSQL prints them. A value that still cannot be decoded
+  is reported as an unsupported type and flags the result, and a real SQL
+  `NULL` shows as `NULL` for every column type, including types without a
+  decoder. The instance inspectors log the column and type of a cell they
+  cannot decode and show it as unsupported. `numeric[]` arrays now show their
+  exact decimals; `money` stays unsupported because its scale depends on the
+  server's `lc_monetary` setting.
 
 * **The inspector rail follows the active tab** — switching to a tab, or
   closing the active one, could leave the right-side rail showing the row

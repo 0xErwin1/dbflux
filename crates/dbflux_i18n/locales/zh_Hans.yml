@@ -1384,6 +1384,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
     footer:
       back: 返回
       continue: 继续
@@ -1462,6 +1463,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
   instance_inspector:
     task_label: "检查器：%{metric_id}"
     connection_not_found: 未找到连接
@@ -1704,6 +1706,7 @@ document:
       skipped: "%{table}：已跳过"
       failed: "%{table}：失败 — %{error}"
       not_attempted: "%{table}：未尝试"
+      cancelled: "%{table}：已在 %{rows} 行后取消"
     mapping:
       target_placeholder: 目标表
       mode_placeholder: 模式
