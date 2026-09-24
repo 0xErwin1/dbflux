@@ -10,6 +10,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Chart controls for missing features removed** — the chart toolbar's PNG
+  button, the dashboard Configure popover's Export PNG action, and the point
+  inspector's Annotate and Copy as query buttons are gone. They only showed a
+  "coming in v0.7" toast or a disabled "Coming soon" label for features that
+  do not exist. The point inspector keeps its Show in tree action.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

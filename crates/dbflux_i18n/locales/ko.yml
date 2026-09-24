@@ -67,9 +67,6 @@ chart:
     source_doc: 원본 문서
     quick_actions: 빠른 작업
     show_in_tree: 트리에 표시
-    annotate: 주석 추가
-    copy_as_query: 쿼리로 복사
-    coming_soon: 곧 제공 예정
 common:
   time_range:
     error:
@@ -719,7 +716,6 @@ document:
     toast:
       chart_saved: 차트 저장됨
       save_failed: "차트를 저장하지 못했습니다: %{error}"
-      png_export_coming: "PNG 내보내기는 v0.7에서 제공될 예정입니다"
     error:
       source: "차트 소스 오류: %{error}"
       no_connection_selected: 선택한 연결이 없습니다
@@ -915,7 +911,6 @@ document:
         last_hour: 최근 1시간
     configure:
       action:
-        export_png: PNG 내보내기
         stats: 통계
       apply: 적용
       bindings_hint: "바인딩을 구성하려면 차트를 한 번 이상 실행하세요."
@@ -1143,7 +1138,6 @@ document:
         trigger: 내보내기
         save_as_file: 파일로 저장
         copy_to_clipboard: 클립보드로 복사
-        png_coming_soon: "PNG 내보내기는 v0.7에 제공 예정 — %{detail}"
         format:
           csv: CSV
           json_pretty: "JSON (들여쓰기)"

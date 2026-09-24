@@ -1709,7 +1709,6 @@ impl DataGridPanel {
             source_supports_save: true,
         };
 
-        let weak_panel = cx.weak_entity();
         let weak_panel_for_save = cx.weak_entity();
         let weak_panel_for_refresh = cx.weak_entity();
 
@@ -1732,19 +1731,6 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            }),
-            on_png_export: Arc::new(move |_window, cx| {
-                if let Some(panel) = weak_panel.upgrade() {
-                    panel.update(cx, |this, _cx| {
-                        this.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
-                            message: dbflux_i18n::t!(
-                                "document.data.grid.export.png_coming_soon",
-                                detail = dbflux_ui_base::toast::now_hms()
-                            ),
-                            is_error: false,
-                        });
-                    });
-                }
             }),
             on_save_chart: Arc::new(move |window, cx| {
                 if let Some(panel) = weak_panel_for_save.upgrade() {
@@ -4025,7 +4011,6 @@ mod tests {
         "document.data.grid.export.trigger",
         "document.data.grid.export.save_as_file",
         "document.data.grid.export.copy_to_clipboard",
-        "document.data.grid.export.png_coming_soon",
         "document.data.grid.export.format.csv",
         "document.data.grid.export.format.json_pretty",
         "document.data.grid.export.format.json_compact",

@@ -8,7 +8,6 @@
 //! - Spacer
 //! - Points · resolution display
 //! - Stats toggle button
-//! - PNG export button (stub)
 //! - Save chart button (gated on `source_supports_save`)
 //!
 //! The AxisBar row is NOT part of this toolbar — it lives below and is
@@ -28,8 +27,8 @@ use gpui::*;
 use gpui_component::theme::Theme;
 use std::sync::Arc;
 
-/// Handler called when the Stats button, PNG button, Save button, or Refresh
-/// button is clicked.
+/// Handler called when the Stats button, Save button, or Refresh button is
+/// clicked.
 pub type ActionHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 /// Handler called when a chart-kind chip is clicked; receives the chosen kind.
 pub type ChartKindHandler = Arc<dyn Fn(ChartKind, &mut Window, &mut App)>;
@@ -72,8 +71,6 @@ pub struct ChartToolbarHandlers {
     pub on_refresh: ActionHandler,
     /// Called when the Stats button is clicked.
     pub on_toggle_stats_rail: ActionHandler,
-    /// Called when the PNG button is clicked.
-    pub on_png_export: ActionHandler,
     /// Called when the "Save chart" button is clicked.
     pub on_save_chart: ActionHandler,
     /// Called when a chart-kind chip (Line / Bar) is clicked.
@@ -252,7 +249,6 @@ pub fn render_chart_toolbar(
 
     let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
     let on_stats = handlers.on_toggle_stats_rail.clone();
-    let on_png = handlers.on_png_export.clone();
     let on_save = handlers.on_save_chart.clone();
 
     let stats_btn = toolbar_btn(
@@ -264,12 +260,6 @@ pub fn render_chart_toolbar(
     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
         on_stats(window, cx);
     });
-
-    // "PNG" is a file-format acronym, not translated prose.
-    let png_btn = toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG".into(), false)
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            on_png(window, cx);
-        });
 
     let save_btn = toolbar_btn(
         "chart-toolbar-save",
@@ -352,7 +342,6 @@ pub fn render_chart_toolbar(
         )
         .child(vdivider(border))
         .child(stats_btn)
-        .child(png_btn)
         .when(ctx.source_supports_save, |el| {
             el.child(vdivider(border)).child(save_btn)
         })
@@ -365,6 +354,118 @@ fn vdivider(border: gpui::Hsla) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
+    // Not a glob import of `super`: that would bring `gpui::test` into scope
+    // and shadow the built-in `#[test]` attribute that `#[gpui::test]` expands to.
+    use super::{
+        ActionHandler, ChartShell, ChartToolbarContext, ChartToolbarHandlers, Dropdown,
+        RefreshPolicy, render_chart_toolbar,
+    };
+    use gpui::{
+        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+        Render, Styled as _, Window, div,
+    };
+    use gpui_component::ActiveTheme as _;
+    use std::sync::Arc;
+
+    struct ToolbarHarness {
+        chart_shell: Entity<ChartShell>,
+        refresh_dropdown: Entity<Dropdown>,
+    }
+
+    impl Render for ToolbarHarness {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let theme = cx.theme().clone();
+            let noop: ActionHandler = Arc::new(|_window, _cx| {});
+
+            let ctx = ChartToolbarContext {
+                theme: &theme,
+                chart_shell: self.chart_shell.clone(),
+                refresh_policy: RefreshPolicy::Manual,
+                refresh_dropdown: self.refresh_dropdown.clone(),
+                dropdown_time_range: None,
+                row_count: 0,
+                resolved_window: Some((0, 3_600_000)),
+                source_supports_save: true,
+            };
+
+            let handlers = ChartToolbarHandlers {
+                on_refresh: noop.clone(),
+                on_toggle_stats_rail: noop.clone(),
+                on_save_chart: noop,
+                on_select_chart_kind: Arc::new(|_kind, _window, _cx| {}),
+            };
+
+            div()
+                .id("toolbar-harness")
+                .size_full()
+                .child(render_chart_toolbar(ctx, handlers, cx))
+        }
+    }
+
+    /// Renders the toolbar with saving enabled and returns the element ids of
+    /// its buttons.
+    fn rendered_toolbar_button_ids(cx: &mut gpui::TestAppContext) -> Vec<String> {
+        cx.update(gpui_component::init);
+
+        let automation = gpui_mcp::Automation::isolated();
+        let automation_for_window = automation.clone();
+        let (_view, visual) = cx.add_window_view(move |window, cx| {
+            automation_for_window.attach(window);
+            ToolbarHarness {
+                chart_shell: cx.new(ChartShell::new_standalone),
+                refresh_dropdown: cx.new(|_cx| Dropdown::new("toolbar-harness-refresh")),
+            }
+        });
+        visual.run_until_parked();
+
+        automation
+            .snapshot()
+            .nodes
+            .into_keys()
+            .filter(|id| id.starts_with("chart-toolbar-"))
+            .collect()
+    }
+
+    /// The toolbar renders its working actions (Stats, Save chart) and no PNG
+    /// export control.
+    #[gpui::test]
+    fn toolbar_renders_no_png_export_control(cx: &mut gpui::TestAppContext) {
+        let ids = rendered_toolbar_button_ids(cx);
+
+        assert!(
+            ids.iter().all(|id| !id.contains("png")),
+            "toolbar still renders a PNG control: {ids:?}"
+        );
+        assert!(ids.iter().any(|id| id == "chart-toolbar-stats"), "{ids:?}");
+        assert!(ids.iter().any(|id| id == "chart-toolbar-save"), "{ids:?}");
+    }
+
+    /// Keys for controls that were removed because the feature behind them
+    /// does not exist. No shipped catalog may keep them.
+    #[test]
+    fn removed_placeholder_keys_are_absent_from_every_catalog() {
+        let removed = [
+            "document.chart.toast.png_export_coming",
+            "document.data.grid.export.png_coming_soon",
+            "document.dashboard.configure.action.export_png",
+            "chart.point_inspector.annotate",
+            "chart.point_inspector.copy_as_query",
+            "chart.point_inspector.coming_soon",
+        ];
+
+        for language in dbflux_i18n::Language::available() {
+            let locale = language.locale_code();
+
+            for key in removed {
+                assert_eq!(
+                    dbflux_i18n::t!(key, locale = locale),
+                    format!("{locale}.{key}"),
+                    "catalog {locale} still defines {key}"
+                );
+            }
+        }
+    }
+
     /// Verify the resolved-window priority logic: when `resolved_window` is `Some`,
     /// the chart view x-bounds fallback must not be used.
     #[test]

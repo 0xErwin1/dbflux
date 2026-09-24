@@ -67,9 +67,6 @@ chart:
     source_doc: 来源文档
     quick_actions: 快捷操作
     show_in_tree: 在树中显示
-    annotate: 标注
-    copy_as_query: 复制为查询语句
-    coming_soon: 即将推出
 common:
   time_range:
     error:
@@ -719,7 +716,6 @@ document:
     toast:
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
-      png_export_coming: PNG 导出将在 v0.7 提供
     error:
       source: "图表源错误：%{error}"
       no_connection_selected: 未选择连接
@@ -915,7 +911,6 @@ document:
         last_hour: 最近 1 小时
     configure:
       action:
-        export_png: 导出 PNG
         stats: 统计
       apply: 应用
       bindings_hint: 请先至少执行一次图表以配置绑定。
@@ -1143,7 +1138,6 @@ document:
         trigger: 导出
         save_as_file: 保存为文件
         copy_to_clipboard: 复制到剪贴板
-        png_coming_soon: "PNG 导出将在 v0.7 提供 — %{detail}"
         format:
           csv: CSV
           json_pretty: JSON（美化）

@@ -67,9 +67,6 @@ chart:
     source_doc: DOCUMENTO DE ORIGEN
     quick_actions: ACCIONES RÁPIDAS
     show_in_tree: Mostrar en árbol
-    annotate: Anotar
-    copy_as_query: Copiar como consulta
-    coming_soon: Próximamente
 common:
   time_range:
     error:
@@ -719,7 +716,6 @@ document:
     toast:
       chart_saved: Gráfico guardado
       save_failed: "No se pudo guardar el gráfico: %{error}"
-      png_export_coming: "La exportación a PNG llega en la v0.7"
     error:
       source: "Error del origen del gráfico: %{error}"
       no_connection_selected: No hay ninguna conexión seleccionada
@@ -915,7 +911,6 @@ document:
         last_hour: Última hora
     configure:
       action:
-        export_png: Exportar PNG
         stats: Estadísticas
       apply: Aplicar
       bindings_hint: Ejecuta el gráfico al menos una vez para configurar los enlaces.
@@ -1143,7 +1138,6 @@ document:
         trigger: Exportar
         save_as_file: Guardar como archivo
         copy_to_clipboard: Copiar al portapapeles
-        png_coming_soon: "Exportación PNG disponible en v0.7 — %{detail}"
         format:
           csv: CSV
           json_pretty: "JSON (con formato)"
