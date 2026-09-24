@@ -2226,4 +2226,224 @@ mod tests {
             .update(&mut cx, |_, window, _| window.remove_window())
             .expect("connection manager window closes");
     }
+
+    /// Stores one Command hook definition per name directly in storage and
+    /// returns an app state that loads them, with each name mapped to the id
+    /// the profile bindings must reference.
+    fn app_state_with_hooks(
+        names: &[&str],
+        cx: &mut TestAppContext,
+    ) -> (Entity<AppStateEntity>, HashMap<String, String>) {
+        use dbflux_storage::repositories::hook_definitions::HookDefinitionDto;
+
+        let runtime = StorageRuntime::in_memory().expect("test storage runtime");
+        let mut ids = HashMap::new();
+
+        for name in names {
+            let id = uuid::Uuid::new_v4();
+            let mut definition =
+                HookDefinitionDto::new(id, (*name).to_string(), "Command".to_string());
+            definition.kind_json =
+                Some(r#"{"kind":"command","command":"echo hi","args":[]}"#.to_string());
+
+            runtime
+                .hook_definitions()
+                .upsert(&definition)
+                .expect("seed hook definition");
+            ids.insert((*name).to_string(), id.to_string());
+        }
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| AppStateEntity::new_with_storage_runtime(runtime).expect("test app state"))
+        });
+        app_state.update(cx, |state, _| {
+            *state
+                .secret_store()
+                .write()
+                .expect("test secret store lock poisoned") =
+                Box::new(SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        });
+
+        (app_state, ids)
+    }
+
+    fn hook_ids(ids: &HashMap<String, String>, names: &[&str]) -> Vec<String> {
+        names
+            .iter()
+            .map(|name| ids.get(*name).expect("seeded hook id").clone())
+            .collect()
+    }
+
+    /// A profile whose phases bind a primary hook plus extras, so the edit
+    /// form splits each phase into its dropdown and its extra input.
+    fn profile_with_hook_bindings(ids: &HashMap<String, String>) -> ConnectionProfile {
+        let mut profile = sqlite_profile("hooked profile");
+        profile.hook_bindings = Some(dbflux_core::ConnectionHookBindings {
+            pre_connect: hook_ids(ids, &["alpha", "beta", "gamma"]),
+            post_connect: Vec::new(),
+            pre_disconnect: hook_ids(ids, &["beta"]),
+            post_disconnect: hook_ids(ids, &["alpha", "gamma"]),
+        });
+        profile
+    }
+
+    const HOOK_EXTRA_FIELDS: [(&str, &str); 4] = [
+        (
+            "cm-setting-pre_connect_hook_extra",
+            "hooks.phase.extra_pre_connect",
+        ),
+        (
+            "cm-setting-post_connect_hook_extra",
+            "hooks.phase.extra_post_connect",
+        ),
+        (
+            "cm-setting-pre_disconnect_hook_extra",
+            "hooks.phase.extra_pre_disconnect",
+        ),
+        (
+            "cm-setting-post_disconnect_hook_extra",
+            "hooks.phase.extra_post_disconnect",
+        ),
+    ];
+
+    #[::core::prelude::v1::test]
+    fn hook_extra_inputs_render_with_ids_labels_and_loaded_values() {
+        let mut cx = TestAppContext::single();
+        init_form_test_runtime(&mut cx);
+        let (app_state, ids) = app_state_with_hooks(&["alpha", "beta", "gamma"], &mut cx);
+        let profile = profile_with_hook_bindings(&ids);
+
+        let capture = Arc::new(FrameCapture::default());
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+        window
+            .update(&mut cx, |manager, window, _cx| {
+                manager.active_tab = super::super::ActiveTab::Settings;
+                window.observe_frames(&capture);
+                window.refresh();
+            })
+            .expect("settings tab opens");
+        cx.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let text_inputs: HashMap<String, (Option<String>, Option<String>)> = frame
+            .nodes()
+            .filter_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == gpui::Role::TextInput).then(|| {
+                    (
+                        node.id().to_owned(),
+                        (
+                            accessible.label().map(ToOwned::to_owned),
+                            accessible.value().map(ToOwned::to_owned),
+                        ),
+                    )
+                })
+            })
+            .collect();
+
+        let expected_values = ["beta, gamma", "", "", "gamma"];
+        for ((id, label_key), value) in HOOK_EXTRA_FIELDS.into_iter().zip(expected_values) {
+            let (label, rendered_value) = text_inputs
+                .get(id)
+                .unwrap_or_else(|| panic!("input {id} is not rendered: {text_inputs:?}"));
+
+            assert_eq!(
+                label.as_deref(),
+                Some(dbflux_i18n::t!(label_key).as_str()),
+                "input {id} is named after its visible label"
+            );
+            assert_eq!(
+                rendered_value.as_deref().unwrap_or_default(),
+                value,
+                "input {id} shows the loaded extra hooks"
+            );
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("connection manager window closes");
+    }
+
+    #[::core::prelude::v1::test]
+    fn hook_extra_inputs_round_trip_loaded_and_typed_values_on_save() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let (app_state, ids) = app_state_with_hooks(&["alpha", "beta", "gamma"], &mut cx);
+        let profile = profile_with_hook_bindings(&ids);
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+
+        let window = open_edit_profile_window(app_state.clone(), profile, &mut cx);
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager
+                    .settings_tab
+                    .conn_post_hook_extra_input
+                    .update(cx, |input, cx| input.set_value("gamma, alpha", window, cx));
+                manager
+                    .settings_tab
+                    .conn_pre_disconnect_hook_extra_input
+                    .update(cx, |input, cx| {
+                        input.set_value(ids["gamma"].clone(), window, cx)
+                    });
+                manager.save_profile(window, cx)
+            })
+            .expect("save runs");
+
+        assert_eq!(
+            cx.update(|cx| host.read(cx).toast_count()),
+            0,
+            "the save reports no error"
+        );
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the form window"
+        );
+
+        let bindings = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .profiles()
+                .first()
+                .expect("the edited profile is persisted")
+                .hook_bindings
+                .clone()
+                .expect("hook bindings are saved")
+        });
+
+        assert_eq!(
+            bindings.pre_connect,
+            hook_ids(&ids, &["alpha", "beta", "gamma"]),
+            "loaded extras survive an untouched save"
+        );
+        assert_eq!(
+            bindings.post_connect,
+            hook_ids(&ids, &["gamma", "alpha"]),
+            "typed hook names resolve to ids in the typed order"
+        );
+        assert_eq!(
+            bindings.pre_disconnect,
+            hook_ids(&ids, &["beta", "gamma"]),
+            "a typed hook id follows the dropdown hook"
+        );
+        assert_eq!(
+            bindings.post_disconnect,
+            hook_ids(&ids, &["alpha", "gamma"])
+        );
+    }
 }

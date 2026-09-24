@@ -24,6 +24,13 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
+* **Extra hook inputs in the Connection Manager** — the Hooks section of the
+  Settings tab shows the "Extra pre-connect" (and post-connect, pre-disconnect,
+  post-disconnect) input next to its label again, so extra hooks can be bound
+  from the form. Each input takes comma-separated hook IDs or names, shows the
+  extras already bound when a connection is edited, is reachable with j/k, and
+  is addressable as `cm-setting-<phase>_hook_extra`.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
