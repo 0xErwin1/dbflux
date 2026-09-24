@@ -24,6 +24,15 @@ pub const MODAL_SHELL_CLOSE_ID: &str = "modal-shell-close";
 /// Element id of the shell's backdrop.
 pub const MODAL_SHELL_BACKDROP_ID: &str = "modal-shell-backdrop";
 
+/// Debug selector of the shell's body content, for layout tests.
+pub const MODAL_SHELL_BODY_SELECTOR: &str = "modal-shell-body";
+
+/// Debug selector of the shell's footer, for layout tests.
+pub const MODAL_SHELL_FOOTER_SELECTOR: &str = "modal-shell-footer";
+
+/// Smallest height of the body area, padding included.
+const BODY_MIN_HEIGHT: Pixels = px(96.0);
+
 /// A key the shell answers while focus is inside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellKey {
@@ -58,7 +67,8 @@ pub enum ModalVariant {
 /// Reusable modal shell providing:
 /// - Scrim overlay (dimmed backdrop)
 /// - Title bar with optional close button
-/// - Scrollable body area (min-height 96 px, 16 px padding)
+/// - Body area that fits its content (min-height 96 px, 16 px padding) and
+///   scrolls once the card reaches 90% of the viewport height
 /// - Footer area (right-aligned, 12 px gap between items)
 /// - Danger variant: 2 px red top-border accent
 ///
@@ -277,6 +287,7 @@ impl RenderOnce for ModalShell {
             .justify_between()
             .px(Spacing::MD)
             .h(Heights::TOOLBAR)
+            .flex_shrink_0()
             .border_b_1()
             .border_color(border_color)
             .child(
@@ -290,14 +301,21 @@ impl RenderOnce for ModalShell {
             )
             .when_some(close_btn, |h, btn| h.child(btn));
 
-        // Body area. `flex_1` + `min_h(0)` lets it absorb the bounded card's
-        // remaining height and scroll, keeping header and footer pinned.
+        // Body area. `flex_1` lets it take its content height and shrink to
+        // scroll once the card reaches `max_card_height`. The minimum height
+        // sits on an inner wrapper: on the scroll region itself, the
+        // scrollbar wrapper sizes the region to that minimum instead of its
+        // content, and the footer then covers the rest of the body.
         let body = div()
             .flex_1()
-            .min_h(px(96.0))
             .p(Spacing::LG)
+            .debug_selector(|| MODAL_SHELL_BODY_SELECTOR.to_string())
             .overflow_y_scrollbar()
-            .child(self.body);
+            .child(
+                div()
+                    .min_h(BODY_MIN_HEIGHT - Spacing::LG * 2.0)
+                    .child(self.body),
+            );
 
         // Footer (right-aligned, 12 px gap).
         let footer = div()
@@ -307,8 +325,10 @@ impl RenderOnce for ModalShell {
             .gap(Spacing::MD)
             .px(Spacing::MD)
             .py(Spacing::SM)
+            .flex_shrink_0()
             .border_t_1()
             .border_color(border_color)
+            .debug_selector(|| MODAL_SHELL_FOOTER_SELECTOR.to_string())
             .child(self.footer);
 
         // Card container.

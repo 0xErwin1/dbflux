@@ -3,7 +3,7 @@ use crate::ui::labels::{
     login_browser_open_failed_message, login_elapsed_message, login_sign_in_prompt,
 };
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Spinner, Text};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::PipelineState;
 use dbflux_ui_base::modal_frame::ModalFrame;
@@ -44,6 +44,8 @@ pub struct LoginModal {
     last_provider_name: Option<String>,
     timeout_generation: u64,
     success_generation: u64,
+    spinner_frame: usize,
+    _spinner_task: Option<Task<()>>,
 }
 
 fn failed_state_shows_open_auth_profiles_button(provider_name: Option<&str>) -> bool {
@@ -59,6 +61,8 @@ impl LoginModal {
             last_provider_name: None,
             timeout_generation: 0,
             success_generation: 0,
+            spinner_frame: 0,
+            _spinner_task: None,
         }
     }
 
@@ -90,6 +94,7 @@ impl LoginModal {
                 };
                 self.focus_handle.focus(window, cx);
                 self.schedule_timeout(cx);
+                self.start_spinner(cx);
             }
             PipelineState::Failed { stage, error } => {
                 self.visible = true;
@@ -155,6 +160,41 @@ impl LoginModal {
         .detach();
     }
 
+    /// Advances the waiting indicator every `Spinner::INTERVAL_MS` while the
+    /// modal waits for the browser. Replacing the stored task cancels a loop
+    /// left over from an earlier login, so the spinner never runs twice as
+    /// fast. The elapsed caption reads whole seconds from `started_at`, so
+    /// these extra renders cannot move it ahead of the wall clock.
+    fn start_spinner(&mut self, cx: &mut Context<Self>) {
+        self.spinner_frame = 0;
+
+        self._spinner_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(Spinner::INTERVAL_MS))
+                    .await;
+
+                let still_waiting = this
+                    .update(cx, |modal, cx| {
+                        let waiting = modal.visible
+                            && matches!(modal.state, LoginModalState::WaitingForBrowser { .. });
+
+                        if waiting {
+                            modal.spinner_frame = Spinner::next_frame(modal.spinner_frame);
+                            cx.notify();
+                        }
+
+                        waiting
+                    })
+                    .unwrap_or(false);
+
+                if !still_waiting {
+                    break;
+                }
+            }
+        }));
+    }
+
     fn schedule_success_close(&mut self, cx: &mut Context<Self>) {
         self.success_generation += 1;
         let generation = self.success_generation;
@@ -200,6 +240,7 @@ impl LoginModal {
         };
         self.focus_handle.focus(window, cx);
         self.schedule_timeout(cx);
+        self.start_spinner(cx);
         cx.notify();
     }
 
@@ -317,7 +358,7 @@ impl Render for LoginModal {
                                 .flex()
                                 .items_center()
                                 .gap(Spacing::XS)
-                                .child(Icon::new(AppIcon::Loader).small().muted())
+                                .child(Spinner::new(self.spinner_frame))
                                 .child(Text::caption(dbflux_i18n::t!("login.body.waiting"))),
                         )
                         .child(Text::caption(login_elapsed_message(elapsed)))
@@ -421,10 +462,15 @@ impl Render for LoginModal {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoginModal, failed_state_shows_open_auth_profiles_button};
+    use super::{
+        LoginModal, SSO_LOGIN_TIMEOUT, failed_state_shows_open_auth_profiles_button,
+        login_elapsed_message,
+    };
     use dbflux_core::PipelineState;
     use gpui::{AccessibilityFrame, FrameObserver, TestAppContext};
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     /// Keeps the latest rendered accessibility frame of the window it observes.
     #[derive(Default)]
@@ -518,6 +564,81 @@ mod tests {
             &failed,
             &dbflux_i18n::t!("login.banner.connection_failed")
         ));
+    }
+
+    fn waiting_indicator_text(frame: &AccessibilityFrame) -> String {
+        frame
+            .nodes()
+            .find(|(_, node)| node.id() == "login-waiting-indicator")
+            .map(|(_, node)| node.content_text().to_owned())
+            .expect("the waiting indicator is rendered")
+    }
+
+    fn shown_elapsed_seconds(frame: &AccessibilityFrame) -> u64 {
+        (0..=SSO_LOGIN_TIMEOUT.as_secs())
+            .find(|seconds| frame_shows_text(frame, &login_elapsed_message(*seconds)))
+            .expect("the elapsed caption is rendered")
+    }
+
+    /// The waiting indicator animates on its own timer, and the extra renders
+    /// it causes do not move the elapsed caption: each spinner tick is driven
+    /// by a full second of test clock, far more than the wall-clock time the
+    /// test takes, and the caption never shows more seconds than have really
+    /// elapsed.
+    #[gpui::test]
+    fn waiting_indicator_animates_without_advancing_the_elapsed_caption(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (modal, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            LoginModal::new(window, cx)
+        });
+
+        let wall_clock_start = Instant::now();
+
+        visual.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open_manual("AWS SSO", "dev", None, window, cx);
+            });
+            window.refresh();
+        });
+        visual.run_until_parked();
+
+        let first = latest_frame(&capture);
+        let mut indicator_texts = HashSet::from([waiting_indicator_text(&first)]);
+        let mut shown_seconds = vec![shown_elapsed_seconds(&first)];
+
+        const TEST_CLOCK_PER_TICK: Duration = Duration::from_secs(1);
+        let ticks = 20;
+        for _ in 0..ticks {
+            visual.executor().advance_clock(TEST_CLOCK_PER_TICK);
+            visual.run_until_parked();
+
+            let frame = latest_frame(&capture);
+            indicator_texts.insert(waiting_indicator_text(&frame));
+            shown_seconds.push(shown_elapsed_seconds(&frame));
+        }
+
+        let test_clock_advanced = TEST_CLOCK_PER_TICK * ticks;
+        let wall_clock_seconds = wall_clock_start.elapsed().as_secs();
+
+        assert!(
+            indicator_texts.len() > 1,
+            "the waiting indicator did not animate: {indicator_texts:?}"
+        );
+        assert!(
+            test_clock_advanced.as_secs() > wall_clock_seconds,
+            "the test ran too slowly to tell spinner ticks from wall-clock seconds"
+        );
+        assert!(
+            shown_seconds
+                .iter()
+                .all(|seconds| *seconds <= wall_clock_seconds),
+            "the elapsed caption ran ahead of the wall clock ({wall_clock_seconds}s): \
+             {shown_seconds:?}"
+        );
     }
 
     #[test]

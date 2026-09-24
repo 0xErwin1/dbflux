@@ -44,6 +44,10 @@ pub enum TableTransferStatus {
     /// error that stopped it. Every table after this one in load order is
     /// `NotStarted`.
     Failed { error: String },
+    /// The run was cancelled while this table was loading. `rows` is how
+    /// many rows were written before the cancel took effect; the pipeline
+    /// finishes the sink, so those rows stay in the target.
+    Cancelled { rows: u64 },
     /// The table was never reached — an earlier table failed, or the run
     /// was cancelled before this table's turn.
     NotStarted,
