@@ -5,6 +5,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{Chord, Icon, Text};
 use dbflux_components::typography::Body;
+use dbflux_ui_base::keymap::chord_display_parts;
 use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::platform;
 use gpui_component::IconName;
@@ -48,19 +49,33 @@ impl Workspace {
     }
 }
 
+/// Display labels of the chord the default keymap binds to `command` in the
+/// global context, so the empty-workspace hints show the binding that is
+/// actually registered, with the platform's modifier (Cmd on macOS).
+fn empty_state_shortcut_keys(command: Command) -> Option<Vec<gpui::SharedString>> {
+    default_keymap()
+        .chord_for_command(ContextId::Global, command)
+        .map(chord_display_parts)
+}
+
 /// One row of the empty-workspace placeholder: a `Chord` followed by a
-/// muted description.
-fn empty_state_shortcut<const N: usize>(
-    keys: [&'static str; N],
+/// muted description. Returns `None` when `command` has no global binding,
+/// so the placeholder never advertises a shortcut that does nothing.
+fn empty_state_shortcut(
+    command: Command,
     description: impl Into<gpui::SharedString>,
-) -> gpui::Div {
-    gpui::div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .child(Chord::new(keys))
-        .child(Text::dim_secondary(description))
+) -> Option<gpui::Div> {
+    let keys = empty_state_shortcut_keys(command)?;
+
+    Some(
+        gpui::div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .child(Chord::new(keys))
+            .child(Text::dim_secondary(description)),
+    )
 }
 
 impl Render for Workspace {
@@ -351,20 +366,20 @@ impl Render for Workspace {
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .child(empty_state_shortcut(
-                                            ["Ctrl", "N"],
+                                        .children(empty_state_shortcut(
+                                            Command::NewQueryTab,
                                             dbflux_i18n::t!("workspace.hint.new_query"),
                                         ))
-                                        .child(empty_state_shortcut(
-                                            ["Ctrl", "Shift", "P"],
+                                        .children(empty_state_shortcut(
+                                            Command::ToggleCommandPalette,
                                             dbflux_i18n::t!("workspace.hint.command_palette"),
                                         ))
-                                        .child(empty_state_shortcut(
-                                            ["Ctrl", "O"],
+                                        .children(empty_state_shortcut(
+                                            Command::OpenScriptFile,
                                             dbflux_i18n::t!("workspace.hint.open"),
                                         ))
-                                        .child(empty_state_shortcut(
-                                            ["Ctrl", "Shift", "N"],
+                                        .children(empty_state_shortcut(
+                                            Command::OpenConnectionManager,
                                             dbflux_i18n::t!("workspace.hint.new_connection"),
                                         )),
                                 ),
@@ -1149,7 +1164,13 @@ mod tests {
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
 
-    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
+    use dbflux_ui_base::keymap::chord_display_parts;
+
+    use super::{
+        defer_to_end_of_effect_cycle, empty_state_shortcut_keys,
+        palette_command_opens_native_window,
+    };
+    use crate::keymap::{Command, KeyChord, Modifiers};
 
     #[test]
     fn panel_headers_keep_mono_family_and_focus_weight_difference() {
@@ -1423,5 +1444,59 @@ mod tests {
         }
 
         invocations
+    }
+
+    #[test]
+    fn empty_state_hints_show_the_registered_global_chords() {
+        let expected = [
+            (
+                Command::NewQueryTab,
+                KeyChord::new("n", Modifiers::primary()),
+            ),
+            (
+                Command::ToggleCommandPalette,
+                KeyChord::new("p", Modifiers::primary_shift()),
+            ),
+            (
+                Command::OpenScriptFile,
+                KeyChord::new("o", Modifiers::primary()),
+            ),
+            (
+                Command::OpenConnectionManager,
+                KeyChord::new("n", Modifiers::primary_shift()),
+            ),
+        ];
+
+        for (command, chord) in expected {
+            assert_eq!(
+                empty_state_shortcut_keys(command),
+                Some(chord_display_parts(&chord)),
+                "empty-state hint for {command:?} must match its global binding"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_state_new_connection_hint_uses_the_platform_modifier() {
+        #[cfg(target_os = "macos")]
+        let expected = ["Shift", "Cmd", "N"];
+        #[cfg(not(target_os = "macos"))]
+        let expected = ["Ctrl", "Shift", "N"];
+
+        let keys = empty_state_shortcut_keys(Command::OpenConnectionManager)
+            .expect("the Connection Manager must have a global binding");
+        let keys: Vec<&str> = keys.iter().map(|key| key.as_ref()).collect();
+
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn empty_state_hints_do_not_hardcode_modifier_labels() {
+        let source = workspace_render_source();
+
+        assert!(
+            !source.contains("\"Ctrl\"") && !source.contains("\"Cmd\""),
+            "empty-state hints must read their chords from the keymap"
+        );
     }
 }

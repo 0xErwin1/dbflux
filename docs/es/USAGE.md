@@ -22,6 +22,7 @@ en el sidebar.
 
 Abre el Connection Manager para crear o editar conexiones:
 
+- Pulsa `Ctrl+Shift+N` (`Cmd+Shift+N` en macOS).
 - Desde el sidebar, pulsa `c`.
 - O usa el command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` en macOS) y ejecuta
   **Open Connection Manager**.
@@ -568,6 +569,7 @@ conflictos con los atajos del sistema en macOS).
 | Teclas                                    | Acción                                 |
 | ----------------------------------------- | -------------------------------------- |
 | `Ctrl+Shift+P` / `Cmd+Shift+P`            | Alternar command palette               |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`            | Abrir el Connection Manager            |
 | `Ctrl+n` / `Cmd+n`                        | Nueva pestaña de query                 |
 | `Ctrl+w` / `Cmd+w`                        | Cerrar pestaña actual                  |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`             | Pestaña siguiente / anterior           |
