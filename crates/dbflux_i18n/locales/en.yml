@@ -23,6 +23,7 @@ access:
   proxy_type: Type
   proxy_host: Host
   proxy_auth: Auth
+  proxy_auth_basic_with_username: "Basic (%{username})"
   proxy_enabled: Enabled
   proxy_no_proxy: No Proxy
   value_yes: "Yes"

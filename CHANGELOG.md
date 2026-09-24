@@ -38,6 +38,11 @@ All notable changes to DBFlux will be documented in this file.
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
 
+* **Proxy details show readable labels** — the Access tab's proxy details
+  card printed the proxy type and authentication as Rust debug output, such
+  as `Http` and `Basic { username: "..." }`. It now shows translated labels:
+  HTTP, HTTPS or SOCKS5, and None or Basic with the username.
+
 
 ### Added
 
