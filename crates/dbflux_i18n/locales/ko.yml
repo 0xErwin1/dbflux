@@ -69,6 +69,12 @@ chart:
     show_in_tree: 트리에 표시
 common:
   time_range:
+    preset:
+      custom: "사용자 지정…"
+    picker:
+      date_range_placeholder: "날짜 범위 선택"
+      from: "시작"
+      to: "종료"
     error:
       invalid_selection: 시간 선택이 올바르지 않습니다.
       ambiguous_local: 현지 시간이 모호하거나 올바르지 않습니다.
@@ -508,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "일부 편집 내용이 파일에 반영되지 않았을 수 있습니다: 종료하는 동안 DBFlux가 저장하다가 시간이 초과되었습니다. 편집 내용은 복구할 수 있도록 세션 저장소에 보관되어 있습니다."
 document:
   audit:
+    pager:
+      range: "전체 %{total} %{unit} 중 %{start}-%{end}"
     actor:
       app: 앱
       external_auth_provider: 외부 인증 공급자
@@ -555,11 +563,18 @@ document:
       summary: 요약
       time: 시간
     filter:
+      timezone:
+        local: "로컬"
+        utc: "UTC"
       apply: 적용
       clear: 지우기
       group_label: "그룹:"
       loading: "불러오는 중…"
       placeholder:
+        search_events: "이벤트 검색..."
+        filter_events: "이벤트 필터링..."
+        all_time: "전체 기간"
+        last_12_hours: "최근 12시간"
         local: 로컬
       retry: 다시 시도
       view_mode:
@@ -1370,6 +1385,8 @@ document:
       continue: 계속
       close: 닫기
   governance:
+    semantics_preview: "요청자: %{requester} | 연결: %{connection} | 분류: %{classification}"
+    pending_actor: "행위자: %{actor}"
     refresh: 대기 항목 새로고침
     no_pending: "대기 중인 실행이 없습니다"
     pending_title: "대기 중 %{id}"
@@ -1549,6 +1566,10 @@ document:
       error:
         background_task_limit: 실행 중인 백그라운드 작업이 너무 많습니다. 잠시 기다려 주세요
     parsing:
+      preview:
+        binary:
+          one: "%{count}바이트 (바이너리)"
+          many: "%{count}바이트 (바이너리)"
       type:
         string: 문자열
         bytes: 바이트
@@ -1560,6 +1581,7 @@ document:
         stream: 스트림
         unknown: "?"
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: 키를 삭제하시겠습니까?
         message: '"%{key}"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.'
@@ -1595,6 +1617,13 @@ document:
         truncated: "부분 값 — %{total}개 중 %{returned}개 표시"
         truncated_unknown_total: "부분 값 — %{returned}개 표시"
       decode:
+        choice:
+          auto: "자동"
+          raw: "원본"
+        preview:
+          image:
+            one: "%{count}바이트 (이미지: %{format})"
+            many: "%{count}바이트 (이미지: %{format})"
         failed: 디코딩 실패
         too_large: 디코딩된 출력이 너무 큽니다
         edit_locked: 편집하려면 원시 보기로 전환하세요
@@ -1846,6 +1875,9 @@ document:
         open: 열기
         presign: 사전 서명
       body:
+        text_kind:
+          json: "JSON"
+          text: "텍스트"
         decode_failed: "%{encoding}(으)로 감지되었지만 디코딩하지 못했습니다: %{reason}"
         decode_too_large: "%{encoding}(으)로 감지되었지만, 디코딩 결과가 %{limit} 미리 보기 한도를 초과합니다."
         decoded_not_utf8: "디코딩된 바이트는 올바른 UTF-8 텍스트가 아닙니다."
@@ -1998,6 +2030,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "그룹화된 쿼리 — SELECT는 자동으로 관리됩니다"
       heading: 열 기준 그룹화
       add_column: "+ 그룹 기준 열"
       aggregates_heading: 집계
@@ -2022,6 +2055,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}: SQL을 미리 보려면 할당 / 필터를 구성하세요"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / 집계"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: 열
       execution: 실행
       filters: 필터
@@ -2508,6 +2546,9 @@ modals:
     dont_save: 저장하지 않음
     cancel: 취소
 palette:
+  footer:
+    navigate: "이동"
+    run: "실행"
   search:
     placeholder: 명령, 연결, 테이블, 스크립트 검색...
   empty: 일치하는 항목이 없습니다
@@ -2526,6 +2567,7 @@ palette:
     keyspace: 키스페이스
     script: 스크립트
   chart:
+    no_saved_charts: "현재 프로필에 저장된 차트가 없습니다"
     browse_suffix: "[찾아보기]"
   import_dashboard:
     name: JSON에서 대시보드 가져오기...
@@ -2646,6 +2688,10 @@ settings:
     storage:
       group: 저장소
     theme:
+      option:
+        ayu_dark: "Ayu 다크"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu 라이트"
       label: 테마
     style:
       label: 스타일
@@ -2987,6 +3033,9 @@ settings:
       secret_store_failed: 프로필의 비밀을 저장하지 못했습니다(OS 키링이 잠겨 있거나 사용할 수 없을 수 있음). 다시 시작하면 유지되지 않습니다.
       write_config_failed: "프로필을 구성에 쓰지 못했습니다: %{error}"
   mcp:
+    badge:
+      active: "활성"
+      inactive: "비활성"
     tool:
       list_connections:
         name: 연결 목록
@@ -3317,6 +3366,12 @@ settings:
     discard_dialog:
       body: 저장하지 않은 프록시 변경 사항이 있습니다. 버리시겠습니까?
   audit:
+    log_level:
+      trace: "추적"
+      debug: "디버그"
+      info: "정보"
+      warn: "경고"
+      error: "오류"
     placeholder_level: 수준
     section_title: 감사
     section_description: 전역 감사 이벤트 수집과 보존을 구성합니다

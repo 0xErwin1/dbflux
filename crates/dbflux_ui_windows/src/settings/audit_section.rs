@@ -762,11 +762,11 @@ impl AuditSection {
 
     fn log_level_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("trace"),
-            DropdownItem::new("debug"),
-            DropdownItem::new("info"),
-            DropdownItem::new("warn"),
-            DropdownItem::new("error"),
+            DropdownItem::new(dbflux_i18n::t!("settings.audit.log_level.trace")),
+            DropdownItem::new(dbflux_i18n::t!("settings.audit.log_level.debug")),
+            DropdownItem::new(dbflux_i18n::t!("settings.audit.log_level.info")),
+            DropdownItem::new(dbflux_i18n::t!("settings.audit.log_level.warn")),
+            DropdownItem::new(dbflux_i18n::t!("settings.audit.log_level.error")),
         ]
     }
 
@@ -1071,6 +1071,11 @@ mod tests {
         "settings.audit.field.purge_interval_minutes",
         "settings.audit.field.min_log_level",
         "settings.audit.field.not_wired",
+        "settings.audit.log_level.trace",
+        "settings.audit.log_level.debug",
+        "settings.audit.log_level.info",
+        "settings.audit.log_level.warn",
+        "settings.audit.log_level.error",
         "settings.audit.action.save",
         "settings.audit.status.degraded",
         "settings.audit.status.enabled",
@@ -1088,7 +1093,7 @@ mod tests {
 
     #[test]
     fn audit_settings_keys_resolve_in_both_locales() {
-        for locale in ["en", "es"] {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
             for key in AUDIT_SECTION_KEYS {
                 let value = dbflux_i18n::t!(key, locale = locale);
 

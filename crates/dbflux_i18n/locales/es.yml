@@ -69,6 +69,12 @@ chart:
     show_in_tree: Mostrar en árbol
 common:
   time_range:
+    preset:
+      custom: "Personalizado…"
+    picker:
+      date_range_placeholder: "Seleccionar rango de fechas"
+      from: "desde"
+      to: "hasta"
     error:
       invalid_selection: La selección de hora no es válida
       ambiguous_local: La hora local es ambigua o no válida
@@ -508,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
   audit:
+    pager:
+      range: "%{start}-%{end} de %{total} %{unit}"
     actor:
       app: Aplicación
       external_auth_provider: Proveedor de autenticación externo
@@ -555,11 +563,18 @@ document:
       summary: Resumen
       time: Hora
     filter:
+      timezone:
+        local: "Local"
+        utc: "UTC"
       apply: Aplicar
       clear: Limpiar
       group_label: "Agrupar:"
       loading: "Cargando…"
       placeholder:
+        search_events: "Buscar eventos..."
+        filter_events: "Filtrar eventos..."
+        all_time: "Todo el período"
+        last_12_hours: "Últimas 12 h"
         local: Local
       retry: Reintentar
       view_mode:
@@ -1370,6 +1385,8 @@ document:
       continue: Continuar
       close: Cerrar
   governance:
+    semantics_preview: "solicitante: %{requester} | conexión: %{connection} | clasificación: %{classification}"
+    pending_actor: "actor: %{actor}"
     refresh: Actualizar pendientes
     no_pending: No hay ejecuciones pendientes
     pending_title: "Pendiente %{id}"
@@ -1549,6 +1566,10 @@ document:
       error:
         background_task_limit: Demasiadas tareas en segundo plano en ejecución, espere por favor
     parsing:
+      preview:
+        binary:
+          one: "%{count} byte (binario)"
+          many: "%{count} bytes (binario)"
       type:
         string: String
         bytes: Bytes
@@ -1560,6 +1581,7 @@ document:
         stream: Stream
         unknown: "?"
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: ¿Eliminar clave?
         message: '¿Eliminar "%{key}"? Esta acción no se puede deshacer.'
@@ -1595,6 +1617,13 @@ document:
         truncated: "Valor parcial — mostrando %{returned} de %{total}"
         truncated_unknown_total: "Valor parcial — mostrando %{returned}"
       decode:
+        choice:
+          auto: "Automático"
+          raw: "Raw"
+        preview:
+          image:
+            one: "%{count} byte (imagen: %{format})"
+            many: "%{count} bytes (imagen: %{format})"
         failed: no se pudo decodificar
         too_large: la salida decodificada es demasiado grande
         edit_locked: Cambia a Raw para editar
@@ -1846,6 +1875,9 @@ document:
         open: Abrir
         presign: Prefirmar
       body:
+        text_kind:
+          json: "JSON"
+          text: "Texto"
         decode_failed: "Detectado como %{encoding}, pero no se pudo decodificar: %{reason}"
         decode_too_large: "Detectado como %{encoding}, pero decodificarlo supera el límite de vista previa de %{limit}."
         decoded_not_utf8: "Los bytes decodificados no son UTF-8 válido."
@@ -1998,6 +2030,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "Consulta agrupada — el SELECT se gestiona automáticamente"
       heading: Agrupar por columnas
       add_column: "+ Columna de agrupación"
       aggregates_heading: Agregaciones
@@ -2022,6 +2055,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}: configure las asignaciones o el filtro para previsualizar el SQL"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / AGREGACIONES"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: COLUMNAS
       execution: EJECUCIÓN
       filters: FILTROS
@@ -2508,6 +2546,9 @@ modals:
     dont_save: No guardar
     cancel: Cancelar
 palette:
+  footer:
+    navigate: "navegar"
+    run: "ejecutar"
   search:
     placeholder: Buscar comandos, conexiones, tablas, scripts…
   empty: No hay coincidencias
@@ -2526,6 +2567,7 @@ palette:
     keyspace: Keyspace
     script: Script
   chart:
+    no_saved_charts: "No hay gráficos guardados para el perfil actual"
     browse_suffix: "[explorar]"
   import_dashboard:
     name: Importar dashboard desde JSON…
@@ -2646,6 +2688,10 @@ settings:
     storage:
       group: Almacenamiento
     theme:
+      option:
+        ayu_dark: "Ayu Oscuro"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu Claro"
       label: Tema
     style:
       label: Estilo
@@ -2988,6 +3034,9 @@ settings:
       secret_store_failed: "No se pudo almacenar el secreto del perfil (el llavero del sistema operativo puede estar bloqueado o no disponible) y no persistirá tras reiniciar."
       write_config_failed: "No se pudo escribir el perfil en la configuración: %{error}"
   mcp:
+    badge:
+      active: "activo"
+      inactive: "inactivo"
     tool:
       list_connections:
         name: Listar conexiones
@@ -3318,6 +3367,12 @@ settings:
     discard_dialog:
       body: Tienes cambios sin guardar en el proxy. ¿Deseas descartarlos?
   audit:
+    log_level:
+      trace: "Traza"
+      debug: "Depuración"
+      info: "Información"
+      warn: "Advertencia"
+      error: "Error"
     placeholder_level: Nivel
     section_title: Auditoría
     section_description: Configura la captura y retención de eventos de auditoría globales

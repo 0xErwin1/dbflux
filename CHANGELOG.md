@@ -402,6 +402,16 @@ All notable changes to DBFlux will be documented in this file.
   three steps now run off the UI thread, and the cleanup still fails closed: a
   file another process wrote into is left alone.
 
+* **Remaining English-only labels are translated** — the command palette
+  footer and its "no saved charts" warning, the key-value encoding picker and
+  size labels, the audit viewer's filter options, time zone, placeholders and
+  row range, the time-range "Custom…" picker, the visual query builder section
+  titles, the theme, audit log level and MCP client badges in Settings, the
+  object preview's text kind, and the MCP approvals requester and actor lines
+  now follow the selected language. SQL keywords in section titles keep their
+  SQL spelling. The palette footer no longer advertises an "open in new tab"
+  shortcut that did nothing.
+
 * **Closing an untitled buffer asks before it drops the edits** — a buffer
   with no file yet (a new query before its first save, or a restored scratch
   buffer) could only be closed by completing Save As, so dismissing that

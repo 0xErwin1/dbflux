@@ -69,6 +69,12 @@ chart:
     show_in_tree: Show in tree
 common:
   time_range:
+    preset:
+      custom: "Custom…"
+    picker:
+      date_range_placeholder: "Select date range"
+      from: "from"
+      to: "to"
     error:
       invalid_selection: Time selection is invalid
       ambiguous_local: Local time is ambiguous or invalid
@@ -508,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
   audit:
+    pager:
+      range: "%{start}-%{end} of %{total} %{unit}"
     actor:
       app: App
       external_auth_provider: External Auth Provider
@@ -555,11 +563,18 @@ document:
       summary: Summary
       time: Time
     filter:
+      timezone:
+        local: "Local"
+        utc: "UTC"
       apply: Apply
       clear: Clear
       group_label: "Group:"
       loading: "Loading…"
       placeholder:
+        search_events: "Search events..."
+        filter_events: "Filter events..."
+        all_time: "All time"
+        last_12_hours: "Last 12 h"
         local: Local
       retry: Retry
       view_mode:
@@ -1370,6 +1385,8 @@ document:
       continue: Continue
       close: Close
   governance:
+    semantics_preview: "requester: %{requester} | connection: %{connection} | classification: %{classification}"
+    pending_actor: "actor: %{actor}"
     refresh: Refresh Pending
     no_pending: No pending executions
     pending_title: "Pending %{id}"
@@ -1549,6 +1566,10 @@ document:
       error:
         background_task_limit: Too many background tasks running, please wait
     parsing:
+      preview:
+        binary:
+          one: "%{count} byte (binary)"
+          many: "%{count} bytes (binary)"
       type:
         string: String
         bytes: Bytes
@@ -1560,6 +1581,7 @@ document:
         stream: Stream
         unknown: "?"
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: Delete key?
         message: 'Delete "%{key}"? This action cannot be undone.'
@@ -1595,6 +1617,13 @@ document:
         truncated: "Partial value — showing %{returned} of %{total}"
         truncated_unknown_total: "Partial value — showing %{returned}"
       decode:
+        choice:
+          auto: "Auto"
+          raw: "Raw"
+        preview:
+          image:
+            one: "%{count} byte (image: %{format})"
+            many: "%{count} bytes (image: %{format})"
         failed: failed to decode
         too_large: decoded output too large
         edit_locked: Switch to Raw to edit
@@ -1846,6 +1875,9 @@ document:
         open: Open
         presign: Presign
       body:
+        text_kind:
+          json: "JSON"
+          text: "Text"
         decode_failed: "Detected as %{encoding} but could not be decoded: %{reason}"
         decode_too_large: "Detected as %{encoding}, but decoding it exceeds the %{limit} preview limit."
         decoded_not_utf8: "The decoded bytes are not valid UTF-8 text."
@@ -1998,6 +2030,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "Grouped query — SELECT is managed automatically"
       heading: Group by columns
       add_column: "+ Group-by column"
       aggregates_heading: Aggregates
@@ -2022,6 +2055,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}: configure assignments / filter to preview SQL"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / AGGREGATES"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: COLUMNS
       execution: EXECUTION
       filters: FILTERS
@@ -2508,6 +2546,9 @@ modals:
     dont_save: Don't save
     cancel: Cancel
 palette:
+  footer:
+    navigate: "navigate"
+    run: "run"
   search:
     placeholder: Search commands, connections, tables, scripts...
   empty: No matching items
@@ -2526,6 +2567,7 @@ palette:
     keyspace: Keyspace
     script: Script
   chart:
+    no_saved_charts: "No saved charts for the current profile"
     browse_suffix: "[browse]"
   import_dashboard:
     name: Import Dashboard from JSON...
@@ -2646,6 +2688,10 @@ settings:
     storage:
       group: Storage
     theme:
+      option:
+        ayu_dark: "Ayu Dark"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu Light"
       label: Theme
     style:
       label: Style
@@ -2988,6 +3034,9 @@ settings:
       secret_store_failed: "The profile's secret could not be stored (the OS keyring may be locked or unavailable) and will not persist after restart."
       write_config_failed: "Failed to write profile to config: %{error}"
   mcp:
+    badge:
+      active: "active"
+      inactive: "inactive"
     tool:
       list_connections:
         name: List Connections
@@ -3318,6 +3367,12 @@ settings:
     discard_dialog:
       body: You have unsaved proxy changes. Discard them?
   audit:
+    log_level:
+      trace: "Trace"
+      debug: "Debug"
+      info: "Info"
+      warn: "Warning"
+      error: "Error"
     placeholder_level: Level
     section_title: Audit
     section_description: Configure global audit event capture and retention

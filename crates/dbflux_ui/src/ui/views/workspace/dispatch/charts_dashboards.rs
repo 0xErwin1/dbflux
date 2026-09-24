@@ -13,7 +13,7 @@ impl Workspace {
                 // then open the command palette so the user can fuzzy-search them.
                 let chart_items = self.build_saved_chart_palette_items(cx);
                 if chart_items.is_empty() {
-                    Toast::warning("No saved charts for the current profile")
+                    Toast::warning(dbflux_i18n::t!("palette.chart.no_saved_charts"))
                         .meta_right(now_hms())
                         .push(cx);
                 } else {

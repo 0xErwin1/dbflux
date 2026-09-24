@@ -217,7 +217,7 @@ impl AuditDocument {
                 adapter: AuditSourceAdapter::new(audit_repo),
             },
             "Audit".to_string(),
-            "Search events...",
+            dbflux_i18n::t!("document.audit.filter.placeholder.search_events"),
             window,
             cx,
         )
@@ -235,7 +235,7 @@ impl AuditDocument {
             app_state,
             AuditDocumentSource::ExternalEventStream { profile_id, target },
             title,
-            "Filter events...",
+            dbflux_i18n::t!("document.audit.filter.placeholder.filter_events"),
             window,
             cx,
         )
@@ -245,7 +245,7 @@ impl AuditDocument {
         app_state: Entity<AppStateEntity>,
         source: AuditDocumentSource,
         title: String,
-        search_placeholder: &'static str,
+        search_placeholder: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -256,9 +256,9 @@ impl AuditDocument {
         let initial_time_range = Self::initial_time_range(&source);
         let time_range_placeholder =
             if matches!(source, AuditDocumentSource::ExternalEventStream { .. }) {
-                "All time"
+                dbflux_i18n::t!("document.audit.filter.placeholder.all_time")
             } else {
-                "Last 12 h"
+                dbflux_i18n::t!("document.audit.filter.placeholder.last_12_hours")
             };
 
         // Construct the reusable time-range panel.  Sub-entities are extracted
@@ -520,9 +520,9 @@ impl AuditDocument {
         let dropdown_chart_group_by = cx.new(|_cx| {
             Dropdown::new("audit-chart-group-by")
                 .items(vec![
-                    DropdownItem::new("Category"),
-                    DropdownItem::new("Outcome"),
-                    DropdownItem::new("Level"),
+                    DropdownItem::new(dbflux_i18n::t!("document.audit.detail.category")),
+                    DropdownItem::new(dbflux_i18n::t!("document.audit.detail.outcome")),
+                    DropdownItem::new(dbflux_i18n::t!("document.audit.detail.level")),
                 ])
                 .selected_index(Some(0))
                 .toolbar_style(true)
@@ -1347,7 +1347,10 @@ impl AuditDocument {
     }
 
     fn timestamp_mode_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Local"), DropdownItem::new("UTC")]
+        vec![
+            DropdownItem::new(dbflux_i18n::t!("document.audit.filter.timezone.local")),
+            DropdownItem::new(dbflux_i18n::t!("document.audit.filter.timezone.utc")),
+        ]
     }
 
     fn timestamp_mode_for_index(index: usize) -> Option<TimestampDisplayMode> {
@@ -1360,9 +1363,9 @@ impl AuditDocument {
 
     fn level_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::with_value("Error", "error"),
-            DropdownItem::with_value("Warn", "warn"),
-            DropdownItem::with_value("Info", "info"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.error"), "error"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.warn"), "warn"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.info"), "info"),
         ]
     }
 
@@ -1378,15 +1381,24 @@ impl AuditDocument {
 
     fn category_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::with_value("Config", "config"),
-            DropdownItem::with_value("Connection", "connection"),
-            DropdownItem::with_value("Query", "query"),
-            DropdownItem::with_value("Hook", "hook"),
-            DropdownItem::with_value("Script", "script"),
-            DropdownItem::with_value("System", "system"),
-            DropdownItem::with_value("MCP", "mcp"),
-            DropdownItem::with_value("Governance", "governance"),
-            DropdownItem::with_value("Object Storage", "object_storage"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.config"), "config"),
+            DropdownItem::with_value(
+                dbflux_i18n::t!("document.audit.category.connection"),
+                "connection",
+            ),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.query"), "query"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.hook"), "hook"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.script"), "script"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.system"), "system"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.category.mcp"), "mcp"),
+            DropdownItem::with_value(
+                dbflux_i18n::t!("document.audit.category.governance"),
+                "governance",
+            ),
+            DropdownItem::with_value(
+                dbflux_i18n::t!("document.audit.category.object_storage"),
+                "object_storage",
+            ),
         ]
     }
 
@@ -1429,9 +1441,12 @@ impl AuditDocument {
 
     fn outcome_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::with_value("Success", "success"),
-            DropdownItem::with_value("Failure", "failure"),
-            DropdownItem::with_value("Cancelled", "cancelled"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.outcome.success"), "success"),
+            DropdownItem::with_value(dbflux_i18n::t!("document.audit.outcome.failure"), "failure"),
+            DropdownItem::with_value(
+                dbflux_i18n::t!("document.audit.outcome.cancelled"),
+                "cancelled",
+            ),
         ]
     }
 
@@ -1786,6 +1801,38 @@ mod tests {
             mode & 0o777,
             0o600,
             "export file must be owner read/write only"
+        );
+    }
+
+    #[test]
+    fn filter_dropdown_items_translate_labels_and_keep_values() {
+        let level_items = AuditDocument::level_items();
+        let category_items = AuditDocument::category_items();
+        let outcome_items = AuditDocument::outcome_items();
+        let timestamp_items = AuditDocument::timestamp_mode_items();
+
+        assert_eq!(level_items[1].value.as_ref(), "warn");
+        assert_eq!(
+            level_items[1].label.as_ref(),
+            dbflux_i18n::t!("document.audit.level.warn")
+        );
+        assert_eq!(category_items[8].value.as_ref(), "object_storage");
+        assert_eq!(
+            category_items[8].label.as_ref(),
+            dbflux_i18n::t!("document.audit.category.object_storage")
+        );
+        assert_eq!(outcome_items[2].value.as_ref(), "cancelled");
+        assert_eq!(
+            outcome_items[2].label.as_ref(),
+            dbflux_i18n::t!("document.audit.outcome.cancelled")
+        );
+        assert_eq!(
+            timestamp_items[0].label.as_ref(),
+            dbflux_i18n::t!("document.audit.filter.timezone.local")
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.audit.filter.timezone.local", locale = "en"),
+            dbflux_i18n::t!("document.audit.filter.timezone.local", locale = "ko")
         );
     }
 

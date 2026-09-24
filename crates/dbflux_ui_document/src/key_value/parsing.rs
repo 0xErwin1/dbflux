@@ -59,7 +59,22 @@ pub(super) fn render_value_preview(value: &KeyGetResult) -> String {
         ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured | ValueRepr::Stream => {
             truncate_preview_text(&String::from_utf8_lossy(&value.value))
         }
-        ValueRepr::Binary => format!("{} bytes (binary)", value.value.len()),
+        ValueRepr::Binary => binary_size_label(value.value.len()),
+    }
+}
+
+/// Preview text standing in for a binary value, such as "42 bytes (binary)".
+pub(super) fn binary_size_label(byte_len: usize) -> String {
+    if byte_len == 1 {
+        dbflux_i18n::t!(
+            "document.key_value.parsing.preview.binary.one",
+            count = byte_len
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.key_value.parsing.preview.binary.many",
+            count = byte_len
+        )
     }
 }
 
@@ -296,10 +311,17 @@ mod tests {
             "document.key_value.parsing.type.json",
             "document.key_value.parsing.type.stream",
             "document.key_value.parsing.type.unknown",
+            "document.key_value.parsing.preview.binary.one",
+            "document.key_value.parsing.preview.binary.many",
+            "document.key_value.render.decode.choice.auto",
+            "document.key_value.render.decode.choice.raw",
+            "document.key_value.render.decode.preview.image.one",
+            "document.key_value.render.decode.preview.image.many",
+            "document.key_value.render.size_bytes",
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
