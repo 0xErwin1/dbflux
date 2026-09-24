@@ -358,6 +358,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Relational filters and visual query builder filters run on PostgreSQL** —
+  the data grid sent visual SELECTs and their row counts as placeholder SQL
+  with separate bound values, but drivers execute the SQL text as is and never
+  bind those values. Any filter with a value, including dotted relational
+  filters such as `created_by.email = 'alice@example.com'`, failed on
+  PostgreSQL with "expected 1 parameters but got 0". The values are now
+  inlined as dialect literals before execution, the same way structured
+  mutations already run, and non-ASCII identifiers survive that inlining.
+
 * **Modal footers no longer cover the body** — the shared modal shell sized its
   body to its 96 px minimum instead of its content, so the footer covered the
   end of any taller body, such as the connection name in the Delete connection

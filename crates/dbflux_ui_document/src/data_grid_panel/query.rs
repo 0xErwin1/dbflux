@@ -3,8 +3,8 @@ use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCoun
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, EditableBinding, OrderByColumn,
-    Pagination, QueryRequest, QueryResult, SelectQuery, SourceTable, TableBrowseRequest,
-    TableCountRequest, TableRef, TaskKind, TaskTarget, VisualQuerySpec,
+    Pagination, QueryResult, SelectQuery, SourceTable, TableBrowseRequest, TableCountRequest,
+    TableRef, TaskKind, TaskTarget, VisualQuerySpec,
 };
 use dbflux_core::{
     RelationalFilterError, RelationalResolveError, count_query_from_spec, parse_and_resolve,
@@ -413,8 +413,7 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
         let conn_for_cleanup = conn.clone();
 
-        let mut request = QueryRequest::new(select.sql.clone());
-        request.params = select.params.clone();
+        let mut request = select.to_query_request(conn.dialect());
         if let Some(ref db) = database {
             request.database = Some(db.clone());
         }
@@ -1082,8 +1081,7 @@ impl DataGridPanel {
         let table_name = spec.source.table.clone();
         let entity = cx.entity().clone();
 
-        let mut request = dbflux_core::QueryRequest::new(count_query.sql.clone());
-        request.params = count_query.params.clone();
+        let mut request = count_query.to_query_request(conn.dialect());
         if let Some(ref db) = database {
             request.database = Some(db.clone());
         }
@@ -1153,8 +1151,7 @@ impl DataGridPanel {
         let table_name = spec.source.table.clone();
         let entity = cx.entity().clone();
 
-        let mut request = dbflux_core::QueryRequest::new(count_query.sql.clone());
-        request.params = count_query.params.clone();
+        let mut request = count_query.to_query_request(conn.dialect());
         if let Some(ref db) = database {
             request.database = Some(db.clone());
         }
