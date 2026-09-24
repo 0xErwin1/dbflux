@@ -1,14 +1,14 @@
 use dbflux_components::chart::ChartKind;
 use dbflux_components::controls::{Button, GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::modals::shell::ModalShell;
+use dbflux_components::modals::shell::{ModalFocus, ModalShell};
 use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
-use dbflux_core::MetricDescriptor;
+use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, FontWeight, IntoElement,
+    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, IntoElement,
     MouseButton, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
@@ -158,7 +158,7 @@ pub struct ModalAddPanelPicker {
     request: Option<AddPanelRequest>,
     visible: bool,
     active_tab: AddPanelTab,
-    focus_handle: FocusHandle,
+    focus: ModalFocus,
 
     // Saved-tab state.
     search_input: Entity<InputState>,
@@ -229,7 +229,7 @@ impl ModalAddPanelPicker {
             request: None,
             visible: false,
             active_tab: AddPanelTab::default(),
-            focus_handle: cx.focus_handle(),
+            focus: ModalFocus::new(cx),
             search_input,
             selected_ids: Vec::new(),
             query_name_input,
@@ -274,7 +274,6 @@ impl ModalAddPanelPicker {
 
         self.search_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
-            state.focus(window, cx);
         });
         self.query_name_input.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -324,7 +323,9 @@ impl ModalAddPanelPicker {
         ));
         self._subscriptions = subs;
 
-        self.focus_handle.focus(window, cx);
+        let search_focus = self.search_input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&search_focus), window, cx);
+
         let _ = has_metric_catalog;
         let _ = has_metric_catalog;
         cx.notify();
@@ -337,7 +338,14 @@ impl ModalAddPanelPicker {
         self.metric_namespace_selected = None;
         self.metric_metric_selected = None;
         self.metric_metrics_for_namespace.clear();
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Dismiss the picker without adding anything.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(AddPanelOutcome::Cancelled);
+        self.close(cx);
     }
 
     pub fn toggle_chart(&mut self, chart_id: Uuid, cx: &mut Context<Self>) {
@@ -445,7 +453,9 @@ impl ModalAddPanelPicker {
             .collect()
     }
 
-    fn confirm(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Submit the active tab, as the submit button does. Does nothing while
+    /// the tab's form is incomplete.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
         if !self.can_confirm(cx) {
             return;
         }
@@ -1130,14 +1140,8 @@ impl Render for ModalAddPanelPicker {
             .child(body_inner)
             .into_any_element();
 
-        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(AddPanelOutcome::Cancelled);
-            this.close(cx);
-        });
-
-        let on_confirm = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-            this.confirm(window, cx);
-        });
+        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.cancel(cx));
+        let on_confirm = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.confirm(cx));
 
         let footer = div()
             .flex()
@@ -1163,6 +1167,20 @@ impl Render for ModalAddPanelPicker {
             footer.into_any_element(),
         )
         .width(gpui::px(900.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(can_confirm)
         .into_any_element()
     }
 }
@@ -1535,5 +1553,132 @@ mod tests {
             METRIC_STATISTICS,
             ["Average", "Sum", "Minimum", "Maximum", "SampleCount"]
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{AddPanelOutcome, AddPanelRequest, AddPanelTab, ModalAddPanelPicker};
+    use crate::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use dbflux_components::chart::ChartSpec;
+    use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy, SavedChartSource};
+    use gpui::{Entity, FocusHandle, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    type Outcomes = Rc<RefCell<Vec<AddPanelOutcome>>>;
+
+    fn chart() -> SavedChart {
+        let chart_spec: ChartSpec = serde_json::from_str(
+            r#"{"x_axis":{"column_index":0,"label":"t","kind":"Time","unit":null},"series":[]}"#,
+        )
+        .expect("valid chart spec");
+
+        SavedChart {
+            id: Uuid::nil(),
+            name: "Latency".to_string(),
+            profile_id: Uuid::nil(),
+            source: SavedChartSource::Query {
+                query: "SELECT 1".to_string(),
+            },
+            chart_spec,
+            bindings: Default::default(),
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalAddPanelPicker>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Outcomes,
+    ) {
+        let (modal, outside, window) = host_modal(cx, ModalAddPanelPicker::new);
+
+        let outcomes: Outcomes = Rc::default();
+        window.update(|window, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &AddPanelOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    AddPanelRequest {
+                        dashboard_id: Uuid::nil(),
+                        profile_id: Uuid::nil(),
+                        candidates: vec![chart()],
+                        has_metric_catalog: false,
+                        metric_namespaces: Vec::new(),
+                        metric_namespaces_loading: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, outside, window, outcomes)
+    }
+
+    #[gpui::test]
+    fn enter_adds_only_once_a_chart_is_selected(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_modal(cx);
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).active_tab()),
+            AddPanelTab::Saved
+        );
+
+        window.simulate_keystrokes("enter");
+        assert!(outcomes.borrow().is_empty());
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| modal.toggle_chart(Uuid::nil(), cx));
+        });
+        window.simulate_keystrokes("enter");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [AddPanelOutcome::Confirmed { chart_ids, .. }] if chart_ids == &[Uuid::nil()]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_cancels_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (modal, outside, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [AddPanelOutcome::Cancelled]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_cancels(cx: &mut TestAppContext) {
+        let (_modal, _outside, window, outcomes) = open_modal(cx);
+
+        click_backdrop(window);
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [AddPanelOutcome::Cancelled]
+        ));
     }
 }
