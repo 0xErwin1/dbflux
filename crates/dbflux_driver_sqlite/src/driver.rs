@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,17 +14,18 @@ use dbflux_core::{
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
     DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
-    ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues, FormattedError, Icon,
-    IndexData, IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
-    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
-    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
-    render_semantic_filter_sql, validate_ddl_fragment,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field_file_path,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template, render_semantic_filter_sql, strip_leading_comments,
+    validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -585,7 +587,9 @@ impl std::ops::Deref for SqliteConnectionState {
 pub struct SqliteConnection {
     state: Arc<Mutex<SqliteConnectionState>>,
     table_alter_planner: SqliteTableAlterPlanner,
-    interrupt_handle: InterruptHandle,
+    /// Shared with every cancel handle, so cancelling never has to lock
+    /// `state`, which a running query holds until it finishes.
+    interrupt_handle: Arc<InterruptHandle>,
     cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]
     path: PathBuf,
@@ -593,7 +597,7 @@ pub struct SqliteConnection {
 
 struct SqliteCancelHandle {
     cancelled: Arc<AtomicBool>,
-    interrupt_handle: InterruptHandle,
+    interrupt_handle: Arc<InterruptHandle>,
 }
 
 impl QueryCancelHandle for SqliteCancelHandle {
@@ -787,6 +791,49 @@ impl Connection for SqliteConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        // Execution-safety preflight: reject requests this driver cannot honor
+        // before the cancellation flag is reset, the connection lock is taken,
+        // or any statement is prepared, so a rejection never carries side
+        // effects and never clears a pending cancellation. A requested
+        // statement deadline cannot be honored safely (no watchdog, no progress
+        // hook), a bounded request must not reach an instance dispatch context
+        // this engine has no cap seam for, and a bounded request must never
+        // expand into a multi-statement batch: preparing or stepping a batch can
+        // execute earlier statements, and some PRAGMA actions run at prepare
+        // time, so the batch check precedes all preparation.
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "SQLite: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if req.limit.is_some()
+            && let Some(source) = req
+                .execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQLite: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQLite: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        if req.limit.is_some() && bounded_sql_has_batch(&req.sql)? {
+            return Err(DbError::NotSupported(
+                "SQLite: a row limit cannot be enforced on a multi-statement batch; the batch was rejected before execution. Run the statements individually with a limit".to_string(),
+            ));
+        }
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         let start = Instant::now();
@@ -809,18 +856,10 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
-    // Invariant: trait returns Arc<dyn QueryCancelHandle> with no Result — cannot propagate.
-    // Mutex poison only occurs if another thread panicked while holding this lock, which is
-    // already a fatal application state.
-    #[allow(clippy::expect_used)]
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
-            interrupt_handle: self
-                .state
-                .lock()
-                .map(|state| state.interrupt_handle())
-                .expect("Failed to get interrupt handle"),
+            interrupt_handle: self.interrupt_handle.clone(),
         })
     }
 
@@ -1428,7 +1467,7 @@ impl SqliteConnection {
         Self {
             table_alter_planner: SqliteTableAlterPlanner::new(state.clone(), cancelled.clone()),
             state,
-            interrupt_handle,
+            interrupt_handle: Arc::new(interrupt_handle),
             cancelled,
             path,
         }
@@ -1850,6 +1889,11 @@ impl SqliteConnection {
 /// string and silently ignores the rest, so a script is split and each
 /// statement runs on its own, stopping at the first failure. The typed
 /// single-statement path stays the common case.
+///
+/// A bounded request skips the split: `execute` has already refused bounded
+/// batches using SQLite's own lexer, so what remains is one statement,
+/// possibly followed by comments or semicolons that the generic splitter would
+/// otherwise turn into extra, empty statements.
 fn execute_sql(
     conn: &RusqliteConnection,
     sql: &str,
@@ -1857,15 +1901,19 @@ fn execute_sql(
     start: Instant,
     cancelled: &AtomicBool,
 ) -> Result<QueryResult, DbError> {
+    if limit.is_some() {
+        return execute_one_statement(conn, sql, limit, start, cancelled);
+    }
+
     let statements = QueryLanguage::Sql.split_statements(sql);
     if statements.len() <= 1 {
-        return execute_one_statement(conn, sql, limit, start, cancelled);
+        return execute_one_statement(conn, sql, None, start, cancelled);
     }
 
     let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
     for statement in &statements {
         result_sets.push(execute_one_statement(
-            conn, statement, limit, start, cancelled,
+            conn, statement, None, start, cancelled,
         )?);
     }
 
@@ -1909,6 +1957,74 @@ fn settle_failed_transaction(
     }
 }
 
+/// Returns `sql` with leading whitespace, SQL comments and byte-order marks
+/// removed, so the batch check can tell whether any statement follows.
+fn sqlite_leading_sql(sql: &str) -> &str {
+    let mut remaining = sql.trim_start();
+    loop {
+        remaining = strip_leading_comments(remaining).trim_start();
+
+        match remaining.strip_prefix('\u{feff}') {
+            Some(after_bom) => remaining = after_bom.trim_start(),
+            None => return remaining,
+        }
+    }
+}
+
+/// Asks SQLite's own lexer whether `sql` ends at a complete statement.
+///
+/// `sqlite3_complete` only tokenizes; it never prepares or runs anything. It
+/// follows SQLite's quoting rules (a backslash is not an escape) and trigger
+/// bodies, which the generic statement splitter does not.
+#[allow(unsafe_code)]
+fn sqlite_statement_is_complete(sql: &CStr) -> bool {
+    // SAFETY: `CStr` guarantees a valid NUL-terminated pointer, and the borrow
+    // keeps it alive for the duration of the call.
+    unsafe { rusqlite::ffi::sqlite3_complete(sql.as_ptr()) != 0 }
+}
+
+/// Returns whether `sql` holds more than one statement, ignoring trailing
+/// comments and semicolons after the first one.
+///
+/// Only prefixes that end at a `;` are probed, and nothing is prepared.
+/// Repeated prefix probes are quadratic in the number of bytes.
+fn bounded_sql_has_batch(sql: &str) -> Result<bool, DbError> {
+    let sql = sql.trim_start_matches('\u{feff}');
+    if sql.contains('\0') {
+        return Err(DbError::NotSupported(
+            "SQLite: a row-limited request containing a NUL character is not supported; the request was rejected before execution".to_string(),
+        ));
+    }
+
+    for (index, byte) in sql.bytes().enumerate() {
+        if byte != b';' {
+            continue;
+        }
+
+        let Some((prefix, mut rest)) = sql.split_at_checked(index + 1) else {
+            continue;
+        };
+        let prefix = CString::new(prefix).map_err(|error| {
+            DbError::NotSupported(format!(
+                "SQLite: a row-limited request could not be checked for multiple statements: {error}"
+            ))
+        })?;
+        if !sqlite_statement_is_complete(&prefix) {
+            continue;
+        }
+
+        loop {
+            rest = sqlite_leading_sql(rest);
+            match rest.strip_prefix(';') {
+                Some(after_semicolon) => rest = after_semicolon,
+                None => return Ok(!rest.is_empty()),
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 /// Executes a single SQLite statement and returns its result set.
 ///
 /// SELECT/PRAGMA/EXPLAIN statements return rows; everything else reports the
@@ -1935,11 +2051,19 @@ fn execute_one_statement(
         }
     };
 
-    // Check if this is a SELECT, PRAGMA, or EXPLAIN statement (returns rows) or a DDL/DML statement
-    let sql_trimmed = sql.trim().to_uppercase();
-    let is_query = sql_trimmed.starts_with("SELECT")
-        || sql_trimmed.starts_with("PRAGMA")
-        || sql_trimmed.starts_with("EXPLAIN");
+    // A bounded request takes the capped row path for every statement that
+    // produces rows (including `WITH ...`, `VALUES` and DML with `RETURNING`),
+    // so the cap applies and the statement still drains to completion. The
+    // uncapped path keeps the keyword classification: SELECT, PRAGMA, or
+    // EXPLAIN return rows, everything else is DDL/DML.
+    let is_query = if limit.is_some() {
+        stmt.column_count() > 0
+    } else {
+        let sql_trimmed = sql.trim().to_uppercase();
+        sql_trimmed.starts_with("SELECT")
+            || sql_trimmed.starts_with("PRAGMA")
+            || sql_trimmed.starts_with("EXPLAIN")
+    };
 
     if is_query {
         // For SELECT statements, use query() to get rows.
@@ -1974,7 +2098,12 @@ fn execute_one_statement(
             })
             .collect();
 
+        // The cap limits retention, not iteration: every row past it is still
+        // stepped so the statement reaches SQLITE_DONE and a late per-row error
+        // surfaces instead of being hidden by an early break.
+        let max_rows = limit.map(|row_limit| row_limit as usize);
         let mut rows: Vec<Row> = Vec::new();
+        let mut truncated = false;
         let query_result = stmt.query([]);
 
         let mut result_rows = match query_result {
@@ -1993,18 +2122,17 @@ fn execute_one_statement(
 
             match next_result {
                 Ok(Some(row)) => {
+                    if max_rows.is_some_and(|cap| rows.len() >= cap) {
+                        truncated = true;
+                        continue;
+                    }
+
                     let mut values: Vec<Value> = Vec::with_capacity(column_count);
                     for i in 0..column_count {
                         let value = sqlite_value_to_value(row, i);
                         values.push(value);
                     }
                     rows.push(values);
-
-                    if let Some(row_limit) = limit
-                        && rows.len() >= row_limit as usize
-                    {
-                        break;
-                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -2017,7 +2145,9 @@ fn execute_one_statement(
             }
         }
 
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        let mut result = QueryResult::table(columns, rows, None, start.elapsed());
+        result.set_rows_truncated(truncated);
+        Ok(result)
     } else {
         // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
         // use execute() which properly handles non-row-returning statements
@@ -2372,6 +2502,73 @@ pub fn fetch_dependents(
     }
 
     Ok(deps)
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::{SqliteConnection, SqliteConnectionState};
+    use dbflux_core::{Connection, QueryRequest};
+    use rusqlite::Connection as RusqliteConnection;
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const ENDLESS_QUERY: &str =
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c";
+
+    /// Regression: `cancel_handle()` used to lock the connection mutex, which
+    /// a running query holds until it finishes, so the thread asking to
+    /// cancel blocked for as long as the query ran (the UI thread, forever,
+    /// for an endless query).
+    #[test]
+    fn cancel_handle_interrupts_a_running_query_without_waiting_for_it() {
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = Arc::new(SqliteConnection::for_test(state.clone()));
+
+        let (query_done_tx, query_done_rx) = mpsc::channel();
+        std::thread::spawn({
+            let connection = connection.clone();
+            move || {
+                let failed = connection
+                    .execute(&QueryRequest::new(ENDLESS_QUERY))
+                    .is_err();
+                if let Err(error) = query_done_tx.send(failed) {
+                    log::warn!("query result channel closed: {error}");
+                }
+            }
+        });
+
+        // Wait until the query holds the connection lock.
+        let mut waited = Duration::ZERO;
+        while state.try_lock().is_ok() {
+            assert!(waited < Duration::from_secs(5), "query never started");
+            std::thread::sleep(Duration::from_millis(5));
+            waited += Duration::from_millis(5);
+        }
+
+        let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+        std::thread::spawn({
+            let connection = connection.clone();
+            move || {
+                let cancelled = connection.cancel_handle().cancel().is_ok();
+                if let Err(error) = cancel_done_tx.send(cancelled) {
+                    log::warn!("cancel result channel closed: {error}");
+                }
+            }
+        });
+
+        assert_eq!(
+            cancel_done_rx.recv_timeout(Duration::from_secs(2)),
+            Ok(true),
+            "cancel must return while the query still holds the connection"
+        );
+        assert_eq!(
+            query_done_rx.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the interrupt must end the running query with an error"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2823,6 +3020,64 @@ mod tests {
                 reason: "SQLite requires a table rebuild".to_string(),
                 followup: Some("DBF-158"),
             })
+        );
+    }
+
+    #[test]
+    fn sqlite_query_safety_refusal_preserves_existing_cancel_signal() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::{
+            Connection, DbError, ExecutionContext, ExecutionSourceContext, QueryRequest,
+        };
+        use std::sync::atomic::Ordering;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let connection = SqliteConnection::for_test(state);
+
+        connection.cancelled.store(true, Ordering::SeqCst);
+        let mut timeout_request = QueryRequest::new("SELECT 1");
+        timeout_request.statement_timeout = Some(Duration::from_secs(1));
+        let outcome = connection.execute(&timeout_request);
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "statement timeout must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "timeout refusal erased an existing cancellation"
+        );
+
+        let mut metric_request = QueryRequest::new("SELECT 1").with_limit(0);
+        metric_request.execution_context = Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "sqlite.safety".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            ..Default::default()
+        });
+        let outcome = connection.execute(&metric_request);
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "bounded metric request must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "bounded metric refusal erased an existing cancellation"
+        );
+
+        let outcome = connection.execute(&QueryRequest::new("SELECT 1; SELECT 2").with_limit(1));
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "bounded batch must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "bounded batch refusal erased an existing cancellation"
         );
     }
 }

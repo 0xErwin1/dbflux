@@ -1326,6 +1326,7 @@ impl ImportConnectionsPanel {
 
         let host_summary = crate::labels::import_external_host_summary(&candidate.config);
         let kind_label = candidate.kind.display_name();
+        let candidate_label = format!("{} — {kind_label}", candidate.name);
 
         let secret_status = if let Some(reason) = &candidate.secret_skip_reason {
             reason.clone()
@@ -1355,6 +1356,7 @@ impl ImportConnectionsPanel {
                             "import-external-candidate-toggle-{index}"
                         )))
                         .checked(included)
+                        .aria_label(candidate_label.clone())
                         .on_click(cx.listener(
                             move |this, _checked: &bool, _, cx| {
                                 toggle_candidate_include(&mut this.external_includes, index);
@@ -1370,7 +1372,7 @@ impl ImportConnectionsPanel {
                                 div()
                                     .text_size(FontSizes::SM)
                                     .text_color(theme.foreground)
-                                    .child(format!("{} — {kind_label}", candidate.name)),
+                                    .child(candidate_label),
                             )
                             .child(Text::muted(host_summary).font_size(FontSizes::XS)),
                     ),

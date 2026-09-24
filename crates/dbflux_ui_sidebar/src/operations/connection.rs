@@ -729,6 +729,24 @@ impl Sidebar {
         .detach();
     }
 
+    /// User-initiated disconnect. When a query is still running on the
+    /// connection, emits [`SidebarEvent::RequestActiveQueryDisconnect`] so the
+    /// host can ask what to do with it; otherwise disconnects right away.
+    pub fn request_disconnect(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
+        let has_running_query = !self
+            .app_state
+            .read(cx)
+            .running_query_tasks(Some(profile_id))
+            .is_empty();
+
+        if has_running_query {
+            cx.emit(SidebarEvent::RequestActiveQueryDisconnect { profile_id });
+            return;
+        }
+
+        self.disconnect_profile(profile_id, cx);
+    }
+
     pub fn disconnect_profile(&mut self, profile_id: Uuid, cx: &mut Context<Self>) {
         let Some(profile) = self
             .app_state

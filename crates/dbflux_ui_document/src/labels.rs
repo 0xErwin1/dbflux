@@ -24,25 +24,9 @@ pub(crate) fn grid_refresh_blocked_by_pending_edits() -> String {
     dbflux_i18n::t!("document.data.grid.edit_bar.refresh_blocked")
 }
 
-/// Label for a [`dbflux_core::RefreshPolicy`], mirroring
-/// `RefreshPolicy::label()` in English while routing every arm through the
-/// translation catalog.
-///
-/// A named interval renders its seconds directly (`"{every_secs}s"`), which
-/// is a unit suffix, not translated prose, so it stays outside the catalog.
-/// Manual and any interval outside the named set fall back to their
-/// respective `document.shared.refresh.*` catalog entries.
-pub(crate) fn refresh_policy_label(policy: dbflux_core::RefreshPolicy) -> String {
-    use dbflux_core::RefreshPolicy;
-
-    match policy {
-        RefreshPolicy::Manual => dbflux_i18n::t!("document.shared.refresh.off"),
-        RefreshPolicy::Interval { every_secs } if RefreshPolicy::ALL.contains(&policy) => {
-            format!("{every_secs}s")
-        }
-        RefreshPolicy::Interval { .. } => dbflux_i18n::t!("document.shared.refresh.custom"),
-    }
-}
+/// Label for a [`dbflux_core::RefreshPolicy`]; the mapping lives in
+/// `dbflux_components` so the shared refresh split-button uses it too.
+pub(crate) use dbflux_components::composites::refresh_policy_label;
 
 /// Label for a [`crate::result_view::ResultViewMode`] shown in the
 /// status-bar result-view mode chips.
@@ -1039,6 +1023,44 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
     }
 }
 
+/// Short uppercase chip shown for a [`dbflux_core::EventCategory`] in an
+/// audit row.
+///
+/// Exhaustive by construction, like [`audit_category_label`], so a new
+/// category cannot fall through to a placeholder chip.
+pub(crate) fn audit_category_chip_label(category: dbflux_core::EventCategory) -> String {
+    use dbflux_core::EventCategory;
+
+    match category {
+        EventCategory::Config => dbflux_i18n::t!("document.audit.category_chip.config"),
+        EventCategory::Connection => dbflux_i18n::t!("document.audit.category_chip.connection"),
+        EventCategory::Query => dbflux_i18n::t!("document.audit.category_chip.query"),
+        EventCategory::Hook => dbflux_i18n::t!("document.audit.category_chip.hook"),
+        EventCategory::Script => dbflux_i18n::t!("document.audit.category_chip.script"),
+        EventCategory::System => dbflux_i18n::t!("document.audit.category_chip.system"),
+        EventCategory::Mcp => dbflux_i18n::t!("document.audit.category_chip.mcp"),
+        EventCategory::Governance => dbflux_i18n::t!("document.audit.category_chip.governance"),
+        EventCategory::ObjectStorage => {
+            dbflux_i18n::t!("document.audit.category_chip.object_storage")
+        }
+    }
+}
+
+/// Short uppercase chip shown for a [`dbflux_core::EventSeverity`] in an
+/// audit row.
+pub(crate) fn audit_level_chip_label(level: dbflux_core::EventSeverity) -> String {
+    use dbflux_core::EventSeverity;
+
+    match level {
+        EventSeverity::Trace => dbflux_i18n::t!("document.audit.level_chip.trace"),
+        EventSeverity::Debug => dbflux_i18n::t!("document.audit.level_chip.debug"),
+        EventSeverity::Info => dbflux_i18n::t!("document.audit.level_chip.info"),
+        EventSeverity::Warn => dbflux_i18n::t!("document.audit.level_chip.warn"),
+        EventSeverity::Error => dbflux_i18n::t!("document.audit.level_chip.error"),
+        EventSeverity::Fatal => dbflux_i18n::t!("document.audit.level_chip.fatal"),
+    }
+}
+
 /// Label for a [`dbflux_core::EventOutcome`] shown in the audit viewer's
 /// detail pane.
 ///
@@ -1714,6 +1736,11 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             table = table.source_table,
             error = error
         ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.import_wizard.status_line.cancelled",
+            table = table.source_table,
+            rows = rows
+        ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.import_wizard.status_line.not_attempted",
             table = table.source_table
@@ -1793,6 +1820,11 @@ pub(crate) fn export_table_status_line(
             "document.export_wizard.status_line.failed",
             table = label,
             error = error
+        ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.export_wizard.status_line.cancelled",
+            table = label,
+            rows = rows
         ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.export_wizard.status_line.not_attempted",
@@ -1895,6 +1927,11 @@ pub(crate) fn migrate_table_status_line(
             "document.migrate_wizard.status_line.failed",
             table = table.source_table,
             error = error
+        ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.migrate_wizard.status_line.cancelled",
+            table = table.source_table,
+            rows = rows
         ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.migrate_wizard.status_line.not_attempted",
@@ -2334,13 +2371,14 @@ mod tests {
     use super::{
         MutationItemKind, VisualMutationTaskMode, add_member_modal_placeholders,
         add_member_modal_section_label, add_member_modal_title, agg_fn_display,
-        assignment_value_kind_label, audit_actor_type_label, audit_category_label,
-        audit_event_source_connection_not_found, audit_events_load_failed,
+        assignment_value_kind_label, audit_actor_type_label, audit_category_chip_label,
+        audit_category_label, audit_event_source_connection_not_found, audit_events_load_failed,
         audit_export_exported_toast, audit_export_failed_error,
-        audit_export_unsupported_source_toast, audit_export_write_failed_error, audit_level_label,
-        audit_loading_event_stream_task_label, audit_outcome_label, auto_refresh_unavailable_toast,
-        bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
-        builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
+        audit_export_unsupported_source_toast, audit_export_write_failed_error,
+        audit_level_chip_label, audit_level_label, audit_loading_event_stream_task_label,
+        audit_outcome_label, auto_refresh_unavailable_toast, bool_op_label,
+        bucket_encryption_choice_label, buckets_table_summary_line, builder_mode_label,
+        bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
         chart_saved_toast, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
         comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
@@ -2377,12 +2415,12 @@ mod tests {
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
         presign_expiry_label, presign_method_label, preview_gate_message, query_failed_error,
-        refresh_policy_label, result_tab_count_label, row_count_label, row_inspector_title,
-        run_script_task_label, saved_query_already_exists_error, saved_query_saved_as_toast,
-        schema_change_description, script_confirm_message_label, shared_error_prefix,
-        sort_direction_label, source_window_error_message, syntax_error_with_hint,
-        table_action_description, unsaved_changes_label, update_columns_label, valid_lines_label,
-        versioning_off_label, versioning_status_label, visual_mutation_task_label,
+        result_tab_count_label, row_count_label, row_inspector_title, run_script_task_label,
+        saved_query_already_exists_error, saved_query_saved_as_toast, schema_change_description,
+        script_confirm_message_label, shared_error_prefix, sort_direction_label,
+        source_window_error_message, syntax_error_with_hint, table_action_description,
+        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
+        versioning_status_label, visual_mutation_task_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -2390,8 +2428,8 @@ mod tests {
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{
         ColumnSnapshot, DangerousQueryKind, EventActorType, EventCategory, EventOutcome,
-        EventSeverity, IndexSnapshot, QueryLanguage, RefreshPolicy, SchemaChange, TableInfo,
-        TableRef, VersioningStatus,
+        EventSeverity, IndexSnapshot, QueryLanguage, SchemaChange, TableInfo, TableRef,
+        VersioningStatus,
     };
 
     const ALL_DANGEROUS_QUERY_KINDS: &[DangerousQueryKind] = &[
@@ -2422,18 +2460,6 @@ mod tests {
         assert!(one.contains('1'));
         assert!(many.contains('2'));
         assert_ne!(one, many);
-    }
-
-    #[test]
-    fn refresh_policy_label_covers_all_variants() {
-        for policy in RefreshPolicy::ALL {
-            assert_eq!(refresh_policy_label(*policy), policy.label());
-        }
-
-        assert_eq!(refresh_policy_label(RefreshPolicy::Manual), "Off");
-
-        let custom = RefreshPolicy::Interval { every_secs: 7 };
-        assert_eq!(refresh_policy_label(custom), "Custom");
     }
 
     #[test]
@@ -3718,6 +3744,83 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn audit_category_chip_key(category: EventCategory) -> &'static str {
+        match category {
+            EventCategory::Config => "document.audit.category_chip.config",
+            EventCategory::Connection => "document.audit.category_chip.connection",
+            EventCategory::Query => "document.audit.category_chip.query",
+            EventCategory::Hook => "document.audit.category_chip.hook",
+            EventCategory::Script => "document.audit.category_chip.script",
+            EventCategory::System => "document.audit.category_chip.system",
+            EventCategory::Mcp => "document.audit.category_chip.mcp",
+            EventCategory::Governance => "document.audit.category_chip.governance",
+            EventCategory::ObjectStorage => "document.audit.category_chip.object_storage",
+        }
+    }
+
+    fn audit_level_chip_key(level: EventSeverity) -> &'static str {
+        match level {
+            EventSeverity::Trace => "document.audit.level_chip.trace",
+            EventSeverity::Debug => "document.audit.level_chip.debug",
+            EventSeverity::Info => "document.audit.level_chip.info",
+            EventSeverity::Warn => "document.audit.level_chip.warn",
+            EventSeverity::Error => "document.audit.level_chip.error",
+            EventSeverity::Fatal => "document.audit.level_chip.fatal",
+        }
+    }
+
+    fn assert_key_resolves_in_every_locale(key: &str) {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            let value = dbflux_i18n::t!(key, locale = locale);
+
+            assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+            assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+            assert_ne!(
+                value,
+                format!("{locale}.{key}"),
+                "{key} missing from {locale} catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn audit_category_chip_label_maps_every_variant_to_a_key_in_every_locale() {
+        for category in ALL_EVENT_CATEGORIES {
+            let key = audit_category_chip_key(*category);
+
+            assert_eq!(audit_category_chip_label(*category), dbflux_i18n::t!(key));
+            assert_key_resolves_in_every_locale(key);
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
+            "CONN"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
+            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "ko")
+        );
+    }
+
+    #[test]
+    fn audit_level_chip_label_maps_every_variant_to_a_key_in_every_locale() {
+        for level in ALL_EVENT_SEVERITIES {
+            let key = audit_level_chip_key(*level);
+
+            assert_eq!(audit_level_chip_label(*level), dbflux_i18n::t!(key));
+            assert_key_resolves_in_every_locale(key);
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("document.audit.level_chip.warn", locale = "en"),
+            "WARN"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.audit.level_chip.warn", locale = "en"),
+            dbflux_i18n::t!("document.audit.level_chip.warn", locale = "es")
+        );
     }
 
     #[test]
@@ -5081,6 +5184,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {
@@ -5218,6 +5322,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {
@@ -5516,6 +5621,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {

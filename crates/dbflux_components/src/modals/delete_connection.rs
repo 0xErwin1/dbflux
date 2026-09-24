@@ -9,6 +9,9 @@ use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::button::{Button, ButtonVariants};
 
+/// Debug selector of the box that shows the connection name, for layout tests.
+pub const DELETE_CONNECTION_NAME_SELECTOR: &str = "delete-connection-name";
+
 /// Outcome emitted when the user resolves the modal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DeleteConnectionOutcome {
@@ -124,6 +127,7 @@ impl Render for ModalDeleteConnection {
             )
             .child(
                 surface_raised(cx)
+                    .debug_selector(|| DELETE_CONNECTION_NAME_SELECTOR.to_string())
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)

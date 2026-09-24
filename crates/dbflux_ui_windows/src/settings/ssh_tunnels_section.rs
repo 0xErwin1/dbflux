@@ -489,6 +489,7 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_save_secret_focused = is_form_focused && current_field == SshFormField::SaveSecret;
+        let save_label = dbflux_i18n::t!("ssh.save");
 
         div()
             .flex()
@@ -507,12 +508,13 @@ impl SshTunnelsSection {
             .child(
                 Checkbox::new("ssh-save-secret")
                     .checked(self.form_save_secret)
+                    .aria_label(save_label.clone())
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.form_save_secret = *checked;
                         cx.notify();
                     })),
             )
-            .child(div().text_sm().child(dbflux_i18n::t!("ssh.save")))
+            .child(div().text_sm().child(save_label))
     }
 
     fn render_private_key_fields(

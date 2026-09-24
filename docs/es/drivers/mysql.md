@@ -33,7 +33,12 @@ Base de datos relacional open-source popular.
   lectura; la definición no es editable ni ejecutable en el visor).
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se dividen y
   ejecutan sentencia por sentencia, cada una a través del camino preparado
-  tipado, devolviendo un result set por sentencia.
+  tipado, devolviendo un result set por sentencia. Una sentencia que el
+  servidor se niega a preparar, como `START TRANSACTION` o `BEGIN` en MySQL, se
+  ejecuta por el protocolo de texto. Un límite explícito retiene
+  como máximo N filas en total entre los resultados del script y del servidor,
+  e indica las filas realmente omitidas incluso si N es cero; las mutaciones
+  posteriores se completan y los errores se propagan.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
@@ -78,6 +83,11 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
+- Los timeouts explícitos de sentencia y las solicitudes acotadas de métricas
+  o inspección de instancia se rechazan antes de ejecutarse; las solicitudes
+  sin límites mantienen la compatibilidad. El límite de filas retenidas no
+  acota bytes, trabajo del servidor, asignación de memoria del motor ni tiempo
+  transcurrido. No se verificó MariaDB alojado.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
 
 - Instance Metrics devuelve un único dato por llamada (snapshot actual de `SHOW
