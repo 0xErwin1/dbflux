@@ -1,0 +1,105 @@
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index c686556c..8fba482e 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2521,6 +2521,22 @@ impl Window {
+         true
+     }
+ 
++    /// Set the value of a uniquely identified element from the last observed frame
++    /// through its accessibility `SetValue` action.
++    ///
++    /// The value reaches the listeners the element registered with `on_a11y_action`,
++    /// the same way an assistive technology request does, so a text input can replace
++    /// its document without holding focus or an active input handler. Returns `false`
++    /// when the ID is absent or duplicated, or when the element has no `SetValue`
++    /// listener.
++    pub fn set_observed_element_value(&mut self, id: &str, value: &str, cx: &mut App) -> bool {
++        let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
++            return false;
++        };
++        let data = accesskit::ActionData::Value(value.into());
++        self.dispatch_a11y_action_listeners(node_id, accesskit::Action::SetValue, Some(&data), cx)
++    }
++
+     /// Insert text through the focused element's active input handler.
+     ///
+     /// Returns `false` when the current frame has no active input handler.
+@@ -2545,6 +2561,18 @@ impl Window {
+         replaced
+     }
+ 
++    /// Report whether the current frame installed an input handler for the focused element.
++    ///
++    /// Tells apart the two reasons [`Window::replace_input_text`] returns `false`: no
++    /// handler at all, or a handler that cannot provide its document range.
++    pub fn has_input_handler(&mut self) -> bool {
++        let Some(input_handler) = self.platform_window.take_input_handler() else {
++            return false;
++        };
++        self.platform_window.set_input_handler(input_handler);
++        true
++    }
++
+     /// Close this window.
+     pub fn remove_window(&mut self) {
+         self.removed = true;
+@@ -7220,26 +7248,42 @@ impl Window {
+             .push((action, Box::new(listener)));
+     }
+ 
+-    #[cfg(not(target_family = "wasm"))]
+-    pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
++    /// Run the listeners registered for `action` on `target_node`.
++    ///
++    /// Returns whether at least one listener matched the action.
++    fn dispatch_a11y_action_listeners(
++        &mut self,
++        target_node: accesskit::NodeId,
++        action: accesskit::Action,
++        data: Option<&accesskit::ActionData>,
++        cx: &mut App,
++    ) -> bool {
+         // Take listeners out temporarily so the closures can borrow Window
+         // mutably, then restore them afterward.
+-        if let Some(mut listeners) = self.a11y.action_listeners.remove(&request.target_node) {
+-            let extra_data = request.data.as_ref();
+-            let mut matched = false;
+-            for (action, listener) in &mut listeners {
+-                if *action == request.action {
+-                    listener(extra_data, self, cx);
+-                    matched = true;
+-                }
+-            }
+-            self.a11y
+-                .action_listeners
+-                .insert(request.target_node, listeners);
+-            if matched {
+-                return;
++        let Some(mut listeners) = self.a11y.action_listeners.remove(&target_node) else {
++            return false;
++        };
++        let mut matched = false;
++        for (registered_action, listener) in &mut listeners {
++            if *registered_action == action {
++                listener(data, self, cx);
++                matched = true;
+             }
+         }
++        self.a11y.action_listeners.insert(target_node, listeners);
++        matched
++    }
++
++    #[cfg(not(target_family = "wasm"))]
++    pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
++        if self.dispatch_a11y_action_listeners(
++            request.target_node,
++            request.action,
++            request.data.as_ref(),
++            cx,
++        ) {
++            return;
++        }
+ 
+         // Fall back to built-in action handling.
+         match request.action {
