@@ -143,6 +143,10 @@ pub struct Task {
     pub details: Option<String>,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
+    /// Full text of the query a `TaskKind::Query` task runs, when the
+    /// description had to shorten it. Shared, so snapshots taken on every
+    /// render do not copy a large script.
+    pub query_text: Option<Arc<str>>,
     cancel_token: CancelToken,
 }
 
@@ -175,6 +179,7 @@ pub struct TaskSnapshot {
     pub is_cancellable: bool,
     pub profile_id: Option<Uuid>,
     pub target: Option<TaskTarget>,
+    pub query_text: Option<Arc<str>>,
 }
 
 impl From<&Task> for TaskSnapshot {
@@ -190,6 +195,7 @@ impl From<&Task> for TaskSnapshot {
             is_cancellable: task.is_cancellable(),
             profile_id: task.profile_id,
             target: task.target.clone(),
+            query_text: task.query_text.clone(),
         }
     }
 }
@@ -235,11 +241,20 @@ impl TaskManager {
             details: None,
             profile_id,
             target,
+            query_text: None,
             cancel_token: cancel_token.clone(),
         };
 
         self.tasks.insert(id, task);
         (id, cancel_token)
+    }
+
+    /// Records the full query text of a task whose description is a
+    /// shortened label, so prompts about the running query can show all of it.
+    pub fn set_query_text(&mut self, id: TaskId, query_text: impl Into<Arc<str>>) {
+        if let Some(task) = self.tasks.get_mut(&id) {
+            task.query_text = Some(query_text.into());
+        }
     }
 
     pub fn complete(&mut self, id: TaskId) {
@@ -637,6 +652,22 @@ mod tests {
         manager.complete(id);
 
         assert!(!manager.get(id).expect("task exists").is_cancellable);
+    }
+
+    #[test]
+    fn query_text_reaches_the_snapshot_and_leaves_the_description_alone() {
+        let mut manager = TaskManager::new();
+        let full_query =
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c;";
+        let (id, _token) = manager.start(TaskKind::Query, "WITH RECURSIVE c(x) AS ...");
+
+        assert!(manager.get(id).expect("task exists").query_text.is_none());
+
+        manager.set_query_text(id, full_query);
+
+        let snapshot = manager.get(id).expect("task exists");
+        assert_eq!(snapshot.query_text.as_deref(), Some(full_query));
+        assert_eq!(snapshot.description, "WITH RECURSIVE c(x) AS ...");
     }
 
     #[test]

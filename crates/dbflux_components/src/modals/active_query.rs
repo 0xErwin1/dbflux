@@ -7,8 +7,18 @@ use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::scroll::ScrollableElement;
 use std::time::Duration;
+
+/// Debug selector of the query preview text, for layout tests.
+pub const ACTIVE_QUERY_PREVIEW_SELECTOR: &str = "active-query-preview";
+
+/// Wrapped lines the query preview shows before it ends in an ellipsis.
+pub const QUERY_PREVIEW_MAX_LINES: usize = 6;
+
+/// Characters handed to the text layout at most. Far more than six wrapped
+/// lines of the modal hold, so clipping here never hides text that would have
+/// been visible, and a pasted multi-megabyte script is never laid out.
+const QUERY_PREVIEW_MAX_CHARS: usize = 2000;
 
 /// The flow that triggered this modal — determines which footer buttons are shown.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,8 +43,11 @@ pub enum ActiveQueryOutcome {
 /// Request payload for `pending_modal_open`.
 #[derive(Clone)]
 pub struct ActiveQueryRequest {
-    /// The SQL text currently running.
+    /// Full text of the longest-running query, not the shortened task label.
     pub sql: String,
+    /// How many other queries are running besides the one in `sql`. The
+    /// prompt previews one query and counts the rest.
+    pub more_queries: usize,
     pub trigger: ActiveQueryTrigger,
     /// How long the query has already been running when the modal opens, so
     /// the elapsed hint continues from the real start instead of from zero.
@@ -69,6 +82,11 @@ impl ModalActiveQuery {
 
     pub fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    /// The request the modal is showing, if it is open.
+    pub fn request(&self) -> Option<&ActiveQueryRequest> {
+        self.request.as_ref()
     }
 
     pub fn open(&mut self, request: ActiveQueryRequest, cx: &mut Context<Self>) {
@@ -156,6 +174,51 @@ fn prompt_label(trigger: ActiveQueryTrigger, connection_names: &[String]) -> Str
     }
 }
 
+/// Line under the preview that counts the running queries it does not show.
+fn more_queries_label(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(dbflux_i18n::t!(
+            "modals.active_query.more_queries.one",
+            count = count
+        )),
+        _ => Some(dbflux_i18n::t!(
+            "modals.active_query.more_queries.many",
+            count = count
+        )),
+    }
+}
+
+/// Text handed to the preview box, which wraps it and clamps it to
+/// [`QUERY_PREVIEW_MAX_LINES`] lines with an ellipsis when it overflows.
+///
+/// Only bounds the work of that layout: keeps the first lines that can be
+/// shown and at most [`QUERY_PREVIEW_MAX_CHARS`] characters. When anything is
+/// dropped, a trailing `…` line keeps the clipped text overflowing, so the
+/// layout still ends the preview in an ellipsis.
+fn query_preview(sql: &str) -> String {
+    let sql = sql.trim();
+
+    let mut lines = sql.lines();
+    let mut preview = lines
+        .by_ref()
+        .take(QUERY_PREVIEW_MAX_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut clipped = lines.any(|line| !line.trim().is_empty());
+
+    if let Some((cut, _)) = preview.char_indices().nth(QUERY_PREVIEW_MAX_CHARS) {
+        preview.truncate(cut);
+        clipped = true;
+    }
+
+    if clipped {
+        preview.push_str("\n\u{2026}");
+    }
+
+    preview
+}
+
 impl EventEmitter<ActiveQueryOutcome> for ModalActiveQuery {}
 
 impl Render for ModalActiveQuery {
@@ -171,7 +234,8 @@ impl Render for ModalActiveQuery {
         };
 
         let theme = cx.theme();
-        let sql = request.sql.clone();
+        let preview = query_preview(&request.sql);
+        let more_queries = more_queries_label(request.more_queries);
         let trigger = request.trigger;
         let elapsed = self.elapsed_secs;
         let elapsed_label = elapsed_label(elapsed);
@@ -185,18 +249,27 @@ impl Render for ModalActiveQuery {
             .child(
                 surface_raised(cx)
                     .w_full()
-                    .max_h(px(120.0))
-                    .overflow_y_scrollbar()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
                     .child(
                         div()
+                            .debug_selector(|| ACTIVE_QUERY_PREVIEW_SELECTOR.to_string())
                             .text_size(FontSizes::XS)
                             .font_family(AppFonts::MONO)
                             .text_color(theme.foreground)
-                            .child(sql),
+                            .line_clamp(QUERY_PREVIEW_MAX_LINES)
+                            .text_ellipsis()
+                            .child(preview),
                     ),
             )
+            .when_some(more_queries, |body, label| {
+                body.child(
+                    div()
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+            })
             .child(
                 div()
                     .text_size(FontSizes::SM)
@@ -291,6 +364,8 @@ mod tests {
             "modals.active_query.quit_anyway",
             "modals.active_query.keep_waiting",
             "modals.active_query.cancel_query",
+            "modals.active_query.more_queries.one",
+            "modals.active_query.more_queries.many",
         ];
 
         for key in keys {
@@ -326,6 +401,74 @@ mod tests {
     }
 
     #[test]
+    fn query_preview_keeps_a_short_query_whole() {
+        let sql =
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) SELECT count(*) FROM c;";
+
+        assert_eq!(query_preview(sql), sql);
+        assert_eq!(query_preview(&format!("\n  {sql}  \n")), sql);
+    }
+
+    #[test]
+    fn query_preview_keeps_a_query_that_fills_the_line_limit() {
+        let sql = (1..=QUERY_PREVIEW_MAX_LINES)
+            .map(|line| format!("SELECT {line};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(query_preview(&format!("{sql}\n\n")), sql);
+    }
+
+    #[test]
+    fn query_preview_clips_extra_lines_behind_an_ellipsis_line() {
+        let sql = (1..=40)
+            .map(|line| format!("SELECT {line};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let preview = query_preview(&sql);
+        let lines: Vec<&str> = preview.lines().collect();
+
+        assert_eq!(lines.len(), QUERY_PREVIEW_MAX_LINES + 1);
+        assert_eq!(lines[0], "SELECT 1;");
+        assert_eq!(lines[QUERY_PREVIEW_MAX_LINES - 1], "SELECT 6;");
+        assert_eq!(lines[QUERY_PREVIEW_MAX_LINES], "\u{2026}");
+    }
+
+    #[test]
+    fn query_preview_bounds_a_single_huge_line() {
+        let sql = format!("SELECT '{}';", "é".repeat(100_000));
+
+        let preview = query_preview(&sql);
+
+        assert!(preview.ends_with("\n\u{2026}"));
+        assert_eq!(
+            preview.chars().count(),
+            QUERY_PREVIEW_MAX_CHARS + 2,
+            "the clipped text plus the ellipsis line"
+        );
+    }
+
+    #[test]
+    fn more_queries_label_counts_only_the_hidden_queries() {
+        assert_eq!(more_queries_label(0), None);
+
+        let one = more_queries_label(1).expect("one hidden query");
+        assert!(one.contains('1'), "{one}");
+        assert_eq!(
+            one,
+            dbflux_i18n::t!("modals.active_query.more_queries.one", count = 1)
+        );
+
+        let many = more_queries_label(3).expect("three hidden queries");
+        assert!(many.contains('3'), "{many}");
+        assert_eq!(
+            many,
+            dbflux_i18n::t!("modals.active_query.more_queries.many", count = 3)
+        );
+    }
+
+    #[test]
     fn elapsed_label_contains_seconds_for_larger_value() {
         let label = elapsed_label(42);
         assert!(label.contains("42"));
@@ -351,6 +494,7 @@ mod outcome_tests {
     fn request(trigger: ActiveQueryTrigger) -> ActiveQueryRequest {
         ActiveQueryRequest {
             sql: "SELECT pg_sleep(60)".to_string(),
+            more_queries: 0,
             trigger,
             elapsed_secs: 12,
             connection_names: vec!["prod".to_string()],
@@ -486,6 +630,7 @@ mod keyboard_tests {
                 modal.open(
                     ActiveQueryRequest {
                         sql: "SELECT pg_sleep(60)".to_string(),
+                        more_queries: 0,
                         trigger: ActiveQueryTrigger::Disconnect,
                         elapsed_secs: 0,
                         connection_names: vec!["prod".to_string()],

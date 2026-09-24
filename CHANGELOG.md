@@ -20,6 +20,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Active query prompt shows the whole query** — the "Active query running"
+  prompt showed the running task's label, which the editor cuts at 80
+  characters, so a longer query ended in "..." as in the status bar. The
+  prompt now wraps the full query text and caps it at six lines, adding an
+  ellipsis only when it does not fit. When several queries run at quit, it
+  shows the longest-running one and counts the others.
+
 * External RPC drivers now refuse a query that sets a row limit (including
   zero) or a statement timeout, both in the client before the request is sent
   and in the driver host before the plugin connection runs it. Previously the
