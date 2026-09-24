@@ -88,6 +88,9 @@ pub struct KeyValueDocument {
     current_cursor: Option<String>,
     next_cursor: Option<String>,
     previous_cursors: Vec<Option<String>>,
+    /// Keys in the whole keyspace, shown only for an unfiltered scan and only
+    /// when the driver can count them.
+    key_total: Option<u64>,
 
     // Inline rename
     rename_input: Option<Entity<InputState>>,
@@ -316,6 +319,7 @@ impl KeyValueDocument {
             current_cursor: None,
             next_cursor: None,
             previous_cursors: Vec::new(),
+            key_total: None,
             rename_input: None,
             renaming_index: None,
             editing_member_index: None,

@@ -1608,6 +1608,7 @@ document:
       keys_count:
         one: "이 페이지의 키 %{count}개"
         many: "이 페이지의 키 %{count}개"
+      keys_total: "전체 %{count}개"
       filter:
         keys_placeholder: "키 필터링..."
         members_placeholder: "멤버 필터링..."
