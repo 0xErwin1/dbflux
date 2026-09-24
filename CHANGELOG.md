@@ -16,6 +16,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* SQL Server explicit row limits retain at most N rows across every result set of a batch and flag actual omissions, including at zero; every set is drained, so later statements and mutations finish and late errors propagate. Explicit timeouts and bounded instance requests are refused before execution without clearing a pending cancellation; unbounded requests remain compatible. The row cap does not bound bytes, server work, or elapsed time; Azure SQL Database and Managed Instance were not verified.
+
 * SQLite explicit row limits retain at most N rows across the row-producing statements of a request (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; every statement still runs to completion, so mutations finish and late errors propagate. Bounded multi-statement batches are split with SQLite's own lexer and run in order under that one budget, so statements after the budget is exhausted still run, and a failure stops the batch as it does without a limit. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time, and splitting a bounded batch is quadratic in statement length.
 
 * MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
@@ -29,6 +31,10 @@ All notable changes to DBFlux will be documented in this file.
   and in the driver host before the plugin connection runs it. Previously the
   host passed those options through with nothing to guarantee the driver
   honored them. Queries without either option run as before.
+
+* `START TRANSACTION` and `BEGIN` now work from the SQL editor on MySQL,
+  including as the first statement of a script. MySQL 8.4 refused them with
+  "This command is not supported in the prepared statement protocol yet".
 
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
@@ -274,6 +280,13 @@ All notable changes to DBFlux will be documented in this file.
   snapshot table rows (old databases upgrade in place and stay readable), and
   snapshot deduplication no longer discards a fresh capture just because the
   structural fingerprint is unchanged.
+
+* **Key total in the Redis key browser** — with no filter set, the key browser
+  now shows how many keys the whole keyspace holds next to the keys on the
+  current page. Drivers report it through a new defaulted
+  `KeyValueApi::key_count` seam: Redis answers with `DBSIZE`, and a Cluster
+  connection sums `DBSIZE` over every master. External drivers carry it over
+  driver RPC 1.5; against an older host the total is simply not shown.
 
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render
