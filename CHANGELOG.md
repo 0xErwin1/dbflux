@@ -91,6 +91,14 @@ All notable changes to DBFlux will be documented in this file.
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
 
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
+
 * **Proxy details show readable labels** — the Access tab's proxy details
   card printed the proxy type and authentication as Rust debug output, such
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
