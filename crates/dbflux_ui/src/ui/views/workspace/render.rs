@@ -1644,6 +1644,42 @@ mod inline_delete_keyboard_tests {
         assert!(harness.workspace_has_focus());
     }
 
+    impl Harness<'_> {
+        /// Moves focus back to the workspace while the confirmation stays
+        /// open, as when something else takes focus behind it.
+        fn focus_workspace(&mut self) {
+            let workspace = self.workspace.clone();
+            self.window.update(|window, cx| {
+                let handle = workspace.read(cx).focus_handle.clone();
+                handle.focus(window, cx);
+            });
+            self.window.run_until_parked();
+            assert!(self.is_open());
+        }
+    }
+
+    #[gpui::test]
+    fn enter_deletes_the_folder_when_focus_is_outside_the_confirmation(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+        harness.focus_workspace();
+
+        harness.window.simulate_keystrokes("enter");
+
+        assert!(!harness.is_open());
+        assert!(!harness.folder_exists());
+    }
+
+    #[gpui::test]
+    fn escape_keeps_the_folder_when_focus_is_outside_the_confirmation(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+        harness.focus_workspace();
+
+        harness.window.simulate_keystrokes("escape");
+
+        assert!(!harness.is_open());
+        assert!(harness.folder_exists());
+    }
+
     #[gpui::test]
     fn a_backdrop_click_keeps_the_folder(cx: &mut TestAppContext) {
         let mut harness = open_confirmation(cx);
