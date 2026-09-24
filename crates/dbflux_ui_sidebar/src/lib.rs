@@ -143,6 +143,9 @@ pub enum SidebarEvent {
     /// Request to open the drop-table modal for a specific table.
     RequestDropTable {
         item_id: String,
+        /// Connection the table belongs to, so the modal can quote its SQL
+        /// preview in that connection's dialect.
+        profile_id: Uuid,
         table_name: String,
         schema_name: Option<String>,
         dependents: Vec<dbflux_core::RelationRef>,

@@ -776,6 +776,12 @@ pub enum ContextId {
     /// SQL preview modal is open (captures all input).
     SqlPreviewModal,
 
+    /// Cell editor modal is open (edits one grid cell as JSON or long text).
+    CellEditorModal,
+
+    /// Document preview modal is open (views or edits a whole document).
+    DocumentPreviewModal,
+
     /// Context menu is open and receiving keyboard navigation.
     ContextMenu,
 
@@ -815,6 +821,8 @@ impl ContextId {
             ContextId::TextInput => None,
             ContextId::Dropdown => None,
             ContextId::SqlPreviewModal => None,
+            ContextId::CellEditorModal => None,
+            ContextId::DocumentPreviewModal => None,
             ContextId::ContextMenu => None,
             ContextId::ConfirmModal => None,
             ContextId::FormNavigation => None,
@@ -841,6 +849,8 @@ impl ContextId {
                 | ContextId::TextInput
                 | ContextId::Dropdown
                 | ContextId::SqlPreviewModal
+                | ContextId::CellEditorModal
+                | ContextId::DocumentPreviewModal
                 | ContextId::ContextMenu
                 | ContextId::ConfirmModal
                 | ContextId::FormNavigation
@@ -869,6 +879,8 @@ impl ContextId {
             ContextId::TextInput => "Text Input",
             ContextId::Dropdown => "Dropdown",
             ContextId::SqlPreviewModal => "SQL Preview",
+            ContextId::CellEditorModal => "Cell Editor",
+            ContextId::DocumentPreviewModal => "Document Preview",
             ContextId::ContextMenu => "Context Menu",
             ContextId::ConfirmModal => "Confirm",
             ContextId::FormNavigation => "Form Navigation",
@@ -894,6 +906,8 @@ impl ContextId {
             ContextId::TextInput => "text_input",
             ContextId::Dropdown => "dropdown",
             ContextId::SqlPreviewModal => "sql_preview_modal",
+            ContextId::CellEditorModal => "cell_editor_modal",
+            ContextId::DocumentPreviewModal => "document_preview_modal",
             ContextId::ContextMenu => "context_menu",
             ContextId::ConfirmModal => "confirm_modal",
             ContextId::FormNavigation => "form_navigation",
@@ -919,6 +933,8 @@ impl ContextId {
             ContextId::TextInput,
             ContextId::Dropdown,
             ContextId::SqlPreviewModal,
+            ContextId::CellEditorModal,
+            ContextId::DocumentPreviewModal,
             ContextId::ContextMenu,
             ContextId::ConfirmModal,
             ContextId::FormNavigation,
@@ -944,6 +960,8 @@ impl ContextId {
             ContextId::TextInput => "TextInput",
             ContextId::Dropdown => "Dropdown",
             ContextId::SqlPreviewModal => "SqlPreviewModal",
+            ContextId::CellEditorModal => "CellEditorModal",
+            ContextId::DocumentPreviewModal => "DocumentPreviewModal",
             ContextId::ContextMenu => "ContextMenu",
             ContextId::ConfirmModal => "ConfirmModal",
             ContextId::FormNavigation => "FormNavigation",

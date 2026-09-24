@@ -171,7 +171,7 @@ impl Render for CellEditorModal {
         }
 
         ModalFrame::new("cell-editor-modal", &self.focus_handle, close)
-            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
+            .key_context(ContextId::CellEditorModal.as_gpui_context())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()))
             .header_leading(Icon::new(AppIcon::Pencil).size(Heights::ICON_SM).primary())
             .title(if is_json {
@@ -208,5 +208,55 @@ mod tests {
         let en = dbflux_i18n::t!("modals.cell_editor.title_json", locale = "en");
         let es = dbflux_i18n::t!("modals.cell_editor.title_json", locale = "es");
         assert_ne!(en, es);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::CellEditorModal;
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, Window, div,
+    };
+
+    struct Host {
+        modal: Entity<CellEditorModal>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn escape_closes_the_cell_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::modals::register_modal_keybindings(cx);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, "{\"a\": 1}".to_string(), true, window, cx);
+            });
+        });
+        window.run_until_parked();
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.simulate_keystrokes("escape");
+
+        assert!(
+            !window.update(|_, cx| modal.read(cx).is_visible()),
+            "Escape closes the editor through its own key context"
+        );
     }
 }

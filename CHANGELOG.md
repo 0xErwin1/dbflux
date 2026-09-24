@@ -474,6 +474,20 @@ All notable changes to DBFlux will be documented in this file.
   at all keeps its tab too and says so. "Don't save" discards only the
   documents the dialog listed, not every open tab.
 
+* **Modals answer Enter, Escape and close the same way** — only the delete
+  connection and unsaved changes dialogs answered the keyboard, and most
+  dialogs had no close button and ignored clicks on the backdrop. Every dialog
+  built on the shared modal shell now cancels on Escape, the X button and a
+  backdrop click, and confirms on Enter only while its primary action is
+  enabled; Enter inside a multi-line editor still inserts a new line. The drop
+  table and tunnel passphrase dialogs focus their input when they open, the
+  drop table and unsaved changes dialogs use real disabled buttons, and the
+  unsaved changes list uses the standard checkbox. The drop table SQL preview
+  now quotes the table the way the connection's database does, such as
+  backticks on MySQL and brackets on SQL Server, instead of always using
+  PostgreSQL double quotes. The cell editor and document preview have their
+  own keyboard contexts, and Escape closes them.
+
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.

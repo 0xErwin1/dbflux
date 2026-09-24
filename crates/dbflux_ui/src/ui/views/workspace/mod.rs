@@ -1029,16 +1029,33 @@ impl Workspace {
                 }
                 SidebarEvent::RequestDropTable {
                     item_id,
+                    profile_id,
                     table_name,
                     schema_name,
                     dependents,
                 } => {
                     use crate::ui::overlays::modals::DropTableRequest;
-                    let req = DropTableRequest {
-                        table_name: table_name.clone(),
-                        schema_name: schema_name.clone(),
-                        dependents: dependents.clone(),
+
+                    // Without a live connection there is no dialect to ask,
+                    // so the preview falls back to ANSI double quotes.
+                    let connection = this
+                        .app_state
+                        .read(cx)
+                        .connections()
+                        .get(profile_id)
+                        .map(|connected| connected.connection.clone());
+                    let default_dialect = dbflux_core::DefaultSqlDialect;
+                    let dialect: &dyn dbflux_core::SqlDialect = match connection.as_ref() {
+                        Some(connection) => connection.dialect(),
+                        None => &default_dialect,
                     };
+
+                    let req = DropTableRequest::new(
+                        table_name.clone(),
+                        schema_name.clone(),
+                        dependents.clone(),
+                        dialect,
+                    );
                     this.pending_drop_table_item_id = Some(item_id.clone());
                     this.modal_drop_table.update(cx, |modal, cx| {
                         modal.open(req, window, cx);
