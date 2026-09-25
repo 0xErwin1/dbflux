@@ -5,14 +5,17 @@ use dbflux_core::QueryResultShape;
 pub enum DataViewMode {
     #[default]
     Table,
+    /// Collapsible document tree.
     Document,
+    /// The page as editable JSON (document collections only).
+    Json,
 }
 
 impl DataViewMode {
     pub fn recommended_for(source: &DataSource) -> Self {
         match source {
             DataSource::Table { .. } => DataViewMode::Table,
-            DataSource::Collection { .. } => DataViewMode::Document,
+            DataSource::Collection { .. } => DataViewMode::Table,
             DataSource::QueryResult { result, .. } => {
                 if result.shape == QueryResultShape::Json {
                     DataViewMode::Document
@@ -26,7 +29,7 @@ impl DataViewMode {
     pub fn available_for(source: &DataSource) -> Vec<Self> {
         match source {
             DataSource::Table { .. } => vec![DataViewMode::Table],
-            DataSource::Collection { .. } => vec![DataViewMode::Table, DataViewMode::Document],
+            DataSource::Collection { .. } => vec![DataViewMode::Document, DataViewMode::Table],
             DataSource::QueryResult { result, .. } => {
                 if result.shape == QueryResultShape::Json {
                     vec![DataViewMode::Table, DataViewMode::Document]
@@ -41,6 +44,7 @@ impl DataViewMode {
         match self {
             DataViewMode::Table => dbflux_i18n::t!("document.data.grid.mode.table"),
             DataViewMode::Document => dbflux_i18n::t!("document.data.grid.mode.document"),
+            DataViewMode::Json => dbflux_i18n::t!("document.collection.view.json"),
         }
     }
 }
@@ -116,7 +120,7 @@ mod tests {
         );
         assert_eq!(
             DataViewMode::recommended_for(&collection_source()),
-            DataViewMode::Document
+            DataViewMode::Table
         );
 
         assert_eq!(
@@ -148,7 +152,7 @@ mod tests {
 
         assert_eq!(
             DataViewMode::available_for(&collection_source()),
-            vec![DataViewMode::Table, DataViewMode::Document]
+            vec![DataViewMode::Document, DataViewMode::Table]
         );
 
         assert_eq!(

@@ -11,8 +11,8 @@ pub use tree::{CONTEXT, DocumentTree, init};
 /// GPUI actions the tree handles, bound to keys in [`CONTEXT`].
 pub mod actions {
     pub use super::tree::{
-        CloseSearch, DeleteDocument, MoveDown, MoveLeft, MoveRight, MoveToBottom, MoveToTop,
-        MoveUp, NextMatch, OpenPreview, OpenSearch, PageDown, PageUp, PrevMatch, StartEdit,
-        ToggleExpand, ToggleViewMode,
+        CloseSearch, CycleDataView, DeleteDocument, MoveDown, MoveLeft, MoveRight, MoveToBottom,
+        MoveToTop, MoveUp, NextMatch, OpenPreview, OpenSearch, PageDown, PageUp, PrevMatch,
+        StartEdit, ToggleExpand, ToggleViewMode,
     };
 }

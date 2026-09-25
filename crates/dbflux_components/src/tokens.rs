@@ -1026,6 +1026,100 @@ impl TableViewMetrics {
     pub const FILTER_ROW_GAP: Pixels = px(8.0);
 }
 
+/// Geometry of a document collection (P1DocTable, P2DocNested, P1DocSchema).
+pub struct CollectionMetrics;
+
+impl CollectionMetrics {
+    /// Query bar row: 50 px tall, 14 px side padding, 8 px gap. Each slot is a
+    /// 32 px field with 10 px padding, 8 px between its keyword and its JSON,
+    /// 12.5 px mono text. Fixed slot widths: project 190, sort 200, limit 90.
+    pub const QUERY_ROW_HEIGHT: Pixels = px(50.0);
+    pub const QUERY_ROW_PADDING_X: Pixels = px(14.0);
+    pub const QUERY_ROW_GAP: Pixels = px(8.0);
+    pub const SLOT_HEIGHT: Pixels = px(32.0);
+    pub const SLOT_PADDING_X: Pixels = px(10.0);
+    pub const SLOT_GAP: Pixels = px(8.0);
+    pub const SLOT_FONT: Pixels = px(12.5);
+    pub const PROJECT_SLOT_WIDTH: Pixels = px(190.0);
+    pub const SORT_SLOT_WIDTH: Pixels = px(200.0);
+    pub const LIMIT_SLOT_WIDTH: Pixels = px(90.0);
+    /// View row under the query bar: 42 px tall, 14 px side padding.
+    pub const VIEW_ROW_HEIGHT: Pixels = px(42.0);
+    pub const VIEW_ROW_PADDING_X: Pixels = px(14.0);
+    pub const VIEW_ROW_GAP: Pixels = px(8.0);
+    /// Keyboard hint after the view switch: 8 px lead, 6 px gap, 12.5 px text.
+    pub const HINT_MARGIN_LEFT: Pixels = px(8.0);
+    pub const HINT_GAP: Pixels = px(6.0);
+    pub const HINT_FONT: Pixels = px(12.5);
+    /// Pending-changes label. (12 px)
+    pub const PENDING_FONT: Pixels = px(12.0);
+    /// Header metadata chip: 6 px lead, 2 x 8 px padding, 11 px mono.
+    pub const META_CHIP_MARGIN_LEFT: Pixels = px(6.0);
+    pub const META_CHIP_PADDING_X: Pixels = px(8.0);
+    pub const META_CHIP_PADDING_Y: Pixels = px(2.0);
+    pub const META_CHIP_FONT: Pixels = px(11.0);
+
+    /// Grid header with a presence bar under each name: 44 px, 5 px between
+    /// the two lines, 48 x 3 px bar, 10 px labels. A column group adds a
+    /// 26 px row above (11.5 px mono); without presence the name row is 30 px.
+    pub const PRESENCE_HEADER_HEIGHT: Pixels = px(44.0);
+    pub const GROUPED_HEADER_HEIGHT: Pixels = px(30.0);
+    pub const GROUP_ROW_HEIGHT: Pixels = px(26.0);
+    pub const GROUP_FONT: Pixels = px(11.5);
+    pub const HEADER_LINE_GAP: Pixels = px(5.0);
+    pub const PRESENCE_BAR_WIDTH: Pixels = px(48.0);
+    pub const PRESENCE_BAR_HEIGHT: Pixels = px(3.0);
+    pub const HEADER_META_FONT: Pixels = px(10.0);
+    /// Tint washes behind a column group: group header 8 %, child headers
+    /// 5 %, child cells 3 %. A pending edit washes its cell in warning at 8 %
+    /// inside a 1.5 px warning ring.
+    pub const GROUP_HEADER_ALPHA: f32 = 0.08;
+    pub const GROUP_CHILD_HEADER_ALPHA: f32 = 0.05;
+    pub const GROUP_CHILD_CELL_ALPHA: f32 = 0.03;
+    pub const EDITED_CELL_ALPHA: f32 = 0.08;
+    /// Icon inside a nested-value cell. (12 px)
+    pub const NESTED_ICON: Pixels = px(12.0);
+
+    /// Server-change card: 460 px wide, 24 px from the right and 56 px from
+    /// the bottom of the grid, 16 px padding, 10 px gap, 3 px warning edge,
+    /// 12.5 px body, 8 x 10 px code block in 12 px mono.
+    pub const CONFLICT_WIDTH: Pixels = px(460.0);
+    pub const CONFLICT_RIGHT: Pixels = px(24.0);
+    pub const CONFLICT_BOTTOM: Pixels = px(56.0);
+    pub const CONFLICT_PADDING: Pixels = px(16.0);
+    pub const CONFLICT_GAP: Pixels = px(10.0);
+    pub const CONFLICT_EDGE: Pixels = px(3.0);
+    pub const CONFLICT_BODY_FONT: Pixels = px(12.5);
+    pub const CONFLICT_CODE_PADDING_X: Pixels = px(10.0);
+    pub const CONFLICT_CODE_PADDING_Y: Pixels = px(8.0);
+    pub const CONFLICT_CODE_FONT: Pixels = px(12.0);
+
+    /// Schema view: 44 px toolbar (14 px padding, 8 px gap), 140 px sample
+    /// size field, 34 px column header in 11.5 px, rows at least 52 px tall
+    /// with 18 px side padding. Columns: field 240, types 360, presence 100.
+    pub const SCHEMA_TOOLBAR_HEIGHT: Pixels = px(44.0);
+    pub const SCHEMA_SAMPLE_WIDTH: Pixels = px(140.0);
+    pub const SCHEMA_HEADER_HEIGHT: Pixels = px(34.0);
+    pub const SCHEMA_HEADER_FONT: Pixels = px(11.5);
+    pub const SCHEMA_ROW_MIN_HEIGHT: Pixels = px(52.0);
+    pub const SCHEMA_PADDING_X: Pixels = px(18.0);
+    pub const SCHEMA_FIELD_WIDTH: Pixels = px(240.0);
+    pub const SCHEMA_TYPES_WIDTH: Pixels = px(360.0);
+    pub const SCHEMA_PRESENCE_WIDTH: Pixels = px(100.0);
+    /// Type bar: 8 px tall with 30 px clearance to the next column, 6 px to
+    /// its legend; legend swatches 8 px, 4 px to their label, 10 px apart,
+    /// 11 px text. Field names 13 px mono, values 12.5 px.
+    pub const TYPE_BAR_HEIGHT: Pixels = px(8.0);
+    pub const TYPE_BAR_CLEARANCE: Pixels = px(30.0);
+    pub const TYPE_BAR_GAP: Pixels = px(6.0);
+    pub const LEGEND_SWATCH: Pixels = px(8.0);
+    pub const LEGEND_GAP: Pixels = px(4.0);
+    pub const LEGEND_SPACING: Pixels = px(10.0);
+    pub const LEGEND_FONT: Pixels = px(11.0);
+    pub const FIELD_FONT: Pixels = px(13.0);
+    pub const VALUE_FONT: Pixels = px(12.5);
+}
+
 /// Geometry of the query editor's context bar, production banner and
 /// toolbar (AppByzEditor).
 pub struct EditorMetrics;

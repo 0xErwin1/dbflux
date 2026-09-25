@@ -144,6 +144,7 @@ flags de capacidad sincronizados con la implementación:
 - [ ] Comportamiento de contexto de fuente, catálogo de métricas, importador de
   dashboards o fuente de dashboards según aplique.
 - [ ] Un catálogo de instancia para métricas o inspectors según aplique.
+- [ ] Seams de colecciones de documentos para un driver `DatabaseCategory::Document`: proyección y orden en `browse_collection` más `sample_collection_schema` (informa `DocumentFeatures::QUERY_SLOTS` desde `Connection::document_features`), y `patch_document`, `replace_document` y `fetch_document` (informa `DocumentFeatures::FIELD_PATCH`), con `QueryGenerator::document_patch_query` / `document_replace_query` para el texto que se muestra antes de escribir. `estimate_collection_count` puede responder desde los metadatos de la colección.
 - [ ] Otros seams de schema, CRUD, cancelación, transfer o key-value
   representados por los traits del core y los flags de capacidad.
 

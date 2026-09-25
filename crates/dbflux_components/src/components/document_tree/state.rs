@@ -116,6 +116,13 @@ impl DocumentTreeState {
         // The _id column is typically the first, and the full document is in a "_document" column
         // or the result contains the document fields directly
 
+        let field_order: std::sync::Arc<[String]> = result
+            .columns
+            .iter()
+            .filter(|column| column.name != "_document")
+            .map(|column| column.name.clone())
+            .collect();
+
         for (row_idx, row) in result.rows.iter().enumerate() {
             // Try to find the full document representation
             let doc_value = Self::extract_document_value(row, &result.columns);
@@ -124,9 +131,21 @@ impl DocumentTreeState {
             let key = document_label(row_idx);
             let node_value = NodeValue::from_value(&doc_value);
 
+            let summary = match &doc_value {
+                Value::Document(fields) => super::node::identifying_summary(
+                    fields,
+                    Some(&field_order),
+                    IDENTIFYING_FIELD_COUNT,
+                ),
+                _ => None,
+            };
+
             self.raw_documents.push(doc_value);
-            self.documents
-                .push(TreeNode::new(node_id, &key, node_value, None));
+            self.documents.push(
+                TreeNode::new(node_id, &key, node_value, None)
+                    .with_field_order(field_order.clone())
+                    .with_summary(summary),
+            );
         }
 
         // Expand first document by default if there's only one
@@ -922,6 +941,9 @@ impl Focusable for DocumentTreeState {
         self.focus_handle.clone()
     }
 }
+
+/// Fields named in a collapsed document's summary.
+const IDENTIFYING_FIELD_COUNT: usize = 2;
 
 /// Build the root-node label for a document at the given row index.
 fn document_label(index: usize) -> String {

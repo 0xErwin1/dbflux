@@ -23,6 +23,8 @@
 - WHERE 运算符：`Eq`、`Ne`、`Gt`、`Gte`、`Lt`、`Lte`、`In`、`NotIn`，以及逻辑 `And`/`Or`/`Not`。
 - 通过游标与分页令牌两种方式分页（`PaginationStyle::Cursor`、`PaginationStyle::PageToken`）。
 - 面向文档的 Schema 元数据：集合字段与索引（`INDEXES`），嵌套文档与数组映射到文档树视图（`NESTED_DOCUMENTS`、`ARRAYS`）。
+- **在数据网格中浏览集合（`DocumentFeatures::QUERY_SLOTS`）**：浏览集合时，除筛选外还可传入投影文档和排序文档；`sample_collection_schema` 读取随机样本（`$sample`，位于筛选的 `$match` 之后），报告每个字段路径的出现率、类型分布（`String`、`Int32`、`Decimal128`、`Object`、`Array` 等）和值摘要。网格用该样本为查询栏提供字段路径补全、在列标题中绘制出现率条，并提供“结构”视图。无筛选时的计数来自 `estimatedDocumentCount`，并标注为估计值。
+- **字段编辑（`DocumentFeatures::FIELD_PATCH`）**：`patch_document` 以 `updateOne` 发送仅包含已修改路径的 `$set` / `$unset`，并保留 BSON 类型（小数仍为 `Decimal128`，日期仍为 `Date`，ObjectId 仍为 `ObjectId`，文本不会被当作 ObjectId）。`replace_document` 以 `replaceOne` 发送且不改动 `_id`；`fetch_document` 按 `_id` 读取单个文档，使网格能判断页面加载后文档是否被修改。Shell 生成器会在服务器更改确认中显示确切的写入，例如 `db.products.updateOne({ _id: ObjectId("…") }, { $set: { "price.amount": Decimal128("119.00") } })`。
 - 变更：插入、更新（含 upsert）与删除（`supports_upsert: true`）。`MongoShellGenerator` 会生成 `insertOne`/`insertMany`、`updateOne`/`updateMany`（带 `{ upsert: true }`）与 `deleteOne`/`deleteMany`，用于预览与「复制为查询」。
 - DDL：删除数据库、删除集合、创建索引与删除索引。
 - 结果的 JSON 导出（`EXPORT_JSON`）。
@@ -67,3 +69,8 @@
 - 在查询能力层面不支持 join、子查询、union、CTE、窗口函数与 `EXPLAIN`。
 - 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
 - DDL 非事务性（`transactional_ddl: false`）；不支持创建数据库、创建集合、alter、视图与触发器。
+- 嵌入文档的字段按键名排序返回，而不是按存储顺序：值模型用有序映射保存嵌入文档。顶层字段保留文档顺序。
+- 网格无法区分值为 `null` 的顶层字段和不存在的顶层字段（浏览时会用 `null` 填充缺失的顶层字段）；嵌套字段可以区分，缺失时显示为 `missing`。出于同样原因，服务器更改检查会忽略顶层的 null。
+- 从网格写入的整数在能容纳时存为 `Int32`，否则存为 `Int64`，与字段原先的宽度无关。
+- 编辑器的 Shell 解析器不识别 JSON 参数中的 `NumberDecimal(...)`、`ISODate(...)` 等构造函数；带类型的写入请通过网格的字段编辑完成。
+- 服务器更改检查在写入前重新读取文档并与页面中的副本比较；在这次读取与写入之间发生的更改无法被检测到。

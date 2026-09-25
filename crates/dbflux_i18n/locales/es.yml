@@ -550,6 +550,85 @@ diagnostics:
     action: "Las queries nuevas se conservan en el session store, así que tu trabajo está a salvo. Verifica que el directorio de datos sea escribible y tenga espacio libre, y reinicia DBFlux."
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
+  collection:
+    menu:
+      unset_field: "Quitar campo"
+      revert_change: "Revertir cambio"
+    view:
+      json: "JSON"
+    find: "Buscar"
+    history: "Historial de consultas"
+    tab:
+      documents: "Documentos"
+      schema: "Esquema"
+    hint:
+      steps_in: "sobre un objeto o arreglo entra en él, con una ruta de navegación"
+      steps_out: "sale"
+      expands: "expande una columna de objeto en su lugar"
+      steps_into_array: "entra en un arreglo"
+    pending:
+      label: "Cambios pendientes:"
+      one_field: "Pendiente:"
+      fields:
+        one: "%{count} campo"
+        many: "%{count} campos"
+      documents:
+        one: "%{count} documento"
+        many: "%{count} documentos"
+    commit:
+      button: "Confirmar"
+      busy: "Espera a que termine la confirmación en curso"
+      invalid_value: "No se puede guardar %{path}: %{reason}"
+      done:
+        one: "%{count} documento confirmado"
+        many: "%{count} documentos confirmados"
+    count:
+      documents:
+        one: "%{count} documento"
+        many: "%{count} documentos"
+      matching: "%{shown} de %{total} coincidentes"
+      estimated: "%{documents} · ~%{total} coincidencias, estimado"
+      presence_note: "Presencia según una muestra de %{count} documentos"
+    slot:
+      not_object: "El campo %{slot} debe ser un objeto JSON"
+      invalid: "JSON no válido en %{slot}: %{error}"
+    schema:
+      sample_size: "Muestra %{count}"
+      sampled_of: "Muestra de %{sampled} de %{total} documentos"
+      sampled: "Muestra de %{sampled} documentos"
+      not_sampled: "Todavía sin muestra"
+      resample: "Volver a muestrear"
+      click_hint: "Haz clic en un valor para añadirlo al filtro"
+      loading: "Muestreando documentos…"
+      empty: "La muestra no tiene campos"
+      failed: "Falló el muestreo del esquema: %{error}"
+      column:
+        field: "Campo"
+        types: "Tipos"
+        presence: "Presencia"
+        values: "Valores"
+      unique: "único"
+      distinct: "%{count} distintos"
+      distinct_capped: "%{count}+ distintos"
+      array_lengths: "longitud %{min}–%{max}, mediana %{median}"
+      nested: "hasta %{count} campos"
+      only_null: "solo nulos"
+      mixed: "tipos mezclados"
+      mixed_detail: "tipos mezclados: %{percent}% guardado como %{type_name}"
+    json:
+      not_array: "La vista JSON debe contener un arreglo de documentos"
+      count_changed: "La vista JSON no puede añadir ni quitar documentos; usa Añadir documento o Eliminar"
+      not_document: "Cada elemento de la vista JSON debe ser un documento"
+      identity_changed: "La vista JSON no puede cambiar ni reordenar la identidad de los documentos (_id)"
+      invalid: "No se puede confirmar la vista JSON: %{error}"
+    conflict:
+      title: "%{label} cambió en el servidor"
+      on_top: "Alguien cambió %{changed} después de cargar esta página. Tu cambio solo toca %{edited}, así que puede aplicarse encima."
+      overlap: "Alguien cambió %{changed} después de cargar esta página, incluido %{overlapping}, que tu cambio también escribe. Aplicarlo sobrescribe su valor."
+      replace: "Alguien cambió %{changed} después de cargar esta página. Reemplazar el documento completo sobrescribe esos cambios."
+      deleted: "El documento se eliminó en el servidor después de cargar esta página"
+      reload: "Recargar documento"
+      apply: "Aplicar mi cambio"
   audit:
     title: "Auditoría"
     level_chip:
@@ -1213,7 +1292,7 @@ document:
         switch_to_table: Cambiar a vista de tabla
       mode:
         table: Tabla
-        document: Documento
+        document: Árbol
       editing:
         aggregated: Los resultados agregados no se pueden editar
         no_primary_key: Esta tabla no tiene clave primaria; la edición está deshabilitada
@@ -3160,6 +3239,7 @@ settings:
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
       toggle_record_view: Alternar vista de registro
+      cycle_document_view: Alternar árbol / tabla / JSON
       toggle_value_panel: Alternar panel de valor
       toggle_row_inspector: Alternar inspector de fila
       results_set_null: Establecer celda en NULL

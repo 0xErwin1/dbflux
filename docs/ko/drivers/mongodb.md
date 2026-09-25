@@ -23,6 +23,8 @@ DBFlux용 MongoDB 문서 드라이버입니다.
 - WHERE 연산자: `Eq`, `Ne`, `Gt`, `Gte`, `Lt`, `Lte`, `In`, `NotIn`, 논리 `And`/`Or`/`Not`.
 - 커서 및 페이지 토큰 스타일의 페이지 나누기(`PaginationStyle::Cursor`, `PaginationStyle::PageToken`).
 - 문서 중심 스키마 메타데이터: 컬렉션 필드와 인덱스(`INDEXES`), 중첩 문서와 배열은 문서 트리 뷰에 매핑됩니다(`NESTED_DOCUMENTS`, `ARRAYS`).
+- **데이터 그리드에서 컬렉션 탐색(`DocumentFeatures::QUERY_SLOTS`)**: 컬렉션 탐색은 필터 외에 프로젝션 문서와 정렬 문서를 받으며, `sample_collection_schema`는 무작위 표본(필터의 `$match` 뒤 `$sample`)을 읽어 필드 경로마다 존재율, 유형 분포(`String`, `Int32`, `Decimal128`, `Object`, `Array` 등), 값 요약을 보고합니다. 그리드는 이 표본으로 쿼리 바의 필드 경로 자동 완성, 열 머리글의 존재율 막대, 스키마 뷰를 제공합니다. 필터가 없는 개수는 `estimatedDocumentCount`에서 가져오며 추정치로 표시됩니다.
+- **필드 편집(`DocumentFeatures::FIELD_PATCH`)**: `patch_document`는 변경된 경로만 담은 `$set` / `$unset`으로 `updateOne`을 보내고 BSON 유형을 유지합니다(소수는 `Decimal128`, 날짜는 `Date`, ObjectId는 `ObjectId`로 남고, 텍스트는 ObjectId로 해석되지 않습니다). `replace_document`는 `_id`를 건드리지 않고 `replaceOne`을 보내며, `fetch_document`는 `_id`로 문서 하나를 읽어 페이지를 불러온 뒤 변경되었는지 그리드가 판단할 수 있게 합니다. 셸 생성기는 서버 변경 확인에 실제로 보낼 쓰기를 보여 줍니다. 예: `db.products.updateOne({ _id: ObjectId("…") }, { $set: { "price.amount": Decimal128("119.00") } })`.
 - 변경: 삽입, 업데이트(upsert 포함), 삭제(`supports_upsert: true`). `MongoShellGenerator`는 미리 보기와 쿼리로 복사를 위해 `insertOne`/`insertMany`, `updateOne`/`updateMany`(`{ upsert: true }` 포함), `deleteOne`/`deleteMany`를 만들어 냅니다.
 - DDL: 데이터베이스 삭제, 컬렉션 삭제, 인덱스 생성, 인덱스 삭제.
 - 결과의 JSON 내보내기(`EXPORT_JSON`).
@@ -74,3 +76,8 @@ MongoDB `serverStatus` 명령에서 가져온 엄선된 실시간 서버 지표�
 - 스크립트 안의 단일 `find()`/`aggregate()` 호출은 문서 10 000개로 제한됩니다. 한도를 초과하면 결과를 조용히 잘라내는 대신 한도를 명시하는 오류로 실패합니다. 지연/스트리밍 커서 의미론(`find()`/`aggregate()` 결과에 연결하는 `hasNext`, `next`, `limit`, `skip`, `sort`, `count`)는 v1 범위 밖이며 호출된 메서드 이름을 밝히며 예외를 던집니다. 대신 동일한 limit/skip/sort를 `find()`에 추가 인수로 디스패치하거나 유계 결과에 `.toArray()`를 사용하세요.
 - 스크립트로 반환되는 문서는 canonical extJSON이 아니라 relaxed extJSON으로 변환됩니다. 일반 JSON 숫자는 숫자로 유지되므로(`doc.qty + 1`이 문자열 연결이 아니라 산술) JSON이 표현하지 못하는 타입(ObjectId, Date 등)은 감싸집니다(`{"$oid": ...}`, `{"$date": ...}`). 이 변환은 정확히 왕복되지 않습니다. `1.0`인 BSON `Double`은 JSON `1`이 됩니다. 읽은 문서를 검사하는 용도로는 괜찮지만, 읽기 결과를 그대로 쓰기로 되돌려 보내서는 안 된다는 뜻입니다.
 - 스크립트 도중 서버에서 실패하는 문(예: 중복 키 오류)은 그 지점에서 실행을 중단합니다. 이미 실행된 문은 롤백되지 않고, 이후 문은 디스패치되지 않습니다.
+- 포함된 문서의 필드는 저장 순서가 아니라 키 순서로 반환됩니다. 값 모델이 포함 문서를 정렬된 맵으로 보관하기 때문입니다. 최상위 필드는 문서 순서를 유지합니다.
+- 그리드에서는 `null`을 담은 최상위 필드와 없는 최상위 필드가 똑같이 보입니다(탐색이 없는 최상위 필드를 `null`로 채움). 중첩 필드는 구분되어 `missing`으로 표시됩니다. 같은 이유로 서버 변경 확인은 최상위 null을 무시합니다.
+- 그리드에서 쓰는 정수는 들어가면 `Int32`, 아니면 `Int64`로 저장되며 필드의 이전 폭과 무관합니다.
+- 편집기의 셸 파서는 JSON 인수 안의 `NumberDecimal(...)`, `ISODate(...)` 같은 셸 생성자를 읽지 못합니다. 유형이 있는 쓰기는 그리드의 필드 편집을 사용하세요.
+- 서버 변경 확인은 쓰기 직전에 문서를 다시 읽어 페이지의 사본과 비교합니다. 그 읽기와 쓰기 사이에 일어난 변경은 감지되지 않습니다.

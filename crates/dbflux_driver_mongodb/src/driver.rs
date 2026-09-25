@@ -14,23 +14,27 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 
 use crate::language_service::MongoLanguageService;
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionIndexInfo, ColumnKind, ColumnMeta,
-    Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult,
-    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
-    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
-    DocumentInsert, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo,
-    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionIndexInfo,
+    CollectionSchemaRequest, CollectionSchemaSample, ColumnKind, ColumnMeta, Connection,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DatabaseCategory,
+    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
+    DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete, DocumentFeatures,
+    DocumentFetchRequest, DocumentInsert, DocumentPatchRequest, DocumentReplaceRequest,
+    DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef, DriverLimits,
+    DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities,
     OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
     RelationalConnection, Row, SchemaDropTarget, SchemaLoadingStrategy, SchemaObjectKind,
-    SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind,
-    SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo, TransactionCapabilities,
-    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
+    SchemaSampleAccumulator, SchemaSnapshot, SemanticFieldRef, SemanticFilter, SemanticPlan,
+    SemanticPlanKind, SemanticRequest, SqlDialect, SshTunnelConfig, TableInfo,
+    TransactionCapabilities, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
+    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
+    with_default,
 };
 use dbflux_ssh::SshTunnel;
+use mongodb::action::Action;
 use mongodb::options::ClientOptions;
 use mongodb::sync::{Client, Database};
 use uuid::Uuid;
@@ -2694,10 +2698,25 @@ impl Connection for MongoConnection {
 
         let collection = db.collection::<Document>(&request.collection.name);
 
+        let projection = request
+            .projection
+            .as_ref()
+            .map(json_to_bson_doc)
+            .transpose()?
+            .filter(|projection| !projection.is_empty());
+        let sort = request
+            .sort
+            .as_ref()
+            .map(json_to_bson_doc)
+            .transpose()?
+            .filter(|sort| !sort.is_empty());
+
         let cursor = collection
             .find(filter)
             .skip(request.pagination.offset())
             .limit(request.pagination.limit() as i64)
+            .optional(projection, |find, projection| find.projection(projection))
+            .optional(sort, |find, sort| find.sort(sort))
             .run()
             .map_err(|e| format_mongo_query_error(&e))?;
 
@@ -2740,6 +2759,184 @@ impl Connection for MongoConnection {
             .map_err(|e| format_mongo_query_error(&e))?;
 
         Ok(count)
+    }
+
+    fn document_features(&self) -> DocumentFeatures {
+        DocumentFeatures::QUERY_SLOTS | DocumentFeatures::FIELD_PATCH
+    }
+
+    fn estimate_collection_count(
+        &self,
+        request: &CollectionCountRequest,
+    ) -> Result<CollectionCountEstimate, DbError> {
+        let unfiltered = request
+            .filter
+            .as_ref()
+            .is_none_or(|filter| filter.as_object().is_some_and(serde_json::Map::is_empty))
+            && request.semantic_filter.is_none();
+
+        if !unfiltered {
+            return Connection::count_collection(self, request)
+                .map(|count| CollectionCountEstimate { count, exact: true });
+        }
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let count = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name)
+            .estimated_document_count()
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        Ok(CollectionCountEstimate {
+            count,
+            exact: false,
+        })
+    }
+
+    fn sample_collection_schema(
+        &self,
+        request: &CollectionSchemaRequest,
+    ) -> Result<CollectionSchemaSample, DbError> {
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let collection = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name);
+
+        let filter = request.filter.as_ref().map(json_to_bson_doc).transpose()?;
+        let unfiltered = filter.as_ref().is_none_or(Document::is_empty);
+
+        let pipeline = crate::document_ops::sample_pipeline(filter, request.sample_size);
+        let cursor = collection
+            .aggregate(pipeline)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+        let documents = collect_cursor_documents(cursor, &self.cancelled)?;
+
+        let mut accumulator = SchemaSampleAccumulator::new();
+        for document in &documents {
+            accumulator
+                .observe_document(crate::document_ops::sampled_fields(document, bson_to_value));
+        }
+
+        let total_documents = if unfiltered {
+            match collection.estimated_document_count().run() {
+                Ok(count) => Some(count),
+                Err(error) => {
+                    log::warn!(
+                        "[SCHEMA] Estimated count failed for {}: {}",
+                        request.collection.qualified_name(),
+                        error
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok(accumulator.finish(total_documents))
+    }
+
+    fn patch_document(&self, request: &DocumentPatchRequest) -> Result<CrudResult, DbError> {
+        let filter = crate::document_ops::identity_filter(&request.identity)?;
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let collection = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name);
+
+        // The server copy tells each edited value which BSON type to keep.
+        let current = collection
+            .find_one(filter.clone())
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?
+            .ok_or_else(|| DbError::query_failed("The document no longer exists".to_string()))?;
+
+        let update = crate::document_ops::patch_update_document(&request.patch, Some(&current))?;
+
+        let result = collection
+            .update_one(filter, update)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        if result.matched_count == 0 {
+            return Err(DbError::query_failed(
+                "The document no longer exists".to_string(),
+            ));
+        }
+
+        Ok(CrudResult::new(result.modified_count, None))
+    }
+
+    fn replace_document(&self, request: &DocumentReplaceRequest) -> Result<CrudResult, DbError> {
+        let filter = crate::document_ops::identity_filter(&request.identity)?;
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let collection = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name);
+
+        // The server copy tells each field of the replacement which BSON type
+        // to keep.
+        let current = collection
+            .find_one(filter.clone())
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?
+            .ok_or_else(|| DbError::query_failed("The document no longer exists".to_string()))?;
+
+        let replacement = crate::document_ops::replacement_document(
+            &request.document,
+            &request.identity,
+            Some(&current),
+        )?;
+
+        let result = collection
+            .replace_one(filter, replacement)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        if result.matched_count == 0 {
+            return Err(DbError::query_failed(
+                "The document no longer exists".to_string(),
+            ));
+        }
+
+        Ok(CrudResult::new(result.modified_count, None))
+    }
+
+    fn fetch_document(&self, request: &DocumentFetchRequest) -> Result<Option<Value>, DbError> {
+        let filter = crate::document_ops::identity_filter(&request.identity)?;
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let document = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name)
+            .find_one(filter)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+
+        Ok(document.map(|document| bson_to_value(&Bson::Document(document))))
     }
 
     fn language_service(&self) -> &dyn LanguageService {

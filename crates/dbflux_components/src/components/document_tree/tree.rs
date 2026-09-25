@@ -35,6 +35,7 @@ actions!(
         OpenPreview,
         DeleteDocument,
         ToggleViewMode,
+        CycleDataView,
         OpenSearch,
         NextMatch,
         PrevMatch,
@@ -259,6 +260,14 @@ impl Render for DocumentTree {
                 let state = self.state.clone();
                 move |_: &ToggleViewMode, _window, cx| {
                     state.update(cx, |s, cx| s.toggle_view_mode(cx));
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
+                move |_: &CycleDataView, _window, cx| {
+                    state.update(cx, |_, cx| {
+                        cx.emit(DocumentTreeEvent::CycleDataViewRequested)
+                    });
                 }
             })
             .on_action({
@@ -629,6 +638,7 @@ fn render_tree_row(
         // Value preview
         .child(render_value_preview_with_expand(
             &node.value,
+            node.summary.as_deref().filter(|_| !is_expanded),
             is_value_expanded,
             is_editing,
             inline_edit_input,
@@ -706,8 +716,10 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_value_preview_with_expand(
     value: &NodeValue,
+    collapsed_summary: Option<&str>,
     is_expanded: bool,
     is_editing: bool,
     inline_edit_input: Option<Entity<InputState>>,
@@ -717,7 +729,9 @@ fn render_value_preview_with_expand(
 ) -> Stateful<Div> {
     let color = get_type_color(value, theme);
 
-    let text = if is_expanded {
+    let text = if let Some(summary) = collapsed_summary {
+        summary.to_string()
+    } else if is_expanded {
         value.full_preview().to_string()
     } else {
         value.preview().to_string()

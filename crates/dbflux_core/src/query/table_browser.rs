@@ -453,6 +453,14 @@ pub struct CollectionBrowseRequest {
     pub filter: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub semantic_filter: Option<SemanticFilter>,
+    /// Native projection document selecting the fields each document returns.
+    /// Honoured by drivers that report `DocumentFeatures::QUERY_SLOTS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<serde_json::Value>,
+    /// Native sort document. Honoured by drivers that report
+    /// `DocumentFeatures::QUERY_SLOTS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<serde_json::Value>,
 }
 
 impl CollectionBrowseRequest {
@@ -462,7 +470,19 @@ impl CollectionBrowseRequest {
             pagination: Pagination::default(),
             filter: None,
             semantic_filter: None,
+            projection: None,
+            sort: None,
         }
+    }
+
+    pub fn with_projection(mut self, projection: serde_json::Value) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    pub fn with_sort(mut self, sort: serde_json::Value) -> Self {
+        self.sort = Some(sort);
+        self
     }
 
     pub fn with_pagination(mut self, pagination: Pagination) -> Self {
@@ -537,6 +557,15 @@ impl CollectionCountRequest {
         self.semantic_filter = Some(filter);
         self
     }
+}
+
+/// A document count that may come from collection metadata instead of a scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CollectionCountEstimate {
+    pub count: u64,
+    /// `false` when the count is an estimate (for example read from collection
+    /// statistics), `true` when every matching document was counted.
+    pub exact: bool,
 }
 
 /// Request for explaining a query execution plan.

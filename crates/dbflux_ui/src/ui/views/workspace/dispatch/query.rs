@@ -110,6 +110,7 @@ impl Workspace {
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
             | Command::ToggleRecordView
+            | Command::CycleDocumentView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector => {
                 self.tab_manager.update(cx, |mgr, cx| {

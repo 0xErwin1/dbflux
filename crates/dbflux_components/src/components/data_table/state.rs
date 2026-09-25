@@ -117,6 +117,10 @@ pub struct DataTableState {
 
     /// Enum/set options per column index.
     enum_options: std::collections::HashMap<usize, Vec<String>>,
+
+    /// Document extras (column groups, presence bars, stepping into nested
+    /// values). `None` for relational grids.
+    document: Option<super::document::DocumentPresentation>,
 }
 
 impl DataTableState {
@@ -165,6 +169,52 @@ impl DataTableState {
             is_editable: false,
             is_insertable: false,
             enum_options: std::collections::HashMap::new(),
+            document: None,
+        }
+    }
+
+    // --- Document presentation ---
+
+    /// Switches the grid to document presentation, or back with `None`.
+    ///
+    /// With a presentation set, Enter on a nested value asks the host to step
+    /// into it instead of editing it, edited cells show their value before
+    /// and after the edit, and the header draws column groups and presence.
+    pub fn set_document_presentation(
+        &mut self,
+        presentation: Option<super::document::DocumentPresentation>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document != presentation {
+            self.document = presentation;
+            cx.notify();
+        }
+    }
+
+    pub fn document_presentation(&self) -> Option<&super::document::DocumentPresentation> {
+        self.document.as_ref()
+    }
+
+    /// Height of the whole header, a column-group row included.
+    pub fn header_height(&self) -> Pixels {
+        self.document
+            .as_ref()
+            .map_or(super::theme::HEADER_HEIGHT, |document| {
+                document.header_height()
+            })
+    }
+
+    /// Whether the base cell at `coord` holds a nested document or array,
+    /// which a document grid steps into instead of editing.
+    fn is_nested_cell(&self, coord: CellCoord) -> bool {
+        use super::model::VisualRowSource;
+
+        match self.edit_buffer.compute_visual_order().get(coord.row) {
+            Some(VisualRowSource::Base(base_idx)) => self
+                .model
+                .cell(*base_idx, coord.col)
+                .is_some_and(|cell| cell.is_nested()),
+            _ => false,
         }
     }
 
@@ -821,6 +871,14 @@ impl DataTableState {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::model::{ColumnKind, VisualRowSource};
+
+        if self.document.is_some() && self.is_nested_cell(coord) {
+            cx.emit(DataTableEvent::StepIntoRequested {
+                row: coord.row,
+                col: coord.col,
+            });
+            return false;
+        }
 
         let column_kind = self
             .model

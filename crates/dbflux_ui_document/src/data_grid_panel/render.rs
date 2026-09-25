@@ -1,5 +1,6 @@
 use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
+    documents,
 };
 use crate::data_grid_panel::filter_bar::{
     filter_input_has_error, render_relational_chip, render_relational_error,
@@ -77,6 +78,9 @@ struct RenderState {
     show_builder_readonly_hint: bool,
     show_edit_toolbar: bool,
     result_view_mode: ResultViewMode,
+    /// The source is a collection on a document connection.
+    document_collection: bool,
+    document_tab: documents::CollectionTab,
 }
 
 // Save-row shortcut hint: matches the SaveRow binding in the data-table
@@ -153,7 +157,15 @@ impl Render for DataGridPanel {
             .flex_col()
             .size_full()
             .child(self.panel_origin_canvas(cx))
-            .when(st.show_data_toolbar, |d| {
+            .when(st.show_data_toolbar && st.document_collection, |d| {
+                d.child(self.render_table_header(None, &st.theme, cx))
+                    .child(self.render_document_query_bar(cx))
+                    .when(
+                        st.document_tab == documents::CollectionTab::Documents,
+                        |d| d.child(self.render_document_view_row(cx)),
+                    )
+            })
+            .when(st.show_data_toolbar && !st.document_collection, |d| {
                 let edit_controls = st.show_edit_toolbar.then_some(EditControls {
                     dirty_count: st.dirty_count,
                     can_undo: st.can_undo,
@@ -188,7 +200,12 @@ impl Render for DataGridPanel {
                 st.sort_info,
                 st.has_data,
                 st.uses_result_view,
-                st.dirty_count,
+                // A document collection counts its staged edits in the view row.
+                if st.document_collection {
+                    0
+                } else {
+                    st.dirty_count
+                },
                 &st.theme,
                 cx,
             ))
@@ -236,6 +253,8 @@ impl DataGridPanel {
         if let Some(pending) = self.pending.total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
+
+        self.flush_json_reload(window, cx);
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
@@ -307,10 +326,16 @@ impl DataGridPanel {
         }
 
         if let Some(preview) = self.pending.document_preview.take() {
+            // A driver with field patches edits the document in document JSON,
+            // which keeps every type through the round trip.
+            let document_json = self
+                .document_preview_json(preview.doc_index, cx)
+                .unwrap_or(preview.document_json);
+
             self.document_view
                 .document_preview_modal
                 .update(cx, |modal, cx| {
-                    modal.open(preview.doc_index, preview.document_json, window, cx);
+                    modal.open(preview.doc_index, document_json, window, cx);
                 });
         }
 
@@ -426,6 +451,7 @@ impl DataGridPanel {
             && self.builder.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
         let result_view_mode = self.chrome.result_view_mode;
+        let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
 
         RenderState {
             theme,
@@ -462,6 +488,8 @@ impl DataGridPanel {
             show_builder_readonly_hint,
             show_edit_toolbar,
             result_view_mode,
+            document_collection,
+            document_tab: self.collection.tab,
         }
     }
 
@@ -636,15 +664,55 @@ impl DataGridPanel {
 
     /// Renders the content area: empty fallback, result view, document view, or
     /// the data table — selected by `st.content_mode`.
-    fn render_content_body(
-        &mut self,
-        st: &RenderState,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_content_body(&mut self, st: &RenderState, cx: &mut Context<Self>) -> AnyElement {
         let content_mode = st.content_mode;
         let result_view_mode = st.result_view_mode;
         let theme = st.theme.clone();
         let is_loading = st.is_loading;
+
+        if st.document_collection {
+            let conflict = self.render_conflict_card(cx);
+
+            let body = if st.document_tab == documents::CollectionTab::Schema {
+                self.render_schema_view(cx).into_any_element()
+            } else if self.view_config.mode == DataViewMode::Json {
+                self.render_document_json_view(cx).into_any_element()
+            } else {
+                self.render_content_body_inner(
+                    content_mode,
+                    result_view_mode,
+                    &theme,
+                    is_loading,
+                    cx,
+                )
+                .into_any_element()
+            };
+
+            return div()
+                .relative()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        if this.focus.focus_mode != GridFocusMode::Table {
+                            this.focus_table(window, cx);
+                        }
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .child(body),
+                )
+                .when_some(conflict, |body, card| body.child(card))
+                .into_any_element();
+        }
 
         div()
             .flex_1()
@@ -659,52 +727,69 @@ impl DataGridPanel {
                     }
                 }),
             )
-            .child({
-                let content = div().flex_1().overflow_hidden();
+            .child(self.render_content_body_inner(
+                content_mode,
+                result_view_mode,
+                &theme,
+                is_loading,
+                cx,
+            ))
+            .into_any_element()
+    }
 
-                let content = content.when(
-                    matches!(content_mode, DataGridContentMode::EmptyFallback),
-                    |d| {
-                        d.flex()
+    /// The content for `content_mode`: empty fallback, result view, document
+    /// tree or data table.
+    fn render_content_body_inner(
+        &mut self,
+        content_mode: DataGridContentMode,
+        result_view_mode: ResultViewMode,
+        theme: &gpui_component::theme::Theme,
+        is_loading: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = theme.clone();
+
+        let content = div().flex_1().overflow_hidden();
+
+        let content = content.when(
+            matches!(content_mode, DataGridContentMode::EmptyFallback),
+            |d| {
+                d.flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if is_loading {
+                        div()
+                            .flex()
                             .items_center()
-                            .justify_center()
-                            .child(if is_loading {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Icon::new(AppIcon::Loader)
-                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                            .color(theme.muted_foreground),
-                                    )
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.data.grid.loading"
-                                    )))
-                                    .into_any_element()
-                            } else {
-                                Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
-                                    .into_any_element()
-                            })
-                    },
-                );
-
-                let content = content.when(
-                    matches!(content_mode, DataGridContentMode::ResultView),
-                    |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                );
-
-                let content = content
-                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                        d.child(self.render_document_view(&theme, cx))
-                    });
-
-                content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
-                        d.child(data_table)
+                            .gap(Spacing::SM)
+                            .child(
+                                Icon::new(AppIcon::Loader)
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                    .color(theme.muted_foreground),
+                            )
+                            .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
+                            .into_any_element()
+                    } else {
+                        Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
+                            .into_any_element()
                     })
-                })
+            },
+        );
+
+        let content = content.when(
+            matches!(content_mode, DataGridContentMode::ResultView),
+            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+        );
+
+        let content = content.when(matches!(content_mode, DataGridContentMode::Document), |d| {
+            d.child(self.render_document_view(&theme, cx))
+        });
+
+        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+            d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
+                d.child(data_table)
             })
+        })
     }
 }
 
@@ -774,6 +859,15 @@ impl DataGridPanel {
 
         segments.extend(database.map(BreadcrumbSegment::new));
         segments.extend(schema.map(BreadcrumbSegment::new));
+        if self.collection.raw.is_some() {
+            segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Box, None));
+            let breadcrumb = Breadcrumb::new(segments);
+            return Some(match self.collection_meta_label() {
+                Some(meta) => breadcrumb.meta(meta),
+                None => breadcrumb,
+            });
+        }
+
         segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Table, None));
 
         let meta = crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows);
@@ -896,6 +990,9 @@ impl DataGridPanel {
             .child(div().flex_1())
             .when_some(edit_controls, |header, controls| {
                 header.child(self.render_edit_controls(controls, theme, cx))
+            })
+            .when(self.has_document_query_slots(cx), |header| {
+                header.child(self.render_collection_tabs(cx))
             })
     }
 
@@ -1054,13 +1151,13 @@ impl DataGridPanel {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
                     DataViewMode::Table => AppIcon::Table,
-                    DataViewMode::Document => AppIcon::Braces,
+                    DataViewMode::Document | DataViewMode::Json => AppIcon::Braces,
                 };
                 let tooltip = match mode {
                     DataViewMode::Table => {
                         dbflux_i18n::t!("document.data.grid.toolbar.switch_to_document")
                     }
-                    DataViewMode::Document => {
+                    DataViewMode::Document | DataViewMode::Json => {
                         dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
                     }
                 };
@@ -3403,8 +3500,15 @@ impl DataGridPanel {
             })
             .child(footer_item(
                 AppIcon::Rows3,
-                crate::labels::row_count_label(row_count),
+                if self.collection.raw.is_some() {
+                    self.document_count_footer()
+                } else {
+                    crate::labels::row_count_label(row_count)
+                },
             ))
+            .when_some(self.presence_footer(), |d, note| {
+                d.child(div().flex_shrink_0().child(note))
+            })
             .when_some(sort_info, |d, (col_name, direction, is_server)| {
                 let arrow_icon = match direction {
                     SortDirection::Ascending => AppIcon::ArrowUp,

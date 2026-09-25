@@ -82,6 +82,7 @@
 - [ ] SQL 方言、代码生成器、查询生成器或语义规划器行为（如适用）。
 - [ ] 源上下文、指标目录、仪表盘导入器或仪表盘来源行为（如适用）。
 - [ ] 用于指标或检查器的实例目录（如适用）。
+- [ ] 面向 `DatabaseCategory::Document` 驱动的文档集合接口：`browse_collection` 中的投影与排序以及 `sample_collection_schema`（通过 `Connection::document_features` 报告 `DocumentFeatures::QUERY_SLOTS`），以及 `patch_document`、`replace_document` 与 `fetch_document`（报告 `DocumentFeatures::FIELD_PATCH`），并通过 `QueryGenerator::document_patch_query` / `document_replace_query` 提供写入前显示的文本。`estimate_collection_count` 可以直接用集合元数据作答。
 - [ ] 核心 trait 与能力标志所涵盖的其他 Schema、CRUD、取消、传输或键值接缝。
 
 ### 6. feature 接线与注册

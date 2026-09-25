@@ -550,6 +550,85 @@ diagnostics:
     action: "新查询会保留在会话存储中，因此你的工作不会丢失。请确认数据目录可写且有剩余空间，然后重启 DBFlux。"
   shutdown_flush_timed_out: "部分编辑可能未写入文件：退出时 DBFlux 未能及时保存。它们已保留在会话存储中以便恢复。"
 document:
+  collection:
+    menu:
+      unset_field: "移除字段"
+      revert_change: "撤销更改"
+    view:
+      json: "JSON"
+    find: "查找"
+    history: "查询历史"
+    tab:
+      documents: "文档"
+      schema: "结构"
+    hint:
+      steps_in: "在对象或数组上按下即可进入，并显示路径"
+      steps_out: "返回上一级"
+      expands: "就地展开对象列"
+      steps_into_array: "进入数组"
+    pending:
+      label: "待提交的更改："
+      one_field: "待提交："
+      fields:
+        one: "%{count} 个字段"
+        many: "%{count} 个字段"
+      documents:
+        one: "%{count} 个文档"
+        many: "%{count} 个文档"
+    commit:
+      button: "提交"
+      busy: "请等待当前提交完成"
+      invalid_value: "无法保存 %{path}：%{reason}"
+      done:
+        one: "已提交 %{count} 个文档"
+        many: "已提交 %{count} 个文档"
+    count:
+      documents:
+        one: "%{count} 个文档"
+        many: "%{count} 个文档"
+      matching: "%{total} 个匹配中的 %{shown} 个"
+      estimated: "%{documents} · 约 %{total} 个匹配（估计）"
+      presence_note: "出现率来自 %{count} 个文档的样本"
+    slot:
+      not_object: "%{slot} 栏必须是 JSON 对象"
+      invalid: "%{slot} 中的 JSON 无效：%{error}"
+    schema:
+      sample_size: "样本 %{count}"
+      sampled_of: "已从 %{total} 个文档中抽样 %{sampled} 个"
+      sampled: "已抽样 %{sampled} 个文档"
+      not_sampled: "尚未抽样"
+      resample: "重新抽样"
+      click_hint: "点击某个值即可将其加入筛选"
+      loading: "正在抽样文档…"
+      empty: "样本中没有字段"
+      failed: "结构抽样失败：%{error}"
+      column:
+        field: "字段"
+        types: "类型"
+        presence: "出现率"
+        values: "值"
+      unique: "唯一"
+      distinct: "%{count} 个不同值"
+      distinct_capped: "%{count}+ 个不同值"
+      array_lengths: "长度 %{min}–%{max}，中位数 %{median}"
+      nested: "最多 %{count} 个字段"
+      only_null: "只有 null"
+      mixed: "混合类型"
+      mixed_detail: "混合类型：%{percent}% 存储为 %{type_name}"
+    json:
+      not_array: "JSON 视图必须是文档数组"
+      count_changed: "JSON 视图不能新增或删除文档；请使用“添加文档”或“删除”"
+      not_document: "JSON 视图中的每个元素都必须是文档"
+      identity_changed: "JSON 视图不能修改或重排文档标识（_id）"
+      invalid: "无法提交 JSON 视图：%{error}"
+    conflict:
+      title: "%{label} 已在服务器上更改"
+      on_top: "此页面加载后，有人更改了 %{changed}。你的更改只涉及 %{edited}，因此可以叠加应用。"
+      overlap: "此页面加载后，有人更改了 %{changed}，其中包括你的更改也会写入的 %{overlapping}。应用后会覆盖对方的值。"
+      replace: "此页面加载后，有人更改了 %{changed}。替换整个文档会覆盖这些更改。"
+      deleted: "此页面加载后，该文档已在服务器上被删除"
+      reload: "重新加载文档"
+      apply: "应用我的更改"
   audit:
     title: "审计"
     level_chip:
@@ -1213,7 +1292,7 @@ document:
         switch_to_table: 切换到表格视图
       mode:
         table: 表格
-        document: 文档
+        document: 树
       editing:
         aggregated: 聚合结果无法编辑
         no_primary_key: 此表没有主键 - 编辑已禁用
@@ -3160,6 +3239,7 @@ settings:
       results_copy_row: 复制行
       results_copy_cell: 复制单元格
       toggle_record_view: 切换记录视图
+      cycle_document_view: 切换树 / 表格 / JSON
       toggle_value_panel: 切换值面板
       toggle_row_inspector: 切换行检查器
       results_set_null: 将单元格设为 NULL

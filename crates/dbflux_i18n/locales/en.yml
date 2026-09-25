@@ -550,6 +550,85 @@ diagnostics:
     action: "New queries are kept in the session store instead, so your work is preserved. Check that the data directory is writable and has free space, then restart DBFlux."
   shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
+  collection:
+    menu:
+      unset_field: "Unset field"
+      revert_change: "Revert change"
+    view:
+      json: "JSON"
+    find: "Find"
+    history: "Query history"
+    tab:
+      documents: "Documents"
+      schema: "Schema"
+    hint:
+      steps_in: "on an object or array steps in, with a breadcrumb"
+      steps_out: "steps out"
+      expands: "expands an object column in place"
+      steps_into_array: "steps into an array"
+    pending:
+      label: "Pending changes:"
+      one_field: "Pending:"
+      fields:
+        one: "%{count} field"
+        many: "%{count} fields"
+      documents:
+        one: "%{count} document"
+        many: "%{count} documents"
+    commit:
+      button: "Commit"
+      busy: "Wait for the current commit to finish"
+      invalid_value: "Cannot save %{path}: %{reason}"
+      done:
+        one: "Committed %{count} document"
+        many: "Committed %{count} documents"
+    count:
+      documents:
+        one: "%{count} document"
+        many: "%{count} documents"
+      matching: "%{shown} of %{total} matching"
+      estimated: "%{documents} · ~%{total} match, estimated"
+      presence_note: "Presence from a %{count}-document sample"
+    slot:
+      not_object: "The %{slot} slot must be a JSON object"
+      invalid: "Invalid JSON in %{slot}: %{error}"
+    schema:
+      sample_size: "Sample %{count}"
+      sampled_of: "Sampled %{sampled} of %{total} documents"
+      sampled: "Sampled %{sampled} documents"
+      not_sampled: "Not sampled yet"
+      resample: "Resample"
+      click_hint: "Click a value to add it to the filter"
+      loading: "Sampling documents…"
+      empty: "No fields in the sample"
+      failed: "Schema sample failed: %{error}"
+      column:
+        field: "Field"
+        types: "Types"
+        presence: "Presence"
+        values: "Values"
+      unique: "unique"
+      distinct: "%{count} distinct"
+      distinct_capped: "%{count}+ distinct"
+      array_lengths: "length %{min}–%{max}, median %{median}"
+      nested: "up to %{count} fields"
+      only_null: "only null"
+      mixed: "mixed types"
+      mixed_detail: "mixed types: %{percent}% stored as %{type_name}"
+    json:
+      not_array: "The JSON view must hold an array of documents"
+      count_changed: "The JSON view cannot add or remove documents; use Add Document or Delete instead"
+      not_document: "Every element of the JSON view must be a document"
+      identity_changed: "The JSON view cannot change or reorder document identities (_id)"
+      invalid: "The JSON view cannot be committed: %{error}"
+    conflict:
+      title: "%{label} changed on the server"
+      on_top: "Someone changed %{changed} after this page loaded. Your change only touches %{edited}, so it can apply on top."
+      overlap: "Someone changed %{changed} after this page loaded, including %{overlapping}, which your change also writes. Applying it overwrites their value."
+      replace: "Someone changed %{changed} after this page loaded. Replacing the whole document overwrites those changes."
+      deleted: "The document was deleted on the server after this page loaded"
+      reload: "Reload document"
+      apply: "Apply my change"
   audit:
     title: "Audit"
     level_chip:
@@ -1213,7 +1292,7 @@ document:
         switch_to_table: Switch to Table View
       mode:
         table: Table
-        document: Document
+        document: Tree
       editing:
         aggregated: Aggregated results cannot be edited
         no_primary_key: This table has no primary key - editing is disabled
@@ -3160,6 +3239,7 @@ settings:
       results_copy_row: Copy Row
       results_copy_cell: Copy Cell
       toggle_record_view: Toggle Record View
+      cycle_document_view: Cycle Tree / Table / JSON
       toggle_value_panel: Toggle Value Panel
       toggle_row_inspector: Toggle Row Inspector
       results_set_null: Set Cell to NULL

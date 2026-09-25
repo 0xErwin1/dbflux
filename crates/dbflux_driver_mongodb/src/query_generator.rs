@@ -26,6 +26,85 @@ impl QueryGenerator for MongoShellGenerator {
         })
     }
 
+    fn document_patch_query(
+        &self,
+        request: &dbflux_core::DocumentPatchRequest,
+    ) -> Option<GeneratedQuery> {
+        if request.patch.is_empty() {
+            return None;
+        }
+
+        let mut operators = Vec::new();
+
+        if !request.patch.set.is_empty() {
+            let entries: Vec<String> = request
+                .patch
+                .set
+                .iter()
+                .map(|(path, value)| {
+                    format!(
+                        "{}: {}",
+                        shell_key(&dbflux_core::field_path_to_dotted(path)),
+                        shell_literal(value)
+                    )
+                })
+                .collect();
+            operators.push(format!("$set: {{ {} }}", entries.join(", ")));
+        }
+
+        if !request.patch.unset.is_empty() {
+            let entries: Vec<String> = request
+                .patch
+                .unset
+                .iter()
+                .map(|path| {
+                    format!(
+                        "{}: \"\"",
+                        shell_key(&dbflux_core::field_path_to_dotted(path))
+                    )
+                })
+                .collect();
+            operators.push(format!("$unset: {{ {} }}", entries.join(", ")));
+        }
+
+        Some(GeneratedQuery {
+            language: QueryLanguage::MongoQuery,
+            text: format!(
+                "{}.updateOne({}, {{ {} }})",
+                collection_accessor(&request.collection.name),
+                identity_literal(&request.identity),
+                operators.join(", ")
+            ),
+        })
+    }
+
+    fn document_replace_query(
+        &self,
+        request: &dbflux_core::DocumentReplaceRequest,
+    ) -> Option<GeneratedQuery> {
+        let body = match &request.document {
+            dbflux_core::Value::Document(fields) => {
+                let entries: Vec<String> = fields
+                    .iter()
+                    .filter(|(key, _)| !request.identity.iter().any(|(field, _)| field == *key))
+                    .map(|(key, value)| format!("{}: {}", shell_key(key), shell_literal(value)))
+                    .collect();
+                format!("{{ {} }}", entries.join(", "))
+            }
+            other => shell_literal(other),
+        };
+
+        Some(GeneratedQuery {
+            language: QueryLanguage::MongoQuery,
+            text: format!(
+                "{}.replaceOne({}, {})",
+                collection_accessor(&request.collection.name),
+                identity_literal(&request.identity),
+                body
+            ),
+        })
+    }
+
     fn generate_read_from_spec(
         &self,
         spec: &VisualQuerySpec,
@@ -308,6 +387,79 @@ fn render_sort(sort: &[SortEntry]) -> Option<String> {
     }
 }
 
+/// A field name as mongosh accepts it: bare when it is a plain identifier,
+/// quoted otherwise (dotted paths, spaces).
+fn shell_key(key: &str) -> String {
+    let is_identifier = !key.is_empty()
+        && key
+            .chars()
+            .enumerate()
+            .all(|(index, character)| match character {
+                'A'..='Z' | 'a'..='z' | '_' | '$' => true,
+                '0'..='9' => index > 0,
+                _ => false,
+            });
+
+    if is_identifier {
+        key.to_string()
+    } else {
+        Value::String(key.to_string()).to_string()
+    }
+}
+
+/// A typed value as mongosh source, with the constructors that keep its BSON
+/// type (`ObjectId(...)`, `Decimal128(...)`, `ISODate(...)`).
+fn shell_literal(value: &dbflux_core::Value) -> String {
+    use dbflux_core::Value as Typed;
+
+    match value {
+        Typed::Null => "null".to_string(),
+        Typed::Bool(boolean) => boolean.to_string(),
+        Typed::Int(integer) => integer.to_string(),
+        Typed::Float(float) => {
+            if float.is_finite() && float.fract() == 0.0 {
+                format!("{float:.1}")
+            } else {
+                float.to_string()
+            }
+        }
+        Typed::Text(text) => Value::String(text.clone()).to_string(),
+        Typed::Decimal(decimal) => format!("Decimal128({})", Value::String(decimal.clone())),
+        Typed::DateTime(date_time) => format!(
+            "ISODate({})",
+            Value::String(date_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+        ),
+        Typed::Date(date) => format!("ISODate({})", Value::String(format!("{date}T00:00:00Z"))),
+        Typed::Time(time) => Value::String(time.to_string()).to_string(),
+        Typed::ObjectId(object_id) => format!("ObjectId({})", Value::String(object_id.clone())),
+        Typed::Bytes(bytes) => format!("BinData(0, <{} bytes>)", bytes.len()),
+        Typed::Json(text) => text.clone(),
+        Typed::Unsupported(type_name) => format!("<{type_name}>"),
+        Typed::Array(items) => {
+            let rendered: Vec<String> = items.iter().map(shell_literal).collect();
+            format!("[{}]", rendered.join(", "))
+        }
+        Typed::Document(fields) => {
+            if fields.is_empty() {
+                return "{}".to_string();
+            }
+            let rendered: Vec<String> = fields
+                .iter()
+                .map(|(key, field)| format!("{}: {}", shell_key(key), shell_literal(field)))
+                .collect();
+            format!("{{ {} }}", rendered.join(", "))
+        }
+    }
+}
+
+fn identity_literal(identity: &dbflux_core::DocumentIdentity) -> String {
+    let entries: Vec<String> = identity
+        .iter()
+        .map(|(field, value)| format!("{}: {}", shell_key(field), shell_literal(value)))
+        .collect();
+    format!("{{ {} }}", entries.join(", "))
+}
+
 // The `documents.len() == 1` guard ensures `[0]` is always in bounds.
 #[allow(clippy::indexing_slicing)]
 fn generate_insert(insert: &dbflux_core::DocumentInsert) -> String {
@@ -357,6 +509,73 @@ fn generate_delete(delete: &dbflux_core::DocumentDelete) -> String {
 mod tests {
     use super::*;
     use dbflux_core::{DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate};
+
+    fn patch_request(patch: dbflux_core::DocumentPatch) -> dbflux_core::DocumentPatchRequest {
+        dbflux_core::DocumentPatchRequest {
+            collection: dbflux_core::CollectionRef::new("catalog", "products"),
+            identity: vec![(
+                "_id".to_string(),
+                dbflux_core::Value::ObjectId("6ab43361d1f8e4b0c2a1e4b0".into()),
+            )],
+            patch,
+        }
+    }
+
+    #[test]
+    fn patch_query_shows_the_exact_set_and_unset() {
+        let request = patch_request(dbflux_core::DocumentPatch {
+            set: vec![(
+                dbflux_core::parse_field_path("price.amount"),
+                dbflux_core::Value::Decimal("119.00".into()),
+            )],
+            unset: vec![dbflux_core::parse_field_path("legacy")],
+        });
+
+        let query = MongoShellGenerator
+            .document_patch_query(&request)
+            .expect("a patch renders");
+
+        assert_eq!(
+            query.text,
+            "db.products.updateOne({ _id: ObjectId(\"6ab43361d1f8e4b0c2a1e4b0\") }, \
+             { $set: { \"price.amount\": Decimal128(\"119.00\") }, $unset: { legacy: \"\" } })"
+        );
+    }
+
+    #[test]
+    fn empty_patch_has_no_query() {
+        let request = patch_request(dbflux_core::DocumentPatch::default());
+
+        assert!(MongoShellGenerator.document_patch_query(&request).is_none());
+    }
+
+    #[test]
+    fn replace_query_leaves_the_identity_out_of_the_body() {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(
+            "_id".to_string(),
+            dbflux_core::Value::ObjectId("6ab43361d1f8e4b0c2a1e4b0".into()),
+        );
+        fields.insert("sku".to_string(), dbflux_core::Value::Text("CAT-1".into()));
+
+        let request = dbflux_core::DocumentReplaceRequest {
+            collection: dbflux_core::CollectionRef::new("catalog", "products"),
+            identity: vec![(
+                "_id".to_string(),
+                dbflux_core::Value::ObjectId("6ab43361d1f8e4b0c2a1e4b0".into()),
+            )],
+            document: dbflux_core::Value::Document(fields),
+        };
+
+        let query = MongoShellGenerator
+            .document_replace_query(&request)
+            .expect("a replacement renders");
+
+        assert_eq!(
+            query.text,
+            "db.products.replaceOne({ _id: ObjectId(\"6ab43361d1f8e4b0c2a1e4b0\") }, { sku: \"CAT-1\" })"
+        );
+    }
 
     #[test]
     fn insert_one_document() {

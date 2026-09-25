@@ -81,6 +81,7 @@
 - [ ] 해당하는 경우 SQL 방언, 코드 생성기, 쿼리 생성기, 또는 의미 플래너 동작.
 - [ ] 해당하는 경우 소스 컨텍스트, 지표 카탈로그, 대시보드 가져오기, 또는 대시보드 소스 동작.
 - [ ] 해당하는 경우 지표나 검사기를 위한 인스턴스 카탈로그.
+- [ ] `DatabaseCategory::Document` 드라이버를 위한 문서 컬렉션 seam: `browse_collection`의 프로젝션과 정렬, `sample_collection_schema`(`Connection::document_features`로 `DocumentFeatures::QUERY_SLOTS` 보고), 그리고 `patch_document`, `replace_document`, `fetch_document`(`DocumentFeatures::FIELD_PATCH` 보고). 쓰기 전에 보여 줄 텍스트는 `QueryGenerator::document_patch_query` / `document_replace_query`로 제공합니다. `estimate_collection_count`는 컬렉션 메타데이터로 답할 수 있습니다.
 - [ ] 핵심 트레이트와 기능 플래그가 표현하는 기타 스키마, CRUD, 취소, 전송, 키-값 연결 지점.
 
 ### 6. 기능 연결 및 등록

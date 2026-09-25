@@ -3,6 +3,7 @@ pub(crate) mod generator;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub mod relational_filter;
+pub(crate) mod relaxed_json;
 pub(crate) mod safety;
 pub(crate) mod script_operation;
 pub(crate) mod semantic;
@@ -29,6 +30,7 @@ pub use language_service::{
     classify_query_for_language_with_service, classify_visual_mutation, detect_dangerous_query,
     detect_dangerous_sql, sql_statement_keywords, strip_leading_comments,
 };
+pub use relaxed_json::{normalize_relaxed_json, parse_relaxed_json};
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
@@ -44,9 +46,9 @@ pub use sql_context::{
     StatementScope,
 };
 pub use table_browser::{
-    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ColumnRef, DescribeRequest,
-    ExplainRequest, OrderByColumn, Pagination, SortDirection, TableBrowseRequest,
-    TableCountRequest, TableRef,
+    CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionRef,
+    ColumnRef, DescribeRequest, ExplainRequest, OrderByColumn, Pagination, SortDirection,
+    TableBrowseRequest, TableCountRequest, TableRef,
 };
 pub use time_macros::{contains_time_macros, substitute_time_macros};
 pub use transfer::TransferColumn;

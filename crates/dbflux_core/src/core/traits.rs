@@ -1510,6 +1510,39 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Document-collection features this connection offers. The default offers
+    /// none; drivers report the seams they implement.
+    fn document_features(&self) -> crate::DocumentFeatures {
+        crate::DocumentFeatures::empty()
+    }
+
+    /// Count documents matching a filter, allowing the driver to answer from
+    /// collection metadata instead of scanning.
+    ///
+    /// The default counts exactly through [`Connection::count_collection`].
+    /// Drivers with a cheap estimate (collection statistics) override this and
+    /// report `exact: false`, so the UI can label the figure as estimated.
+    fn estimate_collection_count(
+        &self,
+        request: &CollectionCountRequest,
+    ) -> Result<crate::CollectionCountEstimate, DbError> {
+        self.count_collection(request)
+            .map(|count| crate::CollectionCountEstimate { count, exact: true })
+    }
+
+    /// Sample documents of a collection and infer each field's presence, type
+    /// distribution and value summary.
+    ///
+    /// Drivers that implement this report `DocumentFeatures::QUERY_SLOTS`.
+    fn sample_collection_schema(
+        &self,
+        _request: &crate::CollectionSchemaRequest,
+    ) -> Result<crate::CollectionSchemaSample, DbError> {
+        Err(DbError::NotSupported(
+            "Collection schema sampling not supported by this driver".to_string(),
+        ))
+    }
+
     /// Browse a driver-owned event stream source as canonical observability records.
     fn browse_event_stream(
         &self,
@@ -1661,6 +1694,40 @@ pub trait Connection: Send + Sync {
     fn delete_document(&self, _delete: &DocumentDelete) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Document deletes not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Set and remove individual field paths of one document.
+    ///
+    /// Drivers that implement this, [`Connection::replace_document`] and
+    /// [`Connection::fetch_document`] report `DocumentFeatures::FIELD_PATCH`.
+    fn patch_document(
+        &self,
+        _request: &crate::DocumentPatchRequest,
+    ) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document field patches not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Replace one whole document, keeping its identity.
+    fn replace_document(
+        &self,
+        _request: &crate::DocumentReplaceRequest,
+    ) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document replacement not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Read the current server copy of one document, `None` when it no longer
+    /// exists. Used to detect changes made after a page loaded.
+    fn fetch_document(
+        &self,
+        _request: &crate::DocumentFetchRequest,
+    ) -> Result<Option<crate::Value>, DbError> {
+        Err(DbError::NotSupported(
+            "Document reads by identity not supported by this driver".to_string(),
         ))
     }
 

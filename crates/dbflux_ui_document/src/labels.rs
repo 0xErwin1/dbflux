@@ -2408,6 +2408,198 @@ pub(crate) fn dump_analysis_summary_line(total_keys: u64, total_serialized_bytes
     )
 }
 
+// === Document collections ===
+
+/// `1234567` as `1,234,567`.
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
+}
+
+pub(crate) fn collection_sample_size_label(size: u32) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.sample_size",
+        count = grouped_count(u64::from(size))
+    )
+}
+
+pub(crate) fn collection_slot_not_object(slot: &str) -> String {
+    dbflux_i18n::t!("document.collection.slot.not_object", slot = slot)
+}
+
+pub(crate) fn collection_slot_invalid(slot: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.slot.invalid",
+        slot = slot,
+        error = error
+    )
+}
+
+pub(crate) fn collection_schema_failed(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.schema.failed", error = error)
+}
+
+pub(crate) fn collection_invalid_edit(path: &str, reason: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.commit.invalid_value",
+        path = path,
+        reason = reason
+    )
+}
+
+pub(crate) fn collection_committed_toast(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.collection.commit.done.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.collection.commit.done.many", count = count)
+    }
+}
+
+pub(crate) fn collection_json_invalid(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.json.invalid", error = error)
+}
+
+/// "3 fields" for staged cells, "2 documents" for JSON edits.
+pub(crate) fn collection_pending_count(count: usize, documents: bool) -> String {
+    match (documents, count == 1) {
+        (true, true) => dbflux_i18n::t!("document.collection.pending.documents.one", count = count),
+        (true, false) => {
+            dbflux_i18n::t!("document.collection.pending.documents.many", count = count)
+        }
+        (false, true) => dbflux_i18n::t!("document.collection.pending.fields.one", count = count),
+        (false, false) => {
+            dbflux_i18n::t!("document.collection.pending.fields.many", count = count)
+        }
+    }
+}
+
+pub(crate) fn collection_documents(count: usize) -> String {
+    let grouped = grouped_count(count as u64);
+    if count == 1 {
+        dbflux_i18n::t!("document.collection.count.documents.one", count = grouped)
+    } else {
+        dbflux_i18n::t!("document.collection.count.documents.many", count = grouped)
+    }
+}
+
+pub(crate) fn collection_document_count(total: u64) -> String {
+    collection_documents(usize::try_from(total).unwrap_or(usize::MAX))
+}
+
+pub(crate) fn collection_matching(shown: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.matching",
+        shown = grouped_count(shown as u64),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn collection_matching_estimated(shown: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.estimated",
+        documents = collection_documents(shown),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn collection_presence_note(sampled: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.presence_note",
+        count = grouped_count(sampled)
+    )
+}
+
+pub(crate) fn collection_sampled(sampled: u64, total: Option<u64>) -> String {
+    match total {
+        Some(total) => dbflux_i18n::t!(
+            "document.collection.schema.sampled_of",
+            sampled = grouped_count(sampled),
+            total = grouped_count(total)
+        ),
+        None => dbflux_i18n::t!(
+            "document.collection.schema.sampled",
+            sampled = grouped_count(sampled)
+        ),
+    }
+}
+
+pub(crate) fn collection_mixed_types(percent: u32, type_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.mixed_detail",
+        percent = percent,
+        type_name = type_name
+    )
+}
+
+pub(crate) fn collection_distinct(count: u64, capped: bool) -> String {
+    if capped {
+        dbflux_i18n::t!(
+            "document.collection.schema.distinct_capped",
+            count = grouped_count(count)
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.collection.schema.distinct",
+            count = grouped_count(count)
+        )
+    }
+}
+
+pub(crate) fn collection_array_lengths(min: u64, max: u64, median: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.array_lengths",
+        min = min,
+        max = max,
+        median = median
+    )
+}
+
+pub(crate) fn collection_nested_fields(fields: u64) -> String {
+    dbflux_i18n::t!("document.collection.schema.nested", count = fields)
+}
+
+/// Field paths joined for a sentence: `price.amount, stock`.
+pub(crate) fn dotted_paths(paths: &[dbflux_core::FieldPath]) -> String {
+    paths
+        .iter()
+        .map(|path| dbflux_core::field_path_to_dotted(path))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn collection_conflict_title(label: &str) -> String {
+    dbflux_i18n::t!("document.collection.conflict.title", label = label)
+}
+
+pub(crate) fn collection_conflict_on_top(changed: &str, edited: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.conflict.on_top",
+        changed = changed,
+        edited = edited
+    )
+}
+
+pub(crate) fn collection_conflict_overlap(changed: &str, overlapping: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.conflict.overlap",
+        changed = changed,
+        overlapping = overlapping
+    )
+}
+
+pub(crate) fn collection_conflict_replace(changed: &str) -> String {
+    dbflux_i18n::t!("document.collection.conflict.replace", changed = changed)
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -2465,6 +2657,10 @@ mod tests {
         source_window_error_message, syntax_error_with_hint, table_action_description,
         unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
         versioning_status_label, visual_mutation_task_label,
+    };
+    use super::{
+        collection_documents, collection_matching, collection_matching_estimated,
+        collection_pending_count, collection_presence_note, grouped_count,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -2541,6 +2737,25 @@ mod tests {
         let summary = pending_edits_summary(1, 1, 1).expect("non-zero counts");
 
         assert_eq!(summary, "1 insert · 1 update · 1 delete");
+    }
+
+    #[test]
+    fn collection_labels_group_digits_and_pluralize() {
+        assert_eq!(grouped_count(0), "0");
+        assert_eq!(grouped_count(1_208), "1,208");
+        assert_eq!(grouped_count(48_211_000), "48,211,000");
+        assert_eq!(collection_matching(50, 1_208), "50 of 1,208 matching");
+        assert_eq!(
+            collection_matching_estimated(50, 640),
+            "50 documents \u{00b7} ~640 match, estimated"
+        );
+        assert_eq!(collection_documents(1), "1 document");
+        assert_eq!(collection_pending_count(1, false), "1 field");
+        assert_eq!(collection_pending_count(2, true), "2 documents");
+        assert_eq!(
+            collection_presence_note(1_000),
+            "Presence from a 1,000-document sample"
+        );
     }
 
     #[test]

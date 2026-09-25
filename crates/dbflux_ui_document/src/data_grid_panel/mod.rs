@@ -1,4 +1,5 @@
 mod context_menu;
+mod documents;
 pub(crate) mod filter_bar;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
@@ -455,6 +456,9 @@ struct PendingActions {
     /// column it applies to. Deferred to render because editing needs a
     /// `Window`.
     row_inspector_action: Option<(row_inspector::RowInspectorContentEvent, usize, usize)>,
+    /// The JSON view has to be reloaded with the page. Deferred to render
+    /// because setting an editor's text needs a `Window`.
+    json_reload: bool,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -737,6 +741,9 @@ pub struct DataGridPanel {
     chrome: ChromeState,
     inspector: InspectorState,
     pub(crate) builder: BuilderState,
+    /// Document collection presentation (flattened table, query bar, schema,
+    /// field edits). Inert for other sources.
+    collection: documents::CollectionViewState,
     pk_columns: Vec<String>,
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
@@ -1220,6 +1227,9 @@ impl DataGridPanel {
             &filter_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } if this.is_document_collection(cx) => {
+                    this.find_documents(window, cx);
+                }
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -1254,6 +1264,9 @@ impl DataGridPanel {
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } if this.is_document_collection(cx) => {
+                    this.find_documents(window, cx);
+                }
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -1400,6 +1413,18 @@ impl DataGridPanel {
             },
         );
 
+        let collection = documents::CollectionViewState::new(window, cx);
+
+        if matches!(source, DataSource::Collection { .. }) && filter_completion_cache.is_none() {
+            let provider: Rc<dyn CompletionProvider> =
+                Rc::new(documents::completion::DocumentFieldCompletionProvider::new(
+                    collection.field_paths.clone(),
+                ));
+            filter_input.update(cx, |state, _| {
+                state.lsp_mut().completion_provider = Some(provider);
+            });
+        }
+
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
 
@@ -1499,6 +1524,7 @@ impl DataGridPanel {
                 filter_input_hidden: false,
                 builder_editable_binding: None,
             },
+            collection,
             runner,
             focus_handle,
             panel_origin: Point::default(),
@@ -1711,9 +1737,12 @@ impl DataGridPanel {
 
     /// Toggle between available view modes for the current data source.
     pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
-        use super::data_view::DataViewMode;
+        if self.is_document_collection(cx) {
+            self.cycle_document_view(cx);
+            return;
+        }
 
-        let available = DataViewMode::available_for(&self.source);
+        let available = super::data_view::DataViewMode::available_for(&self.source);
         if available.len() <= 1 {
             return;
         }
@@ -2648,13 +2677,25 @@ impl DataGridPanel {
         // Find PK column indices in result columns. When mutations are
         // disabled (grouped result or no PK), pass an empty set to the table
         // state so `is_editable` returns false.
-        let pk_indices: Vec<usize> = if self.mutations_enabled() {
+        let document_patches = self.commits_document_patches(cx);
+        let stepped_into = self.is_stepped_into();
+
+        let pk_indices: Vec<usize> = if !self.mutations_enabled() {
+            Vec::new()
+        } else if stepped_into {
+            // Rows inside a nested value are addressed by their path in the
+            // document, not by a key column; they are editable only when the
+            // driver writes field patches.
+            if document_patches && !self.result.columns.is_empty() {
+                vec![0]
+            } else {
+                Vec::new()
+            }
+        } else {
             self.pk_columns
                 .iter()
                 .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
                 .collect()
-        } else {
-            Vec::new()
         };
 
         log::debug!(
@@ -2676,7 +2717,8 @@ impl DataGridPanel {
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.builder.current_visual_spec.is_none() || binding_insertable);
+            && (self.builder.current_visual_spec.is_none() || binding_insertable)
+            && !stepped_into;
 
         let column_details = self.get_column_details(cx);
 
@@ -2698,7 +2740,18 @@ impl DataGridPanel {
         // Columns tagged Joined are blocked from editing while source-table columns remain
         // editable. This mirrors the FK badge marking pattern above.
         let readonly_indices: std::collections::HashSet<usize> =
-            if let Some(binding) = &self.builder.builder_editable_binding {
+            if self.collection.raw.is_some() && !document_patches {
+                // Without field patches only top-level fields can be saved, through
+                // the generic row save.
+                self.collection
+                    .flat
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, column)| column.path.len() != 1 || stepped_into)
+                    .map(|(ix, _)| ix)
+                    .collect()
+            } else if let Some(binding) = &self.builder.builder_editable_binding {
                 use dbflux_core::ColumnOrigin;
                 self.result
                     .columns
@@ -2713,7 +2766,11 @@ impl DataGridPanel {
                 std::collections::HashSet::new()
             };
 
-        let table_model = Arc::new(TableModel::from(&self.result));
+        let table_model = Arc::new(
+            self.document_table_model()
+                .unwrap_or_else(|| TableModel::from(&self.result)),
+        );
+        let document_presentation = self.document_presentation();
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
@@ -2743,6 +2800,7 @@ impl DataGridPanel {
                 state.set_insertable(is_insertable);
                 state.set_fk_columns(fk_indices);
                 state.set_readonly_columns(readonly_indices);
+                state.set_document_presentation(document_presentation, cx);
 
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
@@ -2770,6 +2828,7 @@ impl DataGridPanel {
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
+            state.set_document_presentation(document_presentation, cx);
 
             if !fk_indices.is_empty() {
                 state.set_fk_columns(fk_indices);
@@ -2824,7 +2883,20 @@ impl DataGridPanel {
                         }
                     }
                     DataTableEvent::SaveRowRequested(row_idx) => {
-                        this.handle_save_row(*row_idx, cx);
+                        if this.commits_document_patches(cx) {
+                            this.commit_document_edits(cx);
+                        } else {
+                            this.handle_save_row(*row_idx, cx);
+                        }
+                    }
+                    DataTableEvent::StepIntoRequested { row, col } => {
+                        this.step_into_document_value(*row, *col, cx);
+                    }
+                    DataTableEvent::ToggleColumnGroupRequested { col } => {
+                        this.toggle_document_column_group(*col, cx);
+                    }
+                    DataTableEvent::StepOutRequested => {
+                        this.step_out_of_document_value(cx);
                     }
                     DataTableEvent::ContextMenuRequested {
                         row,
@@ -2900,6 +2972,11 @@ impl DataGridPanel {
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
                     }
+                    DataTableEvent::SaveAllRequested { .. }
+                        if this.commits_document_patches(cx) =>
+                    {
+                        this.commit_document_edits(cx);
+                    }
                     DataTableEvent::SaveAllRequested {
                         pending_deletes,
                         pending_inserts,
@@ -2952,7 +3029,7 @@ impl DataGridPanel {
     fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
         let tree_state = cx.new(|cx| {
             let mut state = DocumentTreeState::new(cx);
-            state.load_from_result(&self.result, cx);
+            state.load_from_result(self.collection.raw.as_ref().unwrap_or(&self.result), cx);
             state
         });
 
@@ -2965,7 +3042,11 @@ impl DataGridPanel {
                     cx.emit(DataGridEvent::Focused);
                 }
                 DocumentTreeEvent::InlineEditCommitted { node_id, new_value } => {
-                    this.handle_document_tree_inline_edit(node_id, new_value, cx);
+                    if this.commits_document_patches(cx) {
+                        this.commit_tree_edit(node_id, new_value, cx);
+                    } else {
+                        this.handle_document_tree_inline_edit(node_id, new_value, cx);
+                    }
                 }
                 DocumentTreeEvent::DocumentPreviewRequested {
                     doc_index,
@@ -3017,6 +3098,9 @@ impl DataGridPanel {
                     this.pending.context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);
                     cx.notify();
+                }
+                DocumentTreeEvent::CycleDataViewRequested => {
+                    this.toggle_view_mode(cx);
                 }
                 DocumentTreeEvent::CursorMoved
                 | DocumentTreeEvent::ExpandToggled
@@ -10861,7 +10945,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn document_collection_keeps_the_document_view_without_result_views(cx: &mut TestAppContext) {
+    fn document_collection_opens_as_a_table_without_result_views(cx: &mut TestAppContext) {
         let (app_state, profile_id) = register_builder_stub_connection(
             cx,
             dbflux_core::DatabaseCategory::Document,
@@ -10886,13 +10970,135 @@ mod tests {
                 assert!(panel.available_result_view_modes(cx).is_empty());
                 assert_eq!(
                     panel.view_config.mode,
-                    crate::data_view::DataViewMode::Document
+                    crate::data_view::DataViewMode::Table
+                );
+                assert!(
+                    panel.collection.raw.is_some(),
+                    "a document collection keeps the driver's page next to the flattened grid"
+                );
+                assert_eq!(
+                    panel.available_view_modes(cx),
+                    vec![
+                        crate::data_view::DataViewMode::Document,
+                        crate::data_view::DataViewMode::Table,
+                        crate::data_view::DataViewMode::Json,
+                    ]
                 );
                 assert_eq!(
                     panel.source_query_labels(cx),
                     ("find", "metrics.system".to_string()),
                     "a driver without a browse query keeps the generic label"
                 );
+            });
+        });
+    }
+
+    /// A page of two products with a nested `price` object and an `items`
+    /// array, the second product lacking `price.currency`.
+    fn nested_document_rows() -> QueryResult {
+        use dbflux_core::Value;
+        use std::collections::BTreeMap;
+
+        let column = |name: &str, is_primary_key: bool| ColumnMeta {
+            name: name.to_string(),
+            type_name: "BSON".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key,
+        };
+
+        let price = |currency: Option<&str>| {
+            let mut fields = BTreeMap::new();
+            fields.insert("amount".to_string(), Value::Decimal("405.00".into()));
+            if let Some(currency) = currency {
+                fields.insert("currency".to_string(), Value::Text(currency.into()));
+            }
+            Value::Document(fields)
+        };
+
+        let items = Value::Array(vec![
+            Value::Document(BTreeMap::from([(
+                "sku".to_string(),
+                Value::Text("a".into()),
+            )])),
+            Value::Document(BTreeMap::from([(
+                "sku".to_string(),
+                Value::Text("b".into()),
+            )])),
+        ]);
+
+        QueryResult::json(
+            vec![
+                column("_id", true),
+                column("price", false),
+                column("items", false),
+            ],
+            vec![
+                vec![Value::Int(1), price(Some("USD")), items.clone()],
+                vec![Value::Int(2), price(None), items],
+            ],
+            Duration::ZERO,
+        )
+    }
+
+    #[gpui::test]
+    fn document_collection_expands_objects_and_steps_into_arrays(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        let column_names = |panel: &DataGridPanel| -> Vec<String> {
+            panel
+                .result
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect()
+        };
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+
+                assert_eq!(column_names(panel), vec!["_id", "price", "items"]);
+
+                panel.toggle_document_column_group(1, cx);
+                assert_eq!(
+                    column_names(panel),
+                    vec!["_id", "price.amount", "price.currency", "items"]
+                );
+
+                let model = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .map(|state| state.read(cx).model().clone())
+                    .expect("table state");
+                assert!(
+                    model.cell(1, 2).is_some_and(|cell| cell.is_missing()),
+                    "the second product has no currency"
+                );
+                assert!(model.cell(0, 3).is_some_and(|cell| cell.is_nested()));
+
+                panel.step_into_document_value(0, 3, cx);
+                assert!(panel.is_stepped_into());
+                assert_eq!(column_names(panel), vec!["sku"]);
+                assert_eq!(panel.result.rows.len(), 2);
+
+                panel.step_out_of_document_value(cx);
+                assert!(!panel.is_stepped_into());
+                assert_eq!(column_names(panel), vec!["_id", "price", "items"]);
             });
         });
     }

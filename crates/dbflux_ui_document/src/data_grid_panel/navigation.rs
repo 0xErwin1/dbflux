@@ -757,6 +757,27 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            Command::CycleDocumentView => {
+                self.toggle_view_mode(cx);
+                true
+            }
+            Command::SaveQuery if self.commits_document_patches(cx) => {
+                self.commit_document_edits(cx);
+                true
+            }
+            Command::SaveQuery => {
+                if let Some(table_state) = &self.grid_table.table_state
+                    && table_state.read(cx).has_pending_operations()
+                {
+                    table_state.update(cx, |state, cx| state.request_save_all(cx));
+                    return true;
+                }
+                false
+            }
+            Command::RunQuery if self.is_document_collection(cx) => {
+                self.find_documents(window, cx);
+                true
+            }
             Command::ToggleRecordView => {
                 if self.record_view_available() {
                     self.set_record_mode(!self.record_mode(), cx);

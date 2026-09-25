@@ -537,6 +537,10 @@ fn results_layer() -> KeymapLayer {
         Command::ToggleRecordView,
     );
     layer.bind(
+        KeyChord::new("t", Modifiers::none()),
+        Command::CycleDocumentView,
+    );
+    layer.bind(
         KeyChord::new("v", Modifiers::none()),
         Command::ToggleValuePanel,
     );
@@ -1031,6 +1035,10 @@ fn document_tree_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("delete", Modifiers::none()), Command::Delete);
     layer.bind(
+        KeyChord::new("t", Modifiers::none()),
+        Command::CycleDocumentView,
+    );
+    layer.bind(
         KeyChord::new("r", Modifiers::none()),
         Command::ToggleRawView,
     );
@@ -1145,6 +1153,7 @@ fn document_tree_action(command: Command) -> Option<Box<dyn Action>> {
         Command::PreviewDocument => Box::new(actions::OpenPreview),
         Command::Delete => Box::new(actions::DeleteDocument),
         Command::ToggleRawView => Box::new(actions::ToggleViewMode),
+        Command::CycleDocumentView => Box::new(actions::CycleDataView),
         Command::FocusSearch => Box::new(actions::OpenSearch),
         Command::NextMatch => Box::new(actions::NextMatch),
         Command::PrevMatch => Box::new(actions::PrevMatch),
@@ -1744,6 +1753,7 @@ mod tests {
             ("f2", Box::new(actions::StartEdit)),
             ("e", Box::new(actions::OpenPreview)),
             ("delete", Box::new(actions::DeleteDocument)),
+            ("t", Box::new(actions::CycleDataView)),
             ("r", Box::new(actions::ToggleViewMode)),
             ("ctrl-f", Box::new(actions::OpenSearch)),
             ("/", Box::new(actions::OpenSearch)),

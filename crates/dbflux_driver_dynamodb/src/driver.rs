@@ -631,6 +631,8 @@ impl Connection for DynamoConnection {
                     pagination,
                     filter,
                     semantic_filter: None,
+                    projection: None,
+                    sort: None,
                 };
 
                 self.browse_collection_with_read_options(&request, &read_options)?

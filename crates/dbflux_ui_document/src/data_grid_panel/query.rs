@@ -616,10 +616,25 @@ impl DataGridPanel {
             return;
         };
 
+        let document_collection = self.is_document_collection(cx);
+        let (projection, sort) = if self.has_document_query_slots(cx) {
+            match self.document_query_options(cx) {
+                Ok(options) => options,
+                Err(()) => return,
+            }
+        } else {
+            (None, None)
+        };
+
         let filter_value = self.filter_bar.filter_input.read(cx).value();
         let filter_str = filter_value.trim();
         let filter: Option<serde_json::Value> = if filter_str.is_empty() {
             None
+        } else if document_collection {
+            match Self::parse_query_slot(filter_str, "filter", cx) {
+                Ok(filter) => filter,
+                Err(()) => return,
+            }
         } else {
             match serde_json::from_str(filter_str) {
                 Ok(v) => Some(v),
@@ -645,6 +660,12 @@ impl DataGridPanel {
             CollectionBrowseRequest::new(collection.clone()).with_pagination(pagination.clone());
         if let Some(f) = filter {
             browse_request = browse_request.with_filter(f);
+        }
+        if let Some(projection) = projection {
+            browse_request = browse_request.with_projection(projection);
+        }
+        if let Some(sort) = sort {
+            browse_request = browse_request.with_sort(sort);
         }
 
         info!(
@@ -753,8 +774,11 @@ impl DataGridPanel {
         })
         .detach();
 
-        // Fetch total count if not known (always re-fetch when filter changes)
-        if total_docs.is_none() {
+        // A document collection counts once per filter (possibly estimated);
+        // paging keeps the count. Other collections count once.
+        if document_collection {
+            self.refresh_document_count(filter_for_count, cx);
+        } else if total_docs.is_none() {
             self.fetch_collection_count(profile_id, collection, filter_for_count, cx);
         }
     }
@@ -785,7 +809,9 @@ impl DataGridPanel {
         self.chrome.derived_text = None;
         self.apply_chart_for_result(&result, cx);
 
-        self.result = result;
+        if !self.apply_document_page(&result, cx) {
+            self.result = result;
+        }
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
         self.rebuild_table(None, cx);

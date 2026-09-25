@@ -112,6 +112,10 @@ pub enum ContextMenuAction {
     InspectRow,
     /// Open a new ChartDocument seeded with the current query and result columns.
     ChartThisQuery,
+    /// Document grid: stage the removal of the field from the document.
+    UnsetField,
+    /// Drop the staged edit of one cell.
+    RevertCell,
 }
 
 /// Events emitted by the DataTable component.
@@ -167,6 +171,17 @@ pub enum DataTableEvent {
 
     /// Request to commit a pending delete (base_row_idx marked for deletion).
     CommitDeleteRequested(usize),
+
+    /// Document grid: Enter on a nested document or array asks the host to
+    /// show its contents.
+    StepIntoRequested { row: usize, col: usize },
+
+    /// Document grid: expand or collapse the object column at `col` in place
+    /// (`e`).
+    ToggleColumnGroupRequested { col: usize },
+
+    /// Document grid: leave the nested value shown now (Backspace).
+    StepOutRequested,
 
     /// Request to save all pending changes at once (deletes, inserts, edits).
     SaveAllRequested {

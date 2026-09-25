@@ -40,6 +40,8 @@ Driver de documentos MongoDB para DBFlux.
 - Metadata de schema centrada en documentos: campos e índices de collection
   (`INDEXES`), con documentos anidados y arrays mapeados a la vista de árbol de
   documentos (`NESTED_DOCUMENTS`, `ARRAYS`).
+- **Exploración de colecciones en el data grid (`DocumentFeatures::QUERY_SLOTS`)**: la exploración de una colección acepta un documento de proyección y uno de orden junto al filtro, y `sample_collection_schema` lee una muestra aleatoria (`$sample`, después del `$match` del filtro) para informar, por cada ruta de campo, su presencia, la distribución de tipos (`String`, `Int32`, `Decimal128`, `Object`, `Array`, …) y un resumen de valores. El grid usa la muestra para completar rutas de campo en la barra de consulta, para las barras de presencia de las cabeceras y para la vista Esquema. Los conteos sin filtro salen de `estimatedDocumentCount` y se marcan como estimados.
+- **Edición de campos (`DocumentFeatures::FIELD_PATCH`)**: `patch_document` envía `updateOne` con `$set` / `$unset` solo sobre las rutas modificadas y conserva los tipos BSON (los decimales siguen como `Decimal128`, las fechas como `Date`, los ObjectId como `ObjectId`, y el texto nunca se interpreta como ObjectId). `replace_document` envía `replaceOne` sin tocar `_id`, y `fetch_document` lee un documento por `_id` para que el grid sepa si cambió después de cargar la página. El generador de shell muestra la escritura exacta en la confirmación de cambio en el servidor, por ejemplo `db.products.updateOne({ _id: ObjectId("…") }, { $set: { "price.amount": Decimal128("119.00") } })`.
 - Mutaciones: insert, update (incluyendo upsert) y delete (`supports_upsert:
   true`). `MongoShellGenerator` emite `insertOne`/`insertMany`,
   `updateOne`/`updateMany` (con `{ upsert: true }`), y `deleteOne`/`deleteMany`
@@ -114,3 +116,8 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   read-only ni soporte deferrable.
 - El DDL no es transaccional (`transactional_ddl: false`); create-database,
   create-collection, alter, views y triggers no están soportados.
+- Los campos de los documentos embebidos vuelven ordenados por clave, no en el orden almacenado: el modelo de valores guarda los documentos embebidos en un mapa ordenado. Los campos de primer nivel conservan el orden del documento.
+- Un campo de primer nivel con `null` y uno ausente se ven igual en el grid (la exploración rellena con `null` los campos de primer nivel ausentes); los campos anidados sí se distinguen y se muestran como `missing`. Por el mismo motivo, la comprobación de cambios en el servidor ignora los nulos de primer nivel.
+- Los enteros escritos desde el grid se guardan como `Int32` si caben y como `Int64` si no, sin importar el ancho que tenía el campo.
+- El parser de shell del editor no lee constructores como `NumberDecimal(...)` o `ISODate(...)` dentro de argumentos JSON; las escrituras con tipo pasan por la edición de campos del grid.
+- La comprobación de cambios en el servidor compara una lectura nueva del documento con la copia de la página justo antes de escribir; un cambio que llegue entre esa lectura y la escritura no se detecta.

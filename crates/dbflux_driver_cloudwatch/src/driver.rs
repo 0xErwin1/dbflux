@@ -741,6 +741,8 @@ impl CloudWatchConnection {
             collection: target.collection.clone(),
             filter: (!filter.is_empty()).then_some(serde_json::Value::Object(filter)),
             semantic_filter: None,
+            projection: None,
+            sort: None,
             pagination: dbflux_core::Pagination::Offset {
                 limit: query.limit.unwrap_or(100) as u32,
                 offset: query.offset.unwrap_or(0) as u64,

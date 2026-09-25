@@ -550,6 +550,85 @@ diagnostics:
     action: "대신 새 쿼리는 세션 저장소에 보관되므로 작업 내용은 그대로 유지됩니다. 데이터 디렉터리에 쓰기 권한과 여유 공간이 있는지 확인한 뒤 DBFlux를 다시 시작하세요."
   shutdown_flush_timed_out: "일부 편집 내용이 파일에 반영되지 않았을 수 있습니다: 종료하는 동안 DBFlux가 저장하다가 시간이 초과되었습니다. 편집 내용은 복구할 수 있도록 세션 저장소에 보관되어 있습니다."
 document:
+  collection:
+    menu:
+      unset_field: "필드 제거"
+      revert_change: "변경 되돌리기"
+    view:
+      json: "JSON"
+    find: "찾기"
+    history: "쿼리 기록"
+    tab:
+      documents: "문서"
+      schema: "스키마"
+    hint:
+      steps_in: "객체나 배열에서 누르면 경로 표시와 함께 안으로 들어갑니다"
+      steps_out: "밖으로 나갑니다"
+      expands: "객체 열을 제자리에서 펼칩니다"
+      steps_into_array: "배열 안으로 들어갑니다"
+    pending:
+      label: "대기 중인 변경:"
+      one_field: "대기 중:"
+      fields:
+        one: "필드 %{count}개"
+        many: "필드 %{count}개"
+      documents:
+        one: "문서 %{count}개"
+        many: "문서 %{count}개"
+    commit:
+      button: "커밋"
+      busy: "진행 중인 커밋이 끝날 때까지 기다리세요"
+      invalid_value: "%{path}을(를) 저장할 수 없습니다: %{reason}"
+      done:
+        one: "문서 %{count}개를 커밋했습니다"
+        many: "문서 %{count}개를 커밋했습니다"
+    count:
+      documents:
+        one: "문서 %{count}개"
+        many: "문서 %{count}개"
+      matching: "%{total}개 중 %{shown}개 일치"
+      estimated: "%{documents} · 약 %{total}개 일치, 추정치"
+      presence_note: "문서 %{count}개 표본 기준 존재율"
+    slot:
+      not_object: "%{slot} 칸은 JSON 객체여야 합니다"
+      invalid: "%{slot}의 JSON이 올바르지 않습니다: %{error}"
+    schema:
+      sample_size: "표본 %{count}"
+      sampled_of: "문서 %{total}개 중 %{sampled}개 표본"
+      sampled: "문서 %{sampled}개 표본"
+      not_sampled: "아직 표본 없음"
+      resample: "다시 표본 추출"
+      click_hint: "값을 클릭하면 필터에 추가됩니다"
+      loading: "문서 표본 추출 중…"
+      empty: "표본에 필드가 없습니다"
+      failed: "스키마 표본 추출 실패: %{error}"
+      column:
+        field: "필드"
+        types: "유형"
+        presence: "존재율"
+        values: "값"
+      unique: "고유"
+      distinct: "고유값 %{count}개"
+      distinct_capped: "고유값 %{count}개 이상"
+      array_lengths: "길이 %{min}–%{max}, 중앙값 %{median}"
+      nested: "최대 %{count}개 필드"
+      only_null: "null만 있음"
+      mixed: "혼합 유형"
+      mixed_detail: "혼합 유형: %{percent}%가 %{type_name}(으)로 저장됨"
+    json:
+      not_array: "JSON 보기는 문서 배열이어야 합니다"
+      count_changed: "JSON 보기에서는 문서를 추가하거나 제거할 수 없습니다. 문서 추가 또는 삭제를 사용하세요"
+      not_document: "JSON 보기의 모든 요소는 문서여야 합니다"
+      identity_changed: "JSON 보기에서는 문서 식별자(_id)를 바꾸거나 순서를 바꿀 수 없습니다"
+      invalid: "JSON 보기를 커밋할 수 없습니다: %{error}"
+    conflict:
+      title: "서버에서 %{label}이(가) 변경되었습니다"
+      on_top: "이 페이지를 불러온 뒤 누군가 %{changed}을(를) 변경했습니다. 내 변경은 %{edited}만 건드리므로 그 위에 적용할 수 있습니다."
+      overlap: "이 페이지를 불러온 뒤 누군가 %{changed}을(를) 변경했으며, 여기에는 내 변경도 쓰는 %{overlapping}이(가) 포함됩니다. 적용하면 상대의 값을 덮어씁니다."
+      replace: "이 페이지를 불러온 뒤 누군가 %{changed}을(를) 변경했습니다. 문서 전체를 바꾸면 그 변경을 덮어씁니다."
+      deleted: "이 페이지를 불러온 뒤 서버에서 문서가 삭제되었습니다"
+      reload: "문서 다시 불러오기"
+      apply: "내 변경 적용"
   audit:
     title: "감사"
     level_chip:
@@ -1213,7 +1292,7 @@ document:
         switch_to_table: 테이블 뷰로 전환
       mode:
         table: 테이블
-        document: 문서
+        document: 트리
       editing:
         aggregated: 집계된 결과는 편집할 수 없습니다
         no_primary_key: 이 테이블에는 기본 키가 없습니다 - 편집할 수 없습니다
@@ -3160,6 +3239,7 @@ settings:
       results_copy_row: 행 복사
       results_copy_cell: 셀 복사
       toggle_record_view: 레코드 뷰 전환
+      cycle_document_view: 트리 / 테이블 / JSON 전환
       toggle_value_panel: 값 패널 전환
       toggle_row_inspector: 행 검사기 전환
       results_set_null: 셀을 NULL로 설정

@@ -78,6 +78,7 @@ pub enum Command {
     ResultsCopyRow,
     ResultsCopyCell,
     ToggleRecordView,
+    CycleDocumentView,
     ToggleValuePanel,
     ToggleRowInspector,
     ResultsSetNull,
@@ -257,6 +258,7 @@ impl Command {
             Command::ResultsCopyRow => "Copy Row",
             Command::ResultsCopyCell => "Copy Cell",
             Command::ToggleRecordView => "Toggle Record View",
+            Command::CycleDocumentView => "Cycle Tree / Table / JSON",
             Command::ToggleValuePanel => "Toggle Value Panel",
             Command::ToggleRowInspector => "Toggle Row Inspector",
             Command::ResultsSetNull => "Set Cell to NULL",
@@ -386,6 +388,7 @@ impl Command {
             Command::ResultsCopyRow => "results_copy_row",
             Command::ResultsCopyCell => "results_copy_cell",
             Command::ToggleRecordView => "toggle_record_view",
+            Command::CycleDocumentView => "cycle_document_view",
             Command::ToggleValuePanel => "toggle_value_panel",
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::ResultsSetNull => "results_set_null",
@@ -509,6 +512,7 @@ impl Command {
             Command::ResultsCopyRow,
             Command::ResultsCopyCell,
             Command::ToggleRecordView,
+            Command::CycleDocumentView,
             Command::ToggleValuePanel,
             Command::ToggleRowInspector,
             Command::ResultsSetNull,
@@ -632,6 +636,7 @@ impl Command {
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
             | Command::ToggleRecordView
+            | Command::CycleDocumentView
             | Command::ToggleValuePanel
             | Command::ToggleRowInspector
             | Command::ResultsSetNull

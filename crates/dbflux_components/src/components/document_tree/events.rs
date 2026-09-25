@@ -34,6 +34,9 @@ pub enum DocumentTreeEvent {
     /// User toggled between Tree and Raw JSON view modes.
     ViewModeToggled,
 
+    /// The host should switch to its next data view (Tree / Table / JSON).
+    CycleDataViewRequested,
+
     /// Search mode was opened.
     SearchOpened,
 
