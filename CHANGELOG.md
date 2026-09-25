@@ -6,7 +6,9 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
-* **Vim Normal-mode change commands** — `c` accepts characterwise `h` / `l`, linewise `j` / `k`, word motions `w` / `W` / `e` / `E` / `b` / `B`, and linewise `gg` / `G`, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six motions); absolute targets clamp to 1-based rows (`2c3G` targets row 6, while bare `cG` targets the last row). Linewise changes preserve the separator before the following row; counted `cc` includes existing LF or CRLF terminators. Native deletion and Insert replacement form one undo step in ordinary sessions with the first caret restored; read-only changes do nothing. Visual `c` and `r` / `R` remain unsupported, as does a Vim redo key. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
+* **Vim Visual character and line change** — `c` changes inclusive selected characters or logical lines through native editing and enters Insert for replacement. One ordinary undo restores the original text and collapsed anchor. Selected-query bytes remain unchanged. Read-only changes leave the selection intact without entering Insert; an empty character or line selection enters Insert without deleting text. Linewise changes handle a trailing empty logical row after LF or CRLF. Visual Block `c` and `r` / `R` remain unsupported; the 1000-change undo cap, stale-IME limitation, and lack of live UI validation still apply.
+
+* **Vim Normal-mode change commands** — `c` accepts characterwise `h` / `l`, linewise `j` / `k`, word motions `w` / `W` / `e` / `E` / `b` / `B`, and linewise `gg` / `G`, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six motions); absolute targets clamp to 1-based rows (`2c3G` targets row 6, while bare `cG` targets the last row). Linewise changes preserve the separator before the following row; counted `cc` includes existing LF or CRLF terminators. Native deletion and Insert replacement form one undo step in ordinary sessions with the first caret restored; read-only changes do nothing. Visual Block `c` and `r` / `R` remain unsupported, as does a Vim redo key. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
 
 * **Vim local marks in code editors** — Normal-mode `m{a-z}` sets or
   overwrites a per-document lowercase mark; `'{a-z}` jumps to its line's first
@@ -40,20 +42,20 @@ All notable changes to DBFlux will be documented in this file.
   the clamped absolute target (bare `gg`: first; bare `G`: last). Prefix or
   inner counts target a 1-based row; together they multiply (`2d3G`: row 6),
   so `1dG` differs from bare `dG`. Read-only deletion is a no-op; yank still
-  copies to the clipboard, and deletion is one undo step. Visual `c` remains unsupported.
+  copies to the clipboard, and deletion is one undo step. Visual Block `c` remains unsupported.
 
 * **Vim Visual selection operators** — Visual character, line, and block
   selections support `d` / `x` deletion and `y` yank to the system clipboard.
   Block deletion uses disjoint row ranges in one undo step. An empty selection
   returns to Normal without editing or changing the clipboard; read-only
   deletion keeps the selection with no effect, while yank still works. `dd`
-  and `cc` remain Normal-only; Visual `c` is unsupported.
+  and `cc` remain Normal-only; Visual Block `c` is unsupported.
 
 * **Vim horizontal and vertical operators** — Normal-mode `d` and `y`
   accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
   Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
   the system clipboard; read-only deletes do nothing, and each delete is
-  one undo step. Visual `c` and `r`/`R` remain unsupported; this
+  one undo step. Visual Block `c` and `r`/`R` remain unsupported; this
   is not full Vim compatibility.
 
 * **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,

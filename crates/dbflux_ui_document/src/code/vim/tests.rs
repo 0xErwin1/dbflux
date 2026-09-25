@@ -1923,6 +1923,133 @@ fn visual_edit_uses_raw_reversed_character_bytes_and_undo(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn visual_change_replaces_inclusive_character_selection_and_groups_native_input(
+    cx: &mut TestAppContext,
+) {
+    let mut editor = open_editor(cx, "aé中z tail", true);
+    editor.set_cursor(1);
+    editor.keys("v l");
+    assert_eq!(editor.selected_query().as_deref(), Some("é中"));
+    editor.keys("c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "az tail");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("é中"));
+    editor.type_text("new");
+    editor.keys("escape u");
+    assert_eq!(editor.text(), "aé中z tail");
+    assert_eq!((editor.cursor(), editor.selection()), (1, 1..1));
+}
+
+#[gpui::test]
+fn visual_change_line_preserves_following_separator_and_groups_undo(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond\nthird", true);
+    editor.set_cursor(2);
+    editor.keys("shift-v j");
+    assert_eq!(editor.selected_query().as_deref(), Some("first\nsecond"));
+    editor.keys("c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "\nthird");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("first\nsecond\n"));
+    editor.type_text("replacement");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "replacement\nthird");
+    editor.keys("u");
+    assert_eq!(editor.text(), "first\nsecond\nthird");
+    assert_eq!((editor.cursor(), editor.selection()), (2, 2..2));
+}
+
+#[gpui::test]
+fn visual_change_read_only_keeps_selection_text_and_clipboard(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "alpha",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    editor
+        .window
+        .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+    editor.keys("v l");
+    assert_eq!(editor.selected_query().as_deref(), Some("al"));
+    let selection = editor.selection();
+    editor.keys("c");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+    assert_eq!(editor.selection(), selection);
+    assert_eq!(editor.text(), "alpha");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+}
+
+#[gpui::test]
+fn visual_change_empty_selection_enters_insert(cx: &mut TestAppContext) {
+    for visual in ["v", "shift-v"] {
+        let mut editor = open_editor(cx, "", true);
+        editor.keys(visual);
+        editor.keys("c");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), "X");
+        editor.keys("u");
+        assert_eq!(editor.text(), "");
+    }
+}
+
+#[gpui::test]
+fn visual_change_trailing_empty_line_respects_selection_direction(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let original = format!("first{separator}second{separator}");
+        for reverse in [false, true] {
+            let mut editor = open_editor(cx, &original, true);
+            if reverse {
+                editor.set_cursor(original.len());
+                editor.keys("shift-v k");
+            } else {
+                editor.set_cursor(0);
+                editor.keys("shift-v shift-g");
+            }
+            editor.keys("c");
+            assert_eq!(editor.mode(), Some(VimMode::Insert));
+            editor.type_text("X");
+            editor.keys("escape");
+            assert_eq!(
+                editor.text(),
+                if reverse {
+                    format!("first{separator}X")
+                } else {
+                    "X".to_string()
+                }
+            );
+        }
+        let mut editor = open_editor(cx, &original, true);
+        editor.set_cursor(original.len());
+        editor.keys("shift-v");
+        editor.keys("c");
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("{original}X"));
+    }
+}
+
+#[gpui::test]
+fn visual_change_accepts_native_ime_commit_and_undoes_as_one_edit(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta", true);
+    editor.set_cursor(0);
+    editor.keys("v l");
+    assert_eq!(editor.selected_query().as_deref(), Some("al"));
+    editor.keys("c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.ime_compose("中", "中文");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "中文pha beta");
+    editor.keys("u");
+    assert_eq!(editor.text(), "alpha beta");
+    assert_eq!((editor.cursor(), editor.selection()), (0, 0..0));
+}
+
+#[gpui::test]
 fn visual_block_delete_is_disjoint_and_atomic(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abXX\na\nabYY", true);
     editor.set_cursor(1);

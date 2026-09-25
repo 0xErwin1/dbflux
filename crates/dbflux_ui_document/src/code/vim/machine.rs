@@ -47,6 +47,7 @@ pub(crate) enum VimCommand {
     LeaveInsert,
     DeleteChar,
     VisualDelete,
+    VisualChange,
     VisualYank,
     Operator(char),
     Undo,
@@ -137,6 +138,9 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
                 "x" | "d" if visual => Some(VimCommand::VisualDelete),
+                "c" if matches!(mode, VimMode::Visual | VimMode::VisualLine) => {
+                    Some(VimCommand::VisualChange)
+                }
                 "y" if visual => Some(VimCommand::VisualYank),
                 "x" if !visual => Some(VimCommand::DeleteChar),
                 "d" if !visual => Some(VimCommand::Operator('d')),

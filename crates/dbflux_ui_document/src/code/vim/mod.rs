@@ -454,7 +454,10 @@ impl CodeDocument {
                 self.apply_visual_operator(true, window, cx)
             }
             VimCommand::VisualYank => self.apply_visual_operator(false, window, cx),
-            VimCommand::VisualDelete => {}
+            VimCommand::VisualChange if !self.read_only => {
+                self.apply_visual_change(window, cx);
+            }
+            VimCommand::VisualDelete | VimCommand::VisualChange => {}
             // A read-only document keeps its text: motions work, edits do nothing.
             VimCommand::Operator(operator) => {
                 self.vim.pending_operator = Some((operator, explicit_count));
@@ -828,6 +831,36 @@ impl CodeDocument {
         if clamped != cursor {
             self.set_editor_cursor(clamped, cx);
         }
+    }
+
+    fn apply_visual_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (range, clipboard) = {
+            let state = self.editor.input_state.read(cx);
+            let content = state.text().to_string();
+            let selected = state.selected_range();
+            let clipboard = if self.vim.mode == VimMode::VisualLine {
+                machine::line_yank_text(&content, selected.clone())
+            } else {
+                content.get(selected.clone())
+            };
+            let range = if self.vim.mode == VimMode::VisualLine && !selected.is_empty() {
+                machine::change_line_range(state.text(), selected)
+            } else {
+                selected
+            };
+            (
+                range,
+                clipboard.filter(|text| !text.is_empty()).map(str::to_owned),
+            )
+        };
+        let anchor = self.vim.visual_anchor.unwrap_or(range.start);
+        self.editor.input_state.update(cx, |state, cx| {
+            state.set_selected_range(anchor..anchor, cx);
+        });
+        self.apply_change(range, clipboard, window, cx);
+        self.vim.visual_anchor = None;
+        self.vim.visual_cursor = None;
+        self.schedule_editor_refocus(window, cx);
     }
 
     fn apply_visual_operator(&mut self, delete: bool, window: &mut Window, cx: &mut Context<Self>) {

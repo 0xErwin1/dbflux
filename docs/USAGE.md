@@ -624,6 +624,7 @@ status bar.
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
 | Visual / Visual Line | `v` / `V` | Exit the active Visual mode / switch between characterwise and linewise selection |
+| Visual / Visual Line | `c` | Change the inclusive selected characters or logical lines, then enter Insert mode |
 | Visual / Visual Line / Visual Block | `d` / `x` / `y` | Delete the selection (`d` / `x`) or yank it to the system clipboard (`y`) |
 | Visual / Visual Line / Visual Block | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
@@ -691,9 +692,11 @@ and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
 
-Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` and `cc` are Normal-only. Visual `c` remains unsupported.
+Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` and `cc` are Normal-only. Visual Block `c` remains unsupported.
 
-**Change and undo.** Normal `c` accepts `h` / `l` characterwise, `j` / `k` linewise, `w` / `W` / `e` / `E` / `b` / `B` wordwise, and `gg` / `G` linewise, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six `w` motions); absolute-line targets use clamped 1-based rows (`2c3G` targets row 6), while bare `cG` targets the last row. Linewise changes preserve the separator before the following row; counted `cc` includes selected lines' existing LF or CRLF terminators. Changes delete through native editing and enter Insert mode for replacement text. Deletion and replacement form one undo step in ordinary sessions, restoring the first caret; read-only editors leave text unchanged and do not enter Insert mode. Visual `c` and `r` / `R` remain unsupported.
+**Change and undo.** Normal `c` accepts `h` / `l` characterwise, `j` / `k` linewise, `w` / `W` / `e` / `E` / `b` / `B` wordwise, and `gg` / `G` linewise, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six `w` motions); absolute-line targets use clamped 1-based rows (`2c3G` targets row 6), while bare `cG` targets the last row. Linewise changes preserve the separator before the following row; counted `cc` includes selected lines' existing LF or CRLF terminators. Changes delete through native editing and enter Insert mode for replacement text. Deletion and replacement form one undo step in ordinary sessions, restoring the first caret; read-only editors leave text unchanged and do not enter Insert mode. Visual Block `c` and `r` / `R` remain unsupported.
+
+Visual character and line `c` change the inclusive selection through native editing and enter Insert for replacement. One ordinary undo restores the original text and collapsed anchor; the selected-query bytes are unchanged. In read-only editors, `c` leaves the selection intact without entering Insert. With an empty character or line selection, `c` enters Insert without deleting text. Linewise changes handle a trailing empty logical row after LF or CRLF.
 
 Each `x`, `dd`, or motion-based `d` invocation is one undo step, including counted commands. Everything typed in one ordinary Insert session is one undo step, and each new Insert session starts another. An undo group is capped at 1000 changes, so a long session may require multiple undo steps. `u` undoes the same steps as `Ctrl+z` / `Cmd+z`.
 
@@ -713,7 +716,7 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  Visual `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
+  Visual Block `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
   `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.
