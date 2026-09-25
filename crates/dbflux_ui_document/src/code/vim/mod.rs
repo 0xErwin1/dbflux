@@ -1412,7 +1412,7 @@ impl CodeDocument {
             || modifiers.platform
             || ((modifiers.alt || modifiers.function) && !printable);
         if self.vim.replace_once.is_none() {
-            return self.intercept_replace_mode_key(keystroke, printable && !shortcut, window, cx);
+            return !shortcut && self.intercept_replace_mode_key(keystroke, printable, window, cx);
         }
         if shortcut {
             self.cancel_replace_once(cx);
@@ -1439,7 +1439,8 @@ impl CodeDocument {
 
     /// Replace mode: a typed character first selects the character under the
     /// cursor, so the native insertion overwrites it, and Backspace restores what
-    /// this session overwrote. Every other key keeps its Insert-mode behavior.
+    /// this session overwrote. Every other key, including shortcuts, keeps its
+    /// Insert-mode behavior.
     fn intercept_replace_mode_key(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -1447,7 +1448,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if keystroke.key == "backspace" && !typed_character {
+        if keystroke.key == "backspace" {
             self.replace_mode_backspace(window, cx);
             return true;
         }

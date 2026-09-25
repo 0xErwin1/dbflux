@@ -733,6 +733,27 @@ fn replace_mode_backspace_restores_overwritten_characters(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn replace_mode_modified_backspace_keeps_its_native_meaning(cx: &mut TestAppContext) {
+    let mut reference = open_editor(cx, "abc deX", true);
+    reference.set_cursor(6);
+    reference.keys("a ctrl-backspace");
+    let expected = reference.text();
+    assert_ne!(
+        expected, "abc deX",
+        "the reference must exercise the binding"
+    );
+
+    let mut editor = open_editor(cx, "abc def", true);
+    editor.set_cursor(6);
+    editor.keys("shift-r");
+    editor.type_text("X");
+    assert_eq!(editor.text(), "abc deX");
+    editor.keys("ctrl-backspace");
+    assert_eq!(editor.text(), expected);
+    assert_eq!(editor.mode(), Some(VimMode::Replace));
+}
+
+#[gpui::test]
 fn replace_mode_enter_inserts_a_line_break_without_overwriting(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abc", true);
     editor.set_cursor(1);
