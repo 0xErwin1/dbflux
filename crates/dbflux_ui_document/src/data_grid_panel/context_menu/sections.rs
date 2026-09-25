@@ -32,11 +32,17 @@ fn submenu_frame(open_left: bool, flyout: Div) -> Div {
     } else {
         (div().absolute().left(SUBMENU_OFFSET), Anchor::TopLeft)
     };
+    // Deferred above the parent menu (priority 1): in a shared layer GPUI
+    // paints icon sprites after quads, so the parent rows' chevrons would
+    // otherwise show through the flyout's background.
     frame.top(-MenuMetrics::PADDING_Y).child(
-        anchored()
-            .anchor(corner)
-            .snap_to_window_with_margin(MenuMetrics::ROW_INSET)
-            .child(flyout),
+        deferred(
+            anchored()
+                .anchor(corner)
+                .snap_to_window_with_margin(MenuMetrics::ROW_INSET)
+                .child(flyout),
+        )
+        .with_priority(2),
     )
 }
 

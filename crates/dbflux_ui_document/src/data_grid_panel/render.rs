@@ -3309,18 +3309,16 @@ impl DataGridPanel {
                     )
             });
 
-        div()
+        // Left and right groups share the remaining width equally so the
+        // pager stays centred on the footer regardless of their contents.
+        let left_group = div()
             .flex()
-            .flex_shrink_0()
+            .flex_1()
+            .flex_basis(px(0.))
+            .min_w_0()
+            .overflow_hidden()
             .items_center()
             .gap(ResultMetrics::FOOTER_GAP)
-            .h(ResultMetrics::FOOTER_HEIGHT)
-            .px(ResultMetrics::FOOTER_PADDING_X)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .text_size(ResultMetrics::FOOTER_FONT)
-            .text_color(muted)
             // Pending-change count — visible only when there are unsaved edits
             .when(pending_change_count > 0, |d| {
                 d.child(div().flex_shrink_0().text_color(theme.warning).child(
@@ -3368,17 +3366,39 @@ impl DataGridPanel {
                 };
                 let mode = if is_server { "db" } else { "local" };
                 d.child(footer_item(arrow_icon, format!("{} ({})", col_name, mode)))
-            })
-            .child(div().flex_1())
-            .when_some(pager, |d, pager| d.child(pager))
-            .child(div().flex_1())
+            });
+
+        let right_group = div()
+            .flex()
+            .flex_1()
+            .flex_basis(px(0.))
+            .min_w_0()
+            .justify_end()
+            .items_center()
+            .gap(ResultMetrics::FOOTER_GAP)
             .when(has_data, |d| d.child(self.render_export_button(cx)))
             .child(
                 div()
                     .flex_shrink_0()
                     .font_family(AppFonts::MONO)
                     .child(exec_time.to_string()),
-            )
+            );
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(ResultMetrics::FOOTER_GAP)
+            .h(ResultMetrics::FOOTER_HEIGHT)
+            .px(ResultMetrics::FOOTER_PADDING_X)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .text_size(ResultMetrics::FOOTER_FONT)
+            .text_color(muted)
+            .child(left_group)
+            .when_some(pager, |d, pager| d.child(pager.flex_shrink_0()))
+            .child(right_group)
     }
 
     /// Icon shown next to each result-view mode chip (Data, Chart, JSON, ...).
