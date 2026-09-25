@@ -256,6 +256,7 @@ mod tests {
             profile_id: Uuid::new_v4(),
             name: name.to_string(),
             is_connected: connected,
+            icon: None,
         }
     }
 
@@ -821,6 +822,7 @@ mod tests {
             profile_id: pid,
             name: "analytics".to_string(),
             is_connected: false,
+            icon: None,
         };
 
         let sel = map_item_to_selection(&item).unwrap();
@@ -837,6 +839,7 @@ mod tests {
             profile_id: pid,
             name: "prod-pg".to_string(),
             is_connected: true,
+            icon: None,
         };
 
         let sel = map_item_to_selection(&item).unwrap();
@@ -1144,6 +1147,7 @@ mod tests {
                 profile_id: Uuid::new_v4(),
                 name: format!("connection-{}", i),
                 is_connected: i < 50,
+                icon: None,
             });
         }
 

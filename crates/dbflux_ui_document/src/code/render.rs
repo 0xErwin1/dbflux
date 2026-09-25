@@ -1,10 +1,14 @@
 use super::*;
 use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
+use dbflux_components::controls::Checkbox;
 use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
+use dbflux_components::modals::{modal_code, modal_lead};
 use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text};
-use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields, TableViewMetrics};
+use dbflux_components::tokens::{
+    ChamferCut, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
+};
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
@@ -792,19 +796,17 @@ impl CodeDocument {
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        // Capture entity clones for each callback before building the footer.
         let entity_run = cx.entity().clone();
         let entity_cancel = cx.entity().clone();
-        let entity_suppress = cx.entity().clone();
+        let entity_toggle = cx.entity().clone();
         let entity_close = cx.entity().clone();
         let entity_confirm = cx.entity().clone();
 
-        let (title, message) = self
-            .pending
-            .dangerous_query
-            .as_ref()
+        let pending = self.pending.dangerous_query.as_ref();
+        let suppress = pending.is_some_and(|pending| pending.suppress);
+        let query = pending.map(|pending| pending.query.clone());
+
+        let (title, message) = pending
             .map(|p| {
                 (
                     crate::labels::dangerous_query_title(p.kind),
@@ -818,31 +820,36 @@ impl CodeDocument {
                 )
             });
 
-        let body = Text::caption(message).into_any_element();
-
-        let dont_ask_chip = div()
-            .id("dont-ask-again-btn")
+        let body = div()
             .flex()
-            .items_center()
-            .gap_1()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(move |_, window, cx| {
-                entity_suppress.update(cx, |doc, cx| {
-                    doc.confirm_dangerous_query(true, window, cx);
-                });
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(message, cx))
+            .when_some(query, |body, query| {
+                body.child(modal_code(query.trim().to_string(), cx))
             })
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.code.dangerous_query.dont_ask_again"
-            )));
+            .child(
+                Checkbox::new("dangerous-dont-ask-again")
+                    .checked(suppress)
+                    .label(dbflux_i18n::t!(
+                        "document.code.dangerous_query.dont_ask_again"
+                    ))
+                    .on_click(move |checked: &bool, _, cx| {
+                        let checked = *checked;
+                        entity_toggle.update(cx, |doc, cx| {
+                            if let Some(pending) = doc.pending.dangerous_query.as_mut() {
+                                pending.suppress = checked;
+                                cx.notify();
+                            }
+                        });
+                    }),
+            );
 
         let cancel_btn = Button::new(
             "dangerous-cancel-btn",
             dbflux_i18n::t!("document.code.dangerous_query.cancel"),
         )
+        .kbd("Esc")
         .on_click(move |_, window, cx| {
             entity_cancel.update(cx, |doc, cx| {
                 doc.cancel_dangerous_query(window, cx);
@@ -854,33 +861,27 @@ impl CodeDocument {
             dbflux_i18n::t!("document.code.dangerous_query.run_anyway"),
         )
         .danger()
+        .icon(AppIcon::Play)
+        .kbd("\u{21B5}")
         .on_click(move |_, window, cx| {
             entity_run.update(cx, |doc, cx| {
-                doc.confirm_dangerous_query(false, window, cx);
+                doc.confirm_dangerous_query(suppress, window, cx);
             });
         });
 
-        // Footer: "Don't ask again" left-aligned, Cancel + Run Anyway right-aligned.
-        // The flex_1 spacer pushes the buttons to the right within the single footer AnyElement.
         let footer = div()
             .flex()
             .items_center()
-            .child(dont_ask_chip)
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex()
-                    .gap(Spacing::SM)
-                    .child(cancel_btn)
-                    .child(run_anyway_btn),
-            )
+            .gap(ModalMetrics::FOOTER_GAP)
+            .child(cancel_btn)
+            .child(run_anyway_btn)
             .into_any_element();
 
         Modal::new(title)
             .body(body)
             .footer(footer)
             .icon(AppIcon::TriangleAlert)
-            .width(px(460.0))
+            .width(ModalMetrics::WIDTH)
             .variant(ModalVariant::Danger)
             .focus_handle(self.dangerous_query_focus.handle())
             .on_close(move |window, cx| {
@@ -890,7 +891,7 @@ impl CodeDocument {
             })
             .on_confirm(move |window, cx| {
                 entity_confirm.update(cx, |doc, cx| {
-                    doc.confirm_dangerous_query(false, window, cx);
+                    doc.confirm_dangerous_query(suppress, window, cx);
                 });
             })
     }

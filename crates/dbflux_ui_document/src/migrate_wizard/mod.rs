@@ -29,8 +29,9 @@ use dbflux_components::composites::{
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Spacing;
+use dbflux_components::modals::modal::MODAL_CLOSE_ID;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{ChromeColors, ModalMetrics};
 use dbflux_core::{
     ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
     SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
@@ -1176,6 +1177,7 @@ impl MigrateWizard {
                             target_connection,
                             source_database,
                             target_database,
+                            source_profile_id,
                             target_profile_id,
                             source_container_label,
                             target_container_label,
@@ -1331,12 +1333,71 @@ impl Render for MigrateWizard {
             .focus_handle(&self.focus_handle)
             .on_close(close)
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
-            .icon(AppIcon::ArrowUpDown)
+            .without_header()
             .width(WIZARD_MODAL_WIDTH)
             .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
+            .child(self.render_header(cx))
             .child(self.render_body(cx));
 
         frame.into_any_element()
+    }
+}
+
+/// Geometry of the migrate wizard's own head and foot bars (P1Migrate).
+struct MigrateChromeMetrics;
+
+impl MigrateChromeMetrics {
+    const HEADER_HEIGHT: Pixels = px(38.0);
+    const HEADER_PADDING_X: Pixels = px(14.0);
+    const HEADER_GAP: Pixels = px(10.0);
+    const HEADER_ICON: Pixels = px(15.0);
+    const TITLE_FONT: Pixels = px(13.0);
+    const FOOTER_HEIGHT: Pixels = px(56.0);
+    const FOOTER_NOTE_FONT: Pixels = px(12.5);
+}
+
+impl MigrateWizard {
+    /// The wizard's head bar: a 38 px strip on the ground with the tinted
+    /// icon, the title and the close button.
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(MigrateChromeMetrics::HEADER_GAP)
+            .h(MigrateChromeMetrics::HEADER_HEIGHT)
+            .px(MigrateChromeMetrics::HEADER_PADDING_X)
+            .bg(theme.background)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Icon::new(AppIcon::ArrowUpDown)
+                    .size(MigrateChromeMetrics::HEADER_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                div()
+                    .text_size(MigrateChromeMetrics::TITLE_FONT)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(dbflux_i18n::t!("document.migrate_wizard.title")),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new(
+                    MODAL_CLOSE_ID,
+                    dbflux_i18n::t!("document.migrate_wizard.footer.close"),
+                )
+                .ghost()
+                .small()
+                .icon(AppIcon::CircleX)
+                .icon_size(ModalMetrics::CLOSE_ICON)
+                .icon_only()
+                .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+            )
+            .into_any_element()
     }
 }
 
@@ -1409,14 +1470,13 @@ impl MigrateWizard {
 
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let border = theme.border;
 
-        let run_state = self
-            .confirm_run
-            .as_ref()
-            .map(|phase| phase.read(cx).run_state());
+        let run_phase = self.confirm_run.as_ref().map(|phase| phase.read(cx));
+        let run_state = run_phase.map(|phase| phase.run_state());
         let running = run_state == Some(RunState::Running);
         let done = run_state == Some(RunState::Done);
+        let integrity_off =
+            running && run_phase.is_some_and(|phase| phase.disables_referential_integrity());
 
         let shows_back = prev_phase(self.phase).is_some() && !running && !done;
         let shows_continue = next_phase(self.phase).is_some();
@@ -1427,74 +1487,81 @@ impl MigrateWizard {
             dbflux_i18n::t!("document.migrate_wizard.footer.continue")
         };
 
-        let actions = div()
+        let note = match &self.error {
+            Some(error) => Some(Text::caption(error.clone()).danger().into_any_element()),
+            None if integrity_off => Some(
+                div()
+                    .text_size(MigrateChromeMetrics::FOOTER_NOTE_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(dbflux_i18n::t!(
+                        "document.migrate_wizard.footer.referential_integrity_off"
+                    ))
+                    .into_any_element(),
+            ),
+            None => None,
+        };
+
+        div()
             .flex()
-            .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::SM)
-            .when(shows_back, |parent| {
-                parent.child(
+            .gap(ModalMetrics::FOOTER_GAP)
+            .h(MigrateChromeMetrics::FOOTER_HEIGHT)
+            .px(ModalMetrics::PADDING)
+            .bg(theme.background)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(div().flex_1().min_w(px(0.0)).children(note))
+            .when(shows_back, |footer| {
+                footer.child(
                     Button::new(
                         "migrate-wizard-back",
                         dbflux_i18n::t!("document.migrate_wizard.footer.back"),
                     )
-                    .small()
-                    .ghost()
+                    .icon(AppIcon::ChevronLeft)
                     .disabled(self.advancing)
                     .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                 )
             })
-            .when(shows_continue, |parent| {
-                parent.child(
+            .when(shows_continue, |footer| {
+                footer.child(
                     Button::new("migrate-wizard-continue", continue_label)
-                        .small()
                         .primary()
+                        .icon(AppIcon::ChevronRight)
                         .disabled(!continue_enabled)
                         .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
                 )
             })
-            .when(running, |parent| {
-                parent.child(
-                    Button::new(
-                        "migrate-wizard-cancel",
-                        dbflux_i18n::t!("document.migrate_wizard.footer.cancel"),
+            .when(running, |footer| {
+                footer
+                    .child(
+                        Button::new(
+                            "migrate-wizard-background",
+                            dbflux_i18n::t!("document.migrate_wizard.footer.run_in_background"),
+                        )
+                        .icon(AppIcon::PanelBottomOpen)
+                        .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
                     )
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
-                )
+                    .child(
+                        Button::new(
+                            "migrate-wizard-cancel",
+                            dbflux_i18n::t!("document.migrate_wizard.footer.cancel_migration"),
+                        )
+                        .danger()
+                        .icon(AppIcon::CircleX)
+                        .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                    )
             })
-            .when(done, |parent| {
-                parent.child(
+            .when(done, |footer| {
+                footer.child(
                     Button::new(
                         "migrate-wizard-close",
                         dbflux_i18n::t!("document.migrate_wizard.footer.close"),
                     )
-                    .small()
                     .primary()
                     .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
                 )
-            });
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .px(Spacing::MD)
-            .py(Spacing::SM)
-            .border_t_1()
-            .border_color(border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .when_some(self.error.clone(), |parent, error| {
-                        parent.child(Text::caption(error).danger())
-                    }),
-            )
-            .child(actions)
+            })
             .into_any_element()
     }
 }

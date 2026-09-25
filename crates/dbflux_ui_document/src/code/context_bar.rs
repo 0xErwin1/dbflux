@@ -2,8 +2,9 @@ use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::primitives::{BadgeTone, EnvTag, FocusShape, Icon, Text, focus_ring};
+use dbflux_components::primitives::{EnvTag, FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
+use dbflux_core::ConnectionEnvironment;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
@@ -1382,23 +1383,17 @@ impl CodeDocument {
         )
     }
 
-    /// The bound connection's environment as `(label, is_production)`, shown
-    /// as an EnvTag in the connection selector; a production environment also
-    /// raises the production banner.
-    ///
-    /// Connection profiles do not record an environment yet, so this is always
-    /// `None` and neither the tag nor the banner renders. When the profile
-    /// gains the field, map it here: both consumers read only this method.
-    fn connection_environment(&self, cx: &App) -> Option<(SharedString, bool)> {
-        let _profile = self.bound_profile(cx)?;
-        None
+    /// The bound connection's environment, shown as an EnvTag in the
+    /// connection selector; a production environment also raises the
+    /// production banner.
+    fn connection_environment(&self, cx: &App) -> Option<ConnectionEnvironment> {
+        self.bound_profile(cx)?.environment()
     }
 
     /// The production banner under the context bar (AppByzEditor): a danger
     /// stripe warning that dangerous statements ask for confirmation.
     pub(super) fn render_production_banner(&self, cx: &App) -> Option<AnyElement> {
-        let (_, is_production) = self.connection_environment(cx)?;
-        if !is_production {
+        if self.connection_environment(cx)? != ConnectionEnvironment::Production {
             return None;
         }
 
@@ -1510,12 +1505,8 @@ impl CodeDocument {
                             )
                             .when_some(
                                 environment,
-                                |selector, (label, is_production)| {
-                                    selector.child(EnvTag::new(label).tone(if is_production {
-                                        BadgeTone::Danger
-                                    } else {
-                                        BadgeTone::Warning
-                                    }))
+                                |selector, environment| {
+                                    selector.child(EnvTag::for_environment(environment))
                                 },
                             ),
                             cx,

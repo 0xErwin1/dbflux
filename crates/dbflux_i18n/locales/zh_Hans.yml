@@ -157,6 +157,9 @@ components:
       position: "第 %{row} 行，共 %{total} 行"
       value_header: 值
   json_editor:
+    valid:
+      one: "有效的 JSON · %{count} 行"
+      many: "有效的 JSON · %{count} 行"
     empty_error: 文档不能为空
     format: 格式化
     compact: 紧凑
@@ -1397,24 +1400,28 @@ document:
           size: 序列化大小
   export_wizard:
     title: 导出数据
+    title_tables:
+      one: "导出 %{count} 个表"
+      many: "导出 %{count} 个表"
     task:
       one: "从 %{profile} 导出 %{count} 张表"
       many: "从 %{profile} 导出 %{count} 张表"
     rail:
       tables: 表
-      format_options: 格式与选项
+      format_options: "格式"
       confirm: 确认
       run: 执行
     tables:
       selected_count: "已选择 %{count} 张表用于导出"
     format_options:
       format_label: 格式
-      output_folder_label: 输出文件夹
+      output_folder_label: "文件夹"
       no_folder_chosen: 未选择文件夹
-      choose_folder: 选择文件夹…
+      choose_folder: "选择"
       choosing: 正在选择…
       dialog_title: 选择导出文件夹
-      segment_size_label: 分段 / 分块大小（高级）
+      segment_size_label: "分块大小"
+      segment_size_hint: "每个文件分段的行数"
       segment_size_placeholder: 分段 / 分块大小
       segment_size_invalid: 必须为大于等于 1 的整数；已保留之前的值。
       error:
@@ -1742,6 +1749,9 @@ document:
         down: 下移
         accept: 使用此顺序
     running:
+      table_header: "表"
+      progress_header: "进度"
+      rows_header: "行数"
       title: 正在迁移…
       position:
         of_total: "表 %{index} / %{total}"
@@ -1803,6 +1813,9 @@ document:
       target_connection_gone: 目标连接已丢失
       cross_database_error: "一次迁移只有一个源数据库。只能选择 %{source} 中的表 — 无法混入 %{other} 中的表。"
     footer:
+      cancel_migration: "取消迁移"
+      referential_integrity_off: "在运行完成前参照完整性处于禁用状态"
+      run_in_background: "在后台运行"
       back: 返回
       continue: 继续
       loading: 加载中…
@@ -2430,7 +2443,7 @@ hooks:
 language:
   native_name: 简体中文
 login:
-  window_title: 连接流程
+  window_title: 登录以继续
   field:
     verification_url: 验证 URL
   action:
@@ -2444,10 +2457,9 @@ login:
     completed: 登录完成
     closing: 认证成功。正在关闭此对话框…
   body:
-    sign_in_prompt: "使用 %{provider} 登录以继续连接 %{profile}。"
-    instructions: 在浏览器中打开登录 URL 并完成认证。登录完成后 DBFlux 将自动继续。
-    waiting: 正在等待你在浏览器中授权…
-    elapsed: "登录最多可能需要 5 分钟。已用时：%{seconds}s"
+    sign_in_prompt: "使用 %{provider} 登录以打开 %{profile}。"
+    waiting: 正在等待浏览器
+    code_hint: 浏览器中显示的代码
     browser_open_failed: "无法自动打开浏览器。请手动打开该 URL。（%{error}；回退失败：%{fallback_error}）"
   error:
     timed_out: 登录在 5 分钟后超时
@@ -2506,6 +2518,7 @@ modals:
       no_metrics_filtered: 没有符合筛选条件的指标。
     cancel: 取消
   cell_editor:
+    title_column: "编辑 %{column}（%{type_name}）"
     title_json: 编辑 JSON
     title_text: 编辑文本
   create_dashboard:
@@ -2536,6 +2549,7 @@ modals:
   document_preview:
     title: 文档预览
   drop_table:
+    title_named: "删除表 %{table}"
     title: 删除表
     confirm: 确认删除表
     cancel: 取消
@@ -2579,10 +2593,11 @@ modals:
     cancel: 取消
     confirm: 重命名
   schema_drift:
-    title: 自此查询打开以来 Schema 已发生更改
+    lead: "%{table} 与缓存的架构不同。"
+    title: 自此标签页打开以来 Schema 已发生更改
     column_header: 列
-    local_header: 本地缓存
-    remote_header: 远程
+    local_header: 缓存
+    remote_header: 当前
     change:
       new_column: 新列
       removed: 已移除
@@ -2603,9 +2618,10 @@ modals:
     refreshing: 正在刷新…
     refresh: 刷新并重新执行
   tunnel_auth:
+    hide_passphrase: "隐藏密码短语"
+    show_passphrase: "显示密码短语"
+    tunnel_label: "隧道"
     title: 需要 SSH 口令
-    prompt: "输入隧道 %{tunnel} 的口令"
-    connection_detail: "主机：%{host}:%{port} · 用户：%{user}"
     placeholder: 输入口令
     incorrect: 口令不正确。请重试。
     empty_error: 口令不能为空
@@ -2631,8 +2647,12 @@ modals:
     cancel: 取消
 palette:
   footer:
-    navigate: "导航"
+    navigate: "移动"
     run: "运行"
+    commands_only: "仅命令"
+    tables_only: "仅表"
+  connection:
+    connected: "已连接"
   search:
     placeholder: 搜索命令、连接、表、脚本…
   empty: 没有匹配项
@@ -3911,21 +3931,13 @@ sso_wizard:
     account_id: 账户 ID
     role_name: 角色名称
   account:
-    hint: 使用 AWS SSO 账户发现中的账户 ID
     discovering: 正在发现账户…
     discover_button: 登录并发现账户
     no_matches: 没有符合当前筛选条件的账户
   role:
-    hint: 使用 AWS SSO 角色列表中的角色名称
     discovering: 正在发现角色…
     discover_button: 发现所选账户的角色
     no_matches: 没有符合当前筛选条件的角色
-  confirm:
-    profile: "配置文件：%{value}"
-    start_url: "起始 URL：%{value}"
-    region: "区域：%{value}"
-    account: "账户：%{value}"
-    role: "角色：%{value}"
   back: 返回
   next: 下一步
   save: 保存

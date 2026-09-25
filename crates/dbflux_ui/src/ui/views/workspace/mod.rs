@@ -47,6 +47,7 @@ use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
 use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
+use dbflux_components::icons::DriverIconTone;
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
@@ -2129,10 +2130,19 @@ impl Workspace {
 
         for profile in app_state.profiles() {
             let is_connected = connections.contains_key(&profile.id);
+            let icon = app_state.drivers().get(&profile.driver_id()).map(|driver| {
+                let metadata = driver.metadata();
+                (
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    DriverIconTone::for_driver(metadata.icon, metadata.category),
+                )
+            });
+
             items.push(PaletteItem::Connection {
                 profile_id: profile.id,
                 name: profile.name.clone(),
                 is_connected,
+                icon,
             });
         }
 

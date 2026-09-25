@@ -6,6 +6,7 @@ pub mod drop_table;
 pub mod import_dashboard;
 pub mod modal;
 pub mod mutation_confirm;
+pub mod parts;
 pub mod schema_drift;
 pub mod tunnel_auth;
 pub mod unsaved_changes;
@@ -29,6 +30,10 @@ pub use mutation_confirm::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,
     MutationConfirmOutcome, MutationConfirmRequest,
 };
+pub use parts::{
+    inline_code, modal_code, modal_field, modal_form_row, modal_frame, modal_hint, modal_lead,
+    modal_value_field,
+};
 pub use schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
@@ -38,8 +43,9 @@ pub use unsaved_changes::{
     UnsavedChangesRequest,
 };
 
-/// Binds Escape to [`crate::actions::Cancel`] inside the cell editor and the
-/// document preview. Both render in a `Modal` with a key context, which closes
+/// Binds Escape to [`crate::actions::Cancel`] and Ctrl+S (Cmd+S on macOS) to
+/// [`crate::actions::SaveEdit`] inside the cell editor and the document
+/// preview. Both render in a `Modal` with a key context, which closes
 /// on `Cancel`;
 /// a focused editor only lets Escape through when it has nothing of its own
 /// to cancel.
@@ -52,12 +58,19 @@ fn modal_keybindings() -> Vec<gpui::KeyBinding> {
 
     [ContextId::CellEditorModal, ContextId::DocumentPreviewModal]
         .iter()
-        .map(|context| {
-            gpui::KeyBinding::new(
-                "escape",
-                crate::actions::Cancel,
-                Some(context.as_gpui_context()),
-            )
+        .flat_map(|context| {
+            [
+                gpui::KeyBinding::new(
+                    "escape",
+                    crate::actions::Cancel,
+                    Some(context.as_gpui_context()),
+                ),
+                gpui::KeyBinding::new(
+                    "secondary-s",
+                    crate::actions::SaveEdit,
+                    Some(context.as_gpui_context()),
+                ),
+            ]
         })
         .collect()
 }
@@ -95,6 +108,26 @@ mod tests {
             ContextId::CellEditorModal.as_gpui_context(),
             ContextId::DocumentPreviewModal.as_gpui_context()
         );
+    }
+
+    fn save_action_in(context: ContextId) -> bool {
+        let mut keymap = Keymap::default();
+        keymap.add_bindings(modal_keybindings());
+
+        let save = [Keystroke::parse("secondary-s").expect("valid keystroke")];
+        let stack = [KeyContext::parse(context.as_gpui_context()).expect("valid context")];
+        let (matches, _pending) = keymap.bindings_for_input(&save, &stack);
+
+        matches
+            .first()
+            .is_some_and(|binding| binding.action().partial_eq(&crate::actions::SaveEdit))
+    }
+
+    #[test]
+    fn save_shortcut_saves_in_both_modal_contexts_only() {
+        assert!(save_action_in(ContextId::CellEditorModal));
+        assert!(save_action_in(ContextId::DocumentPreviewModal));
+        assert!(!save_action_in(ContextId::SqlPreviewModal));
     }
 
     #[test]

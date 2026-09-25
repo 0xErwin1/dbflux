@@ -279,8 +279,22 @@ impl DataGridPanel {
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
+            let column = self
+                .result
+                .columns
+                .get(modal.col)
+                .map(|column| (column.name.clone(), column.type_name.clone()));
+
             self.document_view.cell_editor.update(cx, |editor, cx| {
-                editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
+                editor.open(
+                    modal.row,
+                    modal.col,
+                    modal.value,
+                    modal.is_json,
+                    column,
+                    window,
+                    cx,
+                );
             });
         }
 

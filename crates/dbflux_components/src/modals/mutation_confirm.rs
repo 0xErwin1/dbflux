@@ -1,13 +1,17 @@
 use crate::controls::{Button, ButtonVariant, Checkbox, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::modals::parts::{modal_code, modal_field, modal_lead};
 use crate::primitives::{SurfaceRole, surface};
-use crate::tokens::{FontSizes, Spacing};
+use crate::tokens::{FontSizes, ModalMetrics, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, Entity, EventEmitter, Focusable, SharedString, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
+
+/// Width of the hard (type-to-confirm) mutation dialog.
+const HARD_CONFIRM_WIDTH: gpui::Pixels = px(520.0);
 
 /// Outcome emitted by both mutation confirmation modals when resolved.
 #[derive(Clone, Debug)]
@@ -102,33 +106,16 @@ impl Render for ModalMutationConfirm {
 
         let theme = cx.theme();
         let summary = request.summary.clone();
-        let sql = request.sql_preview.clone();
+        let sql = request.sql_preview.trim().to_string();
         let sample_rows = request.sample_rows.clone();
         let sample_columns = request.sample_columns.clone();
 
         let mut body = div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
-                    .child(SharedString::from(summary)),
-            )
-            .child(
-                surface(SurfaceRole::Raised, cx)
-                    .w_full()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .font_family(AppFonts::MONO)
-                            .text_color(theme.foreground)
-                            .child(SharedString::from(sql)),
-                    ),
-            );
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(summary, cx))
+            .child(modal_code(sql, cx));
 
         // Sample rows preview
         match sample_rows {
@@ -185,9 +172,8 @@ impl Render for ModalMutationConfirm {
 
         let footer = div()
             .flex()
-            .flex_row()
-            .gap_2()
-            .justify_end()
+            .items_center()
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
                 Button::new(
                     "mutation-confirm-cancel",
@@ -204,6 +190,7 @@ impl Render for ModalMutationConfirm {
                     dbflux_i18n::t!("modals.mutation_confirm.confirm"),
                 )
                 .variant(ButtonVariant::Primary)
+                .icon(AppIcon::Play)
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.confirm(cx);
                 })),
@@ -214,7 +201,7 @@ impl Render for ModalMutationConfirm {
             .footer(footer)
             .icon(AppIcon::TriangleAlert)
             .variant(ModalVariant::Default)
-            .width(px(520.0))
+            .width(ModalMetrics::WIDTH)
             .focus_handle(self.focus.handle())
             .on_close({
                 let entity = cx.entity().downgrade();
@@ -387,7 +374,7 @@ impl Render for ModalMutationConfirmHard {
 
         let theme = cx.theme();
         let summary = request.summary.clone();
-        let sql = request.sql_preview.clone();
+        let sql = request.sql_preview.trim().to_string();
         let sample_rows = request.sample_rows.clone();
         let sample_columns = request.sample_columns.clone();
         let require_opt_in = request.require_opt_in;
@@ -399,26 +386,9 @@ impl Render for ModalMutationConfirmHard {
         let mut body = div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
-                    .child(SharedString::from(summary)),
-            )
-            .child(
-                surface(SurfaceRole::Raised, cx)
-                    .w_full()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .font_family(AppFonts::MONO)
-                            .text_color(theme.foreground)
-                            .child(SharedString::from(sql)),
-                    ),
-            );
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(summary, cx))
+            .child(modal_code(sql, cx));
 
         // Sample rows preview
         match sample_rows {
@@ -473,21 +443,13 @@ impl Render for ModalMutationConfirmHard {
         }
 
         // TypeToConfirm input
-        body = body.child(
+        body = body.child(modal_field(
+            dbflux_i18n::t!("modals.mutation_confirm.type_to_confirm_label"),
             div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XS)
-                .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(dbflux_i18n::t!(
-                            "modals.mutation_confirm.type_to_confirm_label"
-                        )),
-                )
-                .child(crate::controls::Input::new(&self.confirm_input)),
-        );
+                .font_family(AppFonts::MONO)
+                .child(crate::controls::Input::new(&self.confirm_input).w_full()),
+            cx,
+        ));
 
         // Per-execution opt-in checkbox (E-2/E-4)
         if require_opt_in {
@@ -504,9 +466,8 @@ impl Render for ModalMutationConfirmHard {
 
         let footer = div()
             .flex()
-            .flex_row()
-            .gap_2()
-            .justify_end()
+            .items_center()
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
                 Button::new(
                     "mutation-hard-cancel",
@@ -523,6 +484,7 @@ impl Render for ModalMutationConfirmHard {
                     dbflux_i18n::t!("modals.mutation_confirm.confirm"),
                 )
                 .variant(ButtonVariant::Danger)
+                .icon(AppIcon::Play)
                 .disabled(!confirm_enabled)
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.confirm(cx);
@@ -532,8 +494,9 @@ impl Render for ModalMutationConfirmHard {
         Modal::new(dbflux_i18n::t!("modals.mutation_confirm.title"))
             .body(body)
             .footer(footer)
+            .icon(AppIcon::TriangleAlert)
             .variant(ModalVariant::Danger)
-            .width(px(560.0))
+            .width(HARD_CONFIRM_WIDTH)
             .focus_handle(self.focus.handle())
             .on_close({
                 let entity = cx.entity().downgrade();

@@ -166,6 +166,90 @@ where
         .into_any_element()
 }
 
+/// Renders a wizard's steps in one row at the top of a dialog body
+/// (P1Flows: the SSO wizard and the export wizard): a 22 px cut-4 badge and a
+/// 12.5 px label per step, joined by 20 px line-2 connectors. A completed step
+/// shows a success check on a raised badge, the current step its number on a
+/// byzantine badge, a pending step its number on a panel badge; completed and
+/// current labels are strong, pending ones muted.
+pub fn render_wizard_stepper(items: &[RailItem], cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let connector_color = theme.input;
+
+    let mut row = div()
+        .id("wizard-stepper")
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(StepperMetrics::INLINE_GAP);
+
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            row = row.child(
+                div()
+                    .flex_shrink_0()
+                    .w(StepperMetrics::INLINE_CONNECTOR_WIDTH)
+                    .h(px(1.0))
+                    .bg(connector_color),
+            );
+        }
+
+        row = row.child(render_stepper_step(index, item, cx));
+    }
+
+    row
+}
+
+fn render_stepper_step(index: usize, item: &RailItem, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let state = StepState::of(item);
+
+    let (fill, content_color) = match state {
+        StepState::Completed => (theme.secondary, theme.success),
+        StepState::Current => (theme.primary, theme.primary_foreground),
+        StepState::Pending => (theme.popover, theme.muted_foreground),
+    };
+
+    let label_color = match state {
+        StepState::Completed | StepState::Current => ChromeColors::strong(theme),
+        StepState::Pending => theme.muted_foreground,
+    };
+
+    let content = match state {
+        StepState::Completed => Icon::new(AppIcon::Check)
+            .size(StepperMetrics::INLINE_BADGE_ICON)
+            .color(content_color)
+            .into_any_element(),
+        StepState::Current | StepState::Pending => div()
+            .text_color(content_color)
+            .child(SharedString::from((index + 1).to_string()))
+            .into_any_element(),
+    };
+
+    let badge = div()
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(StepperMetrics::INLINE_BADGE)
+        .font_weight(FontWeight::BOLD)
+        .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
+        .child(content);
+
+    div()
+        .id(SharedString::from(format!("wizard-step-{index}")))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(StepperMetrics::INLINE_GAP)
+        .text_size(StepperMetrics::INLINE_FONT)
+        .text_color(label_color)
+        .child(badge)
+        .child(item.label.clone())
+        .into_any_element()
+}
+
 /// Fraction of rows done for the running step's progress bar, or `None` when
 /// the total is unknown or zero — the caller then shows only the row counter.
 pub fn wizard_progress_fraction(rows_done: u64, estimated_total: Option<u64>) -> Option<f32> {

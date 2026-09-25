@@ -1,11 +1,11 @@
+use crate::controls::Button;
 use crate::icons::AppIcon;
-use crate::primitives::{Icon, Text};
-use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::primitives::{Chamfer, Icon};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, ModalMetrics};
 use crate::typography::AppFonts;
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::input::{Editor, EditorState};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -37,10 +37,36 @@ pub fn validate_json(s: &str, allow_empty: bool) -> Result<(), String> {
         .map_err(|e| e.to_string().replace('\n', " "))
 }
 
-/// Renders a JSON/text editor area with validation banner and footer buttons.
-///
-/// The footer has Format/Compact buttons on the left (when `show_format_buttons` is true)
-/// and Cancel/Save buttons on the right.
+/// Label of the save shortcut bound to [`crate::actions::SaveEdit`] inside the
+/// cell editor and the document preview.
+pub const SAVE_SHORTCUT_LABEL: &str = if cfg!(target_os = "macos") {
+    "Cmd S"
+} else {
+    "Ctrl S"
+};
+
+/// Status line under a JSON editor: green "valid JSON · N lines" while the
+/// text parses, the parse error in red otherwise.
+fn json_status(value: &str, error: Option<String>) -> Result<String, String> {
+    if let Some(error) = error {
+        return Err(error);
+    }
+
+    validate_json(value, true)?;
+
+    let lines = value.lines().count().max(1);
+
+    Ok(if lines == 1 {
+        dbflux_i18n::t!("components.json_editor.valid.one", count = lines)
+    } else {
+        dbflux_i18n::t!("components.json_editor.valid.many", count = lines)
+    })
+}
+
+/// Renders a JSON/text editor with its status line and footer (P1Flows,
+/// "Edit properties"): the editor on the ground in a cut-8 frame, a status
+/// line for JSON, and a footer with Format and Compact (JSON only), Cancel
+/// and Save.
 pub struct JsonEditorView {
     id_prefix: &'static str,
     input: Entity<EditorState>,
@@ -98,111 +124,142 @@ impl JsonEditorView {
         let theme = cx.theme();
         let prefix = self.id_prefix;
 
-        let mut el = div()
+        let status = self.show_format_buttons.then(|| {
+            let value = self.input.read(cx).value().to_string();
+
+            let (icon, color, text) = match json_status(&value, self.validation_error.clone()) {
+                Ok(text) => (AppIcon::CircleCheck, theme.success, text),
+                Err(error) => (AppIcon::CircleAlert, theme.danger, error),
+            };
+
+            div()
+                .flex()
+                .items_center()
+                .gap(ModalMetrics::FIELD_GAP)
+                .text_size(ModalMetrics::FIELD_LABEL_FONT)
+                .text_color(color)
+                .child(Icon::new(icon).size(Fields::CHEVRON).color(color))
+                .child(div().min_w_0().truncate().child(text))
+        });
+
+        let error_line = (!self.show_format_buttons)
+            .then_some(self.validation_error)
+            .flatten()
+            .map(|error| {
+                div()
+                    .text_size(ModalMetrics::FIELD_LABEL_FONT)
+                    .text_color(theme.danger)
+                    .child(error)
+            });
+
+        let body = div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            // Editor
+            .gap(ModalMetrics::BODY_GAP)
+            .p(ModalMetrics::PADDING)
             .child(
                 div()
+                    .relative()
                     .flex_1()
-                    .p(Spacing::MD)
                     .min_h(self.min_editor_height)
+                    .p(ModalMetrics::CODE_PADDING_X)
                     .overflow_hidden()
+                    .child(
+                        Chamfer::new(ChamferCut::INPUT)
+                            .fill(theme.background)
+                            .border(theme.border),
+                    )
                     .child(
                         Editor::new(&self.input)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_size(FontSizes::BASE),
+                            .text_size(ModalMetrics::CODE_FONT)
+                            .text_color(ChromeColors::strong(theme)),
                     ),
-            );
+            )
+            .children(status)
+            .children(error_line);
 
-        // Validation error banner
-        if let Some(error_msg) = self.validation_error {
-            el = el.child(
-                div()
-                    .px(Spacing::MD)
-                    .py(Spacing::SM)
-                    .bg(theme.danger.opacity(0.1))
-                    .border_t_1()
-                    .border_color(theme.danger.opacity(0.3))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        Icon::new(AppIcon::CircleAlert)
-                            .size(Heights::ICON_SM)
-                            .danger(),
-                    )
-                    .child(Text::caption(error_msg).font_size(FontSizes::XS).danger()),
-            );
-        }
-
-        // Footer
-        let mut left_buttons = div().flex().items_center().gap(Spacing::SM);
-
-        if self.show_format_buttons {
-            if let Some(on_format) = self.on_format {
-                left_buttons = left_buttons.child(
-                    Button::new(SharedString::from(format!("{}-format", prefix)))
-                        .label(dbflux_i18n::t!("components.json_editor.format"))
-                        .small()
-                        .with_variant(ButtonVariant::Ghost)
-                        .on_click(on_format),
-                );
-            }
-            if let Some(on_compact) = self.on_compact {
-                left_buttons = left_buttons.child(
-                    Button::new(SharedString::from(format!("{}-compact", prefix)))
-                        .label(dbflux_i18n::t!("components.json_editor.compact"))
-                        .small()
-                        .with_variant(ButtonVariant::Ghost)
-                        .on_click(on_compact),
-                );
-            }
-        }
-
-        let right_buttons = div()
+        let footer = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::SM)
+            .justify_end()
+            .gap(ModalMetrics::FOOTER_GAP)
+            .px(ModalMetrics::PADDING)
+            .py(ModalMetrics::FOOTER_PADDING_Y)
+            .border_t_1()
+            .border_color(theme.border)
+            .when_some(self.on_format, |footer, on_format| {
+                footer.child(
+                    Button::new(
+                        SharedString::from(format!("{prefix}-format")),
+                        dbflux_i18n::t!("components.json_editor.format"),
+                    )
+                    .icon(AppIcon::Zap)
+                    .on_click(on_format),
+                )
+            })
+            .when_some(self.on_compact, |footer, on_compact| {
+                footer.child(
+                    Button::new(
+                        SharedString::from(format!("{prefix}-compact")),
+                        dbflux_i18n::t!("components.json_editor.compact"),
+                    )
+                    .on_click(on_compact),
+                )
+            })
             .child(
-                Button::new(SharedString::from(format!("{}-cancel", prefix)))
-                    .label(dbflux_i18n::t!("components.json_editor.cancel"))
-                    .small()
-                    .with_variant(ButtonVariant::Ghost)
-                    .on_click(self.on_cancel),
+                Button::new(
+                    SharedString::from(format!("{prefix}-cancel")),
+                    dbflux_i18n::t!("components.json_editor.cancel"),
+                )
+                .on_click(self.on_cancel),
             )
             .child(
-                Button::new(SharedString::from(format!("{}-save", prefix)))
-                    .label(dbflux_i18n::t!("components.json_editor.save"))
-                    .small()
-                    .with_variant(ButtonVariant::Primary)
-                    .on_click(self.on_save),
+                Button::new(
+                    SharedString::from(format!("{prefix}-save")),
+                    dbflux_i18n::t!("components.json_editor.save"),
+                )
+                .primary()
+                .icon(AppIcon::Save)
+                .kbd(SAVE_SHORTCUT_LABEL)
+                .on_click(self.on_save),
             );
 
-        el = el.child(
-            div()
-                .px(Spacing::MD)
-                .py(Spacing::SM)
-                .border_t_1()
-                .border_color(theme.border)
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(left_buttons)
-                .child(right_buttons),
-        );
-
-        el.into_any_element()
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(body)
+            .child(footer)
+            .into_any_element()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_json;
+    use super::{json_status, validate_json};
+
+    #[test]
+    fn status_counts_the_lines_of_valid_json() {
+        assert_eq!(
+            json_status("{\n  \"a\": 1\n}", None),
+            Ok(dbflux_i18n::t!(
+                "components.json_editor.valid.many",
+                count = 3
+            ))
+        );
+        assert!(json_status("{", None).is_err());
+        assert_eq!(
+            json_status("{}", Some("bad".to_string())),
+            Err("bad".to_string())
+        );
+    }
 
     #[test]
     fn validate_json_empty_error_matches_translated_catalog() {
@@ -228,6 +285,8 @@ mod tests {
             "components.json_editor.compact",
             "components.json_editor.cancel",
             "components.json_editor.save",
+            "components.json_editor.valid.one",
+            "components.json_editor.valid.many",
         ];
 
         for key in keys {

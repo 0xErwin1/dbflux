@@ -157,6 +157,9 @@ components:
       position: "Row %{row} of %{total}"
       value_header: Value
   json_editor:
+    valid:
+      one: "valid JSON · %{count} line"
+      many: "valid JSON · %{count} lines"
     empty_error: Document cannot be empty
     format: Format
     compact: Compact
@@ -1397,24 +1400,28 @@ document:
           size: Serialized size
   export_wizard:
     title: Export Data
+    title_tables:
+      one: "Export %{count} table"
+      many: "Export %{count} tables"
     task:
       one: "Export %{count} table from %{profile}"
       many: "Export %{count} tables from %{profile}"
     rail:
       tables: Tables
-      format_options: Format & Options
+      format_options: "Format"
       confirm: Confirm
       run: Run
     tables:
       selected_count: "%{count} table(s) selected for export"
     format_options:
       format_label: Format
-      output_folder_label: Output folder
+      output_folder_label: "Folder"
       no_folder_chosen: No folder chosen
-      choose_folder: "Choose Folder..."
+      choose_folder: "Choose"
       choosing: "Choosing..."
       dialog_title: Choose Export Folder
-      segment_size_label: Segment / chunk size (advanced)
+      segment_size_label: "Chunk size"
+      segment_size_hint: "rows per file segment"
       segment_size_placeholder: Segment / chunk size
       segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
       error:
@@ -1704,13 +1711,13 @@ document:
           bytes: bytes
           image: image
   migrate_wizard:
-    title: Migrate Data
+    title: Migrate data
     task:
       one: "Migrate %{count} table"
       many: "Migrate %{count} tables"
     rail:
-      source_target: Source & Target
-      tables_mapping: Tables Mapping
+      source_target: Source and target
+      tables_mapping: Table mapping
       options: Options
       confirm: Confirm
       run: Run
@@ -1742,6 +1749,9 @@ document:
         down: Down
         accept: Use this order
     running:
+      table_header: "Table"
+      progress_header: "Progress"
+      rows_header: "Rows"
       title: "Migrating…"
       position:
         of_total: "Table %{index} of %{total}"
@@ -1803,6 +1813,9 @@ document:
       target_connection_gone: Target connection is gone
       cross_database_error: "A migration has a single source database. Only tables in '%{source}' can be selected — tables in '%{other}' can't be mixed in."
     footer:
+      cancel_migration: "Cancel migration"
+      referential_integrity_off: "Referential integrity is disabled until the run finishes"
+      run_in_background: "Run in background"
       back: Back
       continue: Continue
       loading: "Loading…"
@@ -2430,11 +2443,11 @@ hooks:
 language:
   native_name: English
 login:
-  window_title: Connection Flow
+  window_title: Sign in to continue
   field:
     verification_url: Verification URL
   action:
-    open_browser: Open Browser
+    open_browser: Open browser
     copy_url: Copy URL
     cancel: Cancel
     close: Close
@@ -2444,10 +2457,9 @@ login:
     completed: Login completed
     closing: Authentication succeeded. Closing this dialog...
   body:
-    sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
-    instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
-    waiting: Waiting for you to authorize in the browser…
-    elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
+    sign_in_prompt: 'Sign in with %{provider} to open %{profile}.'
+    waiting: Waiting for the browser
+    code_hint: code shown in the browser
     browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
   error:
     timed_out: Login timed out after 5 minutes
@@ -2506,6 +2518,7 @@ modals:
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
   cell_editor:
+    title_column: "Edit %{column} (%{type_name})"
     title_json: Edit JSON
     title_text: Edit Text
   create_dashboard:
@@ -2536,11 +2549,12 @@ modals:
   document_preview:
     title: Document Preview
   drop_table:
+    title_named: "Drop table %{table}"
     title: Drop table
     confirm: Drop table
     cancel: Cancel
     confirm_placeholder: Type table name to confirm
-    confirm_prompt: 'Type "%{table}" to confirm'
+    confirm_prompt: 'Type %{table} to confirm'
     cascade_warning: "Dependent objects will also be dropped (CASCADE):"
     dependents_heading: "Objects that depend on this table:"
     delete_warning: This will permanently delete the table and any dependent objects.
@@ -2579,10 +2593,11 @@ modals:
     cancel: Cancel
     confirm: Rename
   schema_drift:
-    title: Schema has changed since this query was opened
-    column_header: column
-    local_header: local cache
-    remote_header: remote
+    lead: "%{table} differs from the cached schema."
+    title: Schema changed since this tab opened
+    column_header: Column
+    local_header: Cached
+    remote_header: Now
     change:
       new_column: new column
       removed: removed
@@ -2601,11 +2616,12 @@ modals:
     continue_stale: Continue with stale schema
     cancel: Cancel
     refreshing: Refreshing…
-    refresh: Refresh and re-run
+    refresh: Refresh and run again
   tunnel_auth:
+    hide_passphrase: "Hide passphrase"
+    show_passphrase: "Show passphrase"
+    tunnel_label: "Tunnel"
     title: SSH passphrase required
-    prompt: 'Enter the passphrase for tunnel "%{tunnel}"'
-    connection_detail: "Host: %{host}:%{port} · User: %{user}"
     placeholder: Enter passphrase
     incorrect: Incorrect passphrase. Try again.
     empty_error: Passphrase cannot be empty
@@ -2631,8 +2647,12 @@ modals:
     cancel: Cancel
 palette:
   footer:
-    navigate: "navigate"
+    navigate: "move"
     run: "run"
+    commands_only: "commands only"
+    tables_only: "tables only"
+  connection:
+    connected: "connected"
   search:
     placeholder: Search commands, connections, tables, scripts...
   empty: No matching items
@@ -3900,7 +3920,7 @@ ssh:
   private_key_hint: "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"
   auth_label: Auth
 sso_wizard:
-  title: AWS SSO Wizard
+  title: AWS SSO
   step:
     start: Start URL
     account: Account
@@ -3913,21 +3933,13 @@ sso_wizard:
     account_id: Account ID
     role_name: Role name
   account:
-    hint: Use account ID from AWS SSO account discovery
     discovering: Discovering accounts...
     discover_button: Login + Discover Accounts
     no_matches: No matching accounts for current filter
   role:
-    hint: Use role name from AWS SSO role listing
     discovering: Discovering roles...
     discover_button: Discover Roles for Selected Account
     no_matches: No matching roles for current filter
-  confirm:
-    profile: "Profile: %{value}"
-    start_url: "Start URL: %{value}"
-    region: "Region: %{value}"
-    account: "Account: %{value}"
-    role: "Role: %{value}"
   back: Back
   next: Next
   save: Save

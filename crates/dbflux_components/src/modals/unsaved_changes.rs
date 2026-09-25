@@ -1,15 +1,14 @@
-use crate::controls::Checkbox;
+use crate::controls::{Button, Checkbox};
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
-use crate::primitives::Text;
-use crate::tokens::{FontSizes, Spacing};
+use crate::modals::parts::{modal_frame, modal_lead};
+use crate::primitives::Icon;
+use crate::tokens::{ChromeColors, ModalMetrics};
 use dbflux_core::LogErr;
 use dbflux_core::document_id::DocumentId;
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, Window, div, px};
+use gpui::{Context, EventEmitter, Window, div};
 use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::button::{Button, ButtonVariants};
 use std::collections::HashMap;
 
 /// Event emitted when the user resolves the modal.
@@ -57,7 +56,7 @@ pub struct UnsavedChangesRequest {
 
 /// Modal entity for the "unsaved changes" confirmation.
 ///
-/// Uses `Modal` (`ModalVariant::Default`) (520 px).
+/// Uses `Modal` (`ModalVariant::Default`) (480 px).
 pub struct ModalUnsavedChanges {
     entries: Vec<DirtySummaryEntry>,
     selected: HashMap<DocumentId, bool>,
@@ -197,26 +196,33 @@ impl Render for ModalUnsavedChanges {
 
         let theme = cx.theme();
         let selected_count = self.selected_count();
+        let divider = theme.table_row_border;
+        let last_row = self.entries.len().saturating_sub(1);
 
-        let mut rows = div().flex().flex_col().gap(Spacing::XS);
+        let mut rows = modal_frame(cx);
 
         for (row_idx, entry) in self.entries.iter().enumerate() {
             let id = entry.id;
             let is_checked = self.selected.get(&id).copied().unwrap_or(false);
-            let name = entry.name.clone();
             let summary = action_summary(entry.action, &entry.summary);
+            let icon = match entry.action {
+                CloseAction::Save => AppIcon::FileCode,
+                CloseAction::Apply => AppIcon::Table,
+            };
 
             rows = rows.child(
                 div()
                     .id(("unsaved-row", row_idx))
                     .flex()
                     .items_center()
-                    .gap(Spacing::SM)
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(px(3.0))
+                    .gap(ModalMetrics::LIST_ROW_GAP)
+                    .h(ModalMetrics::LIST_ROW_HEIGHT)
+                    .px(ModalMetrics::LIST_ROW_PADDING_X)
+                    .when(row_idx < last_row, |row| {
+                        row.border_b_1().border_color(divider)
+                    })
                     .cursor_pointer()
-                    .hover(|d| d.bg(theme.list_active))
+                    .hover(|row| row.bg(theme.list_hover))
                     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                         this.toggle(id, cx);
                     }))
@@ -230,23 +236,23 @@ impl Render for ModalUnsavedChanges {
                             })),
                     )
                     .child(
+                        Icon::new(icon)
+                            .size(ModalMetrics::LIST_ICON)
+                            .color(theme.muted_foreground),
+                    )
+                    .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .gap(px(1.0))
-                            .child(
-                                div()
-                                    .text_size(FontSizes::SM)
-                                    .text_color(theme.foreground)
-                                    .child(name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(FontSizes::XS)
-                                    .text_color(theme.muted_foreground)
-                                    .child(summary),
-                            ),
+                            .min_w_0()
+                            .truncate()
+                            .text_color(ChromeColors::strong(theme))
+                            .child(entry.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(ModalMetrics::LIST_DETAIL_FONT)
+                            .text_color(theme.muted_foreground)
+                            .child(summary),
                     ),
             );
         }
@@ -254,8 +260,11 @@ impl Render for ModalUnsavedChanges {
         let body = div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!("modals.unsaved_changes.prompt")).into_any_element())
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(
+                dbflux_i18n::t!("modals.unsaved_changes.prompt"),
+                cx,
+            ))
             .child(rows);
 
         let on_discard = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -278,23 +287,25 @@ impl Render for ModalUnsavedChanges {
         let footer = div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
-                Button::new("unsaved-discard")
-                    .label(dbflux_i18n::t!("modals.unsaved_changes.dont_save"))
-                    .ghost()
-                    .on_click(on_discard),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("unsaved-cancel")
-                    .label(dbflux_i18n::t!("modals.unsaved_changes.cancel"))
-                    .on_click(on_cancel),
+                Button::new(
+                    "unsaved-discard",
+                    dbflux_i18n::t!("modals.unsaved_changes.dont_save"),
+                )
+                .on_click(on_discard),
             )
             .child(
-                Button::new("unsaved-save")
-                    .label(save_label)
+                Button::new(
+                    "unsaved-cancel",
+                    dbflux_i18n::t!("modals.unsaved_changes.cancel"),
+                )
+                .on_click(on_cancel),
+            )
+            .child(
+                Button::new("unsaved-save", save_label)
                     .primary()
+                    .icon(AppIcon::Save)
                     .disabled(!save_enabled)
                     .on_click(on_save),
             );
@@ -304,7 +315,7 @@ impl Render for ModalUnsavedChanges {
             .footer(footer)
             .icon(AppIcon::Save)
             .variant(ModalVariant::Default)
-            .width(px(520.0))
+            .width(ModalMetrics::WIDTH)
             .focus_handle(self.focus.handle())
             .on_close({
                 let entity = cx.entity().downgrade();

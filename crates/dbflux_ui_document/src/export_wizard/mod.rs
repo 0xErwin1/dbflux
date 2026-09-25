@@ -1,6 +1,6 @@
-//! Export wizard: a four-phase flow (Tables → Format & Options → Confirm →
-//! Run) rendered inside a modal with the shared phase rail, wearing the
-//! migrate/import wizard chrome. Unlike migrate, no phase needs live
+//! Export wizard: a four-phase flow (Tables → Format → Confirm → Run)
+//! rendered inside a modal with the shared horizontal stepper and footer
+//! (P1Flows). Unlike migrate, no phase needs live
 //! cross-connection metadata — the sidebar already resolved the table
 //! selection before the wizard opens — so this is a single flat entity
 //! holding its own format/folder/segment-size state, not a set of child
@@ -21,36 +21,50 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use dbflux_components::composites::{
-    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
-    render_wizard_rail, wizard_progress_fraction,
+    RailItem, render_wizard_progress_bar, render_wizard_stepper, wizard_progress_fraction,
 };
-use dbflux_components::controls::{
-    Button, Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent,
-    InputState,
-};
+use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::Modal;
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Spacing;
+use dbflux_components::modals::{
+    Modal, modal_form_row, modal_frame, modal_hint, modal_lead, modal_value_field,
+};
+use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
+use dbflux_components::tokens::{ChromeColors, ModalMetrics};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{Connection, TableRef};
 use dbflux_transfer::FileFormat;
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
 use uuid::Uuid;
 
 use phases::{ExportPhase, RailEntry, RunState, next_phase, prev_phase, rail_entries};
 use run::RunProgress;
 
-const SEGMENT_SIZE_INPUT_WIDTH: Pixels = px(160.0);
+/// Width of the export dialog (P1Flows).
+const EXPORT_WIZARD_WIDTH: Pixels = px(620.0);
 
-fn format_items() -> Vec<DropdownItem> {
-    FileFormat::ALL
-        .iter()
-        .map(|format| DropdownItem::new(format.label()))
-        .collect()
+/// Width of the chunk-size field. (120 px)
+const SEGMENT_SIZE_INPUT_WIDTH: Pixels = px(120.0);
+
+/// Height of a selected-table row on the Tables step. (36 px)
+const TABLE_ROW_HEIGHT: Pixels = px(36.0);
+
+/// Tallest the selected-table list grows before it scrolls.
+const TABLE_LIST_MAX_HEIGHT: Pixels = px(240.0);
+
+/// Segment id of a file format in the format picker.
+fn format_segment_id(format: FileFormat) -> &'static str {
+    format.extension()
+}
+
+/// Icon of a file format in the format picker.
+fn format_icon(format: FileFormat) -> AppIcon {
+    match format {
+        FileFormat::Csv => AppIcon::FileSpreadsheet,
+        FileFormat::Json => AppIcon::Braces,
+    }
 }
 
 /// Maps the wizard's [`RailEntry`]s to the shared rail composite's
@@ -77,9 +91,7 @@ pub struct ExportWizard {
 
     phase: ExportPhase,
 
-    format_dropdown: Entity<Dropdown>,
-    _format_dropdown_sub: Subscription,
-    selected_format_index: usize,
+    selected_format: FileFormat,
 
     output_dir: Option<PathBuf>,
     choosing_folder: bool,
@@ -103,22 +115,6 @@ impl ExportWizard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let format_dropdown = cx.new(|_cx| {
-            Dropdown::new("export-wizard-format")
-                .items(format_items())
-                .selected_index(Some(0))
-                .placeholder(dbflux_i18n::t!(
-                    "document.export_wizard.format_options.format_label"
-                ))
-        });
-        let format_dropdown_sub = cx.subscribe(
-            &format_dropdown,
-            |this, _entity, event: &DropdownSelectionChanged, cx| {
-                this.selected_format_index = event.index;
-                cx.notify();
-            },
-        );
-
         let segment_size_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(phases::DEFAULT_SEGMENT_SIZE.to_string())
@@ -144,9 +140,7 @@ impl ExportWizard {
             database: None,
             tables: Vec::new(),
             phase: ExportPhase::Tables,
-            format_dropdown,
-            _format_dropdown_sub: format_dropdown_sub,
-            selected_format_index: 0,
+            selected_format: FileFormat::ALL[0],
             output_dir: None,
             choosing_folder: false,
             folder_error: None,
@@ -196,10 +190,7 @@ impl ExportWizard {
         self.tables = tables;
         self.phase = ExportPhase::Tables;
 
-        self.selected_format_index = 0;
-        self.format_dropdown.update(cx, |dropdown, cx| {
-            dropdown.set_selected_index(Some(0), cx);
-        });
+        self.selected_format = FileFormat::ALL[0];
 
         self.output_dir = None;
         self.choosing_folder = false;
@@ -249,7 +240,17 @@ impl ExportWizard {
     }
 
     fn selected_format(&self) -> FileFormat {
-        FileFormat::ALL[self.selected_format_index.min(FileFormat::ALL.len() - 1)]
+        self.selected_format
+    }
+
+    fn select_format(&mut self, segment_id: &str, cx: &mut Context<Self>) {
+        if let Some(format) = FileFormat::ALL
+            .into_iter()
+            .find(|format| format_segment_id(*format) == segment_id)
+        {
+            self.selected_format = format;
+            cx.notify();
+        }
     }
 
     fn on_segment_size_changed(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -336,7 +337,7 @@ impl ExportWizard {
     }
 
     /// Whether the footer's Continue button is enabled for the current
-    /// phase: `Tables` requires a non-empty selection, `Format & Options`
+    /// phase: `Tables` requires a non-empty selection, `Format`
     /// requires a chosen folder and a valid segment size.
     fn continue_enabled(&self) -> bool {
         match self.phase {
@@ -368,165 +369,180 @@ impl Render for ExportWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let frame = Modal::new(dbflux_i18n::t!("document.export_wizard.title"))
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(render_wizard_stepper(&to_rail_items(self.phase), cx))
+            .child(match self.phase {
+                ExportPhase::Tables => self.render_tables(cx),
+                ExportPhase::FormatOptions => self.render_format_options(cx),
+                ExportPhase::Confirm => self.render_confirm(cx),
+                ExportPhase::Run => self.render_run(cx),
+            });
+
+        Modal::new(crate::labels::export_wizard_title(self.tables.len()))
             .id("export-wizard")
             .focus_handle(&self.focus_handle)
             .on_close(close)
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
-            .icon(AppIcon::ArrowUp)
-            .width(WIZARD_MODAL_WIDTH)
-            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
-            .child(self.render_body(cx));
-
-        frame.into_any_element()
+            .icon(AppIcon::Download)
+            .width(EXPORT_WIZARD_WIDTH)
+            .body(body)
+            .footer(self.render_footer(cx))
+            .into_any_element()
     }
 }
 
 impl ExportWizard {
-    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        // `flex_1` (not `size_full`): the modal container is a fixed-height
-        // flex column whose first child is the header, so the body must grow
-        // into the *remaining* height (see `MigrateWizard::render_body`).
+    fn render_tables(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let last_row = self.tables.len().saturating_sub(1);
+
+        let rows = self.tables.iter().enumerate().map(|(index, table)| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(ModalMetrics::LIST_ROW_GAP)
+                .h(TABLE_ROW_HEIGHT)
+                .px(ModalMetrics::LIST_ROW_PADDING_X)
+                .when(index < last_row, |row| {
+                    row.border_b_1().border_color(theme.table_row_border)
+                })
+                .child(
+                    Icon::new(AppIcon::Table)
+                        .size(ModalMetrics::LIST_ICON)
+                        .color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(AppFonts::MONO)
+                        .text_size(ModalMetrics::CODE_FONT)
+                        .text_color(ChromeColors::strong(theme))
+                        .child(table.qualified_name()),
+                )
+        });
+
         div()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .w_full()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(
+                dbflux_i18n::t!(
+                    "document.export_wizard.tables.selected_count",
+                    count = self.tables.len()
+                ),
+                cx,
+            ))
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(render_wizard_rail(
-                        &to_rail_items(self.phase),
-                        None::<fn(usize, &mut Window, &mut App)>,
-                        cx,
-                    ))
-                    .child(self.render_phase_area(cx)),
-            )
-            .child(self.render_footer(cx))
-            .into_any_element()
-    }
-
-    fn render_phase_area(&self, cx: &mut Context<Self>) -> AnyElement {
-        let content = match self.phase {
-            ExportPhase::Tables => self.render_tables(),
-            ExportPhase::FormatOptions => self.render_format_options(cx),
-            ExportPhase::Confirm => self.render_confirm(cx),
-            ExportPhase::Run => self.render_run(cx),
-        };
-
-        div()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .p(Spacing::MD)
-            .child(content)
-            .into_any_element()
-    }
-
-    fn render_tables(&self) -> AnyElement {
-        let rows = self
-            .tables
-            .iter()
-            .map(|table| Text::body(table.qualified_name()).into_any_element());
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::MD)
-            .size_full()
-            .child(Text::body(dbflux_i18n::t!(
-                "document.export_wizard.tables.selected_count",
-                count = self.tables.len()
-            )))
-            .child(
-                div()
-                    .id("export-wizard-tables")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .children(rows),
+                modal_frame(cx).child(
+                    div()
+                        .id("export-wizard-tables")
+                        .flex()
+                        .flex_col()
+                        .max_h(TABLE_LIST_MAX_HEIGHT)
+                        .overflow_y_scroll()
+                        .children(rows),
+                ),
             )
             .into_any_element()
     }
 
     fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let folder_label = self.output_dir.as_ref().map_or_else(
-            || dbflux_i18n::t!("document.export_wizard.format_options.no_folder_chosen"),
-            |dir| dir.display().to_string(),
-        );
+        let format_items: Vec<SegmentedItem> = FileFormat::ALL
+            .into_iter()
+            .map(|format| {
+                SegmentedItem::new(format_segment_id(format), format.label())
+                    .icon(format_icon(format))
+            })
+            .collect();
+
+        let entity = cx.entity().downgrade();
+        let format_picker = div().flex().child(SegmentedControl::new(
+            format_items,
+            format_segment_id(self.selected_format),
+            move |segment_id, _window, cx| {
+                entity
+                    .update(cx, |this, cx| this.select_format(segment_id, cx))
+                    .ok();
+            },
+        ));
+
+        let folder_value = self
+            .output_dir
+            .as_ref()
+            .map(|dir| SharedString::from(dir.display().to_string()));
+
+        let folder_control = div()
+            .flex()
+            .gap(ModalMetrics::FOOTER_GAP)
+            .child(div().flex_1().min_w_0().child(modal_value_field(
+                folder_value,
+                dbflux_i18n::t!("document.export_wizard.format_options.no_folder_chosen"),
+                None,
+                cx,
+            )))
+            .child(
+                Button::new(
+                    "export-wizard-choose-folder",
+                    if self.choosing_folder {
+                        dbflux_i18n::t!("document.export_wizard.format_options.choosing")
+                    } else {
+                        dbflux_i18n::t!("document.export_wizard.format_options.choose_folder")
+                    },
+                )
+                .icon(AppIcon::Folder)
+                .disabled(self.choosing_folder)
+                .on_click(cx.listener(|this, _event, _window, cx| this.choose_folder(cx))),
+            );
+
+        let folder_hint = self
+            .folder_error
+            .clone()
+            .map(|error| Text::caption(error).danger().into_any_element());
+
+        let segment_hint = if self.segment_size_invalid {
+            Text::caption(dbflux_i18n::t!(
+                "document.export_wizard.format_options.segment_size_invalid"
+            ))
+            .danger()
+            .into_any_element()
+        } else {
+            modal_hint(
+                dbflux_i18n::t!("document.export_wizard.format_options.segment_size_hint"),
+                cx,
+            )
+        };
 
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(
+            .child(modal_form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.format_label"),
+                format_picker,
+                None,
+                cx,
+            ))
+            .child(modal_form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.output_folder_label"),
+                folder_control,
+                folder_hint,
+                cx,
+            ))
+            .child(modal_form_row(
+                dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .child(Text::body(dbflux_i18n::t!(
-                        "document.export_wizard.format_options.format_label"
-                    )))
-                    .child(self.format_dropdown.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .child(Text::body(dbflux_i18n::t!(
-                        "document.export_wizard.format_options.output_folder_label"
-                    )))
-                    .child(Text::caption(folder_label))
-                    .child(
-                        Button::new(
-                            "export-wizard-choose-folder",
-                            if self.choosing_folder {
-                                dbflux_i18n::t!("document.export_wizard.format_options.choosing")
-                            } else {
-                                dbflux_i18n::t!(
-                                    "document.export_wizard.format_options.choose_folder"
-                                )
-                            },
-                        )
-                        .small()
-                        .disabled(self.choosing_folder)
-                        .on_click(cx.listener(|this, _event, _window, cx| this.choose_folder(cx))),
-                    )
-                    .when_some(self.folder_error.clone(), |parent, error| {
-                        parent.child(Text::caption(error).danger())
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .child(Text::body(dbflux_i18n::t!(
-                        "document.export_wizard.format_options.segment_size_label"
-                    )))
-                    .child(
-                        div()
-                            .w(SEGMENT_SIZE_INPUT_WIDTH)
-                            .child(Input::new(&self.segment_size_input).small().w_full()),
-                    )
-                    .when(self.segment_size_invalid, |parent| {
-                        parent.child(
-                            Text::caption(dbflux_i18n::t!(
-                                "document.export_wizard.format_options.segment_size_invalid"
-                            ))
-                            .danger(),
-                        )
-                    }),
-            )
+                    .w(SEGMENT_SIZE_INPUT_WIDTH)
+                    .font_family(AppFonts::MONO)
+                    .child(Input::new(&self.segment_size_input).w_full().aria_label(
+                        dbflux_i18n::t!("document.export_wizard.format_options.segment_size_label"),
+                    )),
+                Some(segment_hint),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -540,31 +556,23 @@ impl ExportWizard {
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.export_wizard.confirm.title"
-            )))
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.export_wizard.confirm.summary",
-                count = self.tables.len(),
-                format = self.selected_format().label(),
-                folder = folder_label
-            )))
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.export_wizard.confirm.segment_size",
-                size = self.segment_size
-            )))
-            .child(
-                div().flex().justify_end().child(
-                    Button::new(
-                        "export-wizard-start",
-                        dbflux_i18n::t!("document.export_wizard.confirm.start_export"),
-                    )
-                    .small()
-                    .primary()
-                    .on_click(cx.listener(|this, _event, _window, cx| this.start_export(cx))),
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(
+                dbflux_i18n::t!(
+                    "document.export_wizard.confirm.summary",
+                    count = self.tables.len(),
+                    format = self.selected_format().label(),
+                    folder = folder_label
                 ),
-            )
+                cx,
+            ))
+            .child(modal_hint(
+                dbflux_i18n::t!(
+                    "document.export_wizard.confirm.segment_size",
+                    size = self.segment_size
+                ),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -572,7 +580,7 @@ impl ExportWizard {
         match self.run_state {
             RunState::Idle => div().into_any_element(),
             RunState::Running => self.render_running(cx),
-            RunState::Done => self.render_done(),
+            RunState::Done => self.render_done(cx),
         }
     }
 
@@ -592,105 +600,96 @@ impl ExportWizard {
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!(
-                "document.export_wizard.running.title"
-            )))
-            .child(Text::caption(format!("{position_label}: {current_table}")))
-            .child(Text::caption(rows_label).muted_foreground())
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(format!("{position_label}: {current_table}"), cx))
             .when_some(fraction, |el, fraction| {
                 el.child(render_wizard_progress_bar(fraction, cx))
             })
-            .child(
-                div().flex().justify_end().child(
-                    Button::new(
-                        "export-wizard-cancel",
-                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
-                    )
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
-                ),
-            )
+            .child(modal_hint(rows_label, cx))
             .into_any_element()
     }
 
-    fn render_done(&self) -> AnyElement {
+    fn render_done(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
+            .gap(ModalMetrics::BODY_GAP)
             .when_some(self.result_summary.clone(), |el, summary| {
-                el.child(Text::body(summary))
+                el.child(modal_lead(summary, cx))
             })
             .when(!self.result_warnings.is_empty(), |el| {
-                el.child(Text::caption(self.result_warnings.join("; ")))
+                el.child(modal_hint(self.result_warnings.join("; "), cx))
             })
             .into_any_element()
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let border = theme.border;
-
         let running = self.run_state == RunState::Running;
         let done = self.run_state == RunState::Done;
 
         let shows_back = prev_phase(self.phase).is_some() && !running && !done;
         let shows_continue = next_phase(self.phase).is_some();
+        let shows_start = self.phase == ExportPhase::Confirm;
         let continue_enabled = self.continue_enabled();
 
-        let actions = div()
+        div()
             .flex()
-            .flex_row()
             .items_center()
-            .gap(Spacing::SM)
-            .when(shows_back, |parent| {
-                parent.child(
+            .gap(ModalMetrics::FOOTER_GAP)
+            .when(shows_back, |footer| {
+                footer.child(
                     Button::new(
                         "export-wizard-back",
                         dbflux_i18n::t!("document.export_wizard.footer.back"),
                     )
-                    .small()
-                    .ghost()
+                    .icon(AppIcon::ChevronLeft)
                     .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                 )
             })
-            .when(shows_continue, |parent| {
-                parent.child(
+            .when(shows_continue, |footer| {
+                footer.child(
                     Button::new(
                         "export-wizard-continue",
                         dbflux_i18n::t!("document.export_wizard.footer.continue"),
                     )
-                    .small()
                     .primary()
+                    .icon(AppIcon::ChevronRight)
                     .disabled(!continue_enabled)
                     .on_click(cx.listener(|this, _event, _window, cx| this.advance(cx))),
                 )
             })
-            .when(done, |parent| {
-                parent.child(
+            .when(shows_start, |footer| {
+                footer.child(
+                    Button::new(
+                        "export-wizard-start",
+                        dbflux_i18n::t!("document.export_wizard.confirm.start_export"),
+                    )
+                    .primary()
+                    .icon(AppIcon::Play)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.start_export(cx))),
+                )
+            })
+            .when(running, |footer| {
+                footer.child(
+                    Button::new(
+                        "export-wizard-cancel",
+                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                    )
+                    .danger()
+                    .icon(AppIcon::CircleX)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                )
+            })
+            .when(done, |footer| {
+                footer.child(
                     Button::new(
                         "export-wizard-close",
                         dbflux_i18n::t!("document.export_wizard.footer.close"),
                     )
-                    .small()
                     .primary()
                     .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
                 )
-            });
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_end()
-            .gap(Spacing::SM)
-            .px(Spacing::MD)
-            .py(Spacing::SM)
-            .border_t_1()
-            .border_color(border)
-            .child(actions)
+            })
             .into_any_element()
     }
 }

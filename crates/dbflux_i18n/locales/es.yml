@@ -157,6 +157,9 @@ components:
       position: "Fila %{row} de %{total}"
       value_header: Valor
   json_editor:
+    valid:
+      one: "JSON válido · %{count} línea"
+      many: "JSON válido · %{count} líneas"
     empty_error: El documento no puede estar vacío
     format: Formatear
     compact: Compactar
@@ -1397,24 +1400,28 @@ document:
           size: Tamaño serializado
   export_wizard:
     title: Exportar datos
+    title_tables:
+      one: "Exportar %{count} tabla"
+      many: "Exportar %{count} tablas"
     task:
       one: "Exportar %{count} tabla desde %{profile}"
       many: "Exportar %{count} tablas desde %{profile}"
     rail:
       tables: Tablas
-      format_options: Formato y opciones
+      format_options: "Formato"
       confirm: Confirmar
       run: Ejecutar
     tables:
       selected_count: "%{count} tabla(s) seleccionada(s) para exportar"
     format_options:
       format_label: Formato
-      output_folder_label: Carpeta de destino
+      output_folder_label: "Carpeta"
       no_folder_chosen: Ninguna carpeta elegida
-      choose_folder: "Elegir carpeta…"
+      choose_folder: "Elegir"
       choosing: "Eligiendo…"
       dialog_title: Elegir carpeta de exportación
-      segment_size_label: Tamaño de segmento / bloque (avanzado)
+      segment_size_label: "Tamaño de bloque"
+      segment_size_hint: "filas por segmento de archivo"
       segment_size_placeholder: Tamaño de segmento / bloque
       segment_size_invalid: "Debe ser un número entero de 1 o más; se mantuvo el valor anterior."
       error:
@@ -1742,6 +1749,9 @@ document:
         down: Bajar
         accept: Usar este orden
     running:
+      table_header: "Tabla"
+      progress_header: "Progreso"
+      rows_header: "Filas"
       title: "Migrando…"
       position:
         of_total: "Tabla %{index} de %{total}"
@@ -1803,6 +1813,9 @@ document:
       target_connection_gone: La conexión de destino ya no está disponible
       cross_database_error: "Una migración usa una única base de datos de origen. Solo se pueden seleccionar tablas de «%{source}»; las tablas de «%{other}» no se pueden combinar."
     footer:
+      cancel_migration: "Cancelar migración"
+      referential_integrity_off: "La integridad referencial está desactivada hasta que termine la ejecución"
+      run_in_background: "Ejecutar en segundo plano"
       back: Atrás
       continue: Continuar
       loading: "Cargando…"
@@ -2430,7 +2443,7 @@ hooks:
 language:
   native_name: Español
 login:
-  window_title: Flujo de conexión
+  window_title: Inicia sesión para continuar
   field:
     verification_url: URL de verificación
   action:
@@ -2444,10 +2457,9 @@ login:
     completed: Inicio de sesión completado
     closing: Autenticación correcta. Cerrando este diálogo...
   body:
-    sign_in_prompt: 'Inicia sesión con %{provider} para continuar conectando "%{profile}".'
-    instructions: Abre la URL de inicio de sesión en tu navegador y completa la autenticación. DBFlux continuará automáticamente cuando el inicio de sesión finalice.
-    waiting: Esperando a que autorices en el navegador…
-    elapsed: "El inicio de sesión puede tardar hasta 5 minutos. Transcurrido: %{seconds}s"
+    sign_in_prompt: 'Inicia sesión con %{provider} para abrir %{profile}.'
+    waiting: Esperando al navegador
+    code_hint: código que muestra el navegador
     browser_open_failed: "No se pudo abrir el navegador automáticamente. Abre la URL manualmente. (%{error}; fallo alternativo: %{fallback_error})"
   error:
     timed_out: El inicio de sesión superó el tiempo de espera de 5 minutos
@@ -2506,6 +2518,7 @@ modals:
       no_metrics_filtered: Ninguna métrica coincide con el filtro.
     cancel: Cancelar
   cell_editor:
+    title_column: "Editar %{column} (%{type_name})"
     title_json: Editar JSON
     title_text: Editar texto
   create_dashboard:
@@ -2536,11 +2549,12 @@ modals:
   document_preview:
     title: Vista previa del documento
   drop_table:
+    title_named: "Eliminar la tabla %{table}"
     title: Eliminar tabla
     confirm: Eliminar tabla
     cancel: Cancelar
     confirm_placeholder: Escribe el nombre de la tabla para confirmar
-    confirm_prompt: 'Escribe "%{table}" para confirmar'
+    confirm_prompt: 'Escribe %{table} para confirmar'
     cascade_warning: "También se eliminarán los objetos dependientes (CASCADE):"
     dependents_heading: "Objetos que dependen de esta tabla:"
     delete_warning: Esto eliminará de forma permanente la tabla y cualquier objeto dependiente.
@@ -2579,10 +2593,11 @@ modals:
     cancel: Cancelar
     confirm: Renombrar
   schema_drift:
-    title: El esquema cambió desde que se abrió esta consulta
-    column_header: columna
-    local_header: caché local
-    remote_header: remoto
+    lead: "%{table} difiere del esquema en caché."
+    title: El esquema cambió desde que se abrió esta pestaña
+    column_header: Columna
+    local_header: En caché
+    remote_header: Ahora
     change:
       new_column: columna nueva
       removed: eliminada
@@ -2603,9 +2618,10 @@ modals:
     refreshing: Actualizando…
     refresh: Actualizar y volver a ejecutar
   tunnel_auth:
+    hide_passphrase: "Ocultar frase de contraseña"
+    show_passphrase: "Mostrar frase de contraseña"
+    tunnel_label: "Túnel"
     title: Se requiere la frase de contraseña SSH
-    prompt: 'Introduce la frase de contraseña del túnel "%{tunnel}"'
-    connection_detail: "Host: %{host}:%{port} · Usuario: %{user}"
     placeholder: Introduce la frase de contraseña
     incorrect: Frase de contraseña incorrecta. Inténtalo de nuevo.
     empty_error: La frase de contraseña no puede estar vacía
@@ -2631,8 +2647,12 @@ modals:
     cancel: Cancelar
 palette:
   footer:
-    navigate: "navegar"
+    navigate: "mover"
     run: "ejecutar"
+    commands_only: "solo comandos"
+    tables_only: "solo tablas"
+  connection:
+    connected: "conectada"
   search:
     placeholder: Buscar comandos, conexiones, tablas, scripts…
   empty: No hay coincidencias
@@ -3913,21 +3933,13 @@ sso_wizard:
     account_id: ID de cuenta
     role_name: Nombre del rol
   account:
-    hint: Usa el ID de cuenta obtenido con el descubrimiento de cuentas de AWS SSO
     discovering: Descubriendo cuentas...
     discover_button: Iniciar sesión y descubrir cuentas
     no_matches: No hay cuentas que coincidan con el filtro actual
   role:
-    hint: Usa el nombre de rol del listado de roles de AWS SSO
     discovering: Descubriendo roles...
     discover_button: Descubrir roles para la cuenta seleccionada
     no_matches: No hay roles que coincidan con el filtro actual
-  confirm:
-    profile: "Perfil: %{value}"
-    start_url: "URL de inicio: %{value}"
-    region: "Región: %{value}"
-    account: "Cuenta: %{value}"
-    role: "Rol: %{value}"
   back: Atrás
   next: Siguiente
   save: Guardar

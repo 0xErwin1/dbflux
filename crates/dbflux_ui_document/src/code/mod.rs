@@ -499,6 +499,8 @@ struct PendingDangerousQuery {
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
+    /// The "Don't ask again" checkbox of the confirmation.
+    suppress: bool,
 }
 
 /// Pending confirmation for running a whole multi-statement script.

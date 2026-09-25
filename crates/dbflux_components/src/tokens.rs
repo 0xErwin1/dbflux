@@ -122,6 +122,49 @@ impl ModalMetrics {
     pub const BODY_MIN_HEIGHT: Pixels = px(96.0);
     /// Default width.
     pub const WIDTH: Pixels = px(480.0);
+
+    /// Lead sentence at the top of a body: 13.5 px on a 1.6 line height.
+    pub const LEAD_FONT: Pixels = px(13.5);
+    pub const LEAD_LINE_HEIGHT: f32 = 1.6;
+    /// Statement block: cut 8, 10 px vertical and 12 px horizontal padding,
+    /// 12.5 px mono.
+    pub const CODE_PADDING_Y: Pixels = px(10.0);
+    pub const CODE_PADDING_X: Pixels = px(12.0);
+    pub const CODE_FONT: Pixels = px(12.5);
+    /// A labelled field: 12 px muted label, 6 px above its control.
+    pub const FIELD_LABEL_FONT: Pixels = px(12.0);
+    pub const FIELD_GAP: Pixels = px(6.0);
+    /// Rows of a framed list (unsaved documents, accounts): 40 px tall, 12 px
+    /// sides, 10 px gap, 12 px muted detail.
+    pub const LIST_ROW_HEIGHT: Pixels = px(40.0);
+    pub const LIST_ROW_PADDING_X: Pixels = px(12.0);
+    pub const LIST_ROW_GAP: Pixels = px(10.0);
+    pub const LIST_DETAIL_FONT: Pixels = px(12.0);
+    /// Leading icon of a framed list row, and of a field's inline icons
+    /// (the lock and the reveal eye of a secret). (15 px)
+    pub const LIST_ICON: Pixels = px(15.0);
+    /// Dependent objects under a drop: 28 px rows, 8 px gap.
+    pub const DEPENDENT_ROW_HEIGHT: Pixels = px(28.0);
+    pub const DEPENDENT_ROW_GAP: Pixels = px(8.0);
+    /// Framed table (schema drift): 30 px rows, 11.5 px header labels.
+    pub const TABLE_ROW_HEIGHT: Pixels = px(30.0);
+    pub const TABLE_HEADER_FONT: Pixels = px(11.5);
+    /// Device code of the sign-in dialog: Archivo Expanded 900 at 26 px with
+    /// 0.08 em tracking, 12 px before its caption.
+    pub const DEVICE_CODE_FONT: Pixels = px(26.0);
+    pub const DEVICE_CODE_TRACKING_EM: f32 = 0.08;
+    pub const DEVICE_CODE_GAP: Pixels = px(12.0);
+    /// Progress row: 10 px gap, 4 px track, 11.5 px mono counter.
+    pub const PROGRESS_GAP: Pixels = px(10.0);
+    pub const PROGRESS_HEIGHT: Pixels = px(4.0);
+    pub const META_FONT: Pixels = px(11.5);
+    /// Form rows of a wizard step: a 120 px label column 16 px before the
+    /// control, 7 px above and below, the label 7 px down to sit on the
+    /// control's text line.
+    pub const FORM_LABEL_WIDTH: Pixels = px(120.0);
+    pub const FORM_ROW_GAP: Pixels = px(16.0);
+    pub const FORM_ROW_PADDING_Y: Pixels = px(7.0);
+    pub const FORM_LABEL_OFFSET: Pixels = px(7.0);
 }
 
 /// Geometry of the three tab kinds (document, result, inline), taken from the
@@ -855,6 +898,75 @@ impl ResultMetrics {
     pub const SEARCH_WIDTH: Pixels = px(240.0);
 }
 
+/// Geometry of the migrate wizard's Run phase, from P1Migrate.
+pub struct MigrateRunMetrics;
+
+impl MigrateRunMetrics {
+    pub const SECTION_GAP: Pixels = px(18.0);
+    pub const CONTENT_PADDING_X: Pixels = px(26.0);
+    pub const CONTENT_PADDING_Y: Pixels = px(22.0);
+    pub const HEADER_GAP: Pixels = px(12.0);
+    pub const DRIVER_ICON: Pixels = px(22.0);
+    pub const ARROW_ICON: Pixels = px(16.0);
+    pub const SUMMARY_GAP: Pixels = px(8.0);
+    pub const PERCENT_FONT: Pixels = px(34.0);
+    pub const OVERALL_BAR_HEIGHT: Pixels = px(6.0);
+    pub const TABLE_HEADER_HEIGHT: Pixels = px(32.0);
+    pub const TABLE_ROW_HEIGHT: Pixels = px(36.0);
+    pub const TABLE_PADDING_X: Pixels = px(14.0);
+    pub const STATUS_COLUMN: Pixels = px(30.0);
+    pub const STATUS_ICON: Pixels = px(15.0);
+    pub const PROGRESS_COLUMN: Pixels = px(220.0);
+    pub const ROWS_COLUMN: Pixels = px(160.0);
+    pub const TABLE_BAR_WIDTH: Pixels = px(150.0);
+    pub const TABLE_BAR_HEIGHT: Pixels = px(4.0);
+    pub const BAR_GAP: Pixels = px(8.0);
+    pub const PERCENT_CAPTION_FONT: Pixels = px(11.0);
+}
+
+/// Geometry of the command palette, from P1Palette.
+pub struct PaletteMetrics;
+
+impl PaletteMetrics {
+    /// Card width (640 px) and its distance from the top of the window (90 px).
+    pub const WIDTH: Pixels = px(640.0);
+    pub const TOP_OFFSET: Pixels = px(90.0);
+
+    /// Search row: 56 px tall, 18 px sides, 12 px gap, 18 px search icon,
+    /// 17 px query text, 11.5 px mono match counter.
+    pub const SEARCH_HEIGHT: Pixels = px(56.0);
+    pub const PADDING_X: Pixels = px(18.0);
+    pub const SEARCH_GAP: Pixels = px(12.0);
+    pub const SEARCH_ICON: Pixels = px(18.0);
+    pub const QUERY_FONT: Pixels = px(17.0);
+    pub const COUNT_FONT: Pixels = px(11.5);
+
+    /// Section header: 12 px above, 6 px below, 10 px expanded caps.
+    pub const SECTION_PADDING_TOP: Pixels = px(12.0);
+    pub const SECTION_PADDING_BOTTOM: Pixels = px(6.0);
+    pub const SECTION_FONT: Pixels = px(10.0);
+
+    /// Result row: 38 px tall, 12 px gap, 16 px icon, 14 px name, 11.5 px
+    /// qualifiers.
+    pub const ROW_HEIGHT: Pixels = px(38.0);
+    pub const ROW_GAP: Pixels = px(12.0);
+    pub const ROW_ICON: Pixels = px(16.0);
+    pub const ROW_FONT: Pixels = px(14.0);
+    pub const QUALIFIER_FONT: Pixels = px(11.5);
+    /// Alpha of the tint wash behind the selected row, and the width of its
+    /// leading tint bar (2 px).
+    pub const SELECTED_ALPHA: f32 = 0.12;
+    pub const SELECTION_BAR: Pixels = px(2.0);
+    /// Space under the last result row. (8 px)
+    pub const LIST_PADDING_BOTTOM: Pixels = px(8.0);
+
+    /// Footer hints: 38 px tall, 14 px between every keycap and label, 12 px
+    /// text.
+    pub const FOOTER_HEIGHT: Pixels = px(38.0);
+    pub const FOOTER_GAP: Pixels = px(14.0);
+    pub const FOOTER_FONT: Pixels = px(12.0);
+}
+
 /// Geometry of the wizard stepper (`composites::wizard_rail`), from P1Migrate
 /// and the DSAppPlan "Stepper".
 pub struct StepperMetrics;
@@ -876,6 +988,15 @@ impl StepperMetrics {
     pub const CONNECTOR_WIDTH: Pixels = px(28.0);
     /// Step label size. (13 px)
     pub const FONT: Pixels = px(13.0);
+
+    /// Horizontal stepper at the top of a dialog body (P1Flows): 22 px
+    /// badges holding a 12 px check, 8 px between badge, label and the
+    /// 20 x 1 px connectors, 12.5 px labels.
+    pub const INLINE_BADGE: Pixels = px(22.0);
+    pub const INLINE_BADGE_ICON: Pixels = px(12.0);
+    pub const INLINE_GAP: Pixels = px(8.0);
+    pub const INLINE_CONNECTOR_WIDTH: Pixels = px(20.0);
+    pub const INLINE_FONT: Pixels = px(12.5);
 }
 
 /// Geometry of the table view's header and filter rows (AppByzTable).

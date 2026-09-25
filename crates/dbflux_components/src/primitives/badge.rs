@@ -4,7 +4,7 @@ use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::primitives::Chamfer;
-use crate::tokens::{ChamferCut, ChromeColors, Feedback};
+use crate::tokens::{ChamferCut, ChromeColors, Feedback, SyntaxColors};
 
 /// Semantic tone shared by [`Badge`] and [`EnvTag`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +15,9 @@ pub enum BadgeTone {
     Success,
     Warning,
     Danger,
+    /// The NULL violet, for kinds that are neither state nor risk (a trigger
+    /// among dependent objects).
+    Violet,
 }
 
 impl BadgeTone {
@@ -28,6 +31,13 @@ impl BadgeTone {
             Self::Success => theme.success,
             Self::Warning => theme.warning,
             Self::Danger => theme.danger,
+            Self::Violet => {
+                if theme.mode.is_dark() {
+                    SyntaxColors::dark().number
+                } else {
+                    SyntaxColors::light().number
+                }
+            }
         }
     }
 

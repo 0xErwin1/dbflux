@@ -1,3 +1,4 @@
+use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
@@ -28,6 +29,8 @@ pub struct DocumentPreviewModal {
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    /// Re-renders on every edit so the JSON status line follows the text.
+    _input_observation: Subscription,
 }
 
 impl DocumentPreviewModal {
@@ -38,6 +41,7 @@ impl DocumentPreviewModal {
                 .language("json")
                 .line_number(true)
         });
+        let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
 
         Self {
             visible: false,
@@ -45,6 +49,7 @@ impl DocumentPreviewModal {
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            _input_observation: input_observation,
         }
     }
 
@@ -162,7 +167,17 @@ impl Render for DocumentPreviewModal {
             .height(px(700.0))
             .top_offset(px(60.0))
             .block_scroll()
-            .child(editor.render(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                        this.save(window, cx);
+                    }))
+                    .child(editor.render(cx)),
+            )
             .into_any_element()
     }
 }

@@ -1,15 +1,21 @@
-use crate::controls::{GpuiInput as Input, InputEvent, InputState};
+use crate::controls::{Button, Input, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
-use crate::primitives::{SurfaceRole, Text, surface};
-use crate::tokens::{FontSizes, Spacing};
+use crate::modals::parts::{modal_code, modal_field, modal_lead};
+use crate::primitives::{Badge, BadgeTone};
+use crate::tokens::{ChromeColors, ModalMetrics};
 use crate::typography::AppFonts;
 use dbflux_core::{LogErr, RelationKind, RelationRef, SqlDialect};
 use gpui::prelude::*;
-use gpui::{Context, Entity, EventEmitter, Focusable, Subscription, Window, div, px};
+use gpui::{
+    Context, Entity, EventEmitter, Focusable, HighlightStyle, Pixels, StyledText, Subscription,
+    Window, div, px,
+};
 use gpui_component::ActiveTheme;
-use gpui_component::Disableable;
-use gpui_component::button::{Button, ButtonVariants};
+use std::ops::Range;
+
+/// Width of the drop-table dialog (P1Modals).
+const DROP_TABLE_WIDTH: Pixels = px(520.0);
 
 /// Outcome emitted when the user resolves the modal.
 ///
@@ -107,6 +113,16 @@ impl DropTableRequest {
         } else {
             dbflux_i18n::t!("modals.drop_table.delete_warning_table_only")
         }
+    }
+}
+
+/// Badge tone of a dependent's kind: views read as info, foreign keys as a
+/// warning, triggers in the NULL violet.
+fn relation_kind_tone(kind: &RelationKind) -> BadgeTone {
+    match kind {
+        RelationKind::View | RelationKind::MaterializedView => BadgeTone::Info,
+        RelationKind::ForeignKeyChild => BadgeTone::Warning,
+        RelationKind::Trigger => BadgeTone::Violet,
     }
 }
 
@@ -249,104 +265,75 @@ impl Render for ModalDropTable {
 
         let theme = cx.theme();
         let table_name = request.table_name.clone();
-        let dependents = request.dependents.clone();
-        let sql = request.sql_preview();
-        let dependents_heading = request.dependents_heading();
-        let delete_warning = request.delete_warning();
-        let has_deps = !dependents.is_empty();
         let drop_enabled = self.drop_enabled;
 
-        // Table name badge.
-        let name_badge = surface(SurfaceRole::Raised, cx)
-            .w_full()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .font_family(AppFonts::MONO)
-                    .text_color(theme.foreground)
-                    .child(table_name.clone()),
-            );
-
-        // Dependents section.
-        let dependents_section = if has_deps {
-            let mut dep_list = div().flex().flex_col().gap(Spacing::XS).child(
-                div()
-                    .text_size(FontSizes::XS)
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child(dependents_heading),
-            );
-
-            for dep in &dependents {
-                let kind_label = relation_kind_label(&dep.kind);
-                let dep_name = dep.qualified_name.clone();
-                dep_list = dep_list.child(
+        let dependents = request.dependents.iter().map(|dependent| {
+            div()
+                .flex()
+                .items_center()
+                .gap(ModalMetrics::DEPENDENT_ROW_GAP)
+                .h(ModalMetrics::DEPENDENT_ROW_HEIGHT)
+                .font_family(AppFonts::MONO)
+                .text_size(ModalMetrics::CODE_FONT)
+                .child(Badge::new(
+                    relation_kind_label(&dependent.kind),
+                    relation_kind_tone(&dependent.kind),
+                ))
+                .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .text_color(theme.muted_foreground)
-                                .bg(theme.secondary)
-                                .px(Spacing::XS)
-                                .rounded(px(2.0))
-                                .child(kind_label),
-                        )
-                        .child(
-                            div()
-                                .text_size(FontSizes::XS)
-                                .font_family(AppFonts::MONO)
-                                .text_color(theme.foreground)
-                                .child(dep_name),
-                        ),
-                );
-            }
+                        .min_w_0()
+                        .truncate()
+                        .text_color(ChromeColors::strong(theme))
+                        .child(dependent.qualified_name.clone()),
+                )
+        });
 
-            dep_list.into_any_element()
-        } else {
-            div().into_any_element()
-        };
+        let prompt = confirm_hint(&table_name);
+        let prompt_highlights: Vec<(Range<usize>, HighlightStyle)> = prompt
+            .find(table_name.as_str())
+            .map(|start| {
+                (
+                    start..start + table_name.len(),
+                    HighlightStyle {
+                        color: Some(ChromeColors::strong(theme)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
 
-        // SQL preview.
-        let sql_block = surface(SurfaceRole::Raised, cx)
-            .w_full()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .child(
-                div()
-                    .text_size(FontSizes::XS)
-                    .font_family(AppFonts::MONO)
-                    .text_color(theme.foreground)
-                    .child(sql),
-            );
-
-        // Confirmation input.
-        let hint = if !drop_enabled {
-            Some(
-                div()
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.muted_foreground)
-                    .child(confirm_hint(&table_name))
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
+        let has_dependents = !request.dependents.is_empty();
 
         let body = div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .child(Text::body(delete_warning).into_any_element())
-            .child(name_badge)
-            .when(has_deps, |el| el.child(dependents_section))
-            .child(sql_block)
-            .child(Input::new(&self.confirm_input))
-            .when_some(hint, |el, h| el.child(h));
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(request.delete_warning(), cx))
+            .when(has_dependents, |body| {
+                body.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .when(!request.cascade, |list| {
+                            list.child(
+                                div()
+                                    .text_size(ModalMetrics::FIELD_LABEL_FONT)
+                                    .text_color(theme.muted_foreground)
+                                    .child(request.dependents_heading()),
+                            )
+                        })
+                        .children(dependents),
+                )
+            })
+            .child(modal_code(request.sql_preview(), cx))
+            .child(modal_field(
+                StyledText::new(prompt).with_highlights(prompt_highlights),
+                div()
+                    .font_family(AppFonts::MONO)
+                    .child(Input::new(&self.confirm_input).w_full()),
+                cx,
+            ));
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
             this.cancel(cx);
@@ -359,41 +346,49 @@ impl Render for ModalDropTable {
         let footer = div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
-                Button::new("drop-table-cancel")
-                    .label(dbflux_i18n::t!("modals.drop_table.cancel"))
-                    .on_click(on_cancel),
+                Button::new(
+                    "drop-table-cancel",
+                    dbflux_i18n::t!("modals.drop_table.cancel"),
+                )
+                .on_click(on_cancel),
             )
             .child(
-                Button::new("drop-table-confirm")
-                    .label(dbflux_i18n::t!("modals.drop_table.confirm"))
-                    .danger()
-                    .disabled(!drop_enabled)
-                    .on_click(on_drop),
+                Button::new(
+                    "drop-table-confirm",
+                    dbflux_i18n::t!("modals.drop_table.confirm"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .disabled(!drop_enabled)
+                .on_click(on_drop),
             );
 
-        Modal::new(dbflux_i18n::t!("modals.drop_table.title"))
-            .body(body)
-            .footer(footer)
-            .icon(AppIcon::Delete)
-            .variant(ModalVariant::Danger)
-            .width(px(560.0))
-            .focus_handle(self.focus.handle())
-            .on_close({
-                let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-                }
-            })
-            .on_confirm({
-                let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-                }
-            })
-            .confirm_enabled(drop_enabled)
-            .into_any_element()
+        Modal::new(dbflux_i18n::t!(
+            "modals.drop_table.title_named",
+            table = table_name
+        ))
+        .body(body)
+        .footer(footer)
+        .icon(AppIcon::Delete)
+        .variant(ModalVariant::Danger)
+        .width(DROP_TABLE_WIDTH)
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(drop_enabled)
+        .into_any_element()
     }
 }
 

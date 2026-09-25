@@ -79,7 +79,7 @@ pub(crate) fn workspace_delete_connection_message(name: &str) -> String {
     dbflux_i18n::t!("workspace.confirm.delete_connection", name = name)
 }
 
-/// Formats the login modal's "Sign in with X to continue connecting Y" prompt.
+/// Formats the login modal's "Sign in with X to open Y" prompt.
 pub(crate) fn login_sign_in_prompt(provider_name: &str, profile_name: &str) -> String {
     dbflux_i18n::t!(
         "login.body.sign_in_prompt",
@@ -88,9 +88,23 @@ pub(crate) fn login_sign_in_prompt(provider_name: &str, profile_name: &str) -> S
     )
 }
 
-/// Formats the "Elapsed: Ns" caption shown while waiting for login to complete.
-pub(crate) fn login_elapsed_message(elapsed_secs: u64) -> String {
-    dbflux_i18n::t!("login.body.elapsed", seconds = elapsed_secs)
+/// Formats the "1:04 / 5:00" counter next to the sign-in progress bar.
+pub(crate) fn login_progress_label(elapsed_secs: u64, total_secs: u64) -> String {
+    let clock = |seconds: u64| format!("{}:{:02}", seconds / 60, seconds % 60);
+    format!("{} / {}", clock(elapsed_secs), clock(total_secs))
+}
+
+/// The device code carried by an OAuth device-flow verification URL
+/// (`...?user_code=KQXR-TWPB`), which the browser asks the user to confirm.
+pub(crate) fn login_user_code(verification_url: &str) -> Option<String> {
+    let (_, query) = verification_url.split_once('?')?;
+
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == "user_code")
+        .map(|(_, value)| value.to_string())
+        .filter(|code| !code.is_empty())
 }
 
 /// Formats the fallback message shown when the login browser could not be launched.

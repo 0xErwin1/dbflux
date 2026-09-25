@@ -47,5 +47,5 @@ pub use tabs::{
 };
 pub use wizard_rail::{
     RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
-    render_wizard_rail, wizard_progress_fraction,
+    render_wizard_rail, render_wizard_stepper, wizard_progress_fraction,
 };

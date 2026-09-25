@@ -1,9 +1,13 @@
+use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 use gpui_component::input::EditorState;
+
+/// Width of the cell editor dialog (P1Flows).
+const CELL_EDITOR_WIDTH: Pixels = px(560.0);
 
 /// Event emitted when the modal editor saves.
 #[derive(Clone)]
@@ -23,9 +27,13 @@ pub struct CellEditorModal {
     row: usize,
     col: usize,
     is_json: bool,
+    /// Name and type of the edited column, for the title.
+    column: Option<(String, String)>,
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    /// Re-renders on every edit so the JSON status line follows the text.
+    _input_observation: Subscription,
 }
 
 impl CellEditorModal {
@@ -36,15 +44,18 @@ impl CellEditorModal {
                 .language("json")
                 .line_number(true)
         });
+        let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
 
         Self {
             visible: false,
             row: 0,
             col: 0,
             is_json: false,
+            column: None,
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            _input_observation: input_observation,
         }
     }
 
@@ -52,18 +63,23 @@ impl CellEditorModal {
         self.visible
     }
 
+    /// Opens the editor on a cell. `column` is the column's name and type,
+    /// shown in the title ("Edit properties (jsonb)").
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         &mut self,
         row: usize,
         col: usize,
         value: String,
         is_json: bool,
+        column: Option<(String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.row = row;
         self.col = col;
         self.is_json = is_json;
+        self.column = column;
         self.visible = true;
         self.validation_error = None;
 
@@ -167,21 +183,35 @@ impl Render for CellEditorModal {
             );
         }
 
-        Modal::new(if is_json {
-            dbflux_i18n::t!("modals.cell_editor.title_json")
-        } else {
-            dbflux_i18n::t!("modals.cell_editor.title_text")
-        })
-        .id("cell-editor-modal")
-        .focus_handle(&self.focus_handle)
-        .on_close(close)
-        .key_context(ContextId::CellEditorModal.as_gpui_context())
-        .icon(AppIcon::Pencil)
-        .width(px(900.0))
-        .height(px(600.0))
-        .child(editor.render(cx))
-        .top_offset(px(80.0))
-        .into_any_element()
+        let title = match &self.column {
+            Some((name, type_name)) => dbflux_i18n::t!(
+                "modals.cell_editor.title_column",
+                column = name,
+                type_name = type_name
+            ),
+            None if is_json => dbflux_i18n::t!("modals.cell_editor.title_json"),
+            None => dbflux_i18n::t!("modals.cell_editor.title_text"),
+        };
+
+        Modal::new(title)
+            .id("cell-editor-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::CellEditorModal.as_gpui_context())
+            .icon(AppIcon::Pencil)
+            .width(CELL_EDITOR_WIDTH)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                        this.save(window, cx);
+                    }))
+                    .child(editor.render(cx)),
+            )
+            .into_any_element()
     }
 }
 
@@ -192,6 +222,7 @@ mod tests {
         let keys = [
             "modals.cell_editor.title_json",
             "modals.cell_editor.title_text",
+            "modals.cell_editor.title_column",
         ];
 
         for key in keys {
@@ -245,7 +276,7 @@ mod keyboard_tests {
 
         window.update(|window, cx| {
             modal.update(cx, |modal, cx| {
-                modal.open(0, 0, "{\"a\": 1}".to_string(), true, window, cx);
+                modal.open(0, 0, "{\"a\": 1}".to_string(), true, None, window, cx);
             });
         });
         window.run_until_parked();

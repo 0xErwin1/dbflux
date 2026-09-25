@@ -15,5 +15,7 @@ actions!(
         // Search / saved queries
         FocusSearch,
         SaveQuery,
+        // Save the value of a modal editor (cell editor, document preview)
+        SaveEdit,
     ]
 );

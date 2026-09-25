@@ -157,6 +157,9 @@ components:
       position: "%{total}행 중 %{row}행"
       value_header: 값
   json_editor:
+    valid:
+      one: "유효한 JSON · %{count}줄"
+      many: "유효한 JSON · %{count}줄"
     empty_error: 문서는 비어 있을 수 없습니다
     format: 서식
     compact: 압축
@@ -1397,24 +1400,28 @@ document:
           size: 직렬화 크기
   export_wizard:
     title: 데이터 내보내기
+    title_tables:
+      one: "테이블 %{count}개 내보내기"
+      many: "테이블 %{count}개 내보내기"
     task:
       one: "%{profile}에서 테이블 %{count}개 내보내기"
       many: "%{profile}에서 테이블 %{count}개 내보내기"
     rail:
       tables: 테이블
-      format_options: 형식 및 옵션
+      format_options: "형식"
       confirm: 확인
       run: 실행
     tables:
       selected_count: "내보낼 테이블 %{count}개 선택됨"
     format_options:
       format_label: 형식
-      output_folder_label: 출력 폴더
+      output_folder_label: "폴더"
       no_folder_chosen: 선택한 폴더 없음
-      choose_folder: "폴더 선택..."
+      choose_folder: "선택"
       choosing: "선택하는 중..."
       dialog_title: 내보내기 폴더 선택
-      segment_size_label: "세그먼트 / 청크 크기 (고급)"
+      segment_size_label: "청크 크기"
+      segment_size_hint: "파일 세그먼트당 행 수"
       segment_size_placeholder: 세그먼트 / 청크 크기
       segment_size_invalid: "1 이상의 정수여야 합니다. 이전 값을 유지했습니다."
       error:
@@ -1742,6 +1749,9 @@ document:
         down: 아래로
         accept: 이 순서 사용
     running:
+      table_header: "테이블"
+      progress_header: "진행률"
+      rows_header: "행"
       title: "마이그레이션 중…"
       position:
         of_total: "%{total}개 중 %{index}번째 테이블"
@@ -1803,6 +1813,9 @@ document:
       target_connection_gone: 대상 연결이 더 이상 없습니다
       cross_database_error: "마이그레이션은 하나의 소스 데이터베이스만 사용합니다. '%{source}'의 테이블만 선택할 수 있습니다 — '%{other}'의 테이블은 함께 섞을 수 없습니다."
     footer:
+      cancel_migration: "마이그레이션 취소"
+      referential_integrity_off: "실행이 끝날 때까지 참조 무결성이 비활성화됩니다"
+      run_in_background: "백그라운드에서 실행"
       back: 뒤로
       continue: 계속
       loading: "불러오는 중…"
@@ -2430,7 +2443,7 @@ hooks:
 language:
   native_name: 한국어
 login:
-  window_title: 연결 흐름
+  window_title: 계속하려면 로그인하세요
   field:
     verification_url: 인증 URL
   action:
@@ -2444,10 +2457,9 @@ login:
     completed: 로그인 완료
     closing: 인증에 성공했습니다. 이 대화 상자를 닫는 중...
   body:
-    sign_in_prompt: '%{provider}(으)로 로그인하여 "%{profile}" 연결을 계속하세요.'
-    instructions: 브라우저에서 로그인 URL을 열고 인증을 완료하세요. 로그인이 완료되면 DBFlux가 자동으로 계속합니다.
-    waiting: 브라우저에서 승인하기를 기다리는 중…
-    elapsed: "로그인은 최대 5분까지 걸릴 수 있습니다. 경과 시간: %{seconds}s"
+    sign_in_prompt: '%{provider}(으)로 로그인하여 %{profile}을(를) 여세요.'
+    waiting: 브라우저를 기다리는 중
+    code_hint: 브라우저에 표시되는 코드
     browser_open_failed: "브라우저를 자동으로 열 수 없습니다. URL을 직접 열어 주세요. (%{error}; 대체 방법 실패: %{fallback_error})"
   error:
     timed_out: 5분 후 로그인 시간이 초과되었습니다.
@@ -2506,6 +2518,7 @@ modals:
       no_metrics_filtered: 필터와 일치하는 지표가 없습니다.
     cancel: 취소
   cell_editor:
+    title_column: "%{column} 편집 (%{type_name})"
     title_json: JSON 편집
     title_text: 텍스트 편집
   create_dashboard:
@@ -2536,11 +2549,12 @@ modals:
   document_preview:
     title: 문서 미리보기
   drop_table:
+    title_named: "%{table} 테이블 삭제"
     title: 테이블 삭제(DROP)
     confirm: 테이블 삭제(DROP)
     cancel: 취소
     confirm_placeholder: 확인하려면 테이블 이름을 입력하세요
-    confirm_prompt: '확인하려면 "%{table}"을(를) 입력하세요'
+    confirm_prompt: '확인하려면 %{table}을(를) 입력하세요'
     cascade_warning: "종속 개체도 함께 삭제됩니다(CASCADE):"
     dependents_heading: "이 테이블에 종속된 개체:"
     delete_warning: 테이블과 종속 개체가 영구적으로 삭제됩니다.
@@ -2579,10 +2593,11 @@ modals:
     cancel: 취소
     confirm: 이름 바꾸기
   schema_drift:
-    title: 이 쿼리를 연 이후 스키마가 변경되었습니다
+    lead: "%{table}이(가) 캐시된 스키마와 다릅니다."
+    title: 이 탭을 연 이후 스키마가 변경되었습니다
     column_header: 컬럼
-    local_header: 로컬 캐시
-    remote_header: 원격
+    local_header: 캐시됨
+    remote_header: 현재
     change:
       new_column: 새 컬럼
       removed: 삭제됨
@@ -2603,9 +2618,10 @@ modals:
     refreshing: 새로고침 중…
     refresh: 새로고침 후 다시 실행
   tunnel_auth:
+    hide_passphrase: "암호 문구 숨기기"
+    show_passphrase: "암호 문구 표시"
+    tunnel_label: "터널"
     title: SSH 암호 문구 필요
-    prompt: '터널 "%{tunnel}"의 암호 문구를 입력하세요'
-    connection_detail: "호스트: %{host}:%{port} · 사용자: %{user}"
     placeholder: 암호 문구를 입력하세요
     incorrect: 암호 문구가 올바르지 않습니다. 다시 시도하세요.
     empty_error: 암호 문구는 비어 있을 수 없습니다
@@ -2633,6 +2649,10 @@ palette:
   footer:
     navigate: "이동"
     run: "실행"
+    commands_only: "명령만"
+    tables_only: "테이블만"
+  connection:
+    connected: "연결됨"
   search:
     placeholder: 명령, 연결, 테이블, 스크립트 검색...
   empty: 일치하는 항목이 없습니다
@@ -3912,21 +3932,13 @@ sso_wizard:
     account_id: 계정 ID
     role_name: 역할 이름
   account:
-    hint: AWS SSO 계정 검색에서 가져온 계정 ID를 사용하세요.
     discovering: 계정을 검색하는 중...
     discover_button: 로그인 + 계정 검색
     no_matches: 현재 필터와 일치하는 계정이 없습니다.
   role:
-    hint: AWS SSO 역할 목록에서 가져온 역할 이름을 사용하세요.
     discovering: 역할을 검색하는 중...
     discover_button: 선택한 계정의 역할 검색
     no_matches: 현재 필터와 일치하는 역할이 없습니다.
-  confirm:
-    profile: "프로필: %{value}"
-    start_url: "시작 URL: %{value}"
-    region: "리전: %{value}"
-    account: "계정: %{value}"
-    role: "역할: %{value}"
   back: 뒤로
   next: 다음
   save: 저장
