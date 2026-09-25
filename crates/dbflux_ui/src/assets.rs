@@ -22,6 +22,16 @@ impl AssetSource for Assets {
                     "../../../resources/branding/nightly/mark-256.png"
                 ))));
             }
+            "branding/stable/mark-small-256.png" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/stable/mark-small-256.png"
+                ))));
+            }
+            "branding/nightly/mark-small-256.png" => {
+                return Ok(Some(Cow::Borrowed(include_bytes!(
+                    "../../../resources/branding/nightly/mark-small-256.png"
+                ))));
+            }
             _ => {}
         }
 

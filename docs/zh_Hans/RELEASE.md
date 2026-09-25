@@ -14,8 +14,6 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 `-dev.N` 渠道已**废弃**。nightly 已取代它。旧的 `-dev.N` 标签仍保留在 GitHub 上，但不会再创建新的。
 
-各渠道的应用程序图标在 [issue #183](https://github.com/0xErwin1/dbflux/issues/183) 中跟踪。请勿在此处实现。
-
 ## 更新日志模型
 
 两个产物，各自只有一个编写来源：
@@ -147,14 +145,16 @@ bundle 在 `build.yml` 中于创建 DMG 之前签名。该 job 把证书导入�
 变更时，从 `resources/branding/<channel>/` 重新生成：
 
 ```bash
-magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
-# ... 128、64 来自 mark.svg；48、32、16 来自 mark-small.svg
-magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+scripts/branding/generate-icons.sh
 ```
 
-旁边的 macOS `.icns` 文件（`dbflux.icns`、`dbflux-nightly.icns`）用 `libicns`
-的 `png2icns` 以同样方式构建，额外加入 512 和 1024 尺寸，并以 `AppIcon.icns`
-的名字进入 bundle。
+该脚本用 `mark.svg`（完整图标）渲染 48 px 及以上的尺寸，用 `mark-small.svg`
+（字形）渲染 32 px 及以下的尺寸。它还会重建旁边的 macOS `.icns` 文件
+（`dbflux.icns`、`dbflux-nightly.icns`，额外加入 512 和 1024 尺寸，并以
+`AppIcon.icns` 的名字进入 bundle）、`packaging/icons/<size>/apps/` 下的 hicolor
+PNG、各渠道目录中的应用内 PNG 与组合标识 `wordmark.svg`，以及
+`web/public/brand/` 中的网站副本。缺少 `rsvg-convert`、`icotool`、`png2icns`
+或带 `fonttools` 与 `uharfbuzz` 的 Python 时，脚本会在 Nix shell 中重新运行自身。
 
 ## 切出流程：`main` → `release/vX.Y`
 

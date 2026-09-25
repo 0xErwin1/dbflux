@@ -19,9 +19,6 @@ Este documento es la referencia orientada a humanos. El skill automatizado
 El canal `-dev.N` está **retirado**. Nightly lo reemplaza. Los tags `-dev.N`
 antiguos permanecen en GitHub pero no se crean nuevos.
 
-Los íconos de aplicación por canal se rastrean en el [issue
-#183](https://github.com/0xErwin1/dbflux/issues/183). No los implementes aquí.
-
 ## Modelo de Changelog
 
 Dos artefactos, cada uno con una única fuente de autoría:
@@ -220,15 +217,18 @@ instalador. Regenéralos desde `resources/branding/<channel>/` cuando cambie
 el arte:
 
 ```bash
-magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
-# ... 128, 64 desde mark.svg; 48, 32, 16 desde mark-small.svg
-magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+scripts/branding/generate-icons.sh
 ```
 
-Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
-`dbflux-nightly.icns`) se construyen del mismo modo con `png2icns` de
-`libicns`, añadiendo los tamaños 512 y 1024, y llegan al bundle como
-`AppIcon.icns`.
+El script renderiza 48 px o más desde `mark.svg` (el icono completo) y 32 px
+o menos desde `mark-small.svg` (el glifo). También reconstruye los archivos
+`.icns` de macOS que están al lado (`dbflux.icns`, `dbflux-nightly.icns`,
+añadiendo los tamaños 512 y 1024), que llegan al bundle como `AppIcon.icns`,
+los PNG de hicolor bajo `packaging/icons/<size>/apps/`, los PNG de la app y el
+`wordmark.svg` del lockup en cada directorio de channel, y las copias del sitio
+en `web/public/brand/`. Se vuelve a ejecutar dentro de una shell de Nix cuando
+faltan `rsvg-convert`, `icotool`, `png2icns` o Python con `fonttools` y
+`uharfbuzz`.
 
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 

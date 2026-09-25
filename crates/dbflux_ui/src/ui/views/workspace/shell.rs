@@ -449,9 +449,9 @@ impl Workspace {
         let now = chrono::Utc::now().timestamp();
         let recent = recent_rows(self.app_state.read(cx).recent_files(), now);
 
-        let mark_path = match dbflux_core::ReleaseChannel::current() {
-            dbflux_core::ReleaseChannel::Nightly => "branding/nightly/mark-256.png",
-            _ => "branding/stable/mark-256.png",
+        let glyph_path = match dbflux_core::ReleaseChannel::current() {
+            dbflux_core::ReleaseChannel::Nightly => "branding/nightly/mark-small-256.png",
+            _ => "branding/stable/mark-small-256.png",
         };
 
         let head = div()
@@ -459,7 +459,7 @@ impl Workspace {
             .items_center()
             .gap(ShellMetrics::EMPTY_HEAD_GAP)
             .child(
-                img(mark_path)
+                img(glyph_path)
                     .size(ShellMetrics::EMPTY_GLYPH)
                     .flex_shrink_0(),
             )

@@ -14,8 +14,6 @@ This document is the human-facing reference. The automated `dbflux-release` skil
 
 The `-dev.N` channel is **retired**. Nightly replaces it. Old `-dev.N` tags remain on GitHub but no new ones are created.
 
-Per-channel application icons are tracked in [issue #183](https://github.com/0xErwin1/dbflux/issues/183). Do not implement them here.
-
 ## Changelog Model
 
 Two artifacts, one authored source each:
@@ -156,14 +154,17 @@ installer shortcuts. Regenerate them from `resources/branding/<channel>/`
 when the artwork changes:
 
 ```bash
-magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
-# ... 128, 64 from mark.svg; 48, 32, 16 from mark-small.svg
-magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+scripts/branding/generate-icons.sh
 ```
 
-The macOS `.icns` files beside them (`dbflux.icns`, `dbflux-nightly.icns`)
-are built the same way with `png2icns` from `libicns`, adding 512 and 1024 px
-sizes, and land in the bundle as `AppIcon.icns`.
+The script renders 48 px and larger from `mark.svg` (the full icon) and 32 px
+and smaller from `mark-small.svg` (the glyph). It also rebuilds the macOS
+`.icns` files beside them (`dbflux.icns`, `dbflux-nightly.icns`, adding 512
+and 1024 px sizes), which land in the bundle as `AppIcon.icns`, the hicolor
+PNGs under `packaging/icons/<size>/apps/`, the in-app PNGs and the lockup
+`wordmark.svg` in each channel directory, and the site copies in
+`web/public/brand/`. It re-runs itself in a Nix shell when `rsvg-convert`,
+`icotool`, `png2icns`, or Python with `fonttools` and `uharfbuzz` are missing.
 
 ## Cut Procedure: `main` → `release/vX.Y`
 
