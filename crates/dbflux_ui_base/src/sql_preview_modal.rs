@@ -534,7 +534,7 @@ impl Render for SqlPreviewModal {
                         Editor::new(&sql_display)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::BODY)
+                            .font_family(AppFonts::MONO)
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),

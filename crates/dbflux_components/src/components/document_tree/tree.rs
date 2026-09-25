@@ -306,6 +306,7 @@ impl Render for DocumentTree {
                 div()
                     .flex_1()
                     .overflow_hidden()
+                    .font_family(AppFonts::MONO)
                     .when(is_tree_mode, |d| {
                         d.child(
                             uniform_list("document-tree-list", node_count, {
@@ -392,7 +393,7 @@ impl Render for DocumentTree {
                                 Editor::new(&input)
                                     .w_full()
                                     .h_full()
-                                    .font_family(AppFonts::BODY)
+                                    .font_family(AppFonts::MONO)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_size(FontSizes::BASE),
                             ),

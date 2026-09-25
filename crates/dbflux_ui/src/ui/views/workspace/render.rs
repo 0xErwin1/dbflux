@@ -1197,14 +1197,14 @@ mod tests {
     use crate::keymap::{Command, KeyChord, Modifiers};
 
     #[test]
-    fn panel_headers_keep_mono_family_and_focus_weight_difference() {
+    fn panel_headers_use_interface_family_and_focus_weight_difference() {
         let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
         let unfocused =
             inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
 
         for inspection in [&focused.title, &unfocused.title] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::SM));
         }
 
@@ -1260,7 +1260,7 @@ mod tests {
             focused.focus_title_color,
             Some(PanelHeaderTitleColor::Primary)
         );
-        assert_eq!(focused.title.family, Some(AppFonts::MONO));
+        assert_eq!(focused.title.family, Some(AppFonts::INTERFACE));
         assert_eq!(focused.title.size_override, Some(FontSizes::SM));
         assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
     }

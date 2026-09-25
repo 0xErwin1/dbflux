@@ -254,7 +254,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(SubSectionLabel::new(title.to_uppercase()))
+            .child(SubSectionLabel::new(title))
             .child(content)
     }
 
@@ -993,7 +993,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(SubSectionLabel::new(section.title.to_uppercase()))
+                    .child(SubSectionLabel::new(section.title.clone()))
                     .children(field_elements)
                     .into_any_element(),
             );

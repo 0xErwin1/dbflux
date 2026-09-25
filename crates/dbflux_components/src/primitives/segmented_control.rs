@@ -50,7 +50,7 @@ pub fn new_active_id(items: &[SegmentedItem], _current: &str, clicked: &str) -> 
 /// - Active segment: `theme.primary` background, `theme.primary_foreground` text
 /// - Inactive segment: transparent background, `theme.muted_foreground` text,
 ///   hover lifts to `theme.list_hover`
-/// - Font: `AppFonts::BODY`, `FontSizes::XS`
+/// - Font: `AppFonts::INTERFACE`, `FontSizes::XS`
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     items: Vec<SegmentedItem>,
@@ -111,7 +111,7 @@ impl RenderOnce for SegmentedControl {
                 .cursor_pointer()
                 .bg(bg)
                 .text_color(fg)
-                .font_family(AppFonts::BODY)
+                .font_family(AppFonts::INTERFACE)
                 .text_size(FontSizes::XS)
                 .when(!is_active, move |d| d.hover(move |d| d.bg(hover_bg)))
                 .when(!is_last, |d| d.border_r_1().border_color(theme.input))

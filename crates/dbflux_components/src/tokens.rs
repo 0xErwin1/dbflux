@@ -43,12 +43,14 @@ pub struct FontSizes;
 /// baseline density). For style-aware sizing at render sites, prefer the
 /// `density::font_*(cx)` accessors so the active `AppStyle` is honoured.
 impl FontSizes {
+    /// Section label — uppercase display-face labels (Default: 11 px).
+    pub const LABEL: Pixels = px(11.0);
     /// Extra-small — used for badges, captions, tooltips (Default: 12 px).
     pub const XS: Pixels = px(12.0);
     /// Small — used for labels and secondary metadata (Default: 13 px).
     pub const SM: Pixels = px(13.0);
-    /// Base — primary body and input text (Default: 14 px).
-    pub const BASE: Pixels = px(14.0);
+    /// Base — primary body and input text (Default: 13 px).
+    pub const BASE: Pixels = px(13.0);
     /// Large — emphasized labels and nav items (Default: 15 px).
     pub const LG: Pixels = px(15.0);
     /// Extra-large — sub-headings and panel titles (Default: 18 px).
@@ -520,9 +522,10 @@ mod tests {
     // larger-text default). Style-aware sites use density::font_*/radius_*.
     #[test]
     fn font_sizes_match_default_style_scale() {
+        assert_eq!(FontSizes::LABEL, px(11.0));
         assert_eq!(FontSizes::XS, px(12.0));
         assert_eq!(FontSizes::SM, px(13.0));
-        assert_eq!(FontSizes::BASE, px(14.0));
+        assert_eq!(FontSizes::BASE, px(13.0));
         assert_eq!(FontSizes::LG, px(15.0));
         assert_eq!(FontSizes::XL, px(18.0));
         assert_eq!(FontSizes::TITLE, px(20.0));

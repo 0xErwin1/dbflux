@@ -2,7 +2,7 @@ use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, SyntaxColors};
-use dbflux_components::typography::{Body, MonoCaption};
+use dbflux_components::typography::{Body, InterfaceText};
 use gpui::FontWeight;
 
 fn sidebar_tab_text(
@@ -10,7 +10,7 @@ fn sidebar_tab_text(
     active: bool,
     focused: bool,
     color: Hsla,
-) -> MonoCaption {
+) -> InterfaceText {
     let weight = if active && focused {
         FontWeight::BOLD
     } else if active {
@@ -19,7 +19,7 @@ fn sidebar_tab_text(
         FontWeight::MEDIUM
     };
 
-    MonoCaption::new(label)
+    InterfaceText::caption(label)
         .font_weight(weight)
         .color(color)
         .font_size(FontSizes::SM)
@@ -487,14 +487,14 @@ mod tests {
     use gpui::FontWeight;
 
     #[test]
-    fn sidebar_tabs_keep_mono_family_and_stateful_weight_hierarchy() {
+    fn sidebar_tabs_use_interface_family_and_stateful_weight_hierarchy() {
         let inactive = sidebar_tab_text("CONNECTIONS", false, false, gpui::blue()).inspect();
         let active = sidebar_tab_text("SCRIPTS", true, false, gpui::red()).inspect();
         let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
 
         for inspection in [inactive, active, focused] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             // Tab labels use SM (13px) — the bigger size matches the
             // design after the visual review pass; the original XS was
             // judged too cramped against the rest of the chrome.

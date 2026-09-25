@@ -7,7 +7,7 @@ use dbflux_components::composites::MenuItem;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
-use dbflux_components::typography::MonoMeta;
+use dbflux_components::typography::InterfaceText;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -256,8 +256,8 @@ impl TabBar {
         title: SharedString,
         is_active: bool,
         theme: &gpui_component::Theme,
-    ) -> MonoMeta {
-        MonoMeta::new(title).color(if is_active {
+    ) -> InterfaceText {
+        InterfaceText::meta(title).color(if is_active {
             theme.foreground
         } else {
             theme.muted_foreground
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn tab_titles_use_mono_meta_role(cx: &mut TestAppContext) {
+    fn tab_titles_use_interface_meta_role(cx: &mut TestAppContext) {
         cx.update(theme::init);
 
         let theme = cx.update(|cx| Theme::global(cx).clone());
@@ -662,8 +662,8 @@ mod tests {
         let inactive = TabBar::tab_title_text("table/users".into(), false, &theme).inspect();
 
         for inspection in [active, inactive] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::SM));
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::primitives::Text;
 use crate::tokens::{ChromeColors, FontSizes, RowColors};
+use crate::typography::AppFonts;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -555,6 +556,7 @@ impl gpui::Render for DataTable {
             .relative()
             .size_full()
             .overflow_hidden()
+            .font_family(AppFonts::MONO)
             .bg(theme.table)
             .border_1()
             .border_color(theme.border)

@@ -3,7 +3,7 @@ use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Chord, Icon as FluxIcon};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_components::typography::{Body, FieldLabel, MonoCaption};
+use dbflux_components::typography::{Body, FieldLabel, InterfaceText};
 use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
 use gpui::prelude::*;
 use gpui::*;
@@ -260,7 +260,7 @@ impl KeybindingsSection {
                                     )
                                     // Inherits info
                                     .when(has_parent, |d| {
-                                        d.child(MonoCaption::new(
+                                        d.child(InterfaceText::caption(
                                             crate::labels::keybindings_inherits_from(&parent_name),
                                         ))
                                     })
@@ -363,7 +363,7 @@ impl KeybindingsSection {
                         .py(px(2.0))
                         .rounded(Radii::SM)
                         .bg(secondary)
-                        .child(MonoCaption::new(inherited_label.to_string())),
+                        .child(InterfaceText::caption(inherited_label.to_string())),
                 )
             })
     }

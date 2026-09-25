@@ -2,7 +2,9 @@ use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, PanelTitle};
+use dbflux_components::typography::{
+    Body, InterfaceText, MonoCaption, MonoLabel, MonoMeta, PanelTitle,
+};
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -950,7 +952,7 @@ impl ServicesSection {
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .child(MonoCaption::new(
+                                                                .child(InterfaceText::caption(
                                                                     dbflux_i18n::t!(
                                                                         "settings.rpc_services.field.disabled"
                                                                     ),

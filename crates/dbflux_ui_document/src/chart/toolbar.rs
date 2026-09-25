@@ -21,6 +21,7 @@ use dbflux_components::controls::Dropdown;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Icon;
 use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
 use gpui::*;
@@ -221,7 +222,7 @@ pub fn render_chart_toolbar(
                         .px(px(8.0))
                         .py(px(3.0))
                         .text_size(px(11.0))
-                        .font(font("JetBrains Mono"))
+                        .font(font(AppFonts::INTERFACE))
                         .cursor_pointer()
                         .when(is_active, |d| {
                             d.bg(primary)
@@ -305,7 +306,7 @@ pub fn render_chart_toolbar(
                     div()
                         .text_size(px(11.0))
                         .text_color(muted)
-                        .font(font("JetBrains Mono"))
+                        .font(font(AppFonts::MONO))
                         .child(window_label),
                 ),
         )
@@ -317,7 +318,7 @@ pub fn render_chart_toolbar(
                 .gap(px(4.0))
                 .text_size(px(11.0))
                 .text_color(muted)
-                .font(font("JetBrains Mono"))
+                .font(font(AppFonts::MONO))
                 .child(SharedString::from(
                     crate::labels::chart_toolbar_points_label(row_count),
                 ))

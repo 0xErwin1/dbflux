@@ -143,7 +143,7 @@ pub(crate) fn new_single_line_completion_state(
 /// Renders a single-line completion input as a one-row `Editor`.
 ///
 /// Pairs with [`new_single_line_completion_state`]: same visual contract as
-/// the old `.small()` single-line input (24 px, DBFlux body font) while the
+/// the old `.small()` single-line input (24 px, DBFlux data font) while the
 /// underlying state is the `EditorState` the completion engine requires.
 pub(crate) fn single_line_completion_editor(
     state: &Entity<EditorState>,
@@ -168,7 +168,7 @@ pub(crate) fn single_line_completion_editor(
     gpui_component::input::Editor::new(state)
         .h(dbflux_components::tokens::Heights::ROW_COMPACT)
         .py(leading - EDITOR_INPUT_PADDING_Y - Borders::THIN)
-        .font_family(dbflux_components::typography::AppFonts::BODY)
+        .font_family(dbflux_components::typography::AppFonts::MONO)
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_size(FontSizes::SM)
 }

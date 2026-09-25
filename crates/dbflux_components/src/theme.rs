@@ -187,17 +187,17 @@ fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> Hsla {
 /// Without this, `apply_config()` resets font_family to ".SystemUIFont".
 fn persist_font_config(theme: &mut Theme) {
     let mut dark = (*theme.dark_theme).clone();
-    dark.font_family = Some(SharedString::from(AppFonts::BODY));
+    dark.font_family = Some(SharedString::from(AppFonts::INTERFACE));
     dark.mono_font_family = Some(SharedString::from(AppFonts::MONO));
     theme.dark_theme = Rc::new(dark);
 
     let mut light = (*theme.light_theme).clone();
-    light.font_family = Some(SharedString::from(AppFonts::BODY));
+    light.font_family = Some(SharedString::from(AppFonts::INTERFACE));
     light.mono_font_family = Some(SharedString::from(AppFonts::MONO));
     theme.light_theme = Rc::new(light);
 
     // Also set the immediate values
-    theme.font_family = SharedString::from(AppFonts::BODY);
+    theme.font_family = SharedString::from(AppFonts::INTERFACE);
     theme.mono_font_family = SharedString::from(AppFonts::MONO);
 }
 

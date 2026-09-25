@@ -12,7 +12,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Widths};
 use dbflux_components::typography::{
-    Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
+    Body, FieldLabel, InterfaceText, MonoMeta, PanelTitle, SubSectionLabel,
 };
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
@@ -113,8 +113,8 @@ fn bool_override_index(value: Option<bool>) -> usize {
     }
 }
 
-fn driver_entry_name_text(text: impl Into<SharedString>) -> MonoLabel {
-    MonoLabel::new(text)
+fn driver_entry_name_text(text: impl Into<SharedString>) -> InterfaceText {
+    InterfaceText::label(text)
 }
 
 fn driver_entry_key_text(text: impl Into<SharedString>) -> MonoMeta {
@@ -876,7 +876,9 @@ impl DriversSection {
                             .py_1()
                             .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(MonoCaption::new(entry.metadata.category.display_name())),
+                            .child(InterfaceText::caption(
+                                entry.metadata.category.display_name(),
+                            )),
                     )
                     .child(
                         div()
@@ -884,7 +886,7 @@ impl DriversSection {
                             .py_1()
                             .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(MonoCaption::new(
+                            .child(InterfaceText::caption(
                                 entry.metadata.query_language.display_name().to_string(),
                             )),
                     ),
@@ -1094,9 +1096,9 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(override_default_caption(&policy_label(
-                                global.default_refresh_policy,
-                            )))),
+                            .child(InterfaceText::caption(override_default_caption(
+                                &policy_label(global.default_refresh_policy),
+                            ))),
                     )
                     .child(
                         div()
@@ -1190,7 +1192,7 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(MonoCaption::new(override_default_seconds_caption(
+                            .child(InterfaceText::caption(override_default_seconds_caption(
                                 global.default_refresh_interval_secs,
                             ))),
                     )
@@ -1231,7 +1233,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(override_default_caption(
+                            .child(InterfaceText::caption(override_default_caption(
                                 &bool_override_caption(global.confirm_dangerous_queries),
                             ))),
                     )
@@ -1272,7 +1274,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(override_default_caption(
+                            .child(InterfaceText::caption(override_default_caption(
                                 &bool_override_caption(global.dangerous_requires_where),
                             ))),
                     )
@@ -1313,7 +1315,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(MonoCaption::new(override_default_caption(
+                            .child(InterfaceText::caption(override_default_caption(
                                 &bool_override_caption(global.dangerous_requires_preview),
                             ))),
                     ),
@@ -1356,7 +1358,7 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(SubSectionLabel::new(section.title.to_uppercase()))
+                            .child(SubSectionLabel::new(section.title.clone()))
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(
                                     field,
@@ -1584,8 +1586,8 @@ mod tests {
         let name = driver_entry_name_text("PostgreSQL").inspect();
         let key = driver_entry_key_text("postgres").inspect();
 
-        assert_eq!(name.family, Some(AppFonts::MONO));
-        assert_eq!(name.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(name.family, Some(AppFonts::INTERFACE));
+        assert!(name.fallbacks.is_empty());
         assert_eq!(name.size_override, Some(FontSizes::BASE));
         assert_eq!(name.weight_override, None);
         assert_eq!(

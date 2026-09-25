@@ -6,7 +6,7 @@ use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, focus_frame};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing, Widths};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel, PanelTitle};
+use dbflux_components::typography::{Body, InterfaceText, MonoCaption, MonoLabel, PanelTitle};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
@@ -1441,7 +1441,7 @@ impl HooksSection {
                 container
                     .child(
                         div().mt_2().child(
-                            MonoCaption::new(dbflux_i18n::t!(
+                            InterfaceText::caption(dbflux_i18n::t!(
                                 "settings.hooks.list.unreadable.title"
                             ))
                             .color(theme.muted_foreground),

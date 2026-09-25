@@ -6,7 +6,7 @@ use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChromeColors, Radii, Spacing};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
+use dbflux_components::typography::{Body, InterfaceText, MonoCaption};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -443,7 +443,7 @@ fn palette_item_name(
 
     match item {
         PaletteItem::Resource(_) | PaletteItem::Script { .. } | PaletteItem::SavedChart { .. } => {
-            MonoLabel::new(name).color(color).into_any_element()
+            InterfaceText::label(name).color(color).into_any_element()
         }
         _ => Body::new(name).color(color).into_any_element(),
     }
@@ -453,8 +453,8 @@ fn palette_category_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(label).color(if is_selected {
+) -> InterfaceText {
+    InterfaceText::caption(label).color(if is_selected {
         ChromeColors::tint(theme).opacity(0.75)
     } else {
         theme.muted_foreground
@@ -465,8 +465,8 @@ fn palette_qualifier_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(label).color(if is_selected {
+) -> InterfaceText {
+    InterfaceText::caption(label).color(if is_selected {
         ChromeColors::tint(theme).opacity(0.65)
     } else {
         theme.muted_foreground
@@ -1048,7 +1048,7 @@ impl Render for CommandPalette {
                                         .px(Spacing::MD)
                                         .py(Spacing::XS)
                                         .child(
-                                            MonoCaption::new(label)
+                                            InterfaceText::caption(label)
                                                 .color(theme.muted_foreground)
                                                 .into_any_element(),
                                         )
@@ -1113,7 +1113,7 @@ impl Render for CommandPalette {
                                                 SharedString::from("\u{2193}"),
                                             ]))
                                             .child(
-                                                MonoCaption::new(dbflux_i18n::t!(
+                                                InterfaceText::caption(dbflux_i18n::t!(
                                                     "palette.footer.navigate"
                                                 ))
                                                 .color(theme.muted_foreground),
@@ -1126,7 +1126,7 @@ impl Render for CommandPalette {
                                             .gap(Spacing::XS)
                                             .child(Chord::new(vec![SharedString::from("\u{21B5}")]))
                                             .child(
-                                                MonoCaption::new(dbflux_i18n::t!(
+                                                InterfaceText::caption(dbflux_i18n::t!(
                                                     "palette.footer.run"
                                                 ))
                                                 .color(theme.muted_foreground),
@@ -1213,7 +1213,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
+    fn qualifiers_use_interface_caption_role(cx: &mut TestAppContext) {
         cx.update(theme::init);
 
         let theme = cx.update(|cx| Theme::global(cx).clone());
@@ -1222,8 +1222,8 @@ mod tests {
         let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
 
         for inspection in [qualifier, selected] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::XS));
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);

@@ -95,52 +95,98 @@ pub struct BundledFontAsset {
 pub struct AppFonts;
 
 impl AppFonts {
-    pub const HEADLINE: &'static str = "JetBrains Mono";
-    pub const BODY: &'static str = "JetBrains Mono";
+    /// Interface face: labels, buttons, menus, settings, body copy, tabs and tree rows.
+    pub const INTERFACE: &'static str = "Archivo";
+    /// Display face: uppercase section labels and large titles. Never used for body text.
+    pub const DISPLAY: &'static str = "Archivo Expanded";
+    /// Data face: grid cells, keys, queries, identifiers, key hints and numeric readouts.
     pub const MONO: &'static str = "JetBrains Mono";
     pub const MONO_FALLBACK: &'static str = "monospace";
-    pub const CODE: &'static str = Self::MONO;
-    pub const SHORTCUT: &'static str = Self::MONO;
 }
 
-pub const BUNDLED_FONT_ASSETS: [BundledFontAsset; 8] = [
+pub const BUNDLED_FONT_ASSETS: [BundledFontAsset; 17] = [
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-Regular.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-Regular.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-Italic.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-Italic.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-Medium.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-Medium.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-SemiBold.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-SemiBold.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-Bold.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-Bold.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::INTERFACE,
+        file_name: "Archivo-ExtraBold.ttf",
+        data: include_bytes!("../assets/fonts/Archivo-ExtraBold.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::DISPLAY,
+        file_name: "ArchivoExpanded-Bold.ttf",
+        data: include_bytes!("../assets/fonts/ArchivoExpanded-Bold.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::DISPLAY,
+        file_name: "ArchivoExpanded-ExtraBold.ttf",
+        data: include_bytes!("../assets/fonts/ArchivoExpanded-ExtraBold.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::DISPLAY,
+        file_name: "ArchivoExpanded-Black.ttf",
+        data: include_bytes!("../assets/fonts/ArchivoExpanded-Black.ttf"),
+    },
+    BundledFontAsset {
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-Regular.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-Italic.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-Medium.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-MediumItalic.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-MediumItalic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-SemiBold.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-SemiBoldItalic.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-SemiBoldItalic.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-Bold.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
     },
     BundledFontAsset {
-        family: AppFonts::BODY,
+        family: AppFonts::MONO,
         file_name: "JetBrainsMono-BoldItalic.ttf",
         data: include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
     },
@@ -238,7 +284,7 @@ impl SubSectionLabel {
 
 impl RenderOnce for SubSectionLabel {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Text::subsection_label(SharedString::from(self.text.to_uppercase()))
+        Text::subsection_label(self.text)
     }
 }
 
@@ -259,9 +305,7 @@ impl RenderOnce for SidebarGroupLabel {
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            .child(Text::sidebar_group_label(SharedString::from(
-                self.text.to_uppercase(),
-            )))
+            .child(Text::sidebar_group_label(self.text))
     }
 }
 
@@ -334,6 +378,151 @@ impl RenderOnce for Caption {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DefaultTextTone {
+    Role,
+    Muted,
+}
+
+fn apply_scaled_text_overrides(
+    text: Text,
+    size: Pixels,
+    color: Option<Hsla>,
+    weight_override: Option<FontWeight>,
+    default_tone: DefaultTextTone,
+) -> Text {
+    let text = text.font_size(size);
+
+    let text = match weight_override {
+        Some(weight) => text.font_weight(weight),
+        None => text,
+    };
+
+    match (color, default_tone) {
+        (Some(color), _) => text.color(color),
+        (None, DefaultTextTone::Role) => text,
+        (None, DefaultTextTone::Muted) => text.muted_foreground(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InterfaceTextScale {
+    Label,
+    Caption,
+    Meta,
+}
+
+impl InterfaceTextScale {
+    fn default_size(self) -> Pixels {
+        match self {
+            Self::Label => FontSizes::BASE,
+            Self::Caption => FontSizes::XS,
+            Self::Meta => FontSizes::SM,
+        }
+    }
+
+    fn density_size(self, cx: &App) -> Pixels {
+        match self {
+            Self::Label => density::font_base(cx),
+            Self::Caption => density::font_xs(cx),
+            Self::Meta => density::font_sm(cx),
+        }
+    }
+
+    fn default_tone(self) -> DefaultTextTone {
+        match self {
+            Self::Label => DefaultTextTone::Role,
+            Self::Caption | Self::Meta => DefaultTextTone::Muted,
+        }
+    }
+}
+
+/// Interface-face counterpart of `MonoLabel`, `MonoCaption` and `MonoMeta`
+/// for chrome copy such as tab titles, tree rows, panel headers and status
+/// items. Sizes and default colors match the mono helpers of the same scale.
+#[derive(IntoElement)]
+pub struct InterfaceText {
+    text: SharedString,
+    scale: InterfaceTextScale,
+    color: Option<Hsla>,
+    size_override: Option<gpui::Pixels>,
+    weight_override: Option<FontWeight>,
+}
+
+impl InterfaceText {
+    fn with_scale(text: impl Into<SharedString>, scale: InterfaceTextScale) -> Self {
+        Self {
+            text: text.into(),
+            scale,
+            color: None,
+            size_override: None,
+            weight_override: None,
+        }
+    }
+
+    /// Base-size label in the foreground color.
+    pub fn label(text: impl Into<SharedString>) -> Self {
+        Self::with_scale(text, InterfaceTextScale::Label)
+    }
+
+    /// Extra-small caption in the muted foreground color.
+    pub fn caption(text: impl Into<SharedString>) -> Self {
+        Self::with_scale(text, InterfaceTextScale::Caption)
+    }
+
+    /// Small metadata text in the muted foreground color.
+    pub fn meta(text: impl Into<SharedString>) -> Self {
+        Self::with_scale(text, InterfaceTextScale::Meta)
+    }
+
+    pub fn color(mut self, color: Hsla) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    pub fn font_size(mut self, size: gpui::Pixels) -> Self {
+        self.size_override = Some(size);
+        self
+    }
+
+    pub fn font_weight(mut self, weight: FontWeight) -> Self {
+        self.weight_override = Some(weight);
+        self
+    }
+
+    /// Inspect the text contract without a render context.
+    ///
+    /// Uses Default-tier font sizes when no explicit size override is set.
+    #[doc(hidden)]
+    pub fn inspect(&self) -> MonoTextInspection {
+        inspect_mono_text(&self.build_text(
+            self.text.clone(),
+            self.size_override.unwrap_or(self.scale.default_size()),
+        ))
+    }
+
+    fn build_text(&self, text: SharedString, size: Pixels) -> Text {
+        apply_scaled_text_overrides(
+            Text::body_sm(text),
+            size,
+            self.color,
+            self.weight_override,
+            self.scale.default_tone(),
+        )
+    }
+}
+
+impl RenderOnce for InterfaceText {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let size = self
+            .size_override
+            .unwrap_or_else(|| self.scale.density_size(cx));
+        let text = self.text.clone();
+
+        self.build_text(text, size)
+    }
+}
+
 #[derive(IntoElement)]
 pub struct MonoLabel {
     text: SharedString,
@@ -388,17 +577,13 @@ impl MonoLabel {
         size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size);
-
-        let text = match weight_override {
-            Some(weight) => text.font_weight(weight),
-            None => text,
-        };
-
-        match color {
-            Some(color) => text.color(color),
-            None => text,
-        }
+        apply_scaled_text_overrides(
+            Text::code(text),
+            size,
+            color,
+            weight_override,
+            DefaultTextTone::Role,
+        )
     }
 
     #[cfg(test)]
@@ -472,17 +657,13 @@ impl MonoCaption {
         size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size);
-
-        let text = match weight_override {
-            Some(weight) => text.font_weight(weight),
-            None => text,
-        };
-
-        match color {
-            Some(color) => text.color(color),
-            None => text.muted_foreground(),
-        }
+        apply_scaled_text_overrides(
+            Text::code(text),
+            size,
+            color,
+            weight_override,
+            DefaultTextTone::Muted,
+        )
     }
 
     #[cfg(test)]
@@ -556,17 +737,13 @@ impl MonoMeta {
         size: Pixels,
         weight_override: Option<FontWeight>,
     ) -> Text {
-        let text = Text::code(text).font_size(size);
-
-        let text = match weight_override {
-            Some(weight) => text.font_weight(weight),
-            None => text,
-        };
-
-        match color {
-            Some(color) => text.color(color),
-            None => text.muted_foreground(),
-        }
+        apply_scaled_text_overrides(
+            Text::code(text),
+            size,
+            color,
+            weight_override,
+            DefaultTextTone::Muted,
+        )
     }
 
     #[cfg(test)]
@@ -747,7 +924,9 @@ impl RenderOnce for SectionDivider {
 
 #[cfg(test)]
 mod typography_role_tests {
-    use super::{MonoCaption, MonoColorSelection, MonoDefaultColor, MonoLabel, MonoMeta};
+    use super::{
+        InterfaceText, MonoCaption, MonoColorSelection, MonoDefaultColor, MonoLabel, MonoMeta,
+    };
     use crate::tokens::FontSizes;
     use crate::typography::AppFonts;
     #[test]
@@ -841,6 +1020,47 @@ mod typography_role_tests {
     }
 
     #[test]
+    fn interface_text_uses_interface_family_with_mono_helper_metrics() {
+        let label = InterfaceText::label("users").inspect();
+        let caption = InterfaceText::caption("Tables").inspect();
+        let meta = InterfaceText::meta("Connected").inspect();
+
+        for inspection in [label, caption, meta] {
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
+            assert_eq!(inspection.weight_override, None);
+        }
+
+        assert_eq!(label.size_override, Some(FontSizes::BASE));
+        assert_eq!(
+            label.color_selection,
+            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+        );
+        assert_eq!(caption.size_override, Some(FontSizes::XS));
+        assert!(caption.uses_muted_foreground_override);
+        assert_eq!(meta.size_override, Some(FontSizes::SM));
+        assert!(meta.uses_muted_foreground_override);
+    }
+
+    #[test]
+    fn interface_text_keeps_explicit_overrides() {
+        let color = gpui::red();
+        let inspection = InterfaceText::caption("Panel")
+            .color(color)
+            .font_size(FontSizes::SM)
+            .font_weight(gpui::FontWeight::BOLD)
+            .inspect();
+
+        assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+        assert_eq!(
+            inspection.color_selection,
+            MonoColorSelection::Custom(color)
+        );
+        assert_eq!(inspection.size_override, Some(FontSizes::SM));
+        assert_eq!(inspection.weight_override, Some(gpui::FontWeight::BOLD));
+    }
+
+    #[test]
     fn mono_helpers_allow_explicit_size_and_weight_overrides() {
         let label = MonoLabel::new("table_name")
             .font_size(FontSizes::SM)
@@ -884,7 +1104,7 @@ impl AppButton {
 impl RenderOnce for AppButton {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
-            .font_family(AppFonts::BODY)
+            .font_family(AppFonts::INTERFACE)
             .font_weight(FontWeight::MEDIUM)
             .children(self.children)
     }
@@ -909,7 +1129,7 @@ impl AppInput {
 impl RenderOnce for AppInput {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
-            .font_family(AppFonts::BODY)
+            .font_family(AppFonts::INTERFACE)
             .font_weight(FontWeight::MEDIUM)
             .children(self.children)
     }
@@ -944,7 +1164,7 @@ impl RenderOnce for AppTab {
         };
 
         div()
-            .font_family(AppFonts::BODY)
+            .font_family(AppFonts::INTERFACE)
             .font_weight(weight)
             .children(self.children)
     }
@@ -969,7 +1189,7 @@ impl AppSection {
 impl RenderOnce for AppSection {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
-            .font_family(AppFonts::BODY)
+            .font_family(AppFonts::INTERFACE)
             .font_weight(FontWeight::MEDIUM)
             .children(self.children)
     }
@@ -994,7 +1214,7 @@ impl AppPanel {
 impl RenderOnce for AppPanel {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
-            .font_family(AppFonts::BODY)
+            .font_family(AppFonts::INTERFACE)
             .font_weight(FontWeight::MEDIUM)
             .children(self.children)
     }
@@ -1025,33 +1245,40 @@ mod tests {
     }
 
     #[test]
-    fn mono_font_contract_stays_on_jetbrains_mono() {
-        assert_eq!(AppFonts::BODY, "JetBrains Mono");
-        assert_eq!(AppFonts::HEADLINE, "JetBrains Mono");
+    fn font_contract_splits_interface_display_and_data_families() {
+        assert_eq!(AppFonts::INTERFACE, "Archivo");
+        assert_eq!(AppFonts::DISPLAY, "Archivo Expanded");
         assert_eq!(AppFonts::MONO, "JetBrains Mono");
         assert_eq!(AppFonts::MONO_FALLBACK, "monospace");
-        assert_eq!(AppFonts::CODE, AppFonts::MONO);
-        assert_eq!(AppFonts::SHORTCUT, AppFonts::MONO);
     }
 
     #[test]
-    fn mono_bundled_assets_use_jetbrains_mono_files() {
-        let mono_assets: Vec<_> = BUNDLED_FONT_ASSETS
+    fn bundled_assets_cover_every_family() {
+        let assets: Vec<_> = BUNDLED_FONT_ASSETS
             .iter()
-            .map(|asset| asset.file_name)
+            .map(|asset| (asset.family, asset.file_name))
             .collect();
 
         assert_eq!(
-            mono_assets,
+            assets,
             vec![
-                "JetBrainsMono-Regular.ttf",
-                "JetBrainsMono-Italic.ttf",
-                "JetBrainsMono-Medium.ttf",
-                "JetBrainsMono-MediumItalic.ttf",
-                "JetBrainsMono-SemiBold.ttf",
-                "JetBrainsMono-SemiBoldItalic.ttf",
-                "JetBrainsMono-Bold.ttf",
-                "JetBrainsMono-BoldItalic.ttf",
+                (AppFonts::INTERFACE, "Archivo-Regular.ttf"),
+                (AppFonts::INTERFACE, "Archivo-Italic.ttf"),
+                (AppFonts::INTERFACE, "Archivo-Medium.ttf"),
+                (AppFonts::INTERFACE, "Archivo-SemiBold.ttf"),
+                (AppFonts::INTERFACE, "Archivo-Bold.ttf"),
+                (AppFonts::INTERFACE, "Archivo-ExtraBold.ttf"),
+                (AppFonts::DISPLAY, "ArchivoExpanded-Bold.ttf"),
+                (AppFonts::DISPLAY, "ArchivoExpanded-ExtraBold.ttf"),
+                (AppFonts::DISPLAY, "ArchivoExpanded-Black.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-Regular.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-Italic.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-Medium.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-MediumItalic.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-SemiBold.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-SemiBoldItalic.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-Bold.ttf"),
+                (AppFonts::MONO, "JetBrainsMono-BoldItalic.ttf"),
             ]
         );
     }
@@ -1068,7 +1295,7 @@ mod tests {
     }
 
     #[test]
-    fn body_and_caption_wrappers_keep_shared_mono_first_contracts() {
+    fn body_and_caption_wrappers_keep_shared_interface_contracts() {
         let body = Body::new("Sidebar").text();
         let caption = Caption::new("Settings").text();
 

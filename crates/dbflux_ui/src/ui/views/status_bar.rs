@@ -4,7 +4,7 @@ use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
-use dbflux_components::typography::{MonoCaption, MonoMeta};
+use dbflux_components::typography::{InterfaceText, MonoMeta};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -177,12 +177,17 @@ impl StatusBar {
         )
     }
 
-    fn metadata_text(text: impl Into<SharedString>) -> MonoMeta {
+    fn metadata_text(text: impl Into<SharedString>) -> InterfaceText {
+        InterfaceText::meta(text)
+    }
+
+    /// Elapsed times and counters stay in the data face so their digits line up.
+    fn readout_text(text: impl Into<SharedString>) -> MonoMeta {
         MonoMeta::new(text)
     }
 
-    fn status_text(text: impl Into<SharedString>) -> MonoCaption {
-        MonoCaption::new(text).font_size(FontSizes::SM)
+    fn status_text(text: impl Into<SharedString>) -> InterfaceText {
+        InterfaceText::caption(text).font_size(FontSizes::SM)
     }
 
     /// Compact badge label and tooltip explaining why the active connection
@@ -319,7 +324,7 @@ impl Render for StatusBar {
                                 .h(px(22.0))
                                 .child(Self::status_text(description))
                                 .child(
-                                    Self::metadata_text(format!(
+                                    Self::readout_text(format!(
                                         "({})",
                                         Self::format_elapsed(task.elapsed_secs)
                                     ))
@@ -386,7 +391,7 @@ impl Render for StatusBar {
                                         .size(Heights::ICON_SM)
                                         .color(SemBannerColors::for_current(cx).error_fg),
                                 )
-                                .child(Self::metadata_text(unread.to_string()))
+                                .child(Self::readout_text(unread.to_string()))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.app_state.update(cx, |s, cx| {
                                         s.clear_unread_errors(cx);
@@ -443,11 +448,11 @@ mod tests {
     use dbflux_components::typography::AppFonts;
 
     #[test]
-    fn status_bar_metadata_uses_small_mono_meta_role() {
+    fn status_bar_metadata_uses_small_interface_meta_role() {
         let inspection = StatusBar::metadata_text("dbflux-postgres").inspect();
 
-        assert_eq!(inspection.family, Some(AppFonts::MONO));
-        assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+        assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+        assert!(inspection.fallbacks.is_empty());
         assert_eq!(inspection.size_override, Some(FontSizes::SM));
         assert_eq!(inspection.weight_override, None);
         assert!(inspection.uses_muted_foreground_override);
@@ -455,13 +460,13 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_copy_keeps_mono_family_with_readable_small_size() {
+    fn status_bar_copy_uses_interface_family_with_readable_small_size() {
         let running = StatusBar::status_text("2 running").inspect();
         let divider = StatusBar::status_text("|").inspect();
 
         for inspection in [running, divider] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::SM));
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.uses_muted_foreground_override);

@@ -16,6 +16,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
+use dbflux_components::typography::AppFonts;
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
 use gpui::*;
@@ -599,6 +600,7 @@ impl AuditDocument {
             .id("audit-event-list")
             .flex_1()
             .overflow_y_scrollbar()
+            .font_family(AppFonts::MONO)
             .flex()
             .flex_col()
             .children(rows)

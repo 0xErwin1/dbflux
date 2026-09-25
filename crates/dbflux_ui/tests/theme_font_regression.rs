@@ -46,11 +46,11 @@ fn rgb_to_hsla(hex: u32) -> gpui::Hsla {
 }
 
 fn assert_centralized_fonts(theme: &Theme) {
-    assert_eq!(theme.font_family, SharedString::from(AppFonts::BODY));
+    assert_eq!(theme.font_family, SharedString::from(AppFonts::INTERFACE));
     assert_eq!(theme.mono_font_family, SharedString::from(AppFonts::MONO));
     assert_eq!(
         theme.dark_theme.font_family,
-        Some(SharedString::from(AppFonts::BODY))
+        Some(SharedString::from(AppFonts::INTERFACE))
     );
     assert_eq!(
         theme.dark_theme.mono_font_family,
@@ -58,7 +58,7 @@ fn assert_centralized_fonts(theme: &Theme) {
     );
     assert_eq!(
         theme.light_theme.font_family,
-        Some(SharedString::from(AppFonts::BODY))
+        Some(SharedString::from(AppFonts::INTERFACE))
     );
     assert_eq!(
         theme.light_theme.mono_font_family,

@@ -7,7 +7,7 @@ use crate::density;
 use crate::icon::IconSource;
 use crate::primitives::{Icon, SurfaceRole};
 use crate::tokens::{ChromeColors, FontSizes, Heights, Spacing};
-use crate::typography::{MonoCaption, MonoTextInspection};
+use crate::typography::{InterfaceText, MonoTextInspection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelHeaderVariant {
@@ -94,7 +94,7 @@ fn background_color(selection: PanelHeaderBackground, theme: &gpui_component::Th
 }
 
 fn title_inspection(focused: bool) -> MonoTextInspection {
-    let mut title = MonoCaption::new("Panel").font_size(FontSizes::SM);
+    let mut title = InterfaceText::caption("Panel").font_size(FontSizes::SM);
 
     title = if focused {
         title.font_weight(gpui::FontWeight::BOLD)
@@ -283,7 +283,7 @@ fn panel_header_layout(
         );
     }
 
-    let title = MonoCaption::new(title)
+    let title = InterfaceText::caption(title)
         .font_size(density::font_sm(cx))
         .font_weight(if focused {
             gpui::FontWeight::BOLD
@@ -385,7 +385,7 @@ fn panel_header_layout_stateful(
         .filter(|_| focused)
         .unwrap_or(contract.base_title_color);
 
-    let title = MonoCaption::new(title)
+    let title = InterfaceText::caption(title)
         .font_size(density::font_sm(cx))
         .font_weight(if focused {
             gpui::FontWeight::BOLD
@@ -455,7 +455,7 @@ fn panel_header_custom_stateful(
     }
 
     left = left.child(
-        MonoCaption::new(title)
+        InterfaceText::caption(title)
             .font_size(density::font_sm(cx))
             .font_weight(gpui::FontWeight::MEDIUM)
             .color(theme.foreground),
@@ -487,7 +487,7 @@ mod tests {
     use gpui::FontWeight;
 
     #[test]
-    fn default_panel_header_keeps_toolbar_metrics_and_mono_title_contract() {
+    fn default_panel_header_keeps_toolbar_metrics_and_interface_title_contract() {
         let inspection = inspect_panel_header(PanelHeaderVariant::Standard, false, false, false);
 
         assert_eq!(inspection.height, Heights::TOOLBAR);
@@ -496,7 +496,7 @@ mod tests {
             inspection.background,
             PanelHeaderBackground::Surface(SurfaceRole::Card)
         );
-        assert_eq!(inspection.title.family, Some(AppFonts::MONO));
+        assert_eq!(inspection.title.family, Some(AppFonts::INTERFACE));
         assert_eq!(inspection.title.size_override, Some(FontSizes::SM));
         assert_eq!(inspection.title.weight_override, Some(FontWeight::MEDIUM));
         assert_eq!(

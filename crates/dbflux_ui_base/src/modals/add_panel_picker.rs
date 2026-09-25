@@ -643,7 +643,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::field_label(dbflux_i18n::t!(
                     "modals.add_panel_picker.saved.search_label"
                 ))
                 .into_any_element(),
@@ -717,7 +717,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                Text::field_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
                     .into_any_element(),
             )
             .child(Input::new(&self.query_name_input))
@@ -729,7 +729,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.query.label"))
+                Text::field_label(dbflux_i18n::t!("modals.add_panel_picker.query.label"))
                     .into_any_element(),
             )
             .child(
@@ -745,7 +745,7 @@ impl ModalAddPanelPicker {
                         Editor::new(&self.query_input)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::BODY)
+                            .font_family(AppFonts::MONO)
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     )
@@ -758,7 +758,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.chart_kind.label"))
+                Text::field_label(dbflux_i18n::t!("modals.add_panel_picker.chart_kind.label"))
                     .into_any_element(),
             )
             .child(self.render_chart_kind_picker(cx))
@@ -986,7 +986,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                Text::field_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
                     .into_any_element(),
             )
             .child(Input::new(&self.metric_name_input))
@@ -1000,7 +1000,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::field_label(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.namespace_label"
                 ))
                 .into_any_element(),
@@ -1016,7 +1016,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::field_label(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.metric_label"
                 ))
                 .into_any_element(),
@@ -1039,7 +1039,7 @@ impl ModalAddPanelPicker {
             .gap(Spacing::XS)
             .w(px(180.0))
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::field_label(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.period_label"
                 ))
                 .into_any_element(),
@@ -1074,7 +1074,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::field_label(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.statistic_label"
                 ))
                 .into_any_element(),

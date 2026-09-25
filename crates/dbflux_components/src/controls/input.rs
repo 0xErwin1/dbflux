@@ -10,7 +10,6 @@ use gpui_component::Sizable;
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
 
 use crate::tokens::FontSizes;
-use crate::typography::AppFonts;
 
 pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
@@ -50,6 +49,10 @@ pub fn register_input_overrides(cx: &mut App) {
 
 /// Thin wrapper around `gpui_component::input::Input` that pre-applies
 /// DBFlux design token defaults (height, size).
+///
+/// The font family is inherited from the container: forms render in the
+/// interface face, while data surfaces that set the data face on their rows
+/// keep inline edits in that face.
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
@@ -144,7 +147,6 @@ impl RenderOnce for Input {
         let mut input = GpuiInput::new(&self.state)
             .appearance(self.appearance)
             .disabled(self.disabled)
-            .font_family(AppFonts::BODY)
             .font_weight(FontWeight::MEDIUM)
             .text_size(if self.small {
                 FontSizes::SM

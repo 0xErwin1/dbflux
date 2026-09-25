@@ -23,6 +23,7 @@ use crate::chart::stats::{
 };
 use crate::semantic::ChartColors;
 use crate::tokens::{ChromeColors, FontSizes};
+use crate::typography::AppFonts;
 use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -1263,7 +1264,7 @@ impl Render for ChartView {
 
                                 let theme = cx.theme();
                                 let tick_color = theme.muted_foreground;
-                                let tick_font = font("Zed Mono");
+                                let tick_font = font(AppFonts::MONO);
                                 let tick_size = gpui::px(10.0);
                                 let line_height = gpui::px(12.0);
                                 let gridline_color = theme.border;

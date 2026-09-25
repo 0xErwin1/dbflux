@@ -13,7 +13,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
+use dbflux_components::typography::{Body, InterfaceText, MonoMeta, PanelTitle};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
@@ -803,7 +803,7 @@ impl SshTunnelsSection {
                                             .gap_1()
                                             .child(Body::new(tunnel.name.clone()))
                                             .child(MonoMeta::new(subtitle))
-                                            .child(MonoCaption::new(auth_label)),
+                                            .child(InterfaceText::caption(auth_label)),
                                     ),
                             )
                     })),

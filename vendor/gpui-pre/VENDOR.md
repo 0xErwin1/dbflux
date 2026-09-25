@@ -1,10 +1,11 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus five patches. It exists so the
+This directory is the published `gpui-pre` crate source plus six patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
+The sixth adds letter spacing to text styles.
 
 ## Why
 
@@ -113,6 +114,27 @@ and `SetValue` and `ReplaceSelectedText` requests to it run no listener. This co
 `Window::set_observed_element_value`, which then returns `false`, and requests from an
 assistive technology through `Window::handle_a11y_action`.
 
+### Letter spacing
+
+The design system sets its uppercase section labels with tracking (about 0.14em), and
+upstream `TextStyle` has no letter spacing. The patch adds `TextStyle::letter_spacing`
+(`Pixels`, zero by default) and the `Styled::letter_spacing` builder, so it cascades like
+any other text style.
+
+The text element passes the value to the new `WindowTextSystem::shape_text_with_letter_spacing`;
+`shape_text` delegates to it with zero, so every existing caller is unchanged. Spacing is
+applied after shaping: the wrapped-line cache copies the shaped line, moves each glyph right
+by the spacing times the number of characters before it and widens the line by the spacing
+times the character count, like CSS. Wrap boundaries are computed from those positions, so
+wrapping accounts for the spacing. The spacing is part of the wrapped-line cache key; the
+unwrapped `layout_line` cache and its entries are untouched, and a zero spacing takes the
+exact code path it took before.
+
+Ellipsis truncation still measures characters without the spacing, so a spaced label that
+has to truncate is cut slightly late and relies on its container's `overflow_hidden`. Text
+shaped directly through `shape_line` or `shape_text` (canvas painting, the input editor)
+ignores the style.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -140,6 +162,8 @@ delta to this directory.
   patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
 - Patch 5: `read-only-accessibility.patch`, written for DBFlux against this directory with
   patches 1 to 4 applied — three files, 108 diff lines. It has no upstream counterpart.
+- Patch 6: `letter-spacing.patch`, written for DBFlux against this directory with
+  patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
@@ -193,7 +217,7 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
 `element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch`,
-`text-input-automation.patch` and then `read-only-accessibility.patch`.
+`text-input-automation.patch`, `read-only-accessibility.patch` and then `letter-spacing.patch`.
 It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting

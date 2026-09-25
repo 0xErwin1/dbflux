@@ -78,7 +78,7 @@ impl RenderOnce for KbdBadge {
             .border_1()
             .border_color(border_color)
             .bg(theme.secondary)
-            .font_family(AppFonts::SHORTCUT)
+            .font_family(AppFonts::MONO)
             .text_size(FontSizes::XS)
             .font_weight(Self::font_weight())
             .text_color(text_color)
@@ -104,7 +104,7 @@ impl KbdBadge {
     #[doc(hidden)]
     pub fn inspect(&self) -> KbdBadgeInspection {
         KbdBadgeInspection {
-            font_family: AppFonts::SHORTCUT,
+            font_family: AppFonts::MONO,
             font_size: FontSizes::XS,
             font_weight: Self::font_weight(),
             is_muted: self.muted,
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn kbd_badge_uses_shortcut_font_and_xs_size() {
         let badge = KbdBadge::new("⌘K").inspect();
-        assert_eq!(badge.font_family, AppFonts::SHORTCUT);
+        assert_eq!(badge.font_family, AppFonts::MONO);
         assert_eq!(badge.font_size, FontSizes::XS);
     }
 

@@ -10,7 +10,7 @@ use gpui_component::ActiveTheme;
 
 use crate::primitives::{BannerBlock, BannerVariant};
 use crate::tokens::{Anim, FontSizes, Heights, Radii, Spacing};
-use crate::typography::MonoCaption;
+use crate::typography::InterfaceText;
 
 /// Generic async-fetch state.
 ///
@@ -200,7 +200,7 @@ impl RenderOnce for LoadingBlock {
                 .px(Spacing::SM)
                 .child(Spinner::new(frame))
                 .when_some(label, |d, text| {
-                    d.child(MonoCaption::new(text).color(theme.muted_foreground))
+                    d.child(InterfaceText::caption(text).color(theme.muted_foreground))
                 })
                 .into_any_element(),
 

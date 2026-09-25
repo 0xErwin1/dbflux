@@ -9,6 +9,7 @@ use dbflux_components::controls::{Dropdown, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -333,6 +334,7 @@ impl Render for super::KeyValueDocument {
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
+                            .font_family(AppFonts::MONO)
                             .child(Icon::new(AppIcon::KeyRound).small().muted())
                             .child(Text::body(key_name)),
                     )
@@ -553,6 +555,7 @@ impl Render for super::KeyValueDocument {
                 let mut members_list = div()
                     .flex_1()
                     .overflow_y_scrollbar()
+                    .font_family(AppFonts::MONO)
                     .border_l_1()
                     .border_color(theme.border);
 
@@ -658,6 +661,7 @@ impl Render for super::KeyValueDocument {
                         .p(Spacing::MD)
                         .border_l_1()
                         .border_color(theme.border)
+                        .font_family(AppFonts::MONO)
                         .child(Input::new(input).small().w_full()),
                 );
             } else {
@@ -716,6 +720,7 @@ impl Render for super::KeyValueDocument {
                         .p(Spacing::MD)
                         .border_l_1()
                         .border_color(theme.border)
+                        .font_family(AppFonts::MONO)
                         .text_size(FontSizes::SM)
                         .text_color(theme.muted_foreground)
                         .when(is_editable, |d| {
@@ -1025,79 +1030,84 @@ impl Render for super::KeyValueDocument {
                 this.child(Text::caption(crate::labels::shared_error_prefix(&message)))
             })
             // Keys list
-            .child(div().flex_1().overflow_y_scrollbar().children(
-                self.keys.iter().enumerate().map(|(index, key)| {
-                    let selected = self.selected_index == Some(index);
-                    let is_renaming = self.renaming_index == Some(index);
-                    let row_bg = if selected {
-                        theme.list_active
-                    } else {
-                        theme.transparent
-                    };
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .font_family(AppFonts::MONO)
+                    .children(self.keys.iter().enumerate().map(|(index, key)| {
+                        let selected = self.selected_index == Some(index);
+                        let is_renaming = self.renaming_index == Some(index);
+                        let row_bg = if selected {
+                            theme.list_active
+                        } else {
+                            theme.transparent
+                        };
 
-                    let (icon, icon_color) = key_type_icon(key.key_type);
+                        let (icon, icon_color) = key_type_icon(key.key_type);
 
-                    let mut row = div()
-                        .h(Heights::ROW)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .px(Spacing::SM)
-                        .bg(row_bg)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.list_active))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                this.focus_mode = KeyValueFocusMode::List;
-                                this.select_index(index, cx);
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.focus_mode = KeyValueFocusMode::List;
-                                this.select_index(index, cx);
-                                cx.emit(DocumentEvent::RequestFocus);
-                                this.open_context_menu(
-                                    KvMenuTarget::Key,
-                                    event.position,
-                                    window,
-                                    cx,
+                        let mut row = div()
+                            .h(Heights::ROW)
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .px(Spacing::SM)
+                            .bg(row_bg)
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(theme.list_active))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.focus_mode = KeyValueFocusMode::List;
+                                    this.select_index(index, cx);
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.focus_mode = KeyValueFocusMode::List;
+                                    this.select_index(index, cx);
+                                    cx.emit(DocumentEvent::RequestFocus);
+                                    this.open_context_menu(
+                                        KvMenuTarget::Key,
+                                        event.position,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            );
+
+                        row = row.child(Icon::new(icon).small().color(icon_color));
+
+                        if is_renaming {
+                            if let Some(input) = &self.rename_input {
+                                row = row.child(
+                                    div().flex_1().child(Input::new(input).small().w_full()),
                                 );
-                            }),
-                        );
+                            }
+                        } else {
+                            row = row.child(
+                                div()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .child(Text::caption(key.key.clone())),
+                            );
 
-                    row = row.child(Icon::new(icon).small().color(icon_color));
-
-                    if is_renaming {
-                        if let Some(input) = &self.rename_input {
-                            row =
-                                row.child(div().flex_1().child(Input::new(input).small().w_full()));
+                            row = row.child(Text::caption(
+                                key.key_type.map(key_type_label).unwrap_or_else(|| {
+                                    dbflux_i18n::t!("document.key_value.parsing.type.unknown")
+                                }),
+                            ));
                         }
-                    } else {
-                        row = row.child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(Text::caption(key.key.clone())),
-                        );
 
-                        row = row.child(Text::caption(
-                            key.key_type.map(key_type_label).unwrap_or_else(|| {
-                                dbflux_i18n::t!("document.key_value.parsing.type.unknown")
-                            }),
-                        ));
-                    }
-
-                    row
-                }),
-            ));
+                        row
+                    })),
+            );
 
         // -- Compose --
         let this_entity = cx.entity().clone();

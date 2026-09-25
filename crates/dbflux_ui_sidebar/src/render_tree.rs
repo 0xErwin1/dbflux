@@ -2,7 +2,7 @@ use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
 use dbflux_components::tokens::ChromeColors;
-use dbflux_components::typography::MonoLabel;
+use dbflux_components::typography::InterfaceText;
 use gpui::FontWeight;
 
 fn sidebar_tree_label(
@@ -11,7 +11,7 @@ fn sidebar_tree_label(
     is_active: bool,
     is_active_database: bool,
     color: Hsla,
-) -> MonoLabel {
+) -> InterfaceText {
     let weight = if (node_kind == SchemaNodeKind::Profile && is_active) || is_active_database {
         FontWeight::SEMIBOLD
     } else if matches!(
@@ -30,7 +30,7 @@ fn sidebar_tree_label(
         FontWeight::NORMAL
     };
 
-    MonoLabel::new(label).font_weight(weight).color(color)
+    InterfaceText::label(label).font_weight(weight).color(color)
 }
 
 pub(super) struct TreeRenderParams {
@@ -1283,7 +1283,7 @@ mod tests {
     use gpui::SharedString;
 
     #[test]
-    fn sidebar_tree_items_keep_mono_family_and_hierarchy_weights() {
+    fn sidebar_tree_items_use_interface_family_and_hierarchy_weights() {
         let leaf = sidebar_tree_label(
             SharedString::from("users"),
             SchemaNodeKind::Table,
@@ -1321,8 +1321,8 @@ mod tests {
         .inspect();
 
         for inspection in [leaf, folder, active_profile, active_database] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
+            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::BASE));
             assert!(inspection.has_custom_color_override);
         }

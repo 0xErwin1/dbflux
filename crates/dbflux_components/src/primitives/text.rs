@@ -71,6 +71,9 @@ pub(crate) struct TextRoleContract {
     pub(crate) color: TextDefaultColor,
 }
 
+/// Tracking of the uppercase section-label roles, in em.
+const SECTION_LABEL_TRACKING_EM: f32 = 0.14;
+
 /// Visual variant controlling font size, weight, and default color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextVariant {
@@ -82,7 +85,7 @@ pub enum TextVariant {
     Label,
     /// Small emphasized labels — SM, medium, foreground.
     LabelSm,
-    /// Page titles and brand names — TITLE, bold, foreground.
+    /// Page titles and brand names — TITLE, extra-bold, display font, foreground.
     Title,
     /// Small labels — SM, medium, muted foreground.
     Caption,
@@ -94,23 +97,25 @@ pub enum TextVariant {
     DimSecondary,
     /// Inline code — SM, monospace, medium, foreground.
     Code,
-    /// Shared headline role — TITLE, bold, headline font, foreground.
+    /// Shared headline role — TITLE, extra-bold, display font, foreground.
     Headline3,
-    /// Shared headline role — XL, bold, headline font, foreground.
+    /// Shared headline role — XL, extra-bold, display font, foreground.
     Headline2,
-    /// Shared headline role — LG, bold, headline font, foreground.
+    /// Shared headline role — LG, bold, interface font, foreground.
     Headline1,
-    /// Shared section label role — SM, medium, body font, muted foreground.
+    /// Shared section label role — LABEL, extra-bold, display font, uppercase,
+    /// tracked, muted foreground.
     SubSectionLabel,
-    /// Shared sidebar label role — XS, bold, mono font, muted foreground.
+    /// Shared sidebar label role — LABEL, extra-bold, display font, uppercase,
+    /// tracked, muted foreground.
     SidebarGroupLabel,
-    /// Shared small body role — SM, medium, body font, foreground.
+    /// Shared small body role — SM, medium, interface font, foreground.
     BodySm,
-    /// Shared caption role — XS, medium, body font, muted foreground.
+    /// Shared caption role — XS, medium, interface font, muted foreground.
     CaptionXs,
     /// Shared key hint role — XS, bold, mono font, muted foreground.
     KeyHint,
-    /// Shared field label role — BASE, medium, body font, foreground.
+    /// Shared field label role — BASE, medium, interface font, foreground.
     FieldLabel,
 }
 
@@ -128,9 +133,17 @@ pub struct Text {
 
 impl Text {
     fn from_variant(variant: TextVariant, content: impl Into<SharedString>) -> Self {
+        let content = content.into();
+
+        let content = if variant.is_uppercase() {
+            SharedString::from(content.to_uppercase())
+        } else {
+            content
+        };
+
         Self {
             variant,
-            content: content.into(),
+            content,
             color_override: None,
             size_override: None,
             weight_override: None,
@@ -328,11 +341,25 @@ impl TextVariant {
             | Self::Dim
             | Self::DimSecondary
             | Self::Code
-            | Self::SubSectionLabel
             | Self::BodySm => density::font_sm(cx),
+            Self::SubSectionLabel | Self::SidebarGroupLabel => density::font_label(cx),
             Self::Title | Self::Headline3 => density::font_title(cx),
             Self::Headline1 => density::font_lg(cx),
-            Self::SidebarGroupLabel | Self::CaptionXs | Self::KeyHint => density::font_xs(cx),
+            Self::CaptionXs | Self::KeyHint => density::font_xs(cx),
+        }
+    }
+
+    /// Section-label roles render their text in capitals, so call sites pass
+    /// ordinary text.
+    pub(crate) fn is_uppercase(self) -> bool {
+        matches!(self, Self::SubSectionLabel | Self::SidebarGroupLabel)
+    }
+
+    /// Extra space after every character, as a fraction of the font size.
+    pub(crate) fn letter_spacing_em(self) -> f32 {
+        match self {
+            Self::SubSectionLabel | Self::SidebarGroupLabel => SECTION_LABEL_TRACKING_EM,
+            _ => 0.0,
         }
     }
 
@@ -367,10 +394,10 @@ impl TextVariant {
                 color: TextDefaultColor::Foreground,
             },
             Self::Title => TextRoleContract {
-                family: None,
+                family: Some(AppFonts::DISPLAY),
                 fallbacks: &[],
                 size: FontSizes::TITLE,
-                weight: FontWeight::BOLD,
+                weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::Foreground,
             },
             Self::Caption => TextRoleContract {
@@ -409,63 +436,63 @@ impl TextVariant {
                 color: TextDefaultColor::Foreground,
             },
             Self::Headline3 => TextRoleContract {
-                family: Some(AppFonts::HEADLINE),
+                family: Some(AppFonts::DISPLAY),
                 fallbacks: &[],
                 size: FontSizes::TITLE,
-                weight: FontWeight::BOLD,
+                weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::Foreground,
             },
             Self::Headline2 => TextRoleContract {
-                family: Some(AppFonts::HEADLINE),
+                family: Some(AppFonts::DISPLAY),
                 fallbacks: &[],
                 size: FontSizes::XL,
-                weight: FontWeight::BOLD,
+                weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::Foreground,
             },
             Self::Headline1 => TextRoleContract {
-                family: Some(AppFonts::HEADLINE),
+                family: Some(AppFonts::INTERFACE),
                 fallbacks: &[],
                 size: FontSizes::LG,
                 weight: FontWeight::BOLD,
                 color: TextDefaultColor::Foreground,
             },
             Self::SubSectionLabel => TextRoleContract {
-                family: Some(AppFonts::BODY),
+                family: Some(AppFonts::DISPLAY),
                 fallbacks: &[],
-                size: FontSizes::SM,
-                weight: FontWeight::MEDIUM,
+                size: FontSizes::LABEL,
+                weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::SidebarGroupLabel => TextRoleContract {
-                family: Some(AppFonts::SHORTCUT),
-                fallbacks: &[AppFonts::MONO_FALLBACK],
-                size: FontSizes::XS,
-                weight: FontWeight::BOLD,
+                family: Some(AppFonts::DISPLAY),
+                fallbacks: &[],
+                size: FontSizes::LABEL,
+                weight: FontWeight::EXTRA_BOLD,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::BodySm => TextRoleContract {
-                family: Some(AppFonts::BODY),
+                family: Some(AppFonts::INTERFACE),
                 fallbacks: &[],
                 size: FontSizes::SM,
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::Foreground,
             },
             Self::CaptionXs => TextRoleContract {
-                family: Some(AppFonts::BODY),
+                family: Some(AppFonts::INTERFACE),
                 fallbacks: &[],
                 size: FontSizes::XS,
                 weight: FontWeight::MEDIUM,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::KeyHint => TextRoleContract {
-                family: Some(AppFonts::SHORTCUT),
+                family: Some(AppFonts::MONO),
                 fallbacks: &[AppFonts::MONO_FALLBACK],
                 size: FontSizes::XS,
                 weight: FontWeight::BOLD,
                 color: TextDefaultColor::MutedForeground,
             },
             Self::FieldLabel => TextRoleContract {
-                family: Some(AppFonts::BODY),
+                family: Some(AppFonts::INTERFACE),
                 fallbacks: &[],
                 size: FontSizes::BASE,
                 weight: FontWeight::MEDIUM,
@@ -489,10 +516,15 @@ impl RenderOnce for Text {
             .map(|override_color| override_color.resolve(theme))
             .unwrap_or_else(|| contract.color.resolve(theme));
 
+        let letter_spacing_em = self.variant.letter_spacing_em();
+
         let el = div()
             .text_size(size)
             .font_weight(weight)
             .text_color(color)
+            .when(letter_spacing_em > 0.0, |el| {
+                el.letter_spacing(size * letter_spacing_em)
+            })
             .child(self.content);
 
         if let Some(family) = contract.family {
@@ -528,28 +560,36 @@ mod tests {
     #[test]
     fn shared_typography_roles_expose_expected_font_contracts() {
         let headline = TextVariant::Headline3.role_contract();
-        assert_eq!(headline.family, Some(AppFonts::HEADLINE));
+        assert_eq!(headline.family, Some(AppFonts::DISPLAY));
         assert_eq!(headline.fallbacks, NO_FALLBACKS);
         assert_eq!(headline.size, FontSizes::TITLE);
-        assert_eq!(headline.weight, FontWeight::BOLD);
+        assert_eq!(headline.weight, FontWeight::EXTRA_BOLD);
+
+        let headline_xl = TextVariant::Headline2.role_contract();
+        assert_eq!(headline_xl.family, Some(AppFonts::DISPLAY));
+        assert_eq!(headline_xl.weight, FontWeight::EXTRA_BOLD);
+
+        let title = TextVariant::Title.role_contract();
+        assert_eq!(title.family, Some(AppFonts::DISPLAY));
+        assert_eq!(title.weight, FontWeight::EXTRA_BOLD);
 
         let subsection = TextVariant::SubSectionLabel.role_contract();
-        assert_eq!(subsection.family, Some(AppFonts::BODY));
+        assert_eq!(subsection.family, Some(AppFonts::DISPLAY));
         assert_eq!(subsection.fallbacks, NO_FALLBACKS);
-        assert_eq!(subsection.size, FontSizes::SM);
-        assert_eq!(subsection.weight, FontWeight::MEDIUM);
+        assert_eq!(subsection.size, FontSizes::LABEL);
+        assert_eq!(subsection.weight, FontWeight::EXTRA_BOLD);
 
         let sidebar = TextVariant::SidebarGroupLabel.role_contract();
-        assert_eq!(sidebar.family, Some(AppFonts::SHORTCUT));
-        assert_eq!(sidebar.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(sidebar.size, FontSizes::XS);
-        assert_eq!(sidebar.weight, FontWeight::BOLD);
+        assert_eq!(sidebar.family, Some(AppFonts::DISPLAY));
+        assert_eq!(sidebar.fallbacks, NO_FALLBACKS);
+        assert_eq!(sidebar.size, FontSizes::LABEL);
+        assert_eq!(sidebar.weight, FontWeight::EXTRA_BOLD);
     }
 
     #[test]
     fn shared_body_and_mono_roles_keep_expected_defaults() {
         let body = TextVariant::BodySm.role_contract();
-        assert_eq!(body.family, Some(AppFonts::BODY));
+        assert_eq!(body.family, Some(AppFonts::INTERFACE));
         assert_eq!(body.fallbacks, NO_FALLBACKS);
         assert_eq!(body.size, FontSizes::SM);
         assert_eq!(body.weight, FontWeight::MEDIUM);
@@ -561,7 +601,7 @@ mod tests {
         assert_eq!(body_base.weight, FontWeight::MEDIUM);
 
         let key_hint = TextVariant::KeyHint.role_contract();
-        assert_eq!(key_hint.family, Some(AppFonts::SHORTCUT));
+        assert_eq!(key_hint.family, Some(AppFonts::MONO));
         assert_eq!(key_hint.fallbacks, &[AppFonts::MONO_FALLBACK]);
         assert_eq!(key_hint.size, FontSizes::XS);
         assert_eq!(key_hint.weight, FontWeight::BOLD);
@@ -573,7 +613,7 @@ mod tests {
         assert_eq!(code.weight, FontWeight::MEDIUM);
 
         let field_label = TextVariant::FieldLabel.role_contract();
-        assert_eq!(field_label.family, Some(AppFonts::BODY));
+        assert_eq!(field_label.family, Some(AppFonts::INTERFACE));
         assert_eq!(field_label.fallbacks, NO_FALLBACKS);
         assert_eq!(field_label.size, FontSizes::BASE);
         assert_eq!(field_label.weight, FontWeight::MEDIUM);
@@ -582,7 +622,7 @@ mod tests {
     #[test]
     fn shared_header_and_modal_roles_keep_expected_semantic_defaults() {
         let section_title = TextVariant::Headline1.role_contract();
-        assert_eq!(section_title.family, Some(AppFonts::HEADLINE));
+        assert_eq!(section_title.family, Some(AppFonts::INTERFACE));
         assert_eq!(section_title.fallbacks, NO_FALLBACKS);
         assert_eq!(section_title.size, FontSizes::LG);
         assert_eq!(section_title.weight, FontWeight::BOLD);
@@ -592,5 +632,67 @@ mod tests {
         assert_eq!(modal_title.fallbacks, NO_FALLBACKS);
         assert_eq!(modal_title.size, FontSizes::SM);
         assert_eq!(modal_title.weight, FontWeight::MEDIUM);
+    }
+
+    #[test]
+    fn display_face_is_reserved_for_labels_and_titles() {
+        let display_roles = [
+            TextVariant::Title,
+            TextVariant::Headline3,
+            TextVariant::Headline2,
+            TextVariant::SubSectionLabel,
+            TextVariant::SidebarGroupLabel,
+        ];
+
+        let non_display_roles = [
+            TextVariant::Heading,
+            TextVariant::Body,
+            TextVariant::Label,
+            TextVariant::LabelSm,
+            TextVariant::Caption,
+            TextVariant::Muted,
+            TextVariant::Dim,
+            TextVariant::DimSecondary,
+            TextVariant::Code,
+            TextVariant::Headline1,
+            TextVariant::BodySm,
+            TextVariant::CaptionXs,
+            TextVariant::KeyHint,
+            TextVariant::FieldLabel,
+        ];
+
+        for role in display_roles {
+            assert_eq!(
+                role.role_contract().family,
+                Some(AppFonts::DISPLAY),
+                "{role:?}"
+            );
+        }
+
+        for role in non_display_roles {
+            assert_ne!(
+                role.role_contract().family,
+                Some(AppFonts::DISPLAY),
+                "{role:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn section_label_roles_uppercase_and_track_their_text() {
+        for role in [TextVariant::SubSectionLabel, TextVariant::SidebarGroupLabel] {
+            assert!(role.is_uppercase(), "{role:?}");
+            assert_eq!(role.letter_spacing_em(), 0.14, "{role:?}");
+        }
+
+        assert!(!TextVariant::FieldLabel.is_uppercase());
+        assert_eq!(TextVariant::FieldLabel.letter_spacing_em(), 0.0);
+        assert!(!TextVariant::Body.is_uppercase());
+
+        let label = super::Text::subsection_label("Connection details");
+        assert_eq!(label.content.as_ref(), "CONNECTION DETAILS");
+
+        let field = super::Text::field_label("Connection details");
+        assert_eq!(field.content.as_ref(), "Connection details");
     }
 }
