@@ -275,7 +275,7 @@ impl CodeDocument {
                 )
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::Escape, window, cx| {
-                        this.clear_vim_count();
+                        this.clear_vim_count_and_notify(cx);
                         if this.handle_vim_escape_action(window, cx) {
                             cx.stop_propagation();
                         }
@@ -283,21 +283,21 @@ impl CodeDocument {
                 ))
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::IndentInline, _window, cx| {
-                        if this.vim_swallows_indent_action() {
+                        if this.vim_swallows_indent_action(cx) {
                             cx.stop_propagation();
                         }
                     },
                 ))
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::OutdentInline, _window, cx| {
-                        if this.vim_swallows_indent_action() {
+                        if this.vim_swallows_indent_action(cx) {
                             cx.stop_propagation();
                         }
                     },
                 ))
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                        this.clear_vim_count();
+                        this.clear_vim_count_and_notify(cx);
                         if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
                             cx.stop_propagation();
                         }
@@ -305,7 +305,7 @@ impl CodeDocument {
                 )
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                        this.clear_vim_count();
+                        this.clear_vim_count_and_notify(cx);
                         if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
                             cx.stop_propagation();
                         }
@@ -359,6 +359,14 @@ impl CodeDocument {
             .border_color(theme.border)
             .bg(theme.tab_bar)
             .child(Text::caption(crate::labels::vim_mode_label(mode)))
+            .when(!self.vim.pending_keys.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("vim-pending-command")
+                        .ml(Spacing::SM)
+                        .child(self.vim.pending_keys.clone()),
+                )
+            })
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -1430,6 +1430,29 @@ fn action_and_focus_boundaries_discard_pending_count(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn pending_display_clears_on_focus_and_tab_action(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef", true);
+    let pending = |editor: &mut Fixture<'_>| {
+        let document = editor.document.clone();
+        editor
+            .window
+            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+    };
+
+    editor.keys("3");
+    assert_eq!(pending(&mut editor), "3");
+    editor.focus_document(&editor.document.clone());
+    assert_eq!(pending(&mut editor), "");
+    assert!(editor.editor_focused());
+
+    editor.keys("4 tab");
+    assert_eq!(pending(&mut editor), "");
+    assert!(editor.editor_focused());
+    editor.keys("l");
+    assert_eq!(editor.cursor(), 1);
+}
+
+#[gpui::test]
 fn counted_delete_and_undo_keep_normal_lock(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abcdef\nnext", true);
     editor.keys("2 x");
@@ -2134,4 +2157,27 @@ fn the_editor_undo_and_redo_shortcuts_keep_working_in_normal_mode(cx: &mut TestA
     editor.type_text("z");
     assert_eq!(editor.text(), "bc", "the lock is back after the shortcut");
     assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha\nbeta\ngamma", true);
+    let pending = |editor: &mut Fixture<'_>| {
+        let document = editor.document.clone();
+        editor
+            .window
+            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+    };
+    editor.keys("2 d 3");
+    assert_eq!(pending(&mut editor), "2d3");
+    editor.keys("j");
+    assert_eq!(pending(&mut editor), "");
+    editor.keys("4 g");
+    assert_eq!(pending(&mut editor), "4g");
+    editor.keys("g");
+    assert_eq!(pending(&mut editor), "");
+    editor.keys("g escape");
+    assert_eq!(pending(&mut editor), "");
+    editor.keys("2 ctrl-z");
+    assert_eq!(pending(&mut editor), "");
 }

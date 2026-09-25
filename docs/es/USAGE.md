@@ -645,7 +645,11 @@ formularios y la paleta de comandos siguen escribiendo como siempre.
 
 Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
 debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
-propio modo al cambiar de tab o al mover el focus y volver.
+propio modo al cambiar de tab o al mover el focus y volver. La franja también
+muestra la secuencia de teclas incompleta, como `2`, `2d3` o `4g`. Se borra al
+completarse o interrumpirse el comando, al salir el foco del editor y con
+`Escape` o `Tab`. No muestra el historial de comandos ni aparece en la barra
+de estado del espacio de trabajo.
 
 | Modo | Teclas | Acción |
 |------|--------|--------|

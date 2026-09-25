@@ -49,6 +49,8 @@ pub(super) struct VimState {
     /// any other cursor change (a click, an arrow key, an edit) resets it.
     vertical_goal: Option<(usize, usize)>,
     count: Option<usize>,
+    /// Raw command keys, bounded independently of the saturating numeric count.
+    pub(super) pending_keys: String,
     pending_g: bool,
     pending_operator: Option<(char, usize)>,
     visual_anchor: Option<usize>,
@@ -142,7 +144,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
-            self.clear_vim_count();
+            self.clear_vim_count_and_notify(cx);
             return false;
         }
 
@@ -173,27 +175,31 @@ impl CodeDocument {
             machine::command_for(self.vim.mode, key)
         };
         let Some(command) = command else {
-            self.clear_vim_count();
+            self.clear_vim_count_and_notify(cx);
             return false;
         };
 
         if self.vim.pending_g {
             self.vim.pending_g = false;
+            self.vim.pending_keys.clear();
+            cx.notify();
             if command == VimCommand::PendingG {
                 self.apply_vim_command(VimCommand::FirstLine, window, cx);
                 return true;
             }
-            self.clear_vim_count();
+            self.clear_vim_count_and_notify(cx);
             return true;
         }
         if command == VimCommand::PendingG && self.vim.pending_operator.is_none() {
             self.vim.pending_g = true;
+            self.push_pending_key('g', cx);
             return true;
         }
 
         if let VimCommand::Digit(digit) = command
             && (digit != 0 || self.vim.count.is_some() || self.vim.pending_operator.is_some())
         {
+            self.push_pending_key(char::from(b'0' + digit), cx);
             self.vim.count = Some(
                 self.vim
                     .count
@@ -204,6 +210,8 @@ impl CodeDocument {
             return true;
         }
         if let Some((operator, prefix)) = self.vim.pending_operator.take() {
+            self.vim.pending_keys.clear();
+            cx.notify();
             let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
             if let VimCommand::Operator(repeated) = command
                 && operator == repeated
@@ -252,6 +260,10 @@ impl CodeDocument {
             return true;
         }
 
+        if !matches!(command, VimCommand::Operator(_)) {
+            self.vim.pending_keys.clear();
+            cx.notify();
+        }
         self.apply_vim_command(command, window, cx);
         true
     }
@@ -343,7 +355,10 @@ impl CodeDocument {
             VimCommand::VisualYank => self.apply_visual_operator(false, window, cx),
             VimCommand::VisualDelete => {}
             // A read-only document keeps its text: motions work, edits do nothing.
-            VimCommand::Operator(operator) => self.vim.pending_operator = Some((operator, count)),
+            VimCommand::Operator(operator) => {
+                self.vim.pending_operator = Some((operator, count));
+                self.push_pending_key(operator, cx);
+            }
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
             VimCommand::Undo if !self.read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
@@ -352,13 +367,31 @@ impl CodeDocument {
         }
     }
 
+    fn push_pending_key(&mut self, key: char, cx: &mut Context<Self>) {
+        if self.vim.pending_keys.len() < 32 {
+            self.vim.pending_keys.push(key);
+        }
+        cx.notify();
+    }
+
     pub(super) fn clear_vim_count(&mut self) {
         self.vim.count = None;
         self.vim.pending_g = false;
         self.vim.pending_operator = None;
+        self.vim.pending_keys.clear();
+    }
+
+    pub(super) fn clear_vim_count_and_notify(&mut self, cx: &mut Context<Self>) {
+        if !self.vim.pending_keys.is_empty() {
+            self.clear_vim_count();
+            cx.notify();
+        } else {
+            self.clear_vim_count();
+        }
     }
 
     fn set_vim_mode(&mut self, mode: VimMode, cx: &mut Context<Self>) {
+        self.clear_vim_count_and_notify(cx);
         self.vim.mode = mode;
         self.vim.vertical_goal = None;
         self.sync_editor_lock(cx);
@@ -378,7 +411,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.clear_vim_count();
+        self.clear_vim_count_and_notify(cx);
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
             return false;
         }
@@ -404,8 +437,8 @@ impl CodeDocument {
     /// the keys would fall through to the root's focus navigation and move focus
     /// out of the editor. Checked in the actions' capture phase, because key
     /// bindings are dispatched before any key listener runs.
-    pub(super) fn vim_swallows_indent_action(&mut self) -> bool {
-        self.clear_vim_count();
+    pub(super) fn vim_swallows_indent_action(&mut self, cx: &mut Context<Self>) -> bool {
+        self.clear_vim_count_and_notify(cx);
         self.vim.enabled
             && self.focus_mode == SqlQueryFocus::Editor
             && machine::command_for(
@@ -785,7 +818,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.clear_vim_count();
+        self.clear_vim_count_and_notify(cx);
         if !self.vim.enabled
             || self.vim.mode != VimMode::Normal
             || self.vim.history_unlocked

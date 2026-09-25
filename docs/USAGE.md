@@ -594,7 +594,11 @@ else, so search boxes, forms, and the command palette keep typing as usual.
 
 An editor starts in Normal mode when it opens and when you turn Vim mode on. A
 strip under the editor shows the mode: `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, or `VISUAL BLOCK`. Each tab keeps its
-own mode when you switch tabs or move focus away and back.
+own mode when you switch tabs or move focus away and back. The strip also shows
+an incomplete key sequence, such as `2`, `2d3`, or `4g`. It clears when the
+command completes or is interrupted, when focus leaves the editor, and on
+`Escape` or `Tab`. It does not show command history or appear in the workspace
+status bar.
 
 | Mode | Keys | Action |
 |------|------|--------|

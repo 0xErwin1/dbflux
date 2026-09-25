@@ -6,6 +6,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim pending keys in the code-pane strip** — Shows incomplete raw key
+  sequences such as `2`, `2d3`, and `4g`. The sequence clears on completion,
+  interruption, focus loss, `Escape`, or `Tab`; no command history or workspace
+  status-bar display is added.
+
 * **Vim absolute-line motions** — Normal and Visual `gg` / `G` move to the
   first / last logical line; `Ngg` / `NG` target a clamped 1-based absolute
   line. Visual selection extends; interrupted or unfocused pending `g` clears.
