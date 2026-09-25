@@ -1117,15 +1117,7 @@ impl SourceTargetPhase {
             .enumerate()
             .map(|(index, row)| {
                 let is_cursor = active && index == cursor;
-                let gutter = render_gutter(
-                    row.depth,
-                    row.is_last,
-                    &row.ancestors_continue,
-                    INDENT_PX,
-                    ROW_HEIGHT,
-                    line_color,
-                    false,
-                );
+                let gutter = render_gutter(row.depth, INDENT_PX, ROW_HEIGHT, line_color, false);
                 self.render_row(side, row, is_cursor, gutter, theme, cx)
             })
             .collect()

@@ -1084,6 +1084,7 @@ document:
           host: 主机
           region: 区域
     context_menu:
+      header: "%{column} · 第 %{row} 行"
       item:
         copy: 复制
         view_document: 查看文档
@@ -3864,6 +3865,7 @@ workspace:
   background_tasks: 后台任务
   background_tasks_idle: 空闲
   empty_documents: 没有打开的文档
+  empty_hint: "从侧边栏打开一个表，或从以下操作开始。"
   hint:
     new_query: 新建查询
     command_palette: 命令面板

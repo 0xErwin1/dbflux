@@ -242,6 +242,37 @@ pub(crate) fn chart_degraded_copy(
 
 /// Row/column shape summary shown above the chart dock's degraded-state
 /// column chips, with the row and column counts pluralized independently.
+/// Metadata chip of a table breadcrumb: the column count, then the row
+/// count when the source reports a total ("11 columns · 1284 rows").
+pub(crate) fn breadcrumb_meta_label(columns: usize, total_rows: Option<u64>) -> String {
+    let columns_label = if columns == 1 {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.one",
+            count = columns
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.many",
+            count = columns
+        )
+    };
+
+    match total_rows {
+        Some(1) => format!(
+            "{columns_label} · {}",
+            dbflux_i18n::t!("document.data.chart_dock.rail.shape.rows.one", count = 1)
+        ),
+        Some(rows) => format!(
+            "{columns_label} · {}",
+            dbflux_i18n::t!(
+                "document.data.chart_dock.rail.shape.rows.many",
+                count = rows
+            )
+        ),
+        None => columns_label,
+    }
+}
+
 pub(crate) fn chart_dock_shape_label(rows: usize, columns: usize) -> String {
     let rows_label = if rows == 1 {
         dbflux_i18n::t!("document.data.chart_dock.rail.shape.rows.one", count = rows)

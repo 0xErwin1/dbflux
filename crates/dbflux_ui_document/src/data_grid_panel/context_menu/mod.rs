@@ -6,12 +6,13 @@ use super::{
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
-use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
+use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};
+use dbflux_components::composites::{MenuItem, render_menu_header};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, MenuMetrics, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -42,8 +43,16 @@ const CONTEXT_MENU_EDGE_GAP: Pixels = Spacing::XS;
 /// provided the left side has the room.
 const SUBMENU_MAX_WIDTH: Pixels = px(280.0);
 
-/// How far a submenu overlaps the menu it hangs off (menu width 180 less the
-/// 172 offset in `sections.rs`), so the room it needs is its width less this.
+/// Width of the cell context menu (AppByzMenu).
+const CONTEXT_MENU_WIDTH: Pixels = px(270.0);
+
+/// Width of the menu opened from a column header, which lists every filter
+/// operator inline.
+const COLUMN_HEADER_MENU_WIDTH: Pixels = px(300.0);
+
+/// How far a submenu overlaps the menu it hangs off (the menu width less the
+/// row inset and the offset in `sections.rs`), so the room it needs is its
+/// width less this.
 const SUBMENU_OVERLAP: Pixels = px(8.0); // guardrail-allow: derived from the menu width and submenu offset, not a spacing step
 
 /// Where a context menu goes, in panel coordinates.
@@ -150,7 +159,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + px(cell_x) - horizontal_offset + px(20.0),
+            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
             y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
         };
 
@@ -1376,17 +1385,62 @@ impl DataGridPanel {
             .footer(footer)
     }
 
+    /// Header row of the cell menu: the column and row it acts on, with the
+    /// column's key icon (PK in the warning color, FK in the info color) when
+    /// the table metadata marks it as a key.
+    fn render_cell_menu_header(
+        &self,
+        menu: &TableContextMenu,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let column_name = self
+            .result
+            .columns
+            .get(menu.col)
+            .map(|column| column.name.clone())
+            .unwrap_or_default();
+
+        let label = dbflux_i18n::t!(
+            "document.data.context_menu.header",
+            column = column_name,
+            row = menu.row + 1
+        );
+
+        let table_state = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .map(|table| table.read(cx));
+        let is_primary_key =
+            table_state.is_some_and(|state| state.pk_columns().contains(&menu.col));
+        let is_foreign_key =
+            table_state.is_some_and(|state| state.fk_columns().contains(&menu.col));
+
+        let header = MenuItem::header(label);
+        let header = if is_primary_key {
+            header
+                .icon(AppIcon::KeyRound)
+                .header_icon_color(theme.warning)
+        } else if is_foreign_key {
+            header.icon(AppIcon::Cable).header_icon_color(theme.info)
+        } else {
+            header.icon(AppIcon::Columns)
+        };
+
+        render_menu_header(&header, cx).into_any_element()
+    }
+
     pub(super) fn render_context_menu(
         &self,
         menu: &TableContextMenu,
         is_editable: bool,
-        theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let menu_width = if menu.is_column_header {
-            px(300.0)
+            COLUMN_HEADER_MENU_WIDTH
         } else {
-            px(180.0)
+            CONTEXT_MENU_WIDTH
         };
 
         // Convert window coordinates to panel-relative coordinates
@@ -1404,7 +1458,7 @@ impl DataGridPanel {
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
         let menu_items = if menu.is_column_header {
-            self.render_column_header_menu_items(menu, backend, theme, cx)
+            self.render_column_header_menu_items(menu, backend, cx)
         } else {
             let has_row_target =
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
@@ -1420,8 +1474,11 @@ impl DataGridPanel {
             let mut menu_items: Vec<AnyElement> = Vec::new();
             let mut visual_index = 0usize;
 
+            if has_row_target && !is_document_view {
+                menu_items.push(self.render_cell_menu_header(menu, cx));
+            }
+
             Self::render_menu_item_rows(
-                theme,
                 selected_index,
                 &visible_items,
                 &mut menu_items,
@@ -1437,7 +1494,6 @@ impl DataGridPanel {
                 backend,
                 has_filter,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1447,7 +1503,6 @@ impl DataGridPanel {
                 submenus_open_left,
                 has_order,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1457,7 +1512,6 @@ impl DataGridPanel {
                 menu,
                 submenus_open_left,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1467,7 +1521,6 @@ impl DataGridPanel {
                 menu,
                 submenus_open_left,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1476,7 +1529,6 @@ impl DataGridPanel {
             Self::render_row_actions_section(
                 menu,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1486,7 +1538,8 @@ impl DataGridPanel {
 
         // Separators are shorter than rows, so this over-estimates a little;
         // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height = Heights::ROW_COMPACT * menu_items.len() as f32 + Spacing::XS * 2.0;
+        let menu_height =
+            MenuMetrics::ROW_HEIGHT * menu_items.len() as f32 + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
         self.render_context_menu_overlay(

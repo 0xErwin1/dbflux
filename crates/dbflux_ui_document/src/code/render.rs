@@ -1,13 +1,13 @@
 use super::*;
 use crate::chrome::compact_top_bar;
-use dbflux_components::composites::SplitButton;
+use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
 use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, FocusShape, Icon, Text, focus_ring,
 };
-use dbflux_components::tokens::{ChamferCut, ChromeColors};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
 
@@ -513,77 +513,72 @@ impl CodeDocument {
             })
     }
 
+    /// Result tabs strip (AppByzEditor): one tab per result with its row
+    /// count and a close button, then the maximize and hide controls.
     fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let active_index = self.result_tabs.active_result_index;
+        let muted = cx.theme().muted_foreground;
 
-        div()
+        let tabs: Vec<AnyElement> = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
+                let is_active = active_index == Some(i);
+                let tab_id = tab.id;
+                let row_count = tab.grid.read(cx).result().row_count();
+
+                result_tab(
+                    ElementId::Name(format!("result-tab-{}", tab.id).into()),
+                    tab.title.clone(),
+                    Some(crate::labels::row_count_label(row_count).into()),
+                    is_active,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.activate_result_tab(i, cx);
+                }))
+                .child(
+                    div()
+                        .id(ElementId::Name(
+                            format!("close-result-tab-{}", tab.id).into(),
+                        ))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_result_tab(tab_id, cx);
+                        }))
+                        .child(
+                            Icon::new(AppIcon::CircleX)
+                                .size(Fields::CHEVRON)
+                                .color(muted),
+                        ),
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        result_tab_bar(cx)
             .id("results-header")
-            .flex()
-            .items_center()
-            .h(Heights::TAB)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .h_full()
+                    .overflow_x_hidden()
+                    .flex_1()
+                    .children(tabs),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .overflow_x_hidden()
-                    .flex_1()
-                    .children(
-                        self.result_tabs
-                            .result_tabs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, tab)| {
-                                let is_active = active_index == Some(i);
-                                let tab_id = tab.id;
-
-                                div()
-                                    .id(ElementId::Name(format!("result-tab-{}", tab.id).into()))
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .when(is_active, |el| el.bg(theme.secondary))
-                                    .when(!is_active, |el| {
-                                        el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.activate_result_tab(i, cx);
-                                    }))
-                                    .child(
-                                        Text::caption(tab.title.clone())
-                                            .color(text_color_for_active(is_active, theme)),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(ElementId::Name(
-                                                format!("close-result-tab-{}", tab.id).into(),
-                                            ))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size_4()
-                                            .rounded(Radii::SM)
-                                            .cursor_pointer()
-                                            .hover(|d| d.bg(theme.danger.opacity(0.2)))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.close_result_tab(tab_id, cx);
-                                            }))
-                                            .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
-                                    )
-                            }),
-                    ),
+                    .h_full()
+                    .child(self.render_results_controls(cx)),
             )
-            .child(div().flex_1())
-            .child(self.render_results_controls(cx))
     }
 
     fn render_results_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -694,25 +689,19 @@ impl CodeDocument {
     }
 
     fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::caption(dbflux_i18n::t!("document.code.result.empty")))
+        EmptyState::new(
+            AppIcon::Table,
+            dbflux_i18n::t!("document.code.result.empty"),
+        )
     }
 
     /// Placeholder shown for a routine document when no connection is active for
     /// its profile.  The definition will be fetched automatically on connect.
     fn render_awaiting_connection(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.code.result.awaiting_connection"
-            )))
+        EmptyState::new(
+            AppIcon::Plug,
+            dbflux_i18n::t!("document.code.result.awaiting_connection"),
+        )
     }
 
     fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {

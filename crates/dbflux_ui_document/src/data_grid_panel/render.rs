@@ -17,11 +17,21 @@ use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_components::components::filter_bar::FilterField;
-use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::composites::{
+    Breadcrumb, BreadcrumbSegment, MenuItem, SplitButton, menu_frame, menu_row, render_menu_header,
+    render_separator,
+};
+use dbflux_components::controls::{Button, ButtonVariant, Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, SurfaceRole, Text, surface};
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, Icon, SegmentedControl, SegmentedItem, SurfaceRole, Text, surface,
+};
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{
+    ChromeColors, Fields, FontSizes, Heights, Radii, ResultMetrics, Spacing,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
@@ -39,8 +49,6 @@ struct RenderState {
     exec_time: String,
     show_data_toolbar: bool,
     is_paginated: bool,
-    source_name: String,
-    source_query_prefix: &'static str,
     filter_keyword: String,
     filter_input: Entity<EditorState>,
     filter_has_value: bool,
@@ -141,9 +149,7 @@ impl Render for DataGridPanel {
             .child(self.panel_origin_canvas(cx))
             .when(st.show_data_toolbar, |d| {
                 d.child(self.render_toolbar(
-                    st.source_query_prefix,
                     &st.filter_keyword,
-                    &st.source_name,
                     &st.filter_input,
                     st.filter_has_value,
                     &st.limit_input,
@@ -184,7 +190,7 @@ impl Render for DataGridPanel {
                 cx,
             ))
             .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, st.is_editable, &st.theme, cx))
+                d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
@@ -322,7 +328,6 @@ impl DataGridPanel {
                 DataSource::Table { .. } | DataSource::Collection { .. }
             );
         let is_paginated = self.source.is_paginated();
-        let (source_query_prefix, source_name) = self.source_query_labels(cx);
         let (_, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
         let filter_keyword = if self.builder.filter_input_hidden {
@@ -409,8 +414,6 @@ impl DataGridPanel {
             exec_time,
             show_data_toolbar,
             is_paginated,
-            source_name,
-            source_query_prefix,
             filter_keyword,
             filter_input,
             filter_has_value,
@@ -696,6 +699,133 @@ impl DataGridPanel {
 ///
 /// Only rendered for Table and Collection sources. Returns an empty element for
 /// QueryResult sources that do not show a filter bar.
+impl DataGridPanel {
+    /// Breadcrumb of a table or collection source (AppByzTable header): the
+    /// driver logo and connection name, the database and schema, then the
+    /// table itself with its column and row counts. `None` for query results.
+    pub(super) fn source_breadcrumb(&self, cx: &App) -> Option<Breadcrumb> {
+        let (profile_id, database, schema, name, total_rows) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                total_rows,
+                ..
+            } => (
+                *profile_id,
+                database.clone(),
+                table.schema.clone(),
+                table.name.clone(),
+                *total_rows,
+            ),
+            DataSource::Collection {
+                profile_id,
+                collection,
+                total_docs,
+                ..
+            } => (
+                *profile_id,
+                Some(collection.database.clone()),
+                None,
+                collection.name.clone(),
+                *total_docs,
+            ),
+            DataSource::QueryResult { .. } => return None,
+        };
+
+        let (_, source_label) = self.source_query_labels(cx);
+        let current_label = match &self.source {
+            DataSource::Collection { .. } if self.filter_bar.browse_query_label.is_some() => {
+                source_label
+            }
+            _ => name,
+        };
+
+        let state = self.app_state.read(cx);
+        let profile = state
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id);
+
+        let mut segments = Vec::new();
+
+        if let Some(profile) = profile {
+            let mut segment = BreadcrumbSegment::new(profile.name.clone());
+
+            if let Some(driver) = state.drivers().get(&profile.driver_id()) {
+                let metadata = driver.metadata();
+                segment = segment.icon(
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    Some(DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx)),
+                );
+            }
+
+            segments.push(segment);
+        }
+
+        segments.extend(database.map(BreadcrumbSegment::new));
+        segments.extend(schema.map(BreadcrumbSegment::new));
+        segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Table, None));
+
+        let meta = crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows);
+
+        Some(Breadcrumb::new(segments).meta(meta))
+    }
+}
+
+/// Width of the footer's export menu.
+const EXPORT_MENU_WIDTH: Pixels = px(220.0);
+
+/// The Builder button beside the filter field (AppByzTable: secondary,
+/// icon and label).
+fn builder_button(
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    Button::new(
+        "open-builder-btn",
+        dbflux_i18n::t!("document.data.grid.toolbar.builder"),
+    )
+    .small()
+    .icon(AppIcon::ListFilter)
+    .tab_stop(false)
+    .on_click(on_click)
+}
+
+/// Icon of the refresh action: a loader while a query runs, a clock while
+/// auto-refresh is on, a circling arrow otherwise.
+fn refresh_icon(is_running: bool, is_auto: bool) -> AppIcon {
+    if is_running {
+        AppIcon::Loader
+    } else if is_auto {
+        AppIcon::Clock
+    } else {
+        AppIcon::RefreshCcw
+    }
+}
+
+/// The table view's primary Refresh split: the main action refreshes (or
+/// cancels a running query) and the menu segment hosts the auto-refresh
+/// dropdown as a bare chevron.
+fn refresh_split(
+    label: String,
+    icon: AppIcon,
+    focused: bool,
+    refresh_dropdown: Entity<Dropdown>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> SplitButton {
+    SplitButton::new(
+        "refresh-action-btn",
+        Button::new("refresh-action", label)
+            .small()
+            .primary()
+            .icon(icon)
+            .focused(focused)
+            .tab_stop(false)
+            .on_click(on_click),
+        refresh_dropdown,
+    )
+}
+
 pub(super) fn render_filter_bar_as_segment(
     grid: &Entity<DataGridPanel>,
     _window: &mut Window,
@@ -712,7 +842,7 @@ pub(super) fn render_filter_bar_as_segment(
         return div().into_any();
     }
 
-    let (source_query_prefix, source_name) = g.source_query_labels(cx);
+    let source_breadcrumb = g.source_breadcrumb(cx);
     let (_, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
     let filter_keyword = if g.builder.filter_input_hidden {
@@ -760,7 +890,6 @@ pub(super) fn render_filter_bar_as_segment(
 
     // Pre-clone theme for each section that needs it in a closure.
     let theme_filter = theme.clone();
-    let theme_refresh = theme.clone();
 
     let chip_element: Option<AnyElement> = render_relational_chip(
         &relational_filter_state,
@@ -829,16 +958,7 @@ pub(super) fn render_filter_bar_as_segment(
         .gap(Spacing::SM)
         .flex_1()
         .min_w(px(0.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .when(!source_query_prefix.is_empty(), |d| {
-                    d.child(Text::caption(source_query_prefix).primary())
-                })
-                .child(Text::body(source_name)),
-        )
+        .when_some(source_breadcrumb, |d, breadcrumb| d.child(breadcrumb))
         // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | Builder | Refresh.
         .child({
             let grid_for_clear_event = grid_for_clear.clone();
@@ -935,88 +1055,30 @@ pub(super) fn render_filter_bar_as_segment(
                 .child(field)
                 .when_some(error_element, |d, err| d.child(err))
         })
-        .when(can_open_builder, {
-            let theme_btn = theme.clone();
-            let icon_color = theme.muted_foreground;
-            move |d| {
-                d.child(
-                    div()
-                        .id("open-builder-btn")
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme_btn.muted_foreground)
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
-                        .on_click(move |_, window, cx| {
-                            grid_for_builder.update(cx, |this, cx| {
-                                this.open_query_builder(window, cx);
-                            });
-                        })
-                        .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
-                        .child(Text::caption(dbflux_i18n::t!(
-                            "document.data.grid.toolbar.builder"
-                        ))),
-                )
-            }
+        .when(can_open_builder, move |d| {
+            d.child(builder_button(move |_, window, cx| {
+                grid_for_builder.update(cx, |this, cx| {
+                    this.open_query_builder(window, cx);
+                });
+            }))
         })
-        .child(
-            div()
-                .id("refresh-action-btn")
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .gap_0()
-                .rounded(Radii::SM)
-                .bg(theme_refresh.background)
-                .border_1()
-                .border_color(
-                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                        theme_refresh.ring
+        .child(refresh_split(
+            refresh_label,
+            refresh_icon(is_runner_active, refresh_policy.is_auto()),
+            show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh,
+            refresh_dropdown,
+            move |_, window, cx| {
+                grid_for_refresh.update(cx, |this, cx| {
+                    if this.runner.is_primary_active() {
+                        this.runner.cancel_primary(cx);
+                        cx.notify();
                     } else {
-                        theme_refresh.input
-                    },
-                )
-                .child(
-                    div()
-                        .id("refresh-action")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
-                        .on_click(move |_, window, cx| {
-                            grid_for_refresh.update(cx, |this, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.request_refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            });
-                        })
-                        .child(
-                            Icon::new(if is_runner_active {
-                                AppIcon::Loader
-                            } else if refresh_policy.is_auto() {
-                                AppIcon::Clock
-                            } else {
-                                AppIcon::RefreshCcw
-                            })
-                            .small()
-                            .color(theme.foreground),
-                        )
-                        .child(Text::body(refresh_label)),
-                )
-                .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
-        )
+                        this.request_refresh(window, cx);
+                        this.focus_table(window, cx);
+                    }
+                });
+            },
+        ))
         .into_any()
 }
 
@@ -1024,9 +1086,7 @@ impl DataGridPanel {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_toolbar(
         &self,
-        source_query_prefix: &str,
         filter_keyword: &str,
-        source_name: &str,
         filter_input: &Entity<EditorState>,
         filter_has_value: bool,
         limit_input: &Entity<InputState>,
@@ -1086,16 +1146,9 @@ impl DataGridPanel {
         );
 
         compact_top_bar(theme, std::iter::empty::<AnyElement>())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .when(!source_query_prefix.is_empty(), |d| {
-                        d.child(Text::caption(source_query_prefix.to_string()).primary())
-                    })
-                    .child(Text::body(source_name.to_string())),
-            )
+            .when_some(self.source_breadcrumb(cx), |d, breadcrumb| {
+                d.child(breadcrumb)
+            })
             // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | view toggle | Builder | Refresh.
             .child({
                 let filter_editor = div()
@@ -1212,88 +1265,28 @@ impl DataGridPanel {
                 )
             })
             .when(self.can_open_builder(cx), |d| {
-                d.child(
-                    div()
-                        .id("open-builder-btn")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_query_builder(window, cx);
-                        }))
-                        .child(
-                            Icon::new(AppIcon::ListFilter)
-                                .small()
-                                .color(theme.muted_foreground),
-                        )
-                        .child(Text::caption(dbflux_i18n::t!(
-                            "document.data.grid.toolbar.builder"
-                        ))),
-                )
+                d.child(builder_button(cx.listener(|this, _, window, cx| {
+                    this.open_query_builder(window, cx);
+                })))
             })
-            .child(
-                div()
-                    .id("refresh-action-btn")
-                    .h(Heights::CONTROL)
-                    .flex()
-                    .items_center()
-                    .gap_0()
-                    .rounded(Radii::SM)
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(
-                        if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                            theme.ring
-                        } else {
-                            theme.input
-                        },
-                    )
-                    .child(
-                        div()
-                            .id("refresh-action")
-                            .h_full()
-                            .px(Spacing::SM)
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.request_refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            }))
-                            .child(
-                                Icon::new(if self.runner.is_primary_active() {
-                                    AppIcon::Loader
-                                } else if self.refresh.refresh_policy.is_auto() {
-                                    AppIcon::Clock
-                                } else {
-                                    AppIcon::RefreshCcw
-                                })
-                                .small()
-                                .color(theme.foreground),
-                            )
-                            .child(Text::body(refresh_label)),
-                    )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                    .child(
-                        div()
-                            .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                            .h_full()
-                            .child(self.filter_bar.refresh_dropdown.clone()),
-                    ),
-            )
+            .child(refresh_split(
+                refresh_label,
+                refresh_icon(
+                    self.runner.is_primary_active(),
+                    self.refresh.refresh_policy.is_auto(),
+                ),
+                show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh,
+                self.filter_bar.refresh_dropdown.clone(),
+                cx.listener(|this, _, window, cx| {
+                    if this.runner.is_primary_active() {
+                        this.runner.cancel_primary(cx);
+                        cx.notify();
+                    } else {
+                        this.request_refresh(window, cx);
+                        this.focus_table(window, cx);
+                    }
+                }),
+            ))
     }
 
     pub(super) fn render_edit_toolbar(
@@ -1725,6 +1718,7 @@ impl DataGridPanel {
             row_count: self.result.row_count(),
             resolved_window,
             source_supports_save: true,
+            refresh_variant: ButtonVariant::Primary,
         };
 
         let weak_panel_for_save = cx.weak_entity();
@@ -3452,230 +3446,192 @@ impl DataGridPanel {
         let current_result_mode = self.chrome.result_view_mode;
 
         let show_record_toggle = self.record_view_available();
+        let record_mode = self.chrome.record_mode;
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
+        let panel = cx.entity().downgrade();
+
+        let view_switch = (available_modes.len() > 1
+            && current_result_mode != ResultViewMode::Chart)
+            .then(|| {
+                let items: Vec<SegmentedItem> = available_modes
+                    .iter()
+                    .map(|mode| {
+                        SegmentedItem::new(
+                            SharedString::from(format!("result-view-{}", mode.label())),
+                            crate::labels::result_view_mode_label(*mode),
+                        )
+                        .icon(Self::result_mode_icon(*mode))
+                    })
+                    .collect();
+                let modes = available_modes.clone();
+
+                SegmentedControl::new(
+                    items,
+                    SharedString::from(format!("result-view-{}", current_result_mode.label())),
+                    move |selected, _, cx| {
+                        let Some(mode) = modes.iter().copied().find(|mode| {
+                            selected.as_ref() == format!("result-view-{}", mode.label())
+                        }) else {
+                            return;
+                        };
+
+                        let updated = panel.update(cx, |this, cx| {
+                            this.set_result_view_mode(mode, cx);
+                        });
+                        if let Err(error) = updated {
+                            log::debug!("data grid released before its view switch: {error}");
+                        }
+                    },
+                )
+            });
+
+        let footer_item = |icon: AppIcon, label: String| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                .child(
+                    Icon::new(icon)
+                        .size(ResultMetrics::FOOTER_ICON)
+                        .color(muted),
+                )
+                .child(label)
+        };
+
+        let pager_arrow = |id: &'static str, icon: AppIcon, enabled: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .text_color(muted)
+                .when(!enabled, |arrow| arrow.opacity(Fields::DISABLED_OPACITY))
+                .when(enabled, |arrow| {
+                    arrow
+                        .cursor_pointer()
+                        .hover(move |arrow| arrow.text_color(strong))
+                })
+                .child(
+                    Icon::new(icon)
+                        .size(ResultMetrics::FOOTER_ICON)
+                        .color(if enabled { theme.foreground } else { muted }),
+                )
+        };
+
+        let pager = pagination_info
+            .clone()
+            .filter(|_| is_paginated)
+            .map(|pagination| {
+                let page = pagination.current_page();
+
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(ResultMetrics::PAGER_GAP)
+                    .font_family(AppFonts::MONO)
+                    .child(
+                        pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
+                            can_prev,
+                            |arrow| {
+                                arrow.on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_to_prev_page(window, cx);
+                                }))
+                            },
+                        ),
+                    )
+                    .child(div().text_color(strong).child(page.to_string()))
+                    .when_some(total_pages, |pager, total| {
+                        pager.child(format!("/ {}", total))
+                    })
+                    .child(
+                        pager_arrow("next-page", AppIcon::ChevronRight, can_next).when(
+                            can_next,
+                            |arrow| {
+                                arrow.on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_to_next_page(window, cx);
+                                }))
+                            },
+                        ),
+                    )
+            });
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
+            .gap(ResultMetrics::FOOTER_GAP)
+            .h(ResultMetrics::FOOTER_HEIGHT)
+            .px(ResultMetrics::FOOTER_PADDING_X)
             .border_t_1()
             .border_color(theme.border)
-            .bg(theme.tab_bar)
-            // Left: pending-change count (when applicable), row count / shape info, sort info
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    // Pending-change count — visible only when there are unsaved edits
-                    .when(pending_change_count > 0, |d| {
-                        d.child(
-                            Text::caption(crate::labels::pending_change_count_label(
-                                pending_change_count,
-                            ))
-                            .color(theme.warning),
-                        )
-                    })
-                    .when(
-                        available_modes.len() > 1 && current_result_mode != ResultViewMode::Chart,
-                        |d| {
-                            d.child(div().flex().items_center().gap_0().children(
-                                available_modes.iter().enumerate().map(|(i, mode)| {
-                                    let mode = *mode;
-                                    let is_active = mode == current_result_mode;
-                                    let icon_color = if is_active {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    };
-                                    div()
-                                        .id(ElementId::Name(format!("result-view-{}", i).into()))
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .px(Spacing::SM)
-                                        .text_size(FontSizes::XS)
-                                        .cursor_pointer()
-                                        .rounded(Radii::SM)
-                                        .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
-                                        .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_result_view_mode(mode, cx);
-                                        }))
-                                        .child(
-                                            Icon::new(Self::result_mode_icon(mode))
-                                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                                .color(icon_color),
-                                        )
-                                        .child(Self::result_mode_label(
-                                            crate::labels::result_view_mode_label(mode),
-                                            is_active,
-                                        ))
-                                }),
-                            ))
-                        },
+            .bg(theme.background)
+            .text_size(ResultMetrics::FOOTER_FONT)
+            .text_color(muted)
+            // Pending-change count — visible only when there are unsaved edits
+            .when(pending_change_count > 0, |d| {
+                d.child(div().flex_shrink_0().text_color(theme.warning).child(
+                    crate::labels::pending_change_count_label(pending_change_count),
+                ))
+            })
+            .when_some(view_switch, |d, switch| d.child(switch))
+            // Grid / record presentation toggle. Mirrors the `i` binding so
+            // the mode is discoverable and reversible with the mouse alone.
+            .when(show_record_toggle, |d| {
+                d.child(
+                    Button::new(
+                        "record-mode-toggle",
+                        crate::labels::record_mode_label(record_mode),
                     )
-                    // Grid / record presentation toggle. Mirrors the `i`
-                    // binding so the mode is discoverable and reversible with
-                    // the mouse alone.
-                    .when(show_record_toggle, |d| {
-                        let record_mode = self.chrome.record_mode;
-                        let icon = if record_mode {
-                            AppIcon::Columns
-                        } else {
-                            AppIcon::Table
-                        };
-                        d.child(
-                            div()
-                                .id("record-mode-toggle")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px(Spacing::SM)
-                                .text_size(FontSizes::XS)
-                                .cursor_pointer()
-                                .rounded(Radii::SM)
-                                .when(record_mode, |d| d.bg(theme.accent.opacity(0.15)))
-                                .when(!record_mode, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.set_record_mode(!this.record_mode(), cx);
-                                }))
-                                .child(
-                                    Icon::new(icon)
-                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                        .color(if record_mode {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                )
-                                .child(Self::result_mode_label(
-                                    crate::labels::record_mode_label(record_mode),
-                                    record_mode,
-                                )),
-                        )
-                    })
-                    // Shape badge
-                    .when_some(result_shape_label, |d, shape| {
-                        let label = match &shape {
-                            dbflux_core::QueryResultShape::Table => "table",
-                            dbflux_core::QueryResultShape::Json => "json",
-                            dbflux_core::QueryResultShape::Text => "text",
-                            dbflux_core::QueryResultShape::Binary => "binary",
-                        };
-                        d.child(Text::caption(label.to_string()))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Icon::new(AppIcon::Rows3)
-                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                    .color(theme.muted_foreground),
-                            )
-                            .child(Text::caption(crate::labels::row_count_label(row_count))),
-                    )
-                    .when_some(sort_info, |d, (col_name, direction, is_server)| {
-                        let arrow_icon = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-                        let mode = if is_server { "db" } else { "local" };
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    Icon::new(arrow_icon)
-                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                        .color(theme.muted_foreground),
-                                )
-                                .child(Text::caption(format!("{} ({})", col_name, mode))),
-                        )
-                    }),
-            )
-            // Center: pagination (for Table and Collection sources).
-            // Layout: ‹  N / Total  › using Unicode single-chevrons.
-            .child(div().flex().items_center().gap(Spacing::XS).when_some(
-                pagination_info.clone().filter(|_| is_paginated),
-                |d, pagination| {
-                    let page = pagination.current_page();
-
-                    let page_label = if let Some(total) = total_pages {
-                        format!("{} / {}", page, total)
+                    .ghost()
+                    .small()
+                    .icon(if record_mode {
+                        AppIcon::Columns
                     } else {
-                        format!("{}", page)
-                    };
-
-                    d.child(
-                        div()
-                            .id("prev-page")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(20.0))
-                            .h(px(20.0))
-                            .rounded(Radii::SM)
-                            .text_size(FontSizes::SM)
-                            .when(can_prev, |d| {
-                                d.cursor_pointer()
-                                    .text_color(theme.foreground)
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.go_to_prev_page(window, cx);
-                                    }))
-                            })
-                            .when(!can_prev, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("\u{2039}"),
-                    )
-                    .child(
-                        Text::caption(page_label)
-                            .font_size(FontSizes::XS)
-                            .color(theme.muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .id("next-page")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(20.0))
-                            .h(px(20.0))
-                            .rounded(Radii::SM)
-                            .text_size(FontSizes::SM)
-                            .when(can_next, |d| {
-                                d.cursor_pointer()
-                                    .text_color(theme.foreground)
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.go_to_next_page(window, cx);
-                                    }))
-                            })
-                            .when(!can_next, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("\u{203a}"),
-                    )
-                },
+                        AppIcon::Table
+                    })
+                    .selected(record_mode)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_record_mode(!this.record_mode(), cx);
+                    })),
+                )
+            })
+            .when_some(result_shape_label, |d, shape| {
+                let label = match &shape {
+                    dbflux_core::QueryResultShape::Table => "table",
+                    dbflux_core::QueryResultShape::Json => "json",
+                    dbflux_core::QueryResultShape::Text => "text",
+                    dbflux_core::QueryResultShape::Binary => "binary",
+                };
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(AppFonts::MONO)
+                        .child(label),
+                )
+            })
+            .child(footer_item(
+                AppIcon::Rows3,
+                crate::labels::row_count_label(row_count),
             ))
-            // Right: export and execution time
+            .when_some(sort_info, |d, (col_name, direction, is_server)| {
+                let arrow_icon = match direction {
+                    SortDirection::Ascending => AppIcon::ArrowUp,
+                    SortDirection::Descending => AppIcon::ArrowDown,
+                };
+                let mode = if is_server { "db" } else { "local" };
+                d.child(footer_item(arrow_icon, format!("{} ({})", col_name, mode)))
+            })
+            .child(div().flex_1())
+            .when_some(pager, |d, pager| d.child(pager))
+            .child(div().flex_1())
+            .when(has_data, |d| d.child(self.render_export_button(cx)))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .when(has_data, |d| d.child(self.render_export_button(theme, cx)))
-                    .child({
-                        let mut muted = theme.muted_foreground;
-                        muted.a = 0.5;
-                        Text::caption(exec_time.to_string()).color(muted)
-                    }),
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .child(exec_time.to_string()),
             )
     }
 
@@ -3690,164 +3646,108 @@ impl DataGridPanel {
         }
     }
 
-    fn result_mode_label(label: impl Into<SharedString>, is_active: bool) -> Text {
-        if is_active {
-            Text::body_sm(label).font_size(FontSizes::XS)
-        } else {
-            Text::caption(label).font_size(FontSizes::XS)
-        }
-    }
-
-    fn render_export_button(
-        &self,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// The Export button in the footer (secondary, with a chevron) and, when
+    /// open, its menu of save and copy formats.
+    fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let formats = dbflux_export::available_formats(&self.result.shape);
         let menu_open = self.chrome.export_menu_open;
 
         div()
-            .id("export-trigger")
             .relative()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px(Spacing::XS)
-            .rounded(Radii::SM)
-            .text_size(FontSizes::XS)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.export_results(window, cx);
-            }))
+            .flex_shrink_0()
             .child(
-                Icon::new(AppIcon::FileSpreadsheet)
-                    .small()
-                    .color(theme.muted_foreground),
+                Button::new(
+                    "export-trigger",
+                    dbflux_i18n::t!("document.data.grid.export.trigger"),
+                )
+                .small()
+                .icon(AppIcon::FileSpreadsheet)
+                .trailing_icon(AppIcon::ChevronDown)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.export_results(window, cx);
+                })),
             )
-            .child(
-                Text::caption(dbflux_i18n::t!("document.data.grid.export.trigger"))
-                    .muted_foreground(),
-            )
-            .child(
-                Icon::new(AppIcon::ChevronDown)
-                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .color(theme.muted_foreground),
-            )
-            .when(menu_open, |d| {
-                d.child(self.render_export_menu(formats, theme, cx))
-            })
+            .when(menu_open, |d| d.child(self.render_export_menu(formats, cx)))
     }
 
     fn render_export_menu(
         &self,
         formats: &[dbflux_export::ExportFormat],
-        theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let section_header = |label: SharedString| -> AnyElement {
-            div()
-                .px(Spacing::SM)
-                .mx(Spacing::XS)
-                .pt(Spacing::XS)
-                .pb_0()
-                .child(
-                    Text::caption(label)
-                        .font_size(FontSizes::XS)
-                        .muted_foreground(),
-                )
-                .into_any_element()
-        };
-
         let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
 
-        items.push(section_header(
-            dbflux_i18n::t!("document.data.grid.export.save_as_file").into(),
-        ));
+        items.push(
+            render_menu_header(
+                &MenuItem::header(dbflux_i18n::t!("document.data.grid.export.save_as_file")),
+                cx,
+            )
+            .into_any_element(),
+        );
 
         for (idx, &format) in formats.iter().enumerate() {
+            let item =
+                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Download);
+
             items.push(
-                div()
-                    .id(SharedString::from(format!("export-save-{}", idx)))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .text_size(FontSizes::SM)
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.export_with_format(format, window, cx);
-                    }))
-                    .child(
-                        Icon::new(AppIcon::Download)
-                            .small()
-                            .color(theme.muted_foreground),
-                    )
-                    .child(Text::body(crate::labels::export_format_label(format)))
-                    .into_any_element(),
+                menu_row(
+                    SharedString::from(format!("export-save-{}", idx)),
+                    &item,
+                    false,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.export_with_format(format, window, cx);
+                }))
+                .into_any_element(),
             );
         }
 
-        items.push(
-            div()
-                .mx(Spacing::XS)
-                .my(Spacing::XS)
-                .h(px(1.0))
-                .bg(theme.border)
-                .into_any_element(),
-        );
+        items.push(render_separator(cx).into_any_element());
 
-        items.push(section_header(
-            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard").into(),
-        ));
+        items.push(
+            render_menu_header(
+                &MenuItem::header(dbflux_i18n::t!(
+                    "document.data.grid.export.copy_to_clipboard"
+                )),
+                cx,
+            )
+            .into_any_element(),
+        );
 
         for (idx, &format) in formats.iter().enumerate() {
             let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
-            let row = div()
-                .id(SharedString::from(format!("export-copy-{}", idx)))
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .h(Heights::ROW_COMPACT)
-                .px(Spacing::SM)
-                .mx(Spacing::XS)
-                .rounded(Radii::SM)
-                .text_size(FontSizes::SM)
-                .when(copyable, |d| {
-                    d.cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.copy_to_clipboard_with_format(format, window, cx);
-                        }))
-                })
-                .when(!copyable, |d| d.opacity(0.5))
-                .child(
-                    Icon::new(AppIcon::Copy)
-                        .small()
-                        .color(theme.muted_foreground),
+            let mut item =
+                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Copy);
+            if !copyable {
+                item = item.disabled();
+            }
+
+            items.push(
+                menu_row(
+                    SharedString::from(format!("export-copy-{}", idx)),
+                    &item,
+                    false,
+                    cx,
                 )
-                .child(Text::body(crate::labels::export_format_label(format)))
-                .into_any_element();
-            items.push(row);
+                .when(copyable, |row| {
+                    row.on_click(cx.listener(move |this, _, window, cx| {
+                        this.copy_to_clipboard_with_format(format, window, cx);
+                    }))
+                })
+                .into_any_element(),
+            );
         }
 
         deferred(
-            surface(SurfaceRole::Raised, cx)
+            menu_frame(cx)
                 .absolute()
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
-                .w(px(200.0))
-                .shadow_lg()
-                .py(Spacing::XS)
+                .w(EXPORT_MENU_WIDTH)
                 .occlude()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
                 .children(items),
         )
         // Above the backdrop, which shares the deferred layer.

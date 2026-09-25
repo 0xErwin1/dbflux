@@ -17,9 +17,9 @@ use super::shell::{ChartRailTab, ChartShell};
 use crate::labels::configure_chart_kind_label;
 use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
 use dbflux_components::composites::refresh_split_button;
-use dbflux_components::controls::Dropdown;
+use dbflux_components::controls::{ButtonVariant, Dropdown};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Icon;
+use dbflux_components::primitives::{Icon, vdivider};
 use dbflux_components::tokens::{FontSizes, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::RefreshPolicy;
@@ -60,6 +60,10 @@ pub struct ChartToolbarContext<'a> {
     /// Show the "Save chart" button. DataGridPanel gates on collection source;
     /// ChartDocument always passes `true` here.
     pub source_supports_save: bool,
+    /// Variant of the refresh split. It must match the `chevron_trigger`
+    /// variant of `refresh_dropdown`, whose chevron takes that variant's
+    /// content color.
+    pub refresh_variant: ButtonVariant,
 }
 
 /// Callbacks for interactive toolbar actions.
@@ -138,7 +142,7 @@ pub fn render_chart_toolbar(
             .items_center()
             .gap(px(4.0))
             .child(dropdown)
-            .child(vdivider(border))
+            .child(toolbar_divider(cx))
             .into_any_element()
     });
 
@@ -151,7 +155,8 @@ pub fn render_chart_toolbar(
         false,
         ctx.refresh_dropdown.clone(),
         move |window, cx| on_refresh(window, cx),
-    );
+    )
+    .variant(ctx.refresh_variant);
 
     // --- Toolbar action button helper ---
     let toolbar_btn = |id: &'static str, icon: AppIcon, label: SharedString, is_active: bool| {
@@ -293,7 +298,7 @@ pub fn render_chart_toolbar(
         .bg(theme.tab_bar)
         .when_some(range_section, |el, range| el.child(range))
         .child(refresh_btn)
-        .child(vdivider(border))
+        .child(toolbar_divider(cx))
         // Clock icon + resolved window string
         .child(
             div()
@@ -324,7 +329,7 @@ pub fn render_chart_toolbar(
                 .child("\u{00b7}")
                 .child(resolution_label),
         )
-        .child(vdivider(border))
+        .child(toolbar_divider(cx))
         // Chart kind selector (Line | Bar)
         .child(
             div()
@@ -340,16 +345,17 @@ pub fn render_chart_toolbar(
                 )
                 .child(kind_chips),
         )
-        .child(vdivider(border))
+        .child(toolbar_divider(cx))
         .child(stats_btn)
         .when(ctx.source_supports_save, |el| {
-            el.child(vdivider(border)).child(save_btn)
+            el.child(toolbar_divider(cx)).child(save_btn)
         })
         .into_any_element()
 }
 
-fn vdivider(border: gpui::Hsla) -> impl IntoElement {
-    div().w(px(1.0)).h(px(12.0)).mx(px(4.0)).bg(border)
+/// Vertical rule between toolbar groups.
+fn toolbar_divider(cx: &App) -> Div {
+    vdivider(cx).h(px(12.0)).mx(Spacing::XS)
 }
 
 #[cfg(test)]
@@ -386,6 +392,7 @@ mod tests {
                 row_count: 0,
                 resolved_window: Some((0, 3_600_000)),
                 source_supports_save: true,
+                refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
             };
 
             let handlers = ChartToolbarHandlers {

@@ -2,7 +2,7 @@ use gpui::prelude::*;
 use gpui::{AnyElement, App, ElementId, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::controls::{Button, button_colors};
+use crate::controls::{Button, ButtonVariant, button_colors};
 use crate::primitives::{Chamfer, ChamferCorners, ChamferRing};
 use crate::tokens::ButtonMetrics;
 
@@ -30,6 +30,12 @@ impl SplitButton {
             menu: menu.into_any_element(),
             menu_focused: false,
         }
+    }
+
+    /// Sets the variant of both segments.
+    pub fn variant(mut self, variant: ButtonVariant) -> Self {
+        self.main = self.main.variant(variant);
+        self
     }
 
     /// Shows the focus ring around the menu segment, for a caller that tracks

@@ -1084,6 +1084,7 @@ document:
           host: host
           region: región
     context_menu:
+      header: "%{column} · fila %{row}"
       item:
         copy: Copiar
         view_document: Ver documento
@@ -3866,11 +3867,12 @@ workspace:
   background_tasks: Tareas en segundo plano
   background_tasks_idle: inactivo
   empty_documents: No hay documentos abiertos
+  empty_hint: "Abre una tabla desde la barra lateral o empieza con una de estas opciones."
   hint:
-    new_query: nueva consulta
-    command_palette: paleta de comandos
-    open: abrir script desde el disco
-    new_connection: nueva conexión
+    new_query: Nueva consulta
+    command_palette: Paleta de comandos
+    open: Abrir script desde el disco
+    new_connection: Nueva conexión
   mcp_approvals: Aprobaciones de MCP
   event_streams: Flujos de eventos
   action:

@@ -726,6 +726,188 @@ impl Feedback {
     pub const SPINNER_TRACK_ALPHA: f32 = 0.25;
 }
 
+/// Geometry of context menus (`composites::menu_item`), from the cell menu in
+/// AppByzMenu and the DSApp "Context menu".
+pub struct MenuMetrics;
+
+impl MenuMetrics {
+    /// Vertical padding inside the menu frame. (8 px)
+    pub const PADDING_Y: Pixels = px(8.0);
+    /// Row height. (30 px)
+    pub const ROW_HEIGHT: Pixels = px(30.0);
+    /// Horizontal inset of a row inside the menu frame. (6 px)
+    pub const ROW_INSET: Pixels = px(6.0);
+    /// Horizontal padding inside a row. (10 px)
+    pub const ROW_PADDING_X: Pixels = px(10.0);
+    /// Gap between the icon, the label and the trailing shortcut. (11 px)
+    pub const ROW_GAP: Pixels = px(11.0);
+    /// Row label size. (13 px)
+    pub const ROW_FONT: Pixels = px(13.0);
+    /// Leading row icon. (15 px)
+    pub const ICON: Pixels = px(15.0);
+    /// Trailing submenu chevron. (13 px)
+    pub const SUBMENU_ICON: Pixels = px(13.0);
+
+    /// Header row: icon (13 px), gap (8 px), mono label (11 px), padding
+    /// 2 px top, 16 px sides, 8 px bottom.
+    pub const HEADER_ICON: Pixels = px(13.0);
+    pub const HEADER_GAP: Pixels = px(8.0);
+    pub const HEADER_FONT: Pixels = px(11.0);
+    pub const HEADER_PADDING_TOP: Pixels = px(2.0);
+    pub const HEADER_PADDING_X: Pixels = px(16.0);
+    pub const HEADER_PADDING_BOTTOM: Pixels = px(8.0);
+
+    /// Separator margins: 5 px vertical, 10 px horizontal.
+    pub const SEPARATOR_MARGIN_Y: Pixels = px(5.0);
+    pub const SEPARATOR_MARGIN_X: Pixels = px(10.0);
+
+    /// Alpha of the tint (or danger) wash behind the selected row.
+    pub const SELECTED_ALPHA: f32 = 0.14;
+    /// Opacity of a disabled row.
+    pub const DISABLED_OPACITY: f32 = 0.45;
+}
+
+/// Geometry of trees (`TreeNav` rows and the connections sidebar), from the
+/// sidebar in AppByzTable, P1Sidebar and the DSApp "Tree".
+pub struct TreeMetrics;
+
+impl TreeMetrics {
+    /// Row height. (26 px)
+    pub const ROW_HEIGHT: Pixels = px(26.0);
+    /// Indent added per depth level. (14 px)
+    pub const INDENT: Pixels = px(14.0);
+    /// Padding before the depth-0 chevron and after the trailing slot. (12 px)
+    pub const PADDING_X: Pixels = px(12.0);
+    /// Gap between chevron, icon, label and trailing slot. (7 px)
+    pub const GAP: Pixels = px(7.0);
+    /// Expand chevron. (12 px)
+    pub const CHEVRON: Pixels = px(12.0);
+    /// Node icon or driver logo. (15 px)
+    pub const ICON: Pixels = px(15.0);
+    /// Distance from the row's left edge to the first indent guide, which
+    /// runs through the depth-0 chevron. (19 px)
+    pub const GUIDE_OFFSET: Pixels = px(19.0);
+    /// Label size. (13 px)
+    pub const FONT: Pixels = px(13.0);
+    /// Trailing count and latency size. (11 px)
+    pub const META_FONT: Pixels = px(11.0);
+    /// Width of the tint bar on the left of the selected row. (2 px)
+    pub const SELECTION_BAR: Pixels = px(2.0);
+}
+
+/// Geometry of the result grid (`components::DataTable`), from AppByzTable
+/// and the DSApp "Result grid".
+pub struct GridMetrics;
+
+impl GridMetrics {
+    /// Header row height, including its 1 px line-2 bottom edge. (40 px)
+    pub const HEADER_HEIGHT: Pixels = px(40.0);
+    /// Row height: 30 px of content plus a 1 px divider. (31 px)
+    pub const ROW_HEIGHT: Pixels = px(31.0);
+    /// Horizontal cell padding. (10 px)
+    pub const CELL_PADDING_X: Pixels = px(10.0);
+    /// Row-number column width. (46 px)
+    pub const ROW_NUMBER_WIDTH: Pixels = px(46.0);
+    /// Cell text and column name size, JetBrains Mono. (12.5 px)
+    pub const FONT: Pixels = px(12.5);
+    /// Column type size, JetBrains Mono. (10.5 px)
+    pub const TYPE_FONT: Pixels = px(10.5);
+    /// PK / FK key icon and sort arrow in the header. (12 px)
+    pub const HEADER_ICON: Pixels = px(12.0);
+    /// Gap between the parts of a header cell. (6 px)
+    pub const HEADER_GAP: Pixels = px(6.0);
+    /// Alpha of the tint wash behind the focused and selected cells.
+    pub const CELL_SELECTED_ALPHA: f32 = 0.12;
+}
+
+/// Geometry of the result chrome: the footer under a result grid and the
+/// view-switch row above it (AppByzTable, AppByzEditor).
+pub struct ResultMetrics;
+
+impl ResultMetrics {
+    /// Footer height. (36 px)
+    pub const FOOTER_HEIGHT: Pixels = px(36.0);
+    /// Footer horizontal padding. (12 px)
+    pub const FOOTER_PADDING_X: Pixels = px(12.0);
+    /// Gap between footer groups. (14 px)
+    pub const FOOTER_GAP: Pixels = px(14.0);
+    /// Footer text size. (12 px)
+    pub const FOOTER_FONT: Pixels = px(12.0);
+    /// Footer icons (row count, sort, pager chevrons). (13 px)
+    pub const FOOTER_ICON: Pixels = px(13.0);
+    /// Gap between an icon and its footer label. (6 px)
+    pub const FOOTER_ITEM_GAP: Pixels = px(6.0);
+    /// Gap between the pager chevrons and the page label. (10 px)
+    pub const PAGER_GAP: Pixels = px(10.0);
+
+    /// View-switch row under the result tabs: height (42 px), gap (12 px),
+    /// statement range size (11.5 px, mono).
+    pub const VIEW_ROW_HEIGHT: Pixels = px(42.0);
+    pub const VIEW_ROW_GAP: Pixels = px(12.0);
+    pub const STATEMENT_FONT: Pixels = px(11.5);
+    /// Search-in-results field width. (240 px)
+    pub const SEARCH_WIDTH: Pixels = px(240.0);
+}
+
+/// Geometry of the wizard stepper (`composites::wizard_rail`), from P1Migrate
+/// and the DSAppPlan "Stepper".
+pub struct StepperMetrics;
+
+impl StepperMetrics {
+    /// Step badge (26 px square, cut 4).
+    pub const BADGE: Pixels = px(26.0);
+    /// Check or play glyph inside a badge. (13 px)
+    pub const BADGE_ICON: Pixels = px(13.0);
+    /// Height of one step in the vertical rail. (44 px)
+    pub const RAIL_STEP_HEIGHT: Pixels = px(44.0);
+    /// Horizontal padding of a rail step. (16 px)
+    pub const RAIL_PADDING_X: Pixels = px(16.0);
+    /// Space above the first rail step. (12 px)
+    pub const RAIL_PADDING_TOP: Pixels = px(12.0);
+    /// Gap between a badge and its label. (10 px)
+    pub const GAP: Pixels = px(10.0);
+    /// Connector between steps of the horizontal stepper. (28 x 1 px)
+    pub const CONNECTOR_WIDTH: Pixels = px(28.0);
+    /// Step label size. (13 px)
+    pub const FONT: Pixels = px(13.0);
+}
+
+/// Geometry of the extracted navigation helpers: breadcrumb, empty state and
+/// list rows (AppByzTable header, DSAppPlan).
+pub struct NavigationMetrics;
+
+impl NavigationMetrics {
+    /// Breadcrumb gap between segments and chevrons. (8 px)
+    pub const BREADCRUMB_GAP: Pixels = px(8.0);
+    /// Breadcrumb driver logo and current-object icon. (15 px)
+    pub const BREADCRUMB_ICON: Pixels = px(15.0);
+    /// Breadcrumb chevron. (12 px)
+    pub const BREADCRUMB_CHEVRON: Pixels = px(12.0);
+    /// Breadcrumb text size. (13 px)
+    pub const BREADCRUMB_FONT: Pixels = px(13.0);
+    /// Breadcrumb metadata chip: 2 px vertical, 8 px horizontal padding,
+    /// 11 px mono text, 6 px from the last segment.
+    pub const BREADCRUMB_META_PADDING_Y: Pixels = px(2.0);
+    pub const BREADCRUMB_META_PADDING_X: Pixels = px(8.0);
+    pub const BREADCRUMB_META_FONT: Pixels = px(11.0);
+    pub const BREADCRUMB_META_MARGIN: Pixels = px(6.0);
+
+    /// Empty state card width (460 px), padding (34 px) and gap (14 px).
+    pub const EMPTY_WIDTH: Pixels = px(460.0);
+    pub const EMPTY_PADDING: Pixels = px(34.0);
+    pub const EMPTY_GAP: Pixels = px(14.0);
+    /// Empty state icon. (30 px)
+    pub const EMPTY_ICON: Pixels = px(30.0);
+    /// Empty state title (16 px, bold) and sentence (13 px).
+    pub const EMPTY_TITLE_FONT: Pixels = px(16.0);
+    pub const EMPTY_BODY_FONT: Pixels = px(13.0);
+    /// Gap between empty state actions (8 px) and inside one (10 px).
+    pub const EMPTY_ACTION_GAP: Pixels = px(8.0);
+    pub const EMPTY_ACTION_INNER_GAP: Pixels = px(10.0);
+    /// Empty state action icon. (15 px)
+    pub const EMPTY_ACTION_ICON: Pixels = px(15.0);
+}
+
 /// Shared animation timing constants.
 pub struct Anim;
 

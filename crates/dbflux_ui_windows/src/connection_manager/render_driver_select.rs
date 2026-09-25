@@ -1,6 +1,6 @@
 use dbflux_components::controls::{Button, GpuiInput, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Kbd, Text};
+use dbflux_components::primitives::{Icon, Kbd, Text, hdivider};
 use dbflux_components::tokens::{ChromeColors, FontSizes};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DatabaseCategory;
@@ -229,7 +229,7 @@ impl ConnectionManagerWindow {
                     .child(Text::caption(driver.description.clone()).font_size(FontSizes::XS)),
             )
             .when_some(port_hint, |card, hint| {
-                card.child(div().h(px(1.0)).bg(theme.border)).child(
+                card.child(hdivider(cx)).child(
                     div()
                         .flex()
                         .flex_row()

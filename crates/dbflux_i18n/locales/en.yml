@@ -1084,6 +1084,7 @@ document:
           host: host
           region: region
     context_menu:
+      header: "%{column} · row %{row}"
       item:
         copy: Copy
         view_document: View Document
@@ -3866,11 +3867,12 @@ workspace:
   background_tasks: Background Tasks
   background_tasks_idle: idle
   empty_documents: No documents open
+  empty_hint: "Open a table from the sidebar, or start with one of these."
   hint:
-    new_query: new query
-    command_palette: command palette
-    open: open script from disk
-    new_connection: new connection
+    new_query: New query
+    command_palette: Command palette
+    open: Open script from disk
+    new_connection: New connection
   mcp_approvals: MCP Approvals
   event_streams: Event Streams
   action:

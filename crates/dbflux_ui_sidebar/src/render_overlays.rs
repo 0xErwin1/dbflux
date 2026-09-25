@@ -1,7 +1,11 @@
 use super::*;
+use dbflux_components::composites::{ListRow, MenuItem, menu_frame, menu_row};
 use dbflux_components::primitives::Icon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Heights;
+
+/// Minimum width of the sidebar's add menu.
+const ADD_MENU_MIN_WIDTH: Pixels = px(200.0);
 use gpui_component::scroll::ScrollableElement;
 
 fn format_child_timestamp(timestamp_ms: Option<i64>) -> String {
@@ -60,8 +64,13 @@ fn ensure_selected_in_page(picker: &mut ChildPickerState) {
 
 impl Sidebar {
     pub(super) fn render_add_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let sidebar_for_close = cx.entity().clone();
+
+        let items = if self.active_tab == SidebarTab::Connections {
+            self.add_connections_menu_items(cx)
+        } else {
+            self.add_scripts_menu_items(cx)
+        };
 
         div()
             .absolute()
@@ -78,165 +87,79 @@ impl Sidebar {
                     }),
             )
             .child(
-                div()
+                menu_frame(cx)
                     .absolute()
                     .top(Heights::TOOLBAR)
                     .right(Spacing::XS)
-                    .bg(theme.sidebar)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(Radii::SM)
-                    .py(Spacing::XS)
-                    .min_w(px(140.0))
-                    .shadow_md()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .when(self.active_tab == SidebarTab::Connections, |el| {
-                        self.add_connections_menu_items(el, cx)
-                    })
-                    .when(self.active_tab == SidebarTab::Scripts, |el| {
-                        self.add_scripts_menu_items(el, cx)
-                    }),
+                    .min_w(ADD_MENU_MIN_WIDTH)
+                    .children(items),
             )
     }
 
-    fn add_connections_menu_items(&self, el: Div, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let sidebar_for_folder = cx.entity().clone();
-        let sidebar_for_conn = cx.entity().clone();
-        let hover_bg = theme.list_active;
+    /// One row of the sidebar's add menu; clicking closes the menu first.
+    fn add_menu_row(
+        &self,
+        id: &'static str,
+        icon: AppIcon,
+        label: String,
+        on_select: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let sidebar = cx.entity().clone();
 
-        el.child(
-            div()
-                .id("add-folder-option")
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .hover(move |d| d.bg(hover_bg))
-                .on_click(move |_, _, cx| {
-                    sidebar_for_folder.update(cx, |this, cx| {
-                        this.close_add_menu(cx);
-                        this.create_root_folder(cx);
-                    });
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
-                        .child(dbflux_i18n::t!("sidebar.overlay.add_folder")),
-                ),
-        )
-        .child(
-            div()
-                .id("add-connection-option")
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .hover(move |d| d.bg(theme.list_active))
-                .on_click(move |_, _, cx| {
-                    sidebar_for_conn.update(cx, |this, cx| {
-                        this.close_add_menu(cx);
-                        cx.emit(SidebarEvent::RequestOpenConnectionManager);
-                    });
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Plug).size(Heights::ICON_SM).muted())
-                        .child(dbflux_i18n::t!("sidebar.overlay.add_connection")),
-                ),
-        )
+        menu_row(id, &MenuItem::new(label).icon(icon), false, cx)
+            .on_click(move |_, _, cx| {
+                sidebar.update(cx, |this, cx| {
+                    this.close_add_menu(cx);
+                    on_select(this, cx);
+                });
+            })
+            .into_any_element()
     }
 
-    fn add_scripts_menu_items(&self, el: Div, cx: &mut Context<Self>) -> Div {
-        let theme = cx.theme();
-        let sidebar_for_file = cx.entity().clone();
-        let sidebar_for_folder = cx.entity().clone();
-        let sidebar_for_import = cx.entity().clone();
-        let hover_bg = theme.list_active;
-        let hover_bg2 = theme.list_active;
-        let hover_bg3 = theme.list_active;
+    fn add_connections_menu_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        vec![
+            self.add_menu_row(
+                "add-folder-option",
+                AppIcon::Folder,
+                dbflux_i18n::t!("sidebar.overlay.add_folder"),
+                |this, cx| this.create_root_folder(cx),
+                cx,
+            ),
+            self.add_menu_row(
+                "add-connection-option",
+                AppIcon::Plug,
+                dbflux_i18n::t!("sidebar.overlay.add_connection"),
+                |_, cx| cx.emit(SidebarEvent::RequestOpenConnectionManager),
+                cx,
+            ),
+        ]
+    }
 
-        el.child(
-            div()
-                .id("add-script-file")
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .hover(move |d| d.bg(hover_bg))
-                .on_click(move |_, _, cx| {
-                    sidebar_for_file.update(cx, |this, cx| {
-                        this.close_add_menu(cx);
-                        this.create_script_file(cx);
-                    });
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(
-                            Icon::new(AppIcon::ScrollText)
-                                .size(Heights::ICON_SM)
-                                .muted(),
-                        )
-                        .child(dbflux_i18n::t!("sidebar.overlay.add_script_file")),
-                ),
-        )
-        .child(
-            div()
-                .id("add-script-folder")
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .hover(move |d| d.bg(hover_bg2))
-                .on_click(move |_, _, cx| {
-                    sidebar_for_folder.update(cx, |this, cx| {
-                        this.close_add_menu(cx);
-                        this.create_script_folder(cx);
-                    });
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Folder).size(Heights::ICON_SM).muted())
-                        .child(dbflux_i18n::t!("sidebar.overlay.add_script_folder")),
-                ),
-        )
-        .child(
-            div()
-                .id("import-script")
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .cursor_pointer()
-                .text_size(FontSizes::SM)
-                .hover(move |d| d.bg(hover_bg3))
-                .on_click(move |_, _, cx| {
-                    sidebar_for_import.update(cx, |this, cx| {
-                        this.close_add_menu(cx);
-                        this.import_script(cx);
-                    });
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(Icon::new(AppIcon::Download).size(Heights::ICON_SM).muted())
-                        .child(dbflux_i18n::t!("sidebar.overlay.import_file")),
-                ),
-        )
+    fn add_scripts_menu_items(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        vec![
+            self.add_menu_row(
+                "add-script-file",
+                AppIcon::ScrollText,
+                dbflux_i18n::t!("sidebar.overlay.add_script_file"),
+                |this, cx| this.create_script_file(cx),
+                cx,
+            ),
+            self.add_menu_row(
+                "add-script-folder",
+                AppIcon::Folder,
+                dbflux_i18n::t!("sidebar.overlay.add_script_folder"),
+                |this, cx| this.create_script_folder(cx),
+                cx,
+            ),
+            self.add_menu_row(
+                "import-script",
+                AppIcon::Download,
+                dbflux_i18n::t!("sidebar.overlay.import_file"),
+                |this, cx| this.import_script(cx),
+                cx,
+            ),
+        ]
     }
 
     pub(super) fn open_child_picker_modal(
@@ -449,7 +372,8 @@ impl Sidebar {
     }
 
     pub fn render_child_picker_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let app: &App = cx;
+        let theme = app.theme();
         let Some(picker) = self.child_picker.as_ref() else {
             return div();
         };
@@ -585,15 +509,13 @@ impl Sidebar {
                             let absolute_index = start + row_index;
                             let is_selected = absolute_index == selected_index;
 
-                            div()
-                                .id(("child-picker-row", row_index))
+                            ListRow::new(("child-picker-row", row_index))
+                                .selected(is_selected)
+                                .build(app)
                                 .flex()
                                 .gap(Spacing::SM)
                                 .px(Spacing::MD)
                                 .py(Spacing::XS)
-                                .cursor_pointer()
-                                .when(is_selected, |d| d.bg(theme.list_active))
-                                .hover(|d| d.bg(theme.list_active))
                                 .on_click(move |_, _, cx| {
                                     row_sidebar.update(cx, |this, cx| {
                                         let target = EventStreamTarget {

@@ -1,6 +1,7 @@
 mod badge;
 mod banner;
 mod chamfer;
+mod divider;
 mod file_picker;
 mod focus_ring;
 mod icon;
@@ -21,6 +22,7 @@ pub use chamfer::{
     chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon, clamp_cut, motion_ease,
     snap_bounds_to_device, snap_length_to_device, transition_color,
 };
+pub use divider::{DividerTone, divider, hdivider, vdivider};
 pub use file_picker::{FilePicker, file_picker_label};
 pub use focus_ring::{FocusShape, focus_ring};
 pub use icon::Icon;

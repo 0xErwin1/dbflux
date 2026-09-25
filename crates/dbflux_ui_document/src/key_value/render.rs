@@ -5,7 +5,7 @@ use super::view::{icon_button_base, render_delete_confirm_modal, render_kv_conte
 use super::{KeyValueFocusMode, KvValueViewMode, TtlState};
 use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
-use dbflux_components::composites::SplitButton;
+use dbflux_components::composites::{ListRow, SplitButton};
 use dbflux_components::controls::{Button, Dropdown, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
@@ -24,7 +24,6 @@ struct KvGateColors {
     border: Hsla,
     warning: Hsla,
     muted_foreground: Hsla,
-    list_active: Hsla,
 }
 
 impl super::KeyValueDocument {
@@ -55,24 +54,14 @@ impl super::KeyValueDocument {
                 .color(colors.muted_foreground),
             )
             .child(
-                div()
-                    .id("kv-load-anyway")
-                    .cursor_pointer()
-                    .px(Spacing::MD)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(colors.border)
-                    .hover(|d| d.bg(colors.list_active))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.load_selected_value_without_limit(cx);
-                        }),
-                    )
-                    .child(Text::body(dbflux_i18n::t!(
-                        "document.key_value.render.gate.load_anyway"
-                    ))),
+                Button::new(
+                    "kv-load-anyway",
+                    dbflux_i18n::t!("document.key_value.render.gate.load_anyway"),
+                )
+                .small()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.load_selected_value_without_limit(cx);
+                })),
             )
     }
 
@@ -430,7 +419,6 @@ impl Render for super::KeyValueDocument {
                 border: theme.border,
                 warning: theme.warning,
                 muted_foreground: theme.muted_foreground,
-                list_active: theme.list_active,
             };
 
             if let dbflux_core::KeyLoadState::TooLarge {
@@ -566,7 +554,9 @@ impl Render for super::KeyValueDocument {
                     let is_selected = self.focus_mode == KeyValueFocusMode::ValuePanel
                         && self.selected_member_index == Some(idx);
 
-                    let mut row = div()
+                    let mut row = ListRow::new(("kv-member-row", idx))
+                        .selected(is_selected)
+                        .build(cx)
                         .flex()
                         .items_center()
                         .px(Spacing::MD)
@@ -574,8 +564,6 @@ impl Render for super::KeyValueDocument {
                         .border_b_1()
                         .border_color(theme.border)
                         .text_size(FontSizes::SM)
-                        .when(is_selected, |d| d.bg(theme.list_active))
-                        .when(!is_selected, |d| d.hover(|d| d.bg(theme.list_active)))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -1007,25 +995,18 @@ impl Render for super::KeyValueDocument {
                     .children(self.keys.iter().enumerate().map(|(index, key)| {
                         let selected = self.selected_index == Some(index);
                         let is_renaming = self.renaming_index == Some(index);
-                        let row_bg = if selected {
-                            theme.list_active
-                        } else {
-                            theme.transparent
-                        };
-
                         let (icon, icon_color) = key_type_icon(key.key_type);
 
-                        let mut row = div()
+                        let mut row = ListRow::new(("kv-key-row", index))
+                            .selected(selected)
+                            .build(cx)
                             .h(Heights::ROW)
                             .flex()
                             .items_center()
                             .gap(Spacing::SM)
                             .px(Spacing::SM)
-                            .bg(row_bg)
                             .border_b_1()
                             .border_color(theme.border)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.list_active))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, _, cx| {

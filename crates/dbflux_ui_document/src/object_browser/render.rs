@@ -13,6 +13,7 @@ use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
 use crate::labels::object_browser_status_summary;
 use crate::types::DocumentState;
+use dbflux_components::composites::{Breadcrumb, BreadcrumbSegment, EmptyState, ListRow};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
@@ -119,13 +120,21 @@ impl ObjectBrowserDocument {
         let segments = self.tree.breadcrumb_segments();
         let at_root = self.tree.current_prefix.is_empty();
 
-        let separator = |cx: &Context<Self>| {
-            div()
-                .px(Spacing::XXS)
-                .child(Text::caption("/").color(cx.theme().muted_foreground))
-        };
+        let entity = cx.entity();
 
-        let mut trail = div().flex().items_center().overflow_hidden();
+        let mut crumbs = vec![
+            BreadcrumbSegment::new(self.bucket.clone())
+                .icon(AppIcon::Box, None)
+                .on_click("breadcrumb-bucket", {
+                    let entity = entity.clone();
+                    move |_, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.navigate_to_prefix(String::new(), window, cx);
+                        });
+                    }
+                }),
+        ];
+
         let mut walked = String::new();
 
         for (index, segment) in segments.iter().enumerate() {
@@ -133,24 +142,16 @@ impl ObjectBrowserDocument {
             walked.push('/');
 
             let target = walked.clone();
-            let is_last = index + 1 == segments.len();
+            let entity = entity.clone();
 
-            trail = trail.child(separator(cx)).child(
-                div()
-                    .id(SharedString::from(format!("breadcrumb-{index}")))
-                    .px(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| {
+            crumbs.push(BreadcrumbSegment::new(segment.clone()).on_click(
+                SharedString::from(format!("breadcrumb-{index}")),
+                move |_, window, cx| {
+                    entity.update(cx, |this, cx| {
                         this.navigate_to_prefix(target.clone(), window, cx);
-                    }))
-                    .child(if is_last {
-                        Text::code(segment.clone())
-                    } else {
-                        Text::code(segment.clone()).muted_foreground()
-                    }),
-            );
+                    });
+                },
+            ));
         }
 
         div()
@@ -180,20 +181,7 @@ impl ObjectBrowserDocument {
                     })
                     .child(Icon::new(AppIcon::ChevronUp).small().muted()),
             )
-            .child(Text::caption("s3:/").color(theme.muted_foreground))
-            .child(
-                div()
-                    .id("breadcrumb-bucket")
-                    .px(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.navigate_to_prefix(String::new(), window, cx);
-                    }))
-                    .child(Text::code(self.bucket.clone()).primary()),
-            )
-            .child(trail)
+            .child(Breadcrumb::new(crumbs).mono())
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -480,8 +468,9 @@ impl ObjectBrowserDocument {
         let select_id = node_id.clone();
         let menu_id = node_id.clone();
 
-        div()
-            .id(row_id)
+        ListRow::new(row_id)
+            .selected(selected)
+            .build(cx)
             // `uniform_list` sizes each item from its own content instead of
             // stretching it like a flex column child, so the row needs an
             // explicit full width to line up with the header columns.
@@ -493,10 +482,7 @@ impl ObjectBrowserDocument {
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
-            .cursor_pointer()
             .when(archived, |d| d.opacity(0.55))
-            .when(selected, |d| d.bg(theme.list_active))
-            .when(!selected, |d| d.hover(|d| d.bg(theme.list_active)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -684,16 +670,7 @@ impl ObjectBrowserDocument {
             dbflux_i18n::t!("document.object_browser.empty.prefix")
         };
 
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(Spacing::SM)
-            .child(Icon::new(AppIcon::Folder).size(Heights::ICON_LG).muted())
-            .child(Text::caption(message))
-            .into_any_element()
+        EmptyState::new(AppIcon::Folder, message).into_any_element()
     }
 
     fn render_footer(&self, rows: &[VisibleRow], cx: &Context<Self>) -> impl IntoElement {

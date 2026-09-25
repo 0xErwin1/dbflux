@@ -1,10 +1,10 @@
 use super::*;
 use crate::keymap::ContextId;
-use dbflux_components::composites::collapsible_bar;
+use dbflux_components::composites::{EmptyState, EmptyStateAction, collapsible_bar};
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
-use dbflux_components::primitives::{Icon, Kbd, Text};
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::HeaderMetrics;
 use dbflux_ui_base::keymap::chord_display_parts;
 use dbflux_ui_base::platform;
@@ -58,24 +58,17 @@ fn empty_state_shortcut_keys(command: Command) -> Option<Vec<gpui::SharedString>
         .map(chord_display_parts)
 }
 
-/// One row of the empty-workspace placeholder: a `Chord` followed by a
-/// muted description. Returns `None` when `command` has no global binding,
-/// so the placeholder never advertises a shortcut that does nothing.
+/// One action of the empty-workspace placeholder: its icon, label and the
+/// keys of its global binding. Returns `None` when `command` has no global
+/// binding, so the placeholder never advertises a shortcut that does nothing.
 fn empty_state_shortcut(
     command: Command,
-    description: impl Into<gpui::SharedString>,
-) -> Option<gpui::Div> {
+    icon: AppIcon,
+    label: impl Into<gpui::SharedString>,
+) -> Option<EmptyStateAction> {
     let keys = empty_state_shortcut_keys(command)?;
 
-    Some(
-        gpui::div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(Kbd::chord(keys))
-            .child(Text::caption(description)),
-    )
+    Some(EmptyStateAction::new(icon, label, keys))
 }
 
 impl Render for Workspace {
@@ -197,7 +190,6 @@ impl Render for Workspace {
 
         let theme = cx.theme().clone();
         let bg_color = theme.background;
-        let muted_fg = theme.muted_foreground;
         let header_size = HeaderMetrics::BAR_HEIGHT;
         let running_task_count = self.app_state.read(cx).tasks().running_tasks().len();
         let tasks_status: SharedString = if running_task_count == 0 {
@@ -377,38 +369,39 @@ impl Render for Workspace {
                                 .size_full()
                                 .items_center()
                                 .justify_center()
-                                .gap_4()
                                 .child(
-                                    Icon::new(AppIcon::Database)
-                                        .size(px(64.0))
-                                        .color(muted_fg.opacity(0.5)),
-                                )
-                                .child(
-                                    Text::body(dbflux_i18n::t!("workspace.empty_documents"))
-                                        .muted_foreground(),
-                                )
-                                .child(
-                                    div()
-                                        .mt_4()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_2()
-                                        .children(empty_state_shortcut(
-                                            Command::NewQueryTab,
-                                            dbflux_i18n::t!("workspace.hint.new_query"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::ToggleCommandPalette,
-                                            dbflux_i18n::t!("workspace.hint.command_palette"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::OpenScriptFile,
-                                            dbflux_i18n::t!("workspace.hint.open"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::OpenConnectionManager,
-                                            dbflux_i18n::t!("workspace.hint.new_connection"),
-                                        )),
+                                    EmptyState::new(
+                                        AppIcon::Table,
+                                        dbflux_i18n::t!("workspace.empty_hint"),
+                                    )
+                                    .title(dbflux_i18n::t!("workspace.empty_documents"))
+                                    .card()
+                                    .actions(
+                                        [
+                                            empty_state_shortcut(
+                                                Command::NewQueryTab,
+                                                AppIcon::FileCode,
+                                                dbflux_i18n::t!("workspace.hint.new_query"),
+                                            ),
+                                            empty_state_shortcut(
+                                                Command::ToggleCommandPalette,
+                                                AppIcon::Search,
+                                                dbflux_i18n::t!("workspace.hint.command_palette"),
+                                            ),
+                                            empty_state_shortcut(
+                                                Command::OpenScriptFile,
+                                                AppIcon::SquareTerminal,
+                                                dbflux_i18n::t!("workspace.hint.open"),
+                                            ),
+                                            empty_state_shortcut(
+                                                Command::OpenConnectionManager,
+                                                AppIcon::Plus,
+                                                dbflux_i18n::t!("workspace.hint.new_connection"),
+                                            ),
+                                        ]
+                                        .into_iter()
+                                        .flatten(),
+                                    ),
                                 )
                                 .children(toast_layer),
                         ),

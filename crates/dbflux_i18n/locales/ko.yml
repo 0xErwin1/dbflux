@@ -1084,6 +1084,7 @@ document:
           host: 호스트
           region: 리전
     context_menu:
+      header: "%{column} · 행 %{row}"
       item:
         copy: 복사
         view_document: 문서 보기
@@ -3865,6 +3866,7 @@ workspace:
   background_tasks: 백그라운드 작업
   background_tasks_idle: 유휴
   empty_documents: 열린 문서가 없습니다.
+  empty_hint: "사이드바에서 테이블을 열거나 다음 중 하나로 시작하세요."
   hint:
     new_query: 새 쿼리
     command_palette: 명령 팔레트

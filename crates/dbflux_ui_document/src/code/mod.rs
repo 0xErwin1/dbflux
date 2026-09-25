@@ -13,7 +13,9 @@ use dbflux_components::controls::{
     Button, CodeActionProvider, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition,
     InputState, Rope, RopeExt,
 };
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
 use dbflux_components::modals::schema_drift::{
@@ -825,7 +827,7 @@ impl CodeDocument {
             Dropdown::new("sql-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe_in(

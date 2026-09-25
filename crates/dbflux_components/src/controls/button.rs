@@ -11,7 +11,7 @@ use crate::icon::IconSource;
 use crate::primitives::{
     Chamfer, ChamferCorners, ChamferFillKind, ChamferRing, Icon, Kbd, KbdTone,
 };
-use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors};
+use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, Fields};
 use crate::typography::AppFonts;
 
 /// Color treatment of a [`Button`] (DSStates).
@@ -176,6 +176,7 @@ pub struct Button {
     icon: Option<IconSource>,
     icon_size: Option<Pixels>,
     icon_only: bool,
+    trailing_icon: Option<IconSource>,
     kbd: Option<SharedString>,
     tooltip: Option<SharedString>,
     text_color: Option<Hsla>,
@@ -199,6 +200,7 @@ impl Button {
             icon: None,
             icon_size: None,
             icon_only: false,
+            trailing_icon: None,
             kbd: None,
             tooltip: None,
             text_color: None,
@@ -268,6 +270,13 @@ impl Button {
     }
 
     /// Trailing keycap with the shortcut that runs the same action.
+    /// A small icon after the label, such as the chevron of a button that
+    /// opens a menu (AppByzTable "Export").
+    pub fn trailing_icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.trailing_icon = Some(icon.into());
+        self
+    }
+
     pub fn kbd(mut self, shortcut: impl Into<SharedString>) -> Self {
         self.kbd = Some(shortcut.into());
         self
@@ -380,6 +389,7 @@ impl RenderOnce for Button {
             icon,
             icon_size,
             icon_only,
+            trailing_icon,
             kbd,
             disabled,
             focused,
@@ -445,6 +455,10 @@ impl RenderOnce for Button {
 
         if !icon_only && !label.is_empty() {
             button = button.child(label);
+        }
+
+        if let Some(icon) = trailing_icon.filter(|_| !icon_only) {
+            button = button.child(Icon::new(icon).size(Fields::CHEVRON).color(content));
         }
 
         if let Some(shortcut) = kbd {

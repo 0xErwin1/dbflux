@@ -353,6 +353,7 @@ impl ChartDocument {
                 row_count,
                 resolved_window,
                 source_supports_save: true,
+                refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
             };
 
             let handlers = ChartToolbarHandlers {

@@ -1,3 +1,4 @@
+use crate::composites::ListRow;
 use crate::primitives::Text;
 use crate::tokens::{Heights, Spacing};
 use gpui::prelude::*;
@@ -179,16 +180,14 @@ impl MultiSelect {
             .enumerate()
             .map(|(index, item)| {
                 let checked = self.selected_indices.contains(&index);
-                div()
-                    .id(index)
+                ListRow::new(index)
+                    .build(cx)
                     .w_full()
                     .px_2()
                     .py_1p5()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.list_active))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
@@ -206,14 +205,11 @@ impl MultiSelect {
 
         let footer = div().p_1().pt_0().when(has_selection, |d| {
             d.child(
-                div()
-                    .id("ms-clear")
+                ListRow::new("ms-clear")
+                    .build(cx)
                     .w_full()
                     .px_2()
                     .py_1()
-                    .cursor_pointer()
-                    .rounded_sm()
-                    .hover(|s| s.bg(theme.list_active))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _event, _window, cx| {

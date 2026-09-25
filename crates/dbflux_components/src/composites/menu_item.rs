@@ -3,10 +3,11 @@ use gpui::*;
 use gpui_component::{ActiveTheme, IconName};
 
 use crate::icon::IconSource;
-use crate::primitives::{Icon, Text};
+use crate::primitives::{Chamfer, Icon, Kbd};
 use crate::tokens::{
-    ChromeColorSlot, ChromeEdgeRole, ChromeSurfaceRole, FontSizes, Heights, Radii, Spacing,
+    Borders, ChamferCut, ChromeColorSlot, ChromeColors, ChromeEdgeRole, MenuMetrics,
 };
+use crate::typography::AppFonts;
 
 pub(crate) const DEFAULT_MENU_CONTAINER_MIN_WIDTH: Pixels = px(160.0);
 
@@ -14,18 +15,17 @@ pub(crate) const DEFAULT_MENU_CONTAINER_MIN_WIDTH: Pixels = px(160.0);
 pub(crate) struct MenuChromeInspection {
     pub container_background: ChromeColorSlot,
     pub container_edge: ChromeEdgeRole,
-    pub container_radius: Pixels,
+    pub cut: Pixels,
     pub separator_edge: ChromeEdgeRole,
 }
 
+/// Menu frame roles: raised fill, line-2 border, overlay cut, line separators.
 pub(crate) fn inspect_menu_chrome() -> MenuChromeInspection {
-    let shell = ChromeSurfaceRole::PopoverShell.inspect();
-
     MenuChromeInspection {
-        container_background: shell.background,
-        container_edge: shell.edge,
-        container_radius: shell.radius,
-        separator_edge: ChromeEdgeRole::Separator,
+        container_background: ChromeColorSlot::Secondary,
+        container_edge: ChromeEdgeRole::Control,
+        cut: ChamferCut::OVERLAY,
+        separator_edge: ChromeEdgeRole::Popover,
     }
 }
 
@@ -38,6 +38,10 @@ pub struct MenuItem {
     pub label: SharedString,
     pub icon: Option<IconSource>,
     pub is_separator: bool,
+    /// A non-interactive caption row naming what the menu acts on.
+    pub is_header: bool,
+    /// Color of a header row's icon; muted when `None`.
+    pub header_icon_color: Option<Hsla>,
     pub is_danger: bool,
     pub has_submenu: bool,
     pub disabled: bool,
@@ -49,8 +53,8 @@ enum MenuItemColorRole {
     Foreground,
     Muted,
     Danger,
-    AccentForeground,
-    AccentForegroundMuted,
+    Strong,
+    Tint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,7 +67,6 @@ enum MenuItemBackgroundRole {
 struct MenuItemVisualState {
     text_color: MenuItemColorRole,
     icon_color: MenuItemColorRole,
-    shortcut_color: MenuItemColorRole,
     submenu_color: MenuItemColorRole,
     background: Option<MenuItemBackgroundRole>,
 }
@@ -76,7 +79,7 @@ struct MenuItemInteractionState {
 }
 
 fn menu_item_interaction_state(item: &MenuItem, is_selected: bool) -> MenuItemInteractionState {
-    let interactive = !item.disabled && !item.is_separator;
+    let interactive = !item.disabled && !item.is_separator && !item.is_header;
 
     MenuItemInteractionState {
         interactive,
@@ -88,60 +91,36 @@ fn menu_item_interaction_state(item: &MenuItem, is_selected: bool) -> MenuItemIn
 fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualState {
     if item.disabled {
         return MenuItemVisualState {
-            text_color: MenuItemColorRole::Muted,
+            text_color: MenuItemColorRole::Foreground,
             icon_color: MenuItemColorRole::Muted,
-            shortcut_color: MenuItemColorRole::Muted,
             submenu_color: MenuItemColorRole::Muted,
             background: None,
         };
     }
 
-    let text_color = if item.is_danger {
-        MenuItemColorRole::Danger
-    } else if is_selected {
-        MenuItemColorRole::AccentForeground
-    } else {
-        MenuItemColorRole::Foreground
-    };
+    if item.is_danger {
+        return MenuItemVisualState {
+            text_color: MenuItemColorRole::Danger,
+            icon_color: MenuItemColorRole::Danger,
+            submenu_color: MenuItemColorRole::Danger,
+            background: is_selected.then_some(MenuItemBackgroundRole::DangerTint),
+        };
+    }
 
-    let icon_color = if item.is_danger {
-        MenuItemColorRole::Danger
-    } else if is_selected {
-        MenuItemColorRole::AccentForeground
-    } else {
-        MenuItemColorRole::Muted
-    };
-
-    let shortcut_color = if is_selected && !item.is_danger {
-        MenuItemColorRole::AccentForegroundMuted
-    } else {
-        MenuItemColorRole::Muted
-    };
-
-    let submenu_color = if item.is_danger {
-        MenuItemColorRole::Danger
-    } else if is_selected {
-        MenuItemColorRole::AccentForeground
-    } else {
-        MenuItemColorRole::Foreground
-    };
-
-    let background = if is_selected {
-        Some(if item.is_danger {
-            MenuItemBackgroundRole::DangerTint
-        } else {
-            MenuItemBackgroundRole::Accent
-        })
-    } else {
-        None
-    };
+    if is_selected {
+        return MenuItemVisualState {
+            text_color: MenuItemColorRole::Strong,
+            icon_color: MenuItemColorRole::Tint,
+            submenu_color: MenuItemColorRole::Tint,
+            background: Some(MenuItemBackgroundRole::Accent),
+        };
+    }
 
     MenuItemVisualState {
-        text_color,
-        icon_color,
-        shortcut_color,
-        submenu_color,
-        background,
+        text_color: MenuItemColorRole::Foreground,
+        icon_color: MenuItemColorRole::Muted,
+        submenu_color: MenuItemColorRole::Muted,
+        background: None,
     }
 }
 
@@ -150,8 +129,8 @@ fn resolve_menu_item_color(role: MenuItemColorRole, theme: &gpui_component::Them
         MenuItemColorRole::Foreground => theme.foreground,
         MenuItemColorRole::Muted => theme.muted_foreground,
         MenuItemColorRole::Danger => theme.danger,
-        MenuItemColorRole::AccentForeground => theme.accent_foreground,
-        MenuItemColorRole::AccentForegroundMuted => theme.accent_foreground.opacity(0.7),
+        MenuItemColorRole::Strong => ChromeColors::strong(theme),
+        MenuItemColorRole::Tint => ChromeColors::tint(theme),
     }
 }
 
@@ -160,8 +139,10 @@ fn resolve_menu_item_background(
     theme: &gpui_component::Theme,
 ) -> Hsla {
     match role {
-        MenuItemBackgroundRole::Accent => theme.accent,
-        MenuItemBackgroundRole::DangerTint => theme.danger.opacity(0.1),
+        MenuItemBackgroundRole::Accent => {
+            ChromeColors::tint(theme).opacity(MenuMetrics::SELECTED_ALPHA)
+        }
+        MenuItemBackgroundRole::DangerTint => theme.danger.opacity(MenuMetrics::SELECTED_ALPHA),
     }
 }
 
@@ -172,6 +153,8 @@ impl MenuItem {
             label: label.into(),
             icon: None,
             is_separator: false,
+            is_header: false,
+            header_icon_color: None,
             is_danger: false,
             has_submenu: false,
             disabled: false,
@@ -179,8 +162,24 @@ impl MenuItem {
         }
     }
 
+    /// A caption row at the top of a menu, for example the column and row a
+    /// cell menu acts on. Not selectable.
+    pub fn header(label: impl Into<SharedString>) -> Self {
+        Self {
+            is_header: true,
+            ..Self::new(label)
+        }
+    }
+
     pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Color of a header row's icon, for example the FK color when the menu
+    /// acts on a foreign-key column.
+    pub fn header_icon_color(mut self, color: Hsla) -> Self {
+        self.header_icon_color = Some(color);
         self
     }
 
@@ -206,15 +205,94 @@ impl MenuItem {
 
     pub fn separator() -> Self {
         Self {
-            label: SharedString::default(),
-            icon: None,
             is_separator: true,
-            is_danger: false,
-            has_submenu: false,
-            disabled: false,
-            shortcut: None,
+            ..Self::new(SharedString::default())
         }
     }
+}
+
+/// Visual row of a menu, without handlers: icon, label, then the shortcut as
+/// a keycap or the submenu chevron (AppByzMenu, DSApp "Context menu").
+///
+/// Hand-rolled menus that need their own listeners or a flyout child start
+/// from this and chain `on_click` / `on_mouse_move` / `child` onto it, so
+/// every row shares the same geometry and states. The selected row gets a
+/// cut-4 tint wash (danger wash for danger rows); unselected rows show the
+/// same wash while hovered.
+pub fn menu_row(
+    id: impl Into<ElementId>,
+    item: &MenuItem,
+    is_selected: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+
+    let interaction_state = menu_item_interaction_state(item, is_selected);
+    let visual_state = menu_item_visual_state(item, interaction_state.selected);
+    let icon_color = resolve_menu_item_color(visual_state.icon_color, theme);
+    let text_color = resolve_menu_item_color(visual_state.text_color, theme);
+    let submenu_color = resolve_menu_item_color(visual_state.submenu_color, theme);
+
+    let wash = if item.is_danger {
+        resolve_menu_item_background(MenuItemBackgroundRole::DangerTint, theme)
+    } else {
+        resolve_menu_item_background(MenuItemBackgroundRole::Accent, theme)
+    };
+
+    let mut shape = Chamfer::new(ChamferCut::KEYCAP);
+
+    if let Some(background) = visual_state.background {
+        shape = shape.fill(resolve_menu_item_background(background, theme));
+    } else if interaction_state.hoverable {
+        shape = shape.fill_hover(wash).interactive("menu-row-shape");
+    }
+
+    div()
+        .id(id)
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(MenuMetrics::ROW_GAP)
+        .h(MenuMetrics::ROW_HEIGHT)
+        .mx(MenuMetrics::ROW_INSET)
+        .px(MenuMetrics::ROW_PADDING_X)
+        .font_family(AppFonts::INTERFACE)
+        .text_size(MenuMetrics::ROW_FONT)
+        .whitespace_nowrap()
+        .text_color(text_color)
+        .when(interaction_state.interactive, |row| row.cursor_pointer())
+        .when(item.disabled, |row| {
+            row.opacity(MenuMetrics::DISABLED_OPACITY)
+        })
+        .child(shape)
+        .child(match item.icon.clone() {
+            Some(icon) => Icon::new(icon)
+                .size(MenuMetrics::ICON)
+                .color(icon_color)
+                .into_any_element(),
+            None => div()
+                .flex_shrink_0()
+                .size(MenuMetrics::ICON)
+                .into_any_element(),
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(item.label.clone()),
+        )
+        .when_some(item.shortcut.clone(), |row, shortcut| {
+            row.child(Kbd::new(shortcut))
+        })
+        .when(item.has_submenu, |row| {
+            row.child(
+                Icon::new(IconSource::Named(IconName::ChevronRight))
+                    .size(MenuMetrics::SUBMENU_ICON)
+                    .color(submenu_color),
+            )
+        })
 }
 
 /// Render a single menu item at a given index.
@@ -233,81 +311,46 @@ pub fn render_menu_item(
     on_hover: impl Fn(&mut App) + 'static,
     cx: &App,
 ) -> Stateful<Div> {
-    let theme = cx.theme();
-
-    let is_danger = item.is_danger;
-    let has_submenu = item.has_submenu;
-    let is_disabled = item.disabled;
-    let label = item.label.clone();
-    let icon = item.icon.clone();
-    let shortcut = item.shortcut.clone();
     let interaction_state = menu_item_interaction_state(item, is_selected);
-    let visual_state = menu_item_visual_state(item, interaction_state.selected);
-    let icon_color = resolve_menu_item_color(visual_state.icon_color, theme);
-    let text_color = resolve_menu_item_color(visual_state.text_color, theme);
 
     let item_selector = format!("{}-item-{}", panel_id, index);
     let item_id = SharedString::from(item_selector.clone());
 
-    let has_no_icon = icon.is_none();
-    let mut row = div()
-        .id(item_id)
+    menu_row(item_id, item, is_selected, cx)
         .debug_selector(move || item_selector.clone())
-        .flex()
-        .items_center()
-        .gap(Spacing::SM)
-        .h(Heights::ROW_COMPACT)
-        .px(Spacing::SM)
-        .mx(Spacing::XS)
-        .rounded(Radii::SM)
-        .text_size(FontSizes::SM)
-        .text_color(text_color)
-        .when(interaction_state.interactive, |d| d.cursor_pointer())
-        .when(is_disabled, |d| d.opacity(0.6))
-        .when_some(visual_state.background, |d, background| {
-            d.bg(resolve_menu_item_background(background, theme))
-        })
-        .when(interaction_state.hoverable, |d| {
-            let hover_bg = if is_danger {
-                theme.danger.opacity(0.1)
-            } else {
-                theme.secondary
-            };
-            d.hover(move |d| d.bg(hover_bg))
-        })
-        .when(interaction_state.interactive, |d| {
-            d.on_mouse_move(move |_, _, cx| {
+        .when(interaction_state.interactive, |row| {
+            row.on_mouse_move(move |_, _, cx| {
                 on_hover(cx);
             })
             .on_click(on_click)
         })
-        .when_some(icon, |d, icon| {
-            d.child(Icon::new(icon).small().color(icon_color))
+}
+
+/// Render a menu header row: an optional icon and a short mono caption naming
+/// what the menu acts on (`workspace_id · row 2`).
+pub fn render_menu_header(item: &MenuItem, cx: &App) -> Div {
+    let theme = cx.theme();
+
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(MenuMetrics::HEADER_GAP)
+        .pt(MenuMetrics::HEADER_PADDING_TOP)
+        .pb(MenuMetrics::HEADER_PADDING_BOTTOM)
+        .px(MenuMetrics::HEADER_PADDING_X)
+        .font_family(AppFonts::MONO)
+        .text_size(MenuMetrics::HEADER_FONT)
+        .text_color(theme.muted_foreground)
+        .whitespace_nowrap()
+        .when_some(item.icon.clone(), |header, icon| {
+            header.child(
+                Icon::new(icon)
+                    .size(MenuMetrics::HEADER_ICON)
+                    .color(item.header_icon_color.unwrap_or(theme.muted_foreground)),
+            )
         })
-        .when(has_no_icon, |d| d.pl(px(20.0)))
-        .child(
-            div()
-                .flex_1()
-                .truncate()
-                .child(Text::body_sm(label).text_color(text_color)),
-        );
-
-    if let Some(sc) = shortcut {
-        row = row.child(
-            Text::caption(sc)
-                .text_color(resolve_menu_item_color(visual_state.shortcut_color, theme)),
-        );
-    }
-
-    if has_submenu {
-        row = row.child(
-            Icon::new(IconSource::Named(IconName::ChevronRight))
-                .small()
-                .color(resolve_menu_item_color(visual_state.submenu_color, theme)),
-        );
-    }
-
-    row
+        .child(div().min_w_0().truncate().child(item.label.clone()))
 }
 
 /// Render a thin horizontal separator line.
@@ -316,10 +359,40 @@ pub fn render_separator(cx: &App) -> Div {
     let chrome = inspect_menu_chrome();
 
     div()
-        .h(px(1.0))
-        .mx(Spacing::SM)
-        .my(Spacing::XS)
+        .flex_shrink_0()
+        .h(Borders::THIN)
+        .mx(MenuMetrics::SEPARATOR_MARGIN_X)
+        .my(MenuMetrics::SEPARATOR_MARGIN_Y)
         .bg(chrome.separator_edge.resolve(theme))
+}
+
+/// The frame of a floating menu: raised fill, line-2 border, cut 12, deep
+/// shadow and the menu's vertical padding. Stops mouse-down propagation so a
+/// click inside never reaches the dismiss overlay behind it.
+///
+/// Hand-rolled menus and submenu flyouts use this so they share the frame of
+/// [`render_menu_container`]; size it with `.w(...)` or `.min_w(...)`.
+pub fn menu_frame(cx: &App) -> Div {
+    let theme = cx.theme();
+    let chrome = inspect_menu_chrome();
+
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .py(MenuMetrics::PADDING_Y)
+        .shadow_lg()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down(MouseButton::Right, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .child(
+            Chamfer::new(chrome.cut)
+                .fill(chrome.container_background.resolve(theme))
+                .border(chrome.container_edge.resolve(theme)),
+        )
 }
 
 /// Render the popup panel container for a menu.
@@ -333,24 +406,7 @@ pub fn render_menu_container_with_min_width(
     min_width: Pixels,
     cx: &App,
 ) -> Div {
-    let theme = cx.theme();
-    let chrome = inspect_menu_chrome();
-
-    div()
-        .min_w(min_width)
-        .bg(chrome.container_background.resolve(theme))
-        .border_1()
-        .border_color(chrome.container_edge.resolve(theme))
-        .rounded(chrome.container_radius)
-        .shadow_lg()
-        .py(Spacing::XS)
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .on_mouse_down(MouseButton::Right, |_, _, cx| {
-            cx.stop_propagation();
-        })
-        .children(children)
+    menu_frame(cx).min_w(min_width).children(children)
 }
 
 #[cfg(test)]
@@ -359,7 +415,7 @@ mod tests {
         DEFAULT_MENU_CONTAINER_MIN_WIDTH, MenuItem, MenuItemBackgroundRole, MenuItemColorRole,
         inspect_menu_chrome, menu_item_interaction_state, menu_item_visual_state,
     };
-    use crate::tokens::{ChromeColorSlot, ChromeEdgeRole, Radii};
+    use crate::tokens::{ChamferCut, ChromeColorSlot, ChromeEdgeRole};
     use gpui::px;
 
     #[test]
@@ -387,27 +443,40 @@ mod tests {
         assert_eq!(state.background, Some(MenuItemBackgroundRole::DangerTint));
         assert_eq!(state.text_color, MenuItemColorRole::Danger);
         assert_eq!(state.icon_color, MenuItemColorRole::Danger);
-        assert_eq!(state.shortcut_color, MenuItemColorRole::Muted);
         assert_eq!(state.submenu_color, MenuItemColorRole::Danger);
     }
 
     #[test]
-    fn selected_regular_item_uses_accent_visual_state() {
+    fn unselected_danger_item_keeps_danger_text_without_wash() {
+        let state = menu_item_visual_state(&MenuItem::new("Delete Row").danger(), false);
+
+        assert_eq!(state.background, None);
+        assert_eq!(state.text_color, MenuItemColorRole::Danger);
+        assert_eq!(state.icon_color, MenuItemColorRole::Danger);
+    }
+
+    #[test]
+    fn selected_regular_item_uses_tint_wash_strong_text_and_tint_icon() {
         let item = MenuItem::new("Open").shortcut("Enter").submenu();
         let state = menu_item_visual_state(&item, true);
 
         assert_eq!(state.background, Some(MenuItemBackgroundRole::Accent));
-        assert_eq!(state.text_color, MenuItemColorRole::AccentForeground);
-        assert_eq!(state.icon_color, MenuItemColorRole::AccentForeground);
-        assert_eq!(
-            state.shortcut_color,
-            MenuItemColorRole::AccentForegroundMuted
-        );
-        assert_eq!(state.submenu_color, MenuItemColorRole::AccentForeground);
+        assert_eq!(state.text_color, MenuItemColorRole::Strong);
+        assert_eq!(state.icon_color, MenuItemColorRole::Tint);
+        assert_eq!(state.submenu_color, MenuItemColorRole::Tint);
     }
 
     #[test]
-    fn disabled_items_render_muted_and_unselected() {
+    fn unselected_regular_item_uses_body_text_and_muted_icon() {
+        let state = menu_item_visual_state(&MenuItem::new("Copy"), false);
+
+        assert_eq!(state.background, None);
+        assert_eq!(state.text_color, MenuItemColorRole::Foreground);
+        assert_eq!(state.icon_color, MenuItemColorRole::Muted);
+    }
+
+    #[test]
+    fn disabled_items_render_unselected() {
         let item = MenuItem::new("Delete")
             .danger()
             .shortcut("Del")
@@ -417,9 +486,7 @@ mod tests {
         let state = menu_item_visual_state(&item, true);
 
         assert_eq!(state.background, None);
-        assert_eq!(state.text_color, MenuItemColorRole::Muted);
         assert_eq!(state.icon_color, MenuItemColorRole::Muted);
-        assert_eq!(state.shortcut_color, MenuItemColorRole::Muted);
         assert_eq!(state.submenu_color, MenuItemColorRole::Muted);
     }
 
@@ -435,17 +502,25 @@ mod tests {
     }
 
     #[test]
+    fn header_items_are_not_interactive() {
+        let item = MenuItem::header("workspace_id · row 2");
+
+        assert!(item.is_header);
+        assert!(!menu_item_interaction_state(&item, true).interactive);
+    }
+
+    #[test]
     fn default_menu_container_min_width_preserves_shared_baseline() {
         assert_eq!(DEFAULT_MENU_CONTAINER_MIN_WIDTH, px(160.0));
     }
 
     #[test]
-    fn menu_chrome_prefers_popover_shells_and_separator_tokens() {
+    fn menu_chrome_uses_raised_fill_line_two_edge_and_overlay_cut() {
         let chrome = inspect_menu_chrome();
 
-        assert_eq!(chrome.container_background, ChromeColorSlot::Popover);
-        assert_eq!(chrome.container_edge, ChromeEdgeRole::Popover);
-        assert_eq!(chrome.container_radius, Radii::MD);
-        assert_eq!(chrome.separator_edge, ChromeEdgeRole::Separator);
+        assert_eq!(chrome.container_background, ChromeColorSlot::Secondary);
+        assert_eq!(chrome.container_edge, ChromeEdgeRole::Control);
+        assert_eq!(chrome.cut, ChamferCut::OVERLAY);
+        assert_eq!(chrome.separator_edge, ChromeEdgeRole::Popover);
     }
 }

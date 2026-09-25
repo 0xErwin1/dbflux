@@ -1,7 +1,7 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::document::{TabManager, TabManagerEvent};
 use dbflux_components::primitives::Text;
-use dbflux_components::primitives::{Icon, Status, StatusIndicator};
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, vdivider};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
@@ -248,7 +248,6 @@ impl Render for StatusBar {
             Status::Idle
         };
 
-        let divider_color = ChromeColors::ghost_border(cx.theme());
         let unread = app_state.unread_error_count;
 
         // Segments contributed by the active document (DEC-23) — e.g. engine
@@ -298,7 +297,7 @@ impl Render for StatusBar {
                     // Read-only indicator — shown only for the active connection,
                     // differentiating whether the profile or the server enforced it.
                     .when_some(read_only_copy, |this, (label, tooltip)| {
-                        this.child(Self::vertical_divider(divider_color)).child(
+                        this.child(Self::vertical_divider(cx)).child(
                             div()
                                 .id("status-bar-read-only")
                                 .flex()
@@ -315,7 +314,7 @@ impl Render for StatusBar {
                     // Running task info — shown with a divider when a task is active
                     .when_some(current_task.cloned(), |this, task| {
                         let description = Self::single_line(&task.description);
-                        this.child(Self::vertical_divider(divider_color)).child(
+                        this.child(Self::vertical_divider(cx)).child(
                             div()
                                 .flex()
                                 .items_center()
@@ -333,7 +332,7 @@ impl Render for StatusBar {
                         )
                     })
                     .when_some(last_completed, |this, task| {
-                        this.child(Self::vertical_divider(divider_color)).child(
+                        this.child(Self::vertical_divider(cx)).child(
                             div()
                                 .flex()
                                 .items_center()
@@ -363,7 +362,7 @@ impl Render for StatusBar {
                             }
 
                             [
-                                Self::vertical_divider(divider_color).into_any_element(),
+                                Self::vertical_divider(cx).into_any_element(),
                                 el.into_any_element(),
                             ]
                         },
@@ -376,7 +375,7 @@ impl Render for StatusBar {
                     .flex_shrink_0()
                     .items_center()
                     .when(unread > 0, |this| {
-                        this.child(Self::vertical_divider(divider_color)).child(
+                        this.child(Self::vertical_divider(cx)).child(
                             div()
                                 .id("error-badge")
                                 .flex()
@@ -400,7 +399,7 @@ impl Render for StatusBar {
                                 })),
                         )
                     })
-                    .child(Self::vertical_divider(divider_color))
+                    .child(Self::vertical_divider(cx))
                     .child(
                         div()
                             .id("tasks-toggle")
@@ -435,9 +434,9 @@ impl Render for StatusBar {
 }
 
 impl StatusBar {
-    /// Renders a 1 px vertical ghost-border separator between status bar sections.
-    fn vertical_divider(color: gpui::Hsla) -> impl IntoElement {
-        div().w(px(1.0)).h(px(16.0)).bg(color).flex_shrink_0()
+    /// Renders a 1 px vertical separator between status bar sections.
+    fn vertical_divider(cx: &App) -> impl IntoElement {
+        vdivider(cx).h(px(16.0))
     }
 }
 

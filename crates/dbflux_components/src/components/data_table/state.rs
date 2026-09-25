@@ -11,7 +11,7 @@ use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
-use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
+use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 
 /// How a model swap treats the state that is scoped to the rows being replaced.
@@ -330,8 +330,9 @@ impl DataTableState {
         }
     }
 
+    /// Width of a row: the row-number column plus every data column.
     pub fn total_content_width(&self) -> f32 {
-        *self.column_offsets.last().unwrap_or(&0.0)
+        f32::from(ROW_NUMBER_WIDTH) + *self.column_offsets.last().unwrap_or(&0.0)
     }
 
     // --- Viewport ---
@@ -643,11 +644,18 @@ impl DataTableState {
             return;
         }
 
-        let col_left = px(self.column_offsets[col]);
-        let col_right = px(*self
-            .column_offsets
-            .get(col + 1)
-            .unwrap_or(&self.column_offsets[col]));
+        // Columns start after the row-number column; scrolling to the first
+        // column keeps the row numbers in view.
+        let col_left = if col == 0 {
+            px(0.0)
+        } else {
+            ROW_NUMBER_WIDTH + px(self.column_offsets[col])
+        };
+        let col_right = ROW_NUMBER_WIDTH
+            + px(*self
+                .column_offsets
+                .get(col + 1)
+                .unwrap_or(&self.column_offsets[col]));
 
         let viewport_width = self.viewport_size.width - SCROLLBAR_WIDTH;
         if viewport_width <= px(0.0) {

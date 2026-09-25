@@ -28,8 +28,13 @@ use gpui_component::scroll::ScrollableElement;
 
 use super::super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::super::types::DocumentState;
-use dbflux_components::composites::refresh_split_button;
+use dbflux_components::composites::{
+    ListRow, MenuItem, menu_frame, menu_row, refresh_split_button, render_separator,
+};
 use dbflux_components::controls::Button;
+
+/// Width of the audit row context menu.
+const AUDIT_CONTEXT_MENU_WIDTH: Pixels = px(220.0);
 
 impl AuditDocument {
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
@@ -122,7 +127,6 @@ impl AuditDocument {
 
     pub(super) fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
-        let theme = cx.theme().clone();
 
         let event = self.events.get(menu.row)?;
         let has_correlation = event
@@ -138,14 +142,7 @@ impl AuditDocument {
 
         for (idx, item) in items.iter().enumerate() {
             if item.is_separator() {
-                menu_elements.push(
-                    div()
-                        .h(px(1.0))
-                        .mx(Spacing::SM)
-                        .my(Spacing::XS)
-                        .bg(theme.border)
-                        .into_any_element(),
-                );
+                menu_elements.push(render_separator(cx).into_any_element());
                 continue;
             }
 
@@ -154,106 +151,80 @@ impl AuditDocument {
             };
 
             let is_selected = idx == selected_index;
-            let label = item.label.clone();
-            let icon = item.icon;
 
-            // Icon color follows the DataGridPanel context menu convention.
-            let icon_color = if is_selected {
-                theme.accent_foreground
-            } else {
-                theme.muted_foreground
-            };
+            let mut row_item = MenuItem::new(item.label.clone());
+            if let Some(icon) = item.icon {
+                row_item = row_item.icon(icon);
+            }
 
             menu_elements.push(
-                div()
-                    .id(SharedString::from(format!("audit-ctx-{}", idx)))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .text_size(FontSizes::SM)
-                    .when(is_selected, |d| d.bg(theme.accent))
-                    .when(!is_selected, |d| d.hover(|d| d.bg(theme.secondary)))
-                    // Icon or indent to keep label alignment consistent.
-                    .when_some(icon, |d, icon| {
-                        d.child(Icon::new(icon).size(Heights::ICON_SM).color(icon_color))
-                    })
-                    .when(icon.is_none(), |d| d.pl(px(20.0)))
-                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                        if let Some(ref mut menu) = this.context_menu
-                            && menu.selected_index != idx
-                        {
-                            menu.selected_index = idx;
-                            cx.notify();
-                        }
-                    }))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        // Resolve the action again — the menu may have changed.
-                        let has_corr = this
-                            .context_menu
-                            .as_ref()
-                            .and_then(|m| this.events.get(m.row))
-                            .and_then(|e| e.correlation_id.as_deref())
-                            .map(|c| !c.is_empty())
-                            .unwrap_or(false);
-                        let items = Self::context_menu_items(has_corr);
-                        if let Some(item) = items.get(idx)
-                            && item.action == Some(action)
-                            && let Some(menu) = this.context_menu.clone()
-                        {
-                            let event = this.events.get(menu.row).cloned();
-                            this.close_context_menu(window, cx);
-                            match action {
-                                AuditContextMenuAction::CopyRowAsCsv => {
-                                    if let Some(event) = event {
-                                        let csv = Self::event_to_csv_row(&event);
-                                        cx.write_to_clipboard(ClipboardItem::new_string(csv));
-                                    }
+                menu_row(
+                    SharedString::from(format!("audit-ctx-{}", idx)),
+                    &row_item,
+                    is_selected,
+                    cx,
+                )
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if let Some(ref mut menu) = this.context_menu
+                        && menu.selected_index != idx
+                    {
+                        menu.selected_index = idx;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    // Resolve the action again — the menu may have changed.
+                    let has_corr = this
+                        .context_menu
+                        .as_ref()
+                        .and_then(|m| this.events.get(m.row))
+                        .and_then(|e| e.correlation_id.as_deref())
+                        .map(|c| !c.is_empty())
+                        .unwrap_or(false);
+                    let items = Self::context_menu_items(has_corr);
+                    if let Some(item) = items.get(idx)
+                        && item.action == Some(action)
+                        && let Some(menu) = this.context_menu.clone()
+                    {
+                        let event = this.events.get(menu.row).cloned();
+                        this.close_context_menu(window, cx);
+                        match action {
+                            AuditContextMenuAction::CopyRowAsCsv => {
+                                if let Some(event) = event {
+                                    let csv = Self::event_to_csv_row(&event);
+                                    cx.write_to_clipboard(ClipboardItem::new_string(csv));
                                 }
-                                AuditContextMenuAction::CopySummary => {
-                                    if let Some(event) = event {
-                                        let summary = event.summary.clone().unwrap_or_default();
-                                        cx.write_to_clipboard(ClipboardItem::new_string(summary));
-                                    }
+                            }
+                            AuditContextMenuAction::CopySummary => {
+                                if let Some(event) = event {
+                                    let summary = event.summary.clone().unwrap_or_default();
+                                    cx.write_to_clipboard(ClipboardItem::new_string(summary));
                                 }
-                                AuditContextMenuAction::FilterByCorrelation => {
-                                    if let Some(event) = event
-                                        && let Some(correlation_id) =
-                                            event.correlation_id.clone().filter(|c| !c.is_empty())
-                                    {
-                                        this.filter_by_correlation(correlation_id, cx);
-                                    }
+                            }
+                            AuditContextMenuAction::FilterByCorrelation => {
+                                if let Some(event) = event
+                                    && let Some(correlation_id) =
+                                        event.correlation_id.clone().filter(|c| !c.is_empty())
+                                {
+                                    this.filter_by_correlation(correlation_id, cx);
                                 }
                             }
                         }
-                    }))
-                    .child(Text::caption(label).color(if is_selected {
-                        theme.accent_foreground
-                    } else {
-                        theme.foreground
-                    }))
-                    .into_any_element(),
+                    }
+                }))
+                .into_any_element(),
             );
         }
 
         let position = menu.position;
 
         let element = deferred(
-            surface(SurfaceRole::Raised, cx)
+            menu_frame(cx)
                 .absolute()
                 .top(position.y)
                 .left(position.x)
-                .w(px(200.0))
-                .shadow_lg()
-                .py(Spacing::XS)
+                .w(AUDIT_CONTEXT_MENU_WIDTH)
                 .occlude()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
                 .on_mouse_down_out(cx.listener(|this, _, window, cx| {
                     this.close_context_menu(window, cx);
                 }))
@@ -640,35 +611,25 @@ impl AuditDocument {
         let event_action = event.action.clone();
         let external_event_id = event.object_id.clone();
 
-        // Background priority: selected (keyboard cursor) > expanded > default.
-        // Use theme.list_active for the selected row — same token as key_value and sidebar.
-        let row_bg = if is_selected {
-            theme.list_active
-        } else if is_expanded {
-            ChromeColors::tint(&theme).opacity(0.08)
-        } else {
-            gpui::transparent_black()
-        };
+        // An expanded row that is not the keyboard cursor keeps a faint tint
+        // so its detail block reads as attached to it.
+        let expanded_wash = ChromeColors::tint(&theme).opacity(0.08);
 
         div()
             .w_full()
             .border_b_1()
             .border_color(theme.border.opacity(0.5))
             .child(
-                div()
-                    .id(SharedString::from(format!("audit-event-{}", event_id)))
+                ListRow::new(SharedString::from(format!("audit-event-{}", event_id)))
+                    .selected(is_selected)
+                    .selection_bar(true)
+                    .build(cx)
+                    .when(is_expanded && !is_selected, |d| d.bg(expanded_wash))
                     .flex()
                     .items_center()
                     .gap_3()
                     .px_3()
                     .py_1p5()
-                    .cursor_pointer()
-                    .bg(row_bg)
-                    // Selected rows get a left-border accent to match other list views.
-                    .when(is_selected, |d| {
-                        d.border_l_2().border_color(ChromeColors::tint(&theme))
-                    })
-                    .hover(|style| style.bg(theme.list_hover))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {

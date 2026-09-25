@@ -19,7 +19,7 @@ use super::metric_picker::{DimensionsState, MetricPickerState};
 use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Text, hdivider};
 use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::DimensionFilter;
 use gpui::prelude::*;
@@ -114,11 +114,11 @@ impl<'a> MetricPickerView<'a> {
             // Header: pinned namespace + metric name.
             .child(header)
             // Divider.
-            .child(div().h(px(1.0)).bg(theme.border))
+            .child(hdivider(cx))
             // Dimensions section.
             .child(dimensions_section)
             // Divider.
-            .child(div().h(px(1.0)).bg(theme.border))
+            .child(hdivider(cx))
             // Config footer.
             .child(config_footer)
             // Inline custom-value row, only rendered when at least one of the

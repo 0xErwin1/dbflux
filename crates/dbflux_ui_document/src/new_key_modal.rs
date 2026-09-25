@@ -7,7 +7,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{FocusShape, focus_ring};
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Icon, Text, hdivider};
 use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
@@ -833,7 +833,7 @@ impl Render for NewKeyModal {
 
         // -- Separator ------------------------------------------------------
 
-        body = body.child(div().h(px(1.0)).bg(theme.border));
+        body = body.child(hdivider(cx));
 
         // -- Value section --------------------------------------------------
 

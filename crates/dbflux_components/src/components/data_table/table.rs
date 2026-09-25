@@ -2,27 +2,26 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::controls::{GpuiInput as Input, InputState};
-use crate::primitives::Text;
-use crate::tokens::{ChromeColors, FontSizes, RowColors};
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::tokens::{ChromeColors, GridMetrics, RowColors};
 use crate::typography::AppFonts;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
+    Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, KeyBinding, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    Window, actions, canvas, div, px, uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
-use super::events::{DataTableEvent, Direction, Edge};
+use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
-use super::theme::{
-    CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, SCROLLBAR_WIDTH, SORT_INDICATOR_ASC,
-    SORT_INDICATOR_DESC,
-};
+use super::theme::{CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -145,6 +144,33 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-r", Redo, Some(CONTEXT_WITHOUT_INPUT)),
         KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT_WITHOUT_INPUT)),
     ]);
+}
+
+/// The single-keystroke binding of the table action behind a context-menu
+/// action, shown as the shortcut on that menu row.
+///
+/// Multi-keystroke vim sequences (`y y`, `d d`) are skipped, so an action
+/// bound only to a sequence has no shortcut. Among single keystrokes the
+/// first binding registered by [`init`] wins.
+pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Keystroke> {
+    let table_action: Box<dyn Action> = match action {
+        ContextMenuAction::Copy => Box::new(Copy),
+        ContextMenuAction::Edit => Box::new(StartEdit),
+        ContextMenuAction::DeleteRow => Box::new(DeleteRow),
+        ContextMenuAction::SetNull => Box::new(SetNull),
+        ContextMenuAction::AddRow => Box::new(AddRow),
+        ContextMenuAction::DuplicateRow => Box::new(DuplicateRow),
+        _ => return None,
+    };
+
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+
+    keymap
+        .bindings_for_action(table_action.as_ref())
+        .find(|binding| binding.keystrokes().len() == 1)
+        .and_then(|binding| binding.keystrokes().first())
+        .map(|keystroke| keystroke.inner().clone())
 }
 
 #[derive(Clone)]
@@ -558,8 +584,6 @@ impl gpui::Render for DataTable {
             .overflow_hidden()
             .font_family(AppFonts::MONO)
             .bg(theme.table)
-            .border_1()
-            .border_color(theme.border)
             // Navigation actions
             .on_action(on_move_up)
             .on_action(on_move_down)
@@ -738,18 +762,20 @@ impl DataTable {
             .enumerate()
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                let is_sorted = sort.map(|s| s.column_ix == col_ix).unwrap_or(false);
-                let sort_indicator = if is_sorted {
-                    match sort.unwrap().direction {
-                        SortDirection::Ascending => SORT_INDICATOR_ASC,
-                        SortDirection::Descending => SORT_INDICATOR_DESC,
-                    }
-                } else {
-                    ""
-                };
+                let sort_direction = sort
+                    .filter(|sort| sort.column_ix == col_ix)
+                    .map(|sort| sort.direction);
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
+
+                let key_icon = if is_pk {
+                    Some((AppIcon::KeyRound, theme.warning))
+                } else if is_fk {
+                    Some((AppIcon::Cable, theme.info))
+                } else {
+                    None
+                };
 
                 let type_label: SharedString = col_spec.type_name.clone().into();
 
@@ -762,14 +788,13 @@ impl DataTable {
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .justify_between()
-                    .h(HEADER_HEIGHT)
+                    .gap(GridMetrics::HEADER_GAP)
+                    .h_full()
                     .w(px(width))
                     .px(CELL_PADDING_X)
                     .overflow_hidden()
                     .border_r_1()
                     .border_color(theme.border)
-                    .bg(theme.table_head)
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer()
                     .on_click(move |_event: &ClickEvent, _window, cx| {
@@ -797,77 +822,55 @@ impl DataTable {
                             });
                         }
                     })
+                    // PK / FK key icon: amber key for a primary key, blue
+                    // cable for a foreign key.
+                    .when_some(key_icon, |d, (icon, color)| {
+                        d.child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
+                    })
+                    // Column name — primary affordance, never shrinks. It
+                    // pushes the (secondary) type label out of the cell before
+                    // its own characters get truncated.
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .overflow_hidden()
-                            // PK / FK badges — secondary metadata, same dim styling
-                            // as the type label so they sit clearly below the name
-                            // in the visual hierarchy.
-                            .when(is_pk, |d| {
-                                d.child(
-                                    div().flex_shrink_0().child(
-                                        Text::body("PK")
-                                            .font_size(FontSizes::XS)
-                                            .color(theme.muted_foreground.opacity(0.6)),
-                                    ),
-                                )
-                            })
-                            .when(is_fk, |d| {
-                                d.child(
-                                    div().flex_shrink_0().child(
-                                        Text::body("FK")
-                                            .font_size(FontSizes::XS)
-                                            .color(theme.muted_foreground.opacity(0.6)),
-                                    ),
-                                )
-                            })
-                            // Column name — primary affordance, never shrinks.
-                            // It pushes the (secondary) type label out of the cell
-                            // before its own characters get truncated.
-                            .child(div().flex_shrink_0().whitespace_nowrap().child(
-                                Text::body_sm(col_spec.title.clone()).color(if is_sorted {
-                                    ChromeColors::tint(theme)
-                                } else {
-                                    theme.foreground
-                                }),
-                            ))
-                            // Type label — dimmed metadata. Shrinks and truncates
-                            // first when the cell runs out of horizontal space.
-                            .when_some(
-                                (!type_label.is_empty()).then_some(type_label),
-                                |d, label| {
-                                    d.child(
-                                        div()
-                                            .flex()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .child(
-                                                Text::body(label)
-                                                    .font_size(FontSizes::XS)
-                                                    .color(theme.muted_foreground.opacity(0.6)),
-                                            ),
-                                    )
-                                },
-                            ),
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .text_size(GridMetrics::FONT)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(SharedString::from(col_spec.title.clone())),
                     )
-                    .child(div().child(if is_sorted {
-                        Text::body(sort_indicator)
-                            .font_size(FontSizes::SM)
-                            .color(ChromeColors::tint(theme))
-                    } else {
-                        Text::body(sort_indicator)
-                            .font_size(FontSizes::SM)
-                            .color(theme.muted_foreground)
-                    }))
+                    // Type label — muted metadata. Shrinks and truncates first
+                    // when the cell runs out of horizontal space.
+                    .when_some(
+                        (!type_label.is_empty()).then_some(type_label),
+                        |d, label| {
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(GridMetrics::TYPE_FONT)
+                                    .text_color(theme.muted_foreground)
+                                    .child(label),
+                            )
+                        },
+                    )
+                    .when_some(sort_direction, |d, direction| {
+                        let arrow = match direction {
+                            SortDirection::Ascending => AppIcon::ArrowUp,
+                            SortDirection::Descending => AppIcon::ArrowDown,
+                        };
+
+                        d.child(
+                            div().flex_shrink_0().ml_auto().child(
+                                Icon::new(arrow)
+                                    .size(GridMetrics::HEADER_ICON)
+                                    .color(ChromeColors::tint(theme)),
+                            ),
+                        )
+                    })
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
                     // the cursor leaving this 6px strip.
@@ -903,14 +906,17 @@ impl DataTable {
             .flex_shrink_0()
             .h(HEADER_HEIGHT)
             .overflow_hidden()
+            .bg(theme.table_head)
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(theme.input)
+            .font_family(AppFonts::MONO)
             .child(
                 div()
                     .flex()
+                    .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .bg(theme.table_head)
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
                     .children(header_cells),
             )
     }
@@ -930,6 +936,7 @@ impl DataTable {
             "table-rows",
             row_count,
             move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
                 let theme = cx.theme();
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
@@ -950,6 +957,7 @@ impl DataTable {
                     enum_dropdown.as_ref(),
                     edit_buffer,
                     total_width,
+                    null_color,
                     theme,
                 )
             },
@@ -991,6 +999,7 @@ fn render_rows(
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
     total_width: f32,
+    null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
     use super::model::VisualRowSource;
@@ -1041,6 +1050,9 @@ fn render_rows(
             };
 
             let is_pending_delete = row_state.is_pending_delete();
+            let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
+            let tint = ChromeColors::tint(theme);
+            let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
 
             let cells: Vec<AnyElement> = (0..model.col_count())
                 .map(|col_ix| {
@@ -1063,10 +1075,9 @@ fn render_rows(
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
-                                .h(ROW_HEIGHT)
+                                .h_full()
                                 .w(px(width))
                                 .overflow_hidden()
-                                .border_r_1()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
@@ -1080,10 +1091,9 @@ fn render_rows(
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
-                                .h(ROW_HEIGHT)
+                                .h_full()
                                 .w(px(width))
                                 .overflow_hidden()
-                                .border_r_1()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
@@ -1112,17 +1122,26 @@ fn render_rows(
                     let state_for_click = state_entity.clone();
                     let state_for_context = state_entity.clone();
 
+                    let text_color = if is_pending_delete || is_auto_generated {
+                        theme.muted_foreground
+                    } else if is_null {
+                        null_color
+                    } else if is_active {
+                        ChromeColors::strong(theme)
+                    } else {
+                        theme.foreground
+                    };
+
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
+                        .relative()
                         .flex()
                         .flex_shrink_0()
                         .items_center()
-                        .h(ROW_HEIGHT)
+                        .h_full()
                         .w(px(width))
                         .px(CELL_PADDING_X)
                         .overflow_hidden()
-                        .border_r_1()
-                        .border_color(theme.border)
                         .cursor_pointer()
                         // Highlight individual dirty cells (like DBeaver).
                         // Uses RowColors::dirty for the background and the
@@ -1132,11 +1151,12 @@ fn render_rows(
                                 .border_l_2()
                                 .border_color(theme.warning)
                         })
-                        .when(is_selected, |d| {
-                            d.bg(theme.table_active)
-                                .border_color(theme.table_active_border)
+                        .when(is_selected || is_active, |d| d.bg(cell_wash))
+                        // Focused cell: 1.5 px tint ring inside the cell. No
+                        // cut: cells hold data.
+                        .when(is_active, |d| {
+                            d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
                         })
-                        .when(is_active, |d| d.border_1().border_color(theme.ring))
                         .when(is_null || is_auto_generated, |d| d.italic())
                         .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
@@ -1173,13 +1193,12 @@ fn render_rows(
                             },
                         )
                         .child(
-                            Text::body(display_text.to_string())
-                                .font_size(FontSizes::SM)
-                                .color(if is_pending_delete || is_null || is_auto_generated {
-                                    theme.muted_foreground
-                                } else {
-                                    theme.foreground
-                                }),
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(GridMetrics::FONT)
+                                .text_color(text_color)
+                                .child(display_text.to_string()),
                         )
                         .into_any_element()
                 })
@@ -1196,10 +1215,27 @@ fn render_rows(
                 .border_color(theme.table_row_border)
                 // Row state background (dirty=yellow, error=red)
                 .when_some(row_bg, |d, bg| d.bg(bg))
-                // Alternating row colors only when clean
-                .when(row_bg.is_none() && row_ix % 2 == 1, |d| {
+                // The row holding the focused cell gets the selected-row
+                // wash; clean rows otherwise alternate.
+                .when(row_bg.is_none() && is_active_row, |d| {
+                    d.bg(theme.table_active)
+                })
+                .when(row_bg.is_none() && !is_active_row && row_ix % 2 == 1, |d| {
                     d.bg(theme.table_even)
                 })
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_end()
+                        .w(ROW_NUMBER_WIDTH)
+                        .h_full()
+                        .pr(CELL_PADDING_X)
+                        .text_size(GridMetrics::FONT)
+                        .text_color(if is_active_row { tint } else { theme.input })
+                        .child((row_ix + 1).to_string()),
+                )
                 .children(cells)
                 .into_any_element()
         })

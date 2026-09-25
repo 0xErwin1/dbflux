@@ -32,7 +32,7 @@ use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Spinner;
+use dbflux_components::primitives::{Spinner, vdivider};
 use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
@@ -2722,7 +2722,7 @@ impl SchemaVizDocument {
                     .text_color(muted_foreground)
                     .child(counter_label),
             )
-            .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
+            .child(vdivider(cx).h(Spacing::LG))
             .child(
                 Checkbox::new("schema-viz-show-types")
                     .checked(show_types_val)
@@ -2767,7 +2767,7 @@ impl SchemaVizDocument {
                                 .child(format!("{:.0}%", zoom * 100.0)),
                         ),
                     )
-                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
+                    .child(vdivider(cx).h(Spacing::LG))
                     .child(
                         div()
                             .cursor_pointer()
@@ -2849,7 +2849,7 @@ impl SchemaVizDocument {
                             )
                             .child(dbflux_i18n::t!("document.schema_viz.toolbar.fit")),
                     )
-                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
+                    .child(vdivider(cx).h(Spacing::LG))
                     // Layout dropdown
                     .child(
                         div()
@@ -2891,7 +2891,7 @@ impl SchemaVizDocument {
                                 d.child(self.render_layout_menu(&theme, cx))
                             }),
                     )
-                    .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
+                    .child(vdivider(cx).h(Spacing::LG))
                     // Export dropdown
                     .child(
                         div()

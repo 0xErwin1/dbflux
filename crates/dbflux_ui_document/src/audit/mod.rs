@@ -19,7 +19,9 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::components::filter_bar::{FilterBarItem, FilterBarMode, FilterBarState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_core::{
@@ -490,7 +492,7 @@ impl AuditDocument {
             Dropdown::new("audit-auto-refresh")
                 .items(items)
                 .selected_index(Some(RefreshPolicy::Manual.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_dropdown_sub = cx.subscribe(

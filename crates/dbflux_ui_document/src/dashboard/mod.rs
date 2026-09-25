@@ -19,7 +19,9 @@ use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged, InputState,
+};
 use dbflux_components::modals::ModalFocus;
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
@@ -505,7 +507,7 @@ impl DashboardDocument {
             Dropdown::new("dashboard-refresh")
                 .items(items)
                 .selected_index(Some(refresh_policy_index(shared_refresh_policy)))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_dropdown_sub = cx.subscribe(

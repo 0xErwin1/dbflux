@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon};
@@ -53,6 +54,9 @@ enum DropdownTriggerVariant {
     Standard,
     Toolbar,
     Compact,
+    /// A bare chevron that inherits the text color of the control hosting
+    /// it and draws no hover of its own: the menu segment of a split button.
+    Chevron,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,11 +70,11 @@ fn dropdown_trigger_render_plan(variant: DropdownTriggerVariant) -> DropdownTrig
         DropdownTriggerVariant::Standard => DropdownTriggerRenderPlan {
             uses_chamfer_shape: true,
         },
-        DropdownTriggerVariant::Toolbar | DropdownTriggerVariant::Compact => {
-            DropdownTriggerRenderPlan {
-                uses_chamfer_shape: false,
-            }
-        }
+        DropdownTriggerVariant::Toolbar
+        | DropdownTriggerVariant::Compact
+        | DropdownTriggerVariant::Chevron => DropdownTriggerRenderPlan {
+            uses_chamfer_shape: false,
+        },
     }
 }
 
@@ -145,6 +149,7 @@ pub struct Dropdown {
     focus_ring_color: Option<Hsla>,
     focus_ring_visible: bool,
     compact_trigger: bool,
+    chevron_trigger: Option<ButtonVariant>,
     toolbar_style: bool,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
@@ -170,6 +175,7 @@ impl Dropdown {
             focus_ring_color: None,
             focus_ring_visible: false,
             compact_trigger: false,
+            chevron_trigger: None,
             toolbar_style: false,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
@@ -271,6 +277,16 @@ impl Dropdown {
         self
     }
 
+    /// Renders the trigger as a lone chevron in the content color of a
+    /// button of `variant`, with no hover fill of its own, for a dropdown
+    /// hosted in the menu segment of a `SplitButton` of that variant, whose
+    /// shape already draws the hover and pressed states. Takes precedence
+    /// over the compact and toolbar triggers.
+    pub fn chevron_trigger(mut self, variant: ButtonVariant) -> Self {
+        self.chevron_trigger = Some(variant);
+        self
+    }
+
     pub fn focus_ring_color(mut self, color: Option<Hsla>) -> Self {
         self.focus_ring_color = color;
         self
@@ -282,7 +298,9 @@ impl Dropdown {
     }
 
     fn trigger_variant(&self) -> DropdownTriggerVariant {
-        if self.compact_trigger {
+        if self.chevron_trigger.is_some() {
+            DropdownTriggerVariant::Chevron
+        } else if self.compact_trigger {
             DropdownTriggerVariant::Compact
         } else if self.toolbar_style {
             DropdownTriggerVariant::Toolbar
@@ -583,7 +601,7 @@ impl Dropdown {
             .when(disabled, |el| el.cursor_not_allowed())
             .when(!disabled, |el| el.cursor_pointer());
 
-        if !render_plan.uses_chamfer_shape {
+        if !render_plan.uses_chamfer_shape && variant != DropdownTriggerVariant::Chevron {
             trigger = trigger
                 .when(disabled, |el| {
                     el.text_color(theme.muted_foreground).opacity(0.5)
@@ -597,6 +615,16 @@ impl Dropdown {
         let font_sm = density::font_sm(cx);
 
         match variant {
+            DropdownTriggerVariant::Chevron => {
+                let host_variant = self.chevron_trigger.unwrap_or(ButtonVariant::Secondary);
+                let (_, content_color) = button_colors(theme, host_variant, false);
+
+                trigger = trigger.h_full().justify_center().child(
+                    Icon::new(AppIcon::ChevronDown)
+                        .size(Fields::SEGMENT_ICON)
+                        .color(content_color),
+                );
+            }
             DropdownTriggerVariant::Compact => {
                 trigger = trigger
                     .h_full()
@@ -706,7 +734,13 @@ impl Render for Dropdown {
                 move || id.clone()
             })
             .w_full()
-            .when(variant == DropdownTriggerVariant::Compact, |el| el.h_full())
+            .when(
+                matches!(
+                    variant,
+                    DropdownTriggerVariant::Compact | DropdownTriggerVariant::Chevron
+                ),
+                |el| el.h_full(),
+            )
             .child(trigger)
             .child(self.render_menu(cx))
     }
@@ -817,6 +851,17 @@ mod tests {
         let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Compact);
 
         assert!(!plan.uses_chamfer_shape);
+    }
+
+    #[test]
+    fn chevron_trigger_takes_precedence_and_skips_the_chamfered_shape() {
+        let dropdown = Dropdown::new("chevron-trigger")
+            .toolbar_style(true)
+            .compact_trigger(true)
+            .chevron_trigger(crate::controls::ButtonVariant::Primary);
+
+        assert_eq!(dropdown.trigger_variant(), DropdownTriggerVariant::Chevron);
+        assert!(!dropdown_trigger_render_plan(DropdownTriggerVariant::Chevron).uses_chamfer_shape);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
+use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, SyntaxColors};
 use gpui::FontWeight;
@@ -266,6 +267,8 @@ impl Sidebar {
             code_gen_capabilities: HashMap::new(),
             active_id: None,
             profile_icons: HashMap::new(),
+            profile_icon_colors: HashMap::new(),
+            connection_latencies: HashMap::new(),
             active_databases: HashMap::new(),
             sidebar_entity: sidebar_entity.clone(),
             multi_selection: self.scripts_multi_selection.clone(),
@@ -380,6 +383,20 @@ impl Render for Sidebar {
             })
             .collect();
 
+        let profile_icon_colors: HashMap<Uuid, Hsla> = state
+            .profiles()
+            .iter()
+            .filter_map(|p| {
+                state.drivers().get(&p.driver_id()).map(|driver| {
+                    let metadata = driver.metadata();
+                    (
+                        p.id,
+                        DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+                    )
+                })
+            })
+            .collect();
+
         let connect_failures: HashMap<Uuid, SharedString> = state
             .profiles()
             .iter()
@@ -412,6 +429,8 @@ impl Render for Sidebar {
             code_gen_capabilities,
             active_id,
             profile_icons,
+            profile_icon_colors,
+            connection_latencies: HashMap::new(),
             active_databases,
             sidebar_entity: sidebar_entity.clone(),
             multi_selection,

@@ -30,7 +30,9 @@ use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
 use dbflux_components::controls::CompletionProvider;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
@@ -1361,7 +1363,7 @@ impl DataGridPanel {
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
                 .disabled(!supports_auto_refresh)
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Primary)
         });
 
         let refresh_policy_sub = cx.subscribe_in(

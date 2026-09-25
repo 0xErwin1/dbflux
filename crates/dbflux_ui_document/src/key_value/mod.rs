@@ -22,7 +22,9 @@ use super::types::{DocumentId, DocumentState};
 use context_menu::KvContextMenu;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::document_tree::{DocumentTree, DocumentTreeState};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{CancelToken, KeyEntry, KeyGetResult, KeyType, RefreshPolicy};
 use dbflux_ui_base::AppStateEntity;
@@ -242,7 +244,7 @@ impl KeyValueDocument {
             Dropdown::new("kv-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe_in(

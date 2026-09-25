@@ -53,6 +53,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::PanelBottomOpen,
     AppIcon::FileSpreadsheet,
     AppIcon::KeyRound,
+    AppIcon::Cable,
     AppIcon::Link2,
     AppIcon::CaseSensitive,
     AppIcon::ScrollText,
@@ -181,6 +182,7 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/ui/file-spreadsheet.svg")
         }
         AppIcon::KeyRound => include_bytes!("../../../../../resources/icons/ui/key-round.svg"),
+        AppIcon::Cable => include_bytes!("../../../../../resources/icons/ui/cable.svg"),
         AppIcon::Link2 => include_bytes!("../../../../../resources/icons/ui/link-2.svg"),
         AppIcon::CaseSensitive => {
             include_bytes!("../../../../../resources/icons/ui/case-sensitive.svg")

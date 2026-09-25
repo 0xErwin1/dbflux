@@ -60,15 +60,8 @@ impl SettingsCoordinator {
 
         for (idx, row) in rows.iter().enumerate() {
             let is_cursor = focused && idx == cursor_pos;
-            let gutter = tree_nav::render_gutter(
-                row.depth,
-                row.is_last,
-                &row.ancestors_continue,
-                INDENT_PX,
-                row_height,
-                line_color,
-                true,
-            );
+            let gutter =
+                tree_nav::render_gutter(row.depth, INDENT_PX, row_height, line_color, true);
             let is_group = row.has_children && !row.selectable;
 
             let content: AnyElement = if is_group {

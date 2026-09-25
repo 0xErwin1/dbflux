@@ -14,8 +14,11 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 
 use crate::icons::AppIcon;
-use crate::primitives::{Icon, Text};
-use crate::tokens::{ChromeColors, Spacing};
+use crate::primitives::{Chamfer, Icon};
+use crate::tokens::{ChamferCut, ChromeColors, StepperMetrics};
+
+/// Width of the phase rail (P1Migrate).
+pub const WIZARD_RAIL_WIDTH: Pixels = px(220.0);
 
 /// Modal width every data wizard opens at.
 pub const WIZARD_MODAL_WIDTH: Pixels = px(1000.0);
@@ -35,113 +38,132 @@ pub struct RailItem {
     pub current: bool,
 }
 
-/// The rail's marker/label colors, resolved once per render from the theme.
-/// `current` and `done` use the text-accent tint and the success color (not the
-/// dark `accent`, which is a low-contrast highlight background on dark
-/// themes), so the current phase reads as the most prominent entry.
-#[derive(Clone, Copy)]
-struct RailColors {
-    current: Hsla,
-    done: Hsla,
-    muted: Hsla,
-    hover_bg: Hsla,
+/// Presentation state of one step, derived from its [`RailItem`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepState {
+    Completed,
+    Current,
+    Pending,
 }
 
-/// Renders a wizard's left phase rail from `items` in order. `on_select`, when
-/// `Some`, is invoked with the clicked entry's index and makes completed
-/// entries clickable for back-navigation; `None` (or a caller that never
-/// marks entries completed) renders a display-only progress rail with no
-/// hover/click affordance.
+impl StepState {
+    fn of(item: &RailItem) -> Self {
+        if item.current {
+            Self::Current
+        } else if item.completed {
+            Self::Completed
+        } else {
+            Self::Pending
+        }
+    }
+}
+
+/// Renders a wizard's left phase rail from `items` in order (P1Migrate): one
+/// 44 px row per step with a cut-4 badge. A completed step shows a success
+/// check on a raised badge, the current step its number on a byzantine
+/// badge with a bold strong label, a pending step its number on a panel
+/// badge with a muted label.
+///
+/// `on_select`, when `Some`, is invoked with the clicked entry's index and
+/// makes completed entries clickable for back-navigation; `None` (or a
+/// caller that never marks entries completed) renders a display-only
+/// progress rail with no hover/click affordance.
 pub fn render_wizard_rail<F>(items: &[RailItem], on_select: Option<F>, cx: &App) -> impl IntoElement
 where
     F: Fn(usize, &mut Window, &mut App) + Clone + 'static,
 {
     let theme = cx.theme();
-    let colors = RailColors {
-        current: ChromeColors::tint(theme),
-        done: theme.success,
-        muted: theme.muted_foreground,
-        hover_bg: theme.secondary,
-    };
-    let border = theme.border;
 
-    let entries = items
+    let entries: Vec<AnyElement> = items
         .iter()
-        .cloned()
         .enumerate()
-        .map(move |(index, item)| render_rail_entry(index, item, colors, on_select.clone()));
+        .map(|(index, item)| render_rail_entry(index, item, on_select.clone(), cx))
+        .collect();
 
     div()
         .flex()
         .flex_col()
-        .gap(Spacing::XS)
-        .p(Spacing::MD)
-        .min_w(px(180.0))
+        .flex_shrink_0()
+        .w(WIZARD_RAIL_WIDTH)
+        .pt(StepperMetrics::RAIL_PADDING_TOP)
+        .bg(theme.background)
         .border_r_1()
-        .border_color(border)
+        .border_color(theme.border)
         .children(entries)
 }
 
-fn render_rail_entry<F>(
-    index: usize,
-    item: RailItem,
-    colors: RailColors,
-    on_select: Option<F>,
-) -> impl IntoElement
+/// The cut-4 badge of one step: a check once completed, the step number
+/// otherwise.
+fn render_step_badge(index: usize, state: StepState, cx: &App) -> Div {
+    let theme = cx.theme();
+
+    let (fill, content_color) = match state {
+        StepState::Completed => (theme.secondary, theme.success),
+        StepState::Current => (theme.primary, theme.primary_foreground),
+        StepState::Pending => (theme.popover, theme.muted_foreground),
+    };
+
+    let content = match state {
+        StepState::Completed => Icon::new(AppIcon::Check)
+            .size(StepperMetrics::BADGE_ICON)
+            .color(content_color)
+            .into_any_element(),
+        StepState::Current | StepState::Pending => div()
+            .font_weight(FontWeight::BOLD)
+            .text_color(content_color)
+            .child(SharedString::from((index + 1).to_string()))
+            .into_any_element(),
+    };
+
+    div()
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(StepperMetrics::BADGE)
+        .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
+        .child(content)
+}
+
+fn render_rail_entry<F>(index: usize, item: &RailItem, on_select: Option<F>, cx: &App) -> AnyElement
 where
     F: Fn(usize, &mut Window, &mut App) + Clone + 'static,
 {
-    let marker = if item.completed {
-        Icon::new(AppIcon::CircleCheck)
-            .size(px(14.0))
-            .color(colors.done)
-            .into_any_element()
-    } else {
-        let dot_color = if item.current {
-            colors.current
-        } else {
-            colors.muted
-        };
-        div()
-            .size(px(8.0)) // guardrail-allow: decorative status-dot diameter, not a spacing token
-            .rounded_full()
-            .bg(dot_color)
-            .into_any_element()
-    };
+    let theme = cx.theme();
+    let state = StepState::of(item);
 
-    // The current entry is the most prominent: bright action color plus a
-    // heavier weight. Every other label stays at full foreground contrast (a
-    // check/dot marker conveys completed vs. pending), so the rail reads
-    // clearly instead of as dim, low-contrast text.
-    let mut label = Text::body(item.label.clone());
-    if item.current {
-        label = label
-            .color(colors.current)
-            .font_weight(FontWeight::SEMIBOLD);
-    }
+    let label_color = match state {
+        StepState::Current => ChromeColors::strong(theme),
+        StepState::Completed => theme.foreground,
+        StepState::Pending => theme.muted_foreground,
+    };
+    let hover_fill = theme.list_hover;
 
     div()
         .id(SharedString::from(format!("wizard-rail-{index}")))
         .flex()
+        .flex_shrink_0()
         .items_center()
-        .gap(Spacing::SM)
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .rounded_md()
-        .child(
-            div()
-                .w(px(16.0)) // guardrail-allow: fixed rail marker gutter width for label alignment
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(marker),
-        )
-        .child(label)
-        .when_some(on_select.filter(|_| item.completed), |el, on_select| {
-            el.cursor_pointer()
-                .hover(|style| style.bg(colors.hover_bg))
-                .on_click(move |_event, window, app| on_select(index, window, app))
+        .gap(StepperMetrics::GAP)
+        .h(StepperMetrics::RAIL_STEP_HEIGHT)
+        .px(StepperMetrics::RAIL_PADDING_X)
+        .text_size(StepperMetrics::FONT)
+        .text_color(label_color)
+        .when(state == StepState::Current, |row| {
+            row.font_weight(FontWeight::BOLD)
         })
+        .child(render_step_badge(index, state, cx))
+        .child(div().min_w_0().truncate().child(item.label.clone()))
+        .when_some(
+            on_select.filter(|_| state == StepState::Completed),
+            |row, on_select| {
+                row.cursor_pointer()
+                    .hover(move |style| style.bg(hover_fill))
+                    .on_click(move |_event, window, app| on_select(index, window, app))
+            },
+        )
+        .into_any_element()
 }
 
 /// Fraction of rows done for the running step's progress bar, or `None` when
@@ -175,7 +197,22 @@ pub fn render_wizard_progress_bar(fraction: f32, cx: &App) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::wizard_progress_fraction;
+    use super::{RailItem, StepState, wizard_progress_fraction};
+
+    fn item(completed: bool, current: bool) -> RailItem {
+        RailItem {
+            label: "Step".into(),
+            completed,
+            current,
+        }
+    }
+
+    #[test]
+    fn current_wins_over_completed_and_the_rest_are_pending() {
+        assert_eq!(StepState::of(&item(true, true)), StepState::Current);
+        assert_eq!(StepState::of(&item(true, false)), StepState::Completed);
+        assert_eq!(StepState::of(&item(false, false)), StepState::Pending);
+    }
 
     #[test]
     fn progress_fraction_is_none_without_a_positive_total() {

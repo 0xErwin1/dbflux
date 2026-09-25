@@ -10,6 +10,7 @@ use super::{BucketsFocusMode, BucketsTableDocument};
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::ListRow;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
@@ -291,8 +292,9 @@ impl BucketsTableDocument {
         let row_id = SharedString::from(format!("bucket-row-{name}"));
         let select_name = name.clone();
 
-        div()
-            .id(row_id)
+        ListRow::new(row_id)
+            .selected(selected)
+            .build(cx)
             .flex()
             .items_center()
             .gap(Spacing::MD)
@@ -300,9 +302,6 @@ impl BucketsTableDocument {
             .px(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
-            .cursor_pointer()
-            .when(selected, |d| d.bg(theme.list_active))
-            .when(!selected, |d| d.hover(|d| d.bg(theme.list_active)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {

@@ -70,6 +70,7 @@ pub enum AppIcon {
     PanelBottomOpen,
     FileSpreadsheet,
     KeyRound,
+    Cable,
     Link2,
     CaseSensitive,
     ScrollText,
@@ -201,6 +202,7 @@ impl AppIcon {
             Self::PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
             Self::FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
             Self::KeyRound => "icons/ui/key-round.svg",
+            Self::Cable => "icons/ui/cable.svg",
             Self::Link2 => "icons/ui/link-2.svg",
             Self::CaseSensitive => "icons/ui/case-sensitive.svg",
             Self::ScrollText => "icons/ui/scroll-text.svg",
@@ -329,6 +331,62 @@ impl AppIcon {
     }
 }
 
+/// Palette role of a driver logo, from the driver-declared [`Icon`] and its
+/// database category, never from a driver id (P1Sidebar, P1DriverPicker):
+/// relational engines read in the info blue, document stores in green,
+/// key-value stores in the danger red, time series in the NULL violet, and
+/// object storage and log streams in amber.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriverIconTone {
+    Info,
+    Success,
+    Danger,
+    Violet,
+    Warning,
+}
+
+impl DriverIconTone {
+    pub const fn for_driver(icon: Icon, category: DatabaseCategory) -> Self {
+        match icon {
+            Icon::Postgres
+            | Icon::Mysql
+            | Icon::Mariadb
+            | Icon::Sqlite
+            | Icon::Redshift
+            | Icon::Clickhouse
+            | Icon::Turso => Self::Info,
+            Icon::Mongodb | Icon::Dynamodb => Self::Success,
+            Icon::Redis => Self::Danger,
+            Icon::Influxdb => Self::Violet,
+            Icon::S3 | Icon::Logs => Self::Warning,
+            Icon::Database => match category {
+                DatabaseCategory::Relational
+                | DatabaseCategory::Graph
+                | DatabaseCategory::WideColumn => Self::Info,
+                DatabaseCategory::Document => Self::Success,
+                DatabaseCategory::KeyValue => Self::Danger,
+                DatabaseCategory::TimeSeries => Self::Violet,
+                DatabaseCategory::ObjectStorage | DatabaseCategory::LogStream => Self::Warning,
+            },
+        }
+    }
+
+    /// The color of this tone in the active theme.
+    pub fn resolve(self, cx: &gpui::App) -> gpui::Hsla {
+        use gpui_component::ActiveTheme;
+
+        let theme = cx.theme();
+
+        match self {
+            Self::Info => theme.info,
+            Self::Success => theme.success,
+            Self::Danger => theme.danger,
+            Self::Violet => crate::tokens::SyntaxColors::for_current(cx).number,
+            Self::Warning => theme.warning,
+        }
+    }
+}
+
 impl From<AppIcon> for IconSource {
     fn from(icon: AppIcon) -> Self {
         IconSource::Svg(icon.path().into())
@@ -343,7 +401,31 @@ impl From<AppIcon> for gpui_component::Icon {
 
 #[cfg(test)]
 mod tests {
-    use super::AppIcon;
+    use super::{AppIcon, DriverIconTone};
+
+    #[test]
+    fn driver_tones_follow_the_declared_icon_then_the_category() {
+        assert_eq!(
+            DriverIconTone::for_driver(Icon::Postgres, DatabaseCategory::Relational),
+            DriverIconTone::Info
+        );
+        assert_eq!(
+            DriverIconTone::for_driver(Icon::Redis, DatabaseCategory::KeyValue),
+            DriverIconTone::Danger
+        );
+        assert_eq!(
+            DriverIconTone::for_driver(Icon::S3, DatabaseCategory::ObjectStorage),
+            DriverIconTone::Warning
+        );
+        assert_eq!(
+            DriverIconTone::for_driver(Icon::Database, DatabaseCategory::Document),
+            DriverIconTone::Success
+        );
+        assert_eq!(
+            DriverIconTone::for_driver(Icon::Database, DatabaseCategory::TimeSeries),
+            DriverIconTone::Violet
+        );
+    }
     use dbflux_core::{DatabaseCategory, Icon};
 
     #[test]

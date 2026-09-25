@@ -22,7 +22,9 @@ use dbflux_components::chart::{
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::controls::InputState;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
@@ -223,7 +225,7 @@ impl ChartDocument {
             Dropdown::new("chart-doc-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe(
@@ -444,7 +446,7 @@ impl ChartDocument {
             Dropdown::new("chart-doc-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe(

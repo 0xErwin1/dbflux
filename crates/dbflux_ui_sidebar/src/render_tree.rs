@@ -1,8 +1,10 @@
 use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
-use dbflux_components::tokens::ChromeColors;
+use dbflux_components::tokens::{ChromeColors, TreeMetrics};
+use dbflux_components::typography::AppFonts;
 use gpui::FontWeight;
+use std::time::Duration;
 
 fn sidebar_tree_label(
     label: SharedString,
@@ -13,7 +15,35 @@ fn sidebar_tree_label(
 ) -> Text {
     let weight = if (node_kind == SchemaNodeKind::Profile && is_active) || is_active_database {
         FontWeight::SEMIBOLD
-    } else if matches!(
+    } else {
+        FontWeight::NORMAL
+    };
+
+    Text::body(label).font_weight(weight).color(color)
+}
+
+/// Splits a folder label of the form `"Tables (36)"` into its name and item
+/// count, so the count can sit right-aligned in the row (P1Sidebar). Labels
+/// without a trailing parenthesized number come back whole.
+pub(crate) fn split_folder_count(label: &str) -> (&str, Option<&str>) {
+    let Some(without_close) = label.strip_suffix(')') else {
+        return (label, None);
+    };
+
+    let Some((name, count)) = without_close.rsplit_once(" (") else {
+        return (label, None);
+    };
+
+    if count.is_empty() || !count.chars().all(|character| character.is_ascii_digit()) {
+        return (label, None);
+    }
+
+    (name, Some(count))
+}
+
+/// Folder rows whose labels carry an item count.
+fn is_counted_folder(node_kind: SchemaNodeKind) -> bool {
+    matches!(
         node_kind,
         SchemaNodeKind::TablesFolder
             | SchemaNodeKind::ViewsFolder
@@ -22,14 +52,15 @@ fn sidebar_tree_label(
             | SchemaNodeKind::IndexesFolder
             | SchemaNodeKind::ForeignKeysFolder
             | SchemaNodeKind::ConstraintsFolder
+            | SchemaNodeKind::SchemaIndexesFolder
+            | SchemaNodeKind::SchemaForeignKeysFolder
+            | SchemaNodeKind::RoutinesFolder
+            | SchemaNodeKind::CollectionsFolder
+            | SchemaNodeKind::DatabaseIndexesFolder
+            | SchemaNodeKind::CollectionFieldsFolder
+            | SchemaNodeKind::CollectionIndexesFolder
             | SchemaNodeKind::DependentsFolder
-    ) {
-        FontWeight::MEDIUM
-    } else {
-        FontWeight::NORMAL
-    };
-
-    Text::body(label).font_weight(weight).color(color)
+    )
 }
 
 pub(super) struct TreeRenderParams {
@@ -40,6 +71,12 @@ pub(super) struct TreeRenderParams {
     pub code_gen_capabilities: HashMap<Uuid, CodeGenCapabilities>,
     pub active_id: Option<Uuid>,
     pub profile_icons: HashMap<Uuid, AppIcon>,
+    /// Color of each profile's driver logo (`DriverIconTone`).
+    pub profile_icon_colors: HashMap<Uuid, Hsla>,
+    /// Round-trip latency of each connected profile, shown after its status
+    /// diamond. The connection layer does not measure latency yet, so the
+    /// sidebar passes an empty map and the diamond shows alone.
+    pub connection_latencies: HashMap<Uuid, Duration>,
     pub active_databases: HashMap<Uuid, String>,
     pub sidebar_entity: Entity<Sidebar>,
     pub multi_selection: HashSet<String>,
@@ -88,19 +125,18 @@ pub(super) fn render_tree_item(
         || item_id.starts_with("KL|");
     if is_loading_row {
         let theme = cx.theme();
-        let indent_px = depth as f32 * 14.0_f32;
-        let _ = params;
-        return ListItem::new(ix).h(Heights::ROW).child(
+        let label_start =
+            TreeMetrics::INDENT * depth as f32 + TreeMetrics::CHEVRON + TreeMetrics::GAP;
+        return ListItem::new(ix).h(TreeMetrics::ROW_HEIGHT).child(
             div()
                 .w_full()
                 .flex()
                 .items_center()
-                .gap(Spacing::SM)
-                .pl(px(indent_px + 14.0 + 4.0)) // align with label start
-                .py(Spacing::XS)
+                .gap(TreeMetrics::GAP)
+                .pl(label_start)
                 .child(
                     Icon::new(AppIcon::Loader)
-                        .size(Spacing::MD)
+                        .size(TreeMetrics::ICON)
                         .color(theme.muted_foreground),
                 )
                 .child(
@@ -135,7 +171,7 @@ pub(super) fn render_tree_item(
     );
 
     let theme = cx.theme();
-    let indent_per_level = 14.0_f32;
+    let indent_per_level = f32::from(TreeMetrics::INDENT);
     let is_folder = entry.is_folder();
     let is_expanded = entry.is_expanded();
 
@@ -205,7 +241,7 @@ pub(super) fn render_tree_item(
         _ => None,
     };
 
-    let (node_icon, unicode_icon, icon_color) = resolve_node_icon(
+    let (node_icon, unicode_icon, _category_color) = resolve_node_icon(
         node_kind,
         &parsed_id,
         &params.profile_icons,
@@ -214,13 +250,54 @@ pub(super) fn render_tree_item(
         params,
         &item.label,
     );
-    let icon_color = if connect_failure.is_some() {
-        theme.danger
-    } else {
-        icon_color
+    let profile_id = match &parsed_id {
+        Some(SchemaNodeId::Profile { profile_id }) => Some(*profile_id),
+        _ => None,
     };
 
-    let label_color = resolve_label_color(node_kind, theme, params);
+    // Icons read muted, the driver logo keeps its tone, and the selected row
+    // takes the tint (DSApp "Tree").
+    let icon_color = if connect_failure.is_some() {
+        theme.danger
+    } else if selected {
+        ChromeColors::tint(theme)
+    } else if let Some(color) = profile_id.and_then(|id| params.profile_icon_colors.get(&id)) {
+        *color
+    } else {
+        theme.muted_foreground
+    };
+
+    let label_color = if connect_failure.is_some() {
+        theme.danger
+    } else if selected
+        || matches!(
+            node_kind,
+            SchemaNodeKind::Profile | SchemaNodeKind::ConnectionFolder
+        )
+    {
+        ChromeColors::strong(theme)
+    } else {
+        theme.foreground
+    };
+
+    let (label_text, folder_count): (SharedString, Option<SharedString>) =
+        if is_counted_folder(node_kind) {
+            let (name, count) = split_folder_count(&item.label);
+            (
+                SharedString::from(name.to_string()),
+                count.map(|count| SharedString::from(count.to_string())),
+            )
+        } else {
+            (item.label.clone(), None)
+        };
+
+    let connection_status: Option<(Status, Option<Duration>)> =
+        profile_id.filter(|_| is_connected).map(|id| {
+            (
+                Status::Connected,
+                params.connection_latencies.get(&id).copied(),
+            )
+        });
 
     let is_being_renamed = match &parsed_id {
         Some(SchemaNodeId::ConnectionFolder { node_id }) => {
@@ -263,10 +340,8 @@ pub(super) fn render_tree_item(
     let gutter: AnyElement = if let Some(info) = params.gutter_metadata.get(item_id.as_ref()) {
         tree_nav::render_gutter(
             info.depth,
-            info.is_last,
-            &info.ancestors_continue,
             indent_per_level,
-            Heights::ROW,
+            TreeMetrics::ROW_HEIGHT,
             params.line_color,
             false,
         )
@@ -289,9 +364,20 @@ pub(super) fn render_tree_item(
     let current_drop_target = params.drop_target.as_ref();
     let drop_indicator_color = ChromeColors::tint(theme);
 
+    let selection_tint = ChromeColors::tint(theme);
+    let selection_wash = theme.list_active;
+
+    // The selected row gets the tint wash and a 2 px tint bar on its left
+    // edge; the bar takes its width out of the left padding so the row's
+    // content, and with it the indent guides, stay in place.
     let mut list_item = ListItem::new(ix)
-        .selected(selected)
-        .h(Heights::ROW)
+        .h(TreeMetrics::ROW_HEIGHT)
+        .when(selected && !is_pending_delete, |el| {
+            el.bg(selection_wash)
+                .border_l_2()
+                .border_color(selection_tint)
+                .pl(TreeMetrics::PADDING_X - TreeMetrics::SELECTION_BAR)
+        })
         .when(is_pending_delete, |el| el.bg(pending_delete_bg))
         .when(is_multi_selected && !selected && !is_pending_delete, |el| {
             el.bg(multi_select_bg)
@@ -366,8 +452,9 @@ pub(super) fn render_tree_item(
                 .child(
                     div()
                         .id(SharedString::from(format!("chevron-{}", item_id)))
-                        .w(px(14.0))
-                        .mr(Spacing::XS)
+                        .flex_shrink_0()
+                        .w(TreeMetrics::CHEVRON)
+                        .mr(TreeMetrics::GAP)
                         .flex()
                         .justify_center()
                         .when_some(chevron_icon, |el, icon| {
@@ -381,7 +468,7 @@ pub(super) fn render_tree_item(
                                         this.handle_chevron_click(&item_id_for_chevron, cx);
                                     });
                                 })
-                                .child(Icon::new(icon).size(px(14.0)).muted())
+                                .child(Icon::new(icon).size(TreeMetrics::CHEVRON).muted())
                         })
                         .when_some(leaf_marker, |el, marker| {
                             el.child(
@@ -393,12 +480,13 @@ pub(super) fn render_tree_item(
                 )
                 .child(
                     div()
-                        .w(Heights::ICON_SM)
-                        .mr(Spacing::XS)
+                        .flex_shrink_0()
+                        .w(TreeMetrics::ICON)
+                        .mr(TreeMetrics::GAP)
                         .flex()
                         .justify_center()
                         .when_some(node_icon, |el, icon| {
-                            el.child(Icon::new(icon).small().color(icon_color))
+                            el.child(Icon::new(icon).size(TreeMetrics::ICON).color(icon_color))
                         })
                         .when(node_icon.is_none() && !unicode_icon.is_empty(), |el| {
                             el.child(
@@ -447,12 +535,38 @@ pub(super) fn render_tree_item(
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .child(sidebar_tree_label(
-                                item.label.clone(),
+                                label_text.clone(),
                                 node_kind,
                                 is_active,
                                 is_active_database,
                                 label_color,
                             )),
+                    )
+                })
+                .when_some(folder_count, |el, count| {
+                    el.child(
+                        div()
+                            .flex_shrink_0()
+                            .ml(TreeMetrics::GAP)
+                            .font_family(AppFonts::MONO)
+                            .text_size(TreeMetrics::META_FONT)
+                            .text_color(theme.muted_foreground)
+                            .child(count),
+                    )
+                })
+                .when_some(connection_status, |el, (status, latency)| {
+                    let indicator = StatusIndicator::new(status);
+                    let indicator = match latency {
+                        Some(latency) => indicator.latency(latency),
+                        None => indicator,
+                    };
+
+                    el.child(
+                        div()
+                            .flex_shrink_0()
+                            .ml(TreeMetrics::GAP)
+                            .text_size(TreeMetrics::META_FONT)
+                            .child(indicator),
                     )
                 })
                 .when_some(connect_failure, |el, (profile_id, tooltip)| {
@@ -461,8 +575,12 @@ pub(super) fn render_tree_item(
                             .id(SharedString::from(format!("connect-error-{profile_id}")))
                             .debug_selector(move || format!("connect-error-{profile_id}"))
                             .flex_shrink_0()
-                            .ml(Spacing::XS)
-                            .child(Icon::new(AppIcon::CircleAlert).small().color(theme.danger))
+                            .ml(TreeMetrics::GAP)
+                            .child(
+                                Icon::new(AppIcon::TriangleAlert)
+                                    .size(TreeMetrics::CHEVRON)
+                                    .color(theme.danger),
+                            )
                             .tooltip(move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(tooltip.clone())
                                     .build(window, cx)
@@ -1228,53 +1346,9 @@ fn resolve_collection_field_type_icon(label: &str) -> AppIcon {
     }
 }
 
-fn resolve_label_color(
-    node_kind: SchemaNodeKind,
-    theme: &gpui_component::Theme,
-    params: &TreeRenderParams,
-) -> Hsla {
-    match node_kind {
-        SchemaNodeKind::ConnectionFolder => theme.foreground,
-        SchemaNodeKind::Profile => theme.foreground,
-        SchemaNodeKind::Database => params.color_orange,
-        SchemaNodeKind::Schema => params.color_schema,
-        SchemaNodeKind::TablesFolder
-        | SchemaNodeKind::ViewsFolder
-        | SchemaNodeKind::TypesFolder
-        | SchemaNodeKind::ColumnsFolder
-        | SchemaNodeKind::IndexesFolder
-        | SchemaNodeKind::ForeignKeysFolder
-        | SchemaNodeKind::ConstraintsFolder
-        | SchemaNodeKind::SchemaIndexesFolder
-        | SchemaNodeKind::SchemaForeignKeysFolder
-        | SchemaNodeKind::RoutinesFolder => params.color_gray,
-        SchemaNodeKind::Routine => params.color_blue,
-        SchemaNodeKind::Table => params.color_teal,
-        SchemaNodeKind::View => params.color_yellow,
-        SchemaNodeKind::CustomType => params.color_purple,
-        SchemaNodeKind::Column => params.color_blue,
-        SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => params.color_purple,
-        SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => params.color_orange,
-        SchemaNodeKind::Constraint => params.color_yellow,
-        SchemaNodeKind::CollectionsFolder
-        | SchemaNodeKind::DatabaseIndexesFolder
-        | SchemaNodeKind::CollectionFieldsFolder
-        | SchemaNodeKind::CollectionIndexesFolder => params.color_gray,
-        SchemaNodeKind::Collection => params.color_teal,
-        SchemaNodeKind::CollectionChild => params.color_teal,
-        SchemaNodeKind::CollectionField => params.color_blue,
-        SchemaNodeKind::CollectionIndex => params.color_purple,
-        SchemaNodeKind::ScriptsFolder => theme.foreground,
-        SchemaNodeKind::ScriptFile => theme.foreground,
-        SchemaNodeKind::DependentsFolder => params.color_gray,
-        SchemaNodeKind::DependentItem => theme.muted_foreground,
-        _ => theme.muted_foreground,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{icon_for_node_kind, sidebar_tree_label};
+    use super::{icon_for_node_kind, sidebar_tree_label, split_folder_count};
     use dbflux_components::typography::AppFonts;
     use dbflux_core::SchemaNodeKind;
     use gpui::FontWeight;
@@ -1326,9 +1400,21 @@ mod tests {
         }
 
         assert_eq!(leaf.weight_override, Some(FontWeight::NORMAL));
-        assert_eq!(folder.weight_override, Some(FontWeight::MEDIUM));
+        assert_eq!(folder.weight_override, Some(FontWeight::NORMAL));
         assert_eq!(active_profile.weight_override, Some(FontWeight::SEMIBOLD));
         assert_eq!(active_database.weight_override, Some(FontWeight::SEMIBOLD));
+    }
+
+    #[test]
+    fn folder_counts_split_off_a_trailing_parenthesized_number() {
+        assert_eq!(split_folder_count("Tables (36)"), ("Tables", Some("36")));
+        assert_eq!(
+            split_folder_count("Foreign Keys (1)"),
+            ("Foreign Keys", Some("1"))
+        );
+        assert_eq!(split_folder_count("Tables"), ("Tables", None));
+        assert_eq!(split_folder_count("users (view)"), ("users (view)", None));
+        assert_eq!(split_folder_count("Indexes ()"), ("Indexes ()", None));
     }
 
     // -----------------------------------------------------------------------

@@ -497,6 +497,7 @@ mod tests {
     const WORKSPACE_CATALOG_KEYS: &[&str] = &[
         "workspace.background_tasks",
         "workspace.empty_documents",
+        "workspace.empty_hint",
         "workspace.hint.new_query",
         "workspace.hint.command_palette",
         "workspace.hint.open",

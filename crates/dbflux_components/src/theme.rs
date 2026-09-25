@@ -536,7 +536,7 @@ fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
     theme.tab_active_foreground = palette.text_strong;
     theme.tab_bar_segmented = palette.raised;
 
-    theme.table = palette.background;
+    theme.table = palette.panel;
     theme.table_head = palette.background;
     theme.table_head_foreground = palette.text_strong;
     theme.table_even = palette.alternating_row_wash;
