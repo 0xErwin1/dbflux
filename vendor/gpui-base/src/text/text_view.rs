@@ -839,6 +839,13 @@ mod tests {
         );
     }
 
+    static STATELESS_MARKDOWN_FIXTURE: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(|| {
+            let paragraph =
+                "Plain Markdown text exercises asynchronous parsing without loading resources.\n\n";
+            paragraph.repeat(80)
+        });
+
     struct StatelessMarkdownRoot {
         renders: Arc<AtomicUsize>,
     }
@@ -847,7 +854,7 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders.fetch_add(1, Ordering::Relaxed);
             div().child(
-                TextView::markdown("stateless-markdown", include_str!("../../../../README.md"))
+                TextView::markdown("stateless-markdown", STATELESS_MARKDOWN_FIXTURE.as_str())
                     .markdown_block_parser(|_, _| None),
             )
         }
@@ -874,6 +881,7 @@ mod tests {
 
     #[gpui::test]
     fn stateless_markdown_with_rebuilt_parser_settles(cx: &mut TestAppContext) {
+        assert!(STATELESS_MARKDOWN_FIXTURE.len() > 4 * 1024);
         cx.update(crate::init);
         let renders = Arc::new(AtomicUsize::new(0));
         let (_, cx) = cx.add_window_view({
@@ -883,6 +891,10 @@ mod tests {
         let cx: &mut VisualTestContext = cx;
 
         cx.run_until_parked();
+        assert!(
+            renders.load(Ordering::Relaxed) >= 2,
+            "asynchronous parsing must trigger a follow-up root render",
+        );
         assert!(
             renders.load(Ordering::Relaxed) <= 2,
             "an unchanged TextView must settle after its parse, but rendered {} times",

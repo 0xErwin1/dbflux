@@ -19,6 +19,7 @@ Live visual verification of block placement and glyph contrast is still required
 
 The `state.rs` tests also cover a test-local outer undo bracket around programmatic deletion and native typing or IME composition. This is regression evidence for a future change operator, not a public undo-session API. They do not prove the ordering of a late `unmark_text` callback after a new composition begins.
 
+- `src/text/text_view.rs`: the stateless Markdown parser convergence regression uses a deterministic, resource-free fixture over 4 KiB to retain asynchronous parsing. The README fixture triggered unrelated embedded-content load notifications and inflated the root render count; the test still rebuilds its parser callback on each render and requires at most two renders.
 - `src/motion.rs` and `src/motion/presence.rs`: preserve exact transition duration when the reversal factor is 1.0 instead of passing it through `Duration::mul_f32`, which can round a 100 ms duration up by one nanosecond. Other reversal factors still scale normally.
 
 ## Refresh
