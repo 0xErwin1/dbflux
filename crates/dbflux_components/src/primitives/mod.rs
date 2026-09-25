@@ -1,5 +1,6 @@
 mod badge;
 mod banner;
+mod chamfer;
 mod chord;
 mod file_picker;
 mod focus_frame;
@@ -17,6 +18,12 @@ mod type_to_confirm;
 
 pub use badge::{Badge, BadgeVariant};
 pub use banner::{BannerBlock, BannerVariant};
+pub use chamfer::{
+    Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing,
+    chamfer_border_polygons, chamfer_bottom_edge_polygon, chamfer_points, chamfer_ring_points,
+    chamfer_top_edge_polygon, clamp_cut, snap_bounds_to_device, snap_length_to_device,
+    transition_color,
+};
 pub use chord::Chord;
 pub use file_picker::{FilePicker, file_picker_label};
 pub use focus_frame::focus_frame;

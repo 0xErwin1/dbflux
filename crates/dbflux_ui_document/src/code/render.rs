@@ -7,7 +7,7 @@ use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{
     Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame,
 };
-use dbflux_components::tokens::ChromeColors;
+use dbflux_components::tokens::{ChamferCut, ChromeColors};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
 
@@ -92,6 +92,7 @@ impl CodeDocument {
                             ToolbarButtonVariant::Primary
                         })
                         .disabled(!run_enabled)
+                        .chamfer(ChamferCut::CONTROL)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.state == DocumentState::Executing {
                                 this.cancel_query(cx);

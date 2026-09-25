@@ -1,5 +1,5 @@
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::primitives::{Chamfer, ChamferFillKind, ChamferRing, Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
@@ -106,6 +106,7 @@ pub(crate) struct ToolbarButton {
     disabled: bool,
     tooltip: Option<SharedString>,
     on_click: Option<ToolbarClickHandler>,
+    chamfer_cut: Option<Pixels>,
 }
 
 impl ToolbarButton {
@@ -119,6 +120,7 @@ impl ToolbarButton {
             disabled: false,
             tooltip: None,
             on_click: None,
+            chamfer_cut: None,
         }
     }
 
@@ -149,6 +151,15 @@ impl ToolbarButton {
 
     pub(crate) fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Paints the background as a 45° chamfered shape with the given cut
+    /// (a `ChamferCut` token) instead of the rectangle. The shape uses the
+    /// theme's hover and pressed fills per variant, and keyboard focus draws a
+    /// ring along the full outline instead of recoloring the border.
+    pub(crate) fn chamfer(mut self, cut: Pixels) -> Self {
+        self.chamfer_cut = Some(cut);
         self
     }
 
@@ -186,6 +197,7 @@ impl RenderOnce for ToolbarButton {
             disabled,
             tooltip,
             on_click,
+            chamfer_cut,
         } = self;
 
         let content_color = match variant {
@@ -232,22 +244,34 @@ impl RenderOnce for ToolbarButton {
             .gap_1()
             .h(Heights::CONTROL)
             .px(Spacing::SM)
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(border_color)
-            .bg(bg_color)
             .text_color(content_color);
 
-        if !disabled {
-            el = match variant {
-                ToolbarButtonVariant::Primary | ToolbarButtonVariant::Danger => {
-                    el.hover(|d| d.opacity(0.9))
-                }
-                ToolbarButtonVariant::Default => el.hover(move |d| d.bg(accent_hover)),
-                ToolbarButtonVariant::Ghost => {
-                    el.hover(move |d| d.bg(secondary).text_color(foreground))
-                }
-            };
+        if let Some(cut) = chamfer_cut {
+            el = el
+                .relative()
+                .child(chamfer_background(theme, cut, variant, disabled, focused));
+
+            if !disabled && variant == ToolbarButtonVariant::Ghost {
+                el = el.hover(move |d| d.text_color(foreground));
+            }
+        } else {
+            el = el
+                .rounded(Radii::SM)
+                .border_1()
+                .border_color(border_color)
+                .bg(bg_color);
+
+            if !disabled {
+                el = match variant {
+                    ToolbarButtonVariant::Primary | ToolbarButtonVariant::Danger => {
+                        el.hover(|d| d.opacity(0.9))
+                    }
+                    ToolbarButtonVariant::Default => el.hover(move |d| d.bg(accent_hover)),
+                    ToolbarButtonVariant::Ghost => {
+                        el.hover(move |d| d.bg(secondary).text_color(foreground))
+                    }
+                };
+            }
         }
 
         if disabled {
@@ -270,4 +294,62 @@ impl RenderOnce for ToolbarButton {
 
         el
     }
+}
+
+/// Chamfered background for a [`ToolbarButton`] that opted in with
+/// `ToolbarButton::chamfer`. Fills per variant (rest / hover / pressed):
+/// primary `primary` / `primary_hover` / `primary_active`, danger `danger` /
+/// `danger_hover` / `danger_active`, default `background` / `secondary_hover`
+/// / `secondary_active`, ghost transparent / `secondary` / `secondary_hover`.
+/// A disabled button keeps its rest fill. Keyboard focus draws the ring
+/// outside filled buttons (enabled primary, danger) and inside the others.
+/// The interaction key is scoped by the button's own element id.
+fn chamfer_background(
+    theme: &Theme,
+    cut: Pixels,
+    variant: ToolbarButtonVariant,
+    disabled: bool,
+    focused: bool,
+) -> Chamfer {
+    let (fill, fill_hover, fill_active) = match variant {
+        ToolbarButtonVariant::Primary if disabled => {
+            (theme.secondary, theme.secondary, theme.secondary)
+        }
+        ToolbarButtonVariant::Primary => (theme.primary, theme.primary_hover, theme.primary_active),
+        ToolbarButtonVariant::Danger => (theme.danger, theme.danger_hover, theme.danger_active),
+        ToolbarButtonVariant::Default => (
+            theme.background,
+            theme.secondary_hover,
+            theme.secondary_active,
+        ),
+        ToolbarButtonVariant::Ghost => (
+            gpui::transparent_black(),
+            theme.secondary,
+            theme.secondary_hover,
+        ),
+    };
+
+    let mut shape = Chamfer::new(cut).fill(fill);
+
+    if variant == ToolbarButtonVariant::Default {
+        shape = shape.border(theme.input);
+    }
+
+    if focused {
+        let fill_kind = match variant {
+            ToolbarButtonVariant::Primary if !disabled => ChamferFillKind::Filled,
+            ToolbarButtonVariant::Danger => ChamferFillKind::Filled,
+            _ => ChamferFillKind::Surface,
+        };
+        shape = shape.ring(ChamferRing::focus_for(theme.ring, fill_kind));
+    }
+
+    if disabled {
+        return shape;
+    }
+
+    shape
+        .fill_hover(fill_hover)
+        .fill_active(fill_active)
+        .interactive("toolbar-button-chamfer")
 }

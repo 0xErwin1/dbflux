@@ -75,6 +75,25 @@ impl Radii {
     pub const FULL: Pixels = px(9999.0);
 }
 
+/// 45° corner-cut depths for chamfered shapes (see `primitives::Chamfer`).
+/// The cut is measured along each axis from the cut corner.
+pub struct ChamferCut;
+
+impl ChamferCut {
+    /// Keycaps, badges, counters (4 px).
+    pub const KEYCAP: Pixels = px(4.0);
+    /// Controls 28–32 px tall: buttons, selects, icon buttons (6 px).
+    pub const CONTROL: Pixels = px(6.0);
+    /// Inputs, document tabs (top-left only), segmented controls (8 px).
+    pub const INPUT: Pixels = px(8.0);
+    /// Menus, large buttons, popovers, toasts, overlays (12 px).
+    pub const OVERLAY: Pixels = px(12.0);
+    /// Cards (14 px).
+    pub const CARD: Pixels = px(14.0);
+    /// Modals and hero frames (18 px).
+    pub const MODAL: Pixels = px(18.0);
+}
+
 /// Border-width tokens. WIDTH context only — `.border_*` widths, stripe
 /// thicknesses. Do NOT use for margins, paddings, or radii.
 pub struct Borders;
@@ -84,6 +103,8 @@ impl Borders {
     pub const THIN: Pixels = px(1.0);
     /// Emphasis border — danger accents, active-state edges. (2 px)
     pub const MEDIUM: Pixels = px(2.0);
+    /// Keyboard focus ring traced around chamfered controls. (1.5 px)
+    pub const FOCUS_RING: Pixels = px(1.5);
 }
 
 /// Centralized box-shadow definitions.
@@ -433,6 +454,9 @@ impl Anim {
 
     /// Duration of a cross-fade transition in milliseconds.
     pub const FADE_MS: u64 = 120;
+
+    /// Foundations motion "fast": hover and press color transitions.
+    pub const FAST_MS: u64 = 150;
 }
 
 /// Chart-specific geometry tokens — fonts, gaps, swatch/dot sizes, row heights,
