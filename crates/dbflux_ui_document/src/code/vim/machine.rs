@@ -402,6 +402,56 @@ pub(crate) fn word_operator_range(
     (!range.is_empty()).then_some(range)
 }
 
+/// Horizontal operator motions exclude the destination for `h` and include it
+/// for `l`, without crossing a logical line or including its separator.
+pub(crate) fn horizontal_operator_range(
+    text: &Rope,
+    offset: usize,
+    right: bool,
+    count: usize,
+) -> Option<Range<usize>> {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset).min(line.last_column());
+    if line.content.is_empty() {
+        return None;
+    }
+    let index = line.char_count_before(column);
+    let columns: Vec<usize> = line.content.char_indices().map(|(at, _)| at).collect();
+    let (start, end) = if right {
+        let last = index.saturating_add(count).min(columns.len() - 1);
+        (
+            column,
+            columns[last] + line.content[columns[last]..].chars().next()?.len_utf8(),
+        )
+    } else {
+        (columns[index.saturating_sub(count)], column)
+    };
+    (start < end).then_some(line.start + start..line.start + end)
+}
+
+/// Whole current and destination logical lines, clamping at either edge.
+pub(crate) fn vertical_operator_range(
+    text: &Rope,
+    offset: usize,
+    down: bool,
+    count: usize,
+) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let last = text.lines_len().saturating_sub(1);
+    let target = if down {
+        row.saturating_add(count).min(last)
+    } else {
+        row.saturating_sub(count)
+    };
+    let first = row.min(target);
+    let end = row.max(target).saturating_add(1);
+    text.line_start_offset(first)..if end < text.lines_len() {
+        text.line_start_offset(end)
+    } else {
+        text.len()
+    }
+}
+
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerticalStep {
@@ -688,6 +738,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn operator_motions_respect_unicode_and_line_boundaries() {
+        let text = Rope::from("é中x\r\nlast");
+        assert_eq!(horizontal_operator_range(&text, 0, true, 2), Some(0..6));
+        assert_eq!(horizontal_operator_range(&text, 5, false, 2), Some(0..5));
+        assert_eq!(horizontal_operator_range(&text, 0, false, 1), None);
+        assert_eq!(horizontal_operator_range(&text, 5, true, 50), Some(5..6));
+        assert_eq!(vertical_operator_range(&text, 0, true, 1), 0..12);
+        assert_eq!(vertical_operator_range(&text, 9, false, 1), 0..12);
+        assert_eq!(line_delete_range(&text, 0..12), 0..12);
+        let empty = Rope::from("");
+        assert_eq!(horizontal_operator_range(&empty, 0, true, 1), None);
+        assert_eq!(vertical_operator_range(&empty, 0, true, 1), 0..0);
     }
 
     #[test]

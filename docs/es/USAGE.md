@@ -658,6 +658,7 @@ propio modo al cambiar de tab o al mover el focus y volver.
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
 | Normal | `dd` / `yy` | Borrar / copiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
+| Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `u` | Deshacer |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
@@ -668,8 +669,11 @@ propio modo al cambiar de tab o al mover el focus y volver.
 
 Puedes anteponer un contador a un movimiento, a `x` / `u` o a `dd` / `yy` (por
 ejemplo, `3w`, `2x`, `2u`, `3dd`, `2yy`). También se acepta entre las letras
-repetidas (`d2d`); ambos contadores se multiplican (`2d3d` afecta seis líneas). También en movimientos de palabra: `2d3w` borra hasta completar seis movimientos `w`. `x` con contador borra hasta el final de la línea sin unir
-líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve
+repetidas (`d2d`); ambos contadores se multiplican (`2d3d` afecta seis
+líneas). Los contadores de operador y movimiento también se multiplican:
+`2d3w` abarca seis movimientos `w` y `2d3j`, seis líneas. `h` / `l` abarcan
+caracteres; `j` / `k`, líneas lógicas completas. `x` con contador borra
+hasta el final de la línea sin unir líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
@@ -707,19 +711,27 @@ modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
 siguiente vuelve al modo Normal.
 
-**Deshacer.** Cada ejecución de `x`, `dd` o `d` con movimiento de palabra es un paso de deshacer, también con contador. Todo lo escrito en una misma
-sesión de modo Insertar es un paso, y cada nueva sesión de modo Insertar empieza
+**Deshacer.** Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de
+deshacer, también con contador. Todo lo escrito en una misma sesión de modo
+Insertar es un paso, y cada nueva sesión de modo Insertar empieza
 otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
-**Editores de solo lectura** (definiciones de rutinas): aceptan los movimientos, `yy` y `y` con movimiento de palabra; `x`, `dd`, `d` con movimiento de palabra y `u` no hacen nada. Borrar tampoco modifica el portapapeles.
+**Editores de solo lectura** (definiciones de rutinas): aceptan los
+movimientos, `yy` y `y` con movimiento; `x`, `dd`, `d` con movimiento y `u`
+no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
 
 - Solo existen los comandos de la primera tabla. `dd` y `yy` abarcan líneas lógicas
   completas, con sus terminadores si existen. En el fin del archivo, el contador
   se detiene en la última línea; borrar la última línea quita también el separador
-  anterior, pero copiarla no agrega un salto de línea inexistente. No se admiten
-  `d` / `y` con movimiento de palabra solo admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen el carácter de destino; `e` / `E` lo incluyen. No se admiten `c` ni movimientos `h` / `j` / `k` / `l` con operadores, ni búsqueda, objetos de texto, registros, macros, repetición con `.`, comandos `:` o una tecla de rehacer.
+  anterior, pero copiarla no agrega un salto de línea inexistente. `d` / `y`
+  admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
+  el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
+  `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
+  No se admiten `c`, búsqueda, `r` / `R`, marcas, objetos de texto, registros,
+  macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
+  completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
   que una letra escrita con un acento combinante separado requiere dos pulsaciones.
 - El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace

@@ -6,6 +6,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim horizontal and vertical operators** — Normal-mode `d` and `y`
+  accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
+  Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
+  the system clipboard; read-only deletes do nothing, and each delete is
+  one undo step. `c`, search, `r`/`R`, and marks remain unsupported; this
+  is not full Vim compatibility.
+
 * **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,
   `e`/`E`, and `b`/`B`. Operator and motion counts multiply (`2d3w`);
   `w`/`b` ranges exclude the destination and `e` ranges include it (also

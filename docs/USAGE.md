@@ -607,6 +607,7 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
 | Normal | `dd` / `yy` | Delete / yank whole logical lines (`yy` copies to the system clipboard) |
+| Normal | `d` / `y` + `h` / `l` / `j` / `k` | Delete / yank a characterwise horizontal or linewise vertical motion (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Delete / yank a characterwise word-motion range (`y` copies to the system clipboard) |
 | Normal | `u` | Undo |
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
@@ -617,7 +618,10 @@ own mode when you switch tabs or move focus away and back.
 
 Prefix a motion, `x` / `u`, or `dd` / `yy` with a count (for example, `3w`, `2x`,
 `2u`, `3dd`, `2yy`). A count between the repeated letters also applies (for example,
-`d2d`); prefix and inner counts multiply (`2d3d` affects six lines). The same applies to word operators: `2d3w` deletes through six `w` motions. A counted `x` deletes up to the end of the line without joining lines;
+`d2d`); prefix and inner counts multiply (`2d3d` affects six lines). Operator and motion counts also multiply: `2d3w` deletes through six `w`
+motions, and `2d3j` deletes through six lines. `h` / `l` select characters;
+`j` / `k` select whole logical lines. A counted `x` deletes up to the end
+of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
@@ -653,19 +657,26 @@ and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
 
-**Undo.** Each `x`, `dd`, or word-motion `d` invocation is one undo step, including counted commands. Everything typed in one Insert session is
-one undo step, and each new Insert session starts another. `u` undoes the same
+**Undo.** Each `x`, `dd`, or motion-based `d` invocation is one undo step,
+including counted commands. Everything typed in one Insert session is one
+undo step, and each new Insert session starts another. `u` undoes the same
 steps as `Ctrl+z` / `Cmd+z`.
 
-**Read-only editors** (routine definitions) accept motions, `yy`, and word-motion `y`; `x`, `dd`, word-motion `d`, and `u` do nothing there. A read-only delete does not change the clipboard.
+**Read-only editors** (routine definitions) accept motions, `yy`, and
+motion-based `y`; `x`, `dd`, motion-based `d`, and `u` do nothing there.
+A read-only delete does not change the clipboard.
 
 **Limitations.**
 
 - Only the commands in the first table exist. `dd` and `yy` operate on whole logical
   lines, including line endings when present. At EOF, a count stops at the last line;
   deleting the last line also removes its preceding separator, without inventing
-  a trailing newline for yanks. Word-motion `d` / `y` supports `w` / `W` / `e` / `E` / `b` / `B` only: `w` / `W` and `b` / `B` exclude the destination character, while `e` / `E` include it. `c` and operator motions `h` / `j` / `k` / `l` are unsupported. There is no search, text objects, registers, macros,
-  `.` repeat, `:` commands, or a redo key.
+  a trailing newline for yanks. Word-motion `d` / `y` supports
+  `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
+  destination character, while `e` / `E` include it. Horizontal operator
+  motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
+  `c`, search, `r` / `R`, marks, text objects, registers, macros, `.` repeat,
+  `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.
 - Normal mode blocks your typing and pasting only. Edits DBFlux makes itself,

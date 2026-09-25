@@ -600,6 +600,111 @@ fn pending_operator_is_interrupted_and_readonly_yank_does_not_edit(cx: &mut Test
 }
 
 #[gpui::test]
+fn horizontal_and_vertical_operators_yank_delete_and_undo(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é中x\r\nlast", true);
+    editor.keys("y 2 l");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("é中x"));
+    editor.keys("d 2 l");
+    assert_eq!(editor.text(), "\r\nlast");
+    editor.keys("u");
+    assert_eq!(editor.text(), "é中x\r\nlast");
+
+    editor.set_cursor(5);
+    editor.keys("d 2 h");
+    assert_eq!(editor.text(), "x\r\nlast");
+    editor.keys("u");
+    assert_eq!(editor.text(), "é中x\r\nlast");
+
+    editor.keys("y j");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("é中x\r\nlast"));
+    editor.set_cursor(8);
+    editor.keys("d k");
+    assert_eq!(editor.text(), "");
+    editor.keys("u");
+    assert_eq!(editor.text(), "é中x\r\nlast");
+}
+
+#[gpui::test]
+fn directional_operator_counts_multiply_and_clamp(cx: &mut TestAppContext) {
+    let mut editor = open_editor(
+        cx,
+        "abcdefghi\nsecond\nthird\nfourth\nfifth\nsixth\nseventh",
+        true,
+    );
+    editor.keys("2 d 3 l");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("abcdefg"));
+    assert_eq!(
+        editor.text(),
+        "hi\nsecond\nthird\nfourth\nfifth\nsixth\nseventh"
+    );
+    editor.keys("u");
+    editor.keys("2 y 3 j");
+    assert_eq!(
+        editor.clipboard_text().as_deref(),
+        Some("abcdefghi\nsecond\nthird\nfourth\nfifth\nsixth\nseventh")
+    );
+    assert_eq!(
+        editor.text(),
+        "abcdefghi\nsecond\nthird\nfourth\nfifth\nsixth\nseventh"
+    );
+}
+
+#[gpui::test]
+fn vertical_operators_handle_edges_and_eof_separator(cx: &mut TestAppContext) {
+    for (content, cursor, keys, yank, result) in [
+        ("first\nlast", 0, "y k", "first\n", "first\nlast"),
+        ("first\nlast", 6, "d j", "last", "first"),
+        ("first\n", 6, "d j", "", "first"),
+        ("first\n\nlast", 6, "y j", "\nlast", "first\n\nlast"),
+        ("", 0, "d j", "", ""),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            (!yank.is_empty()).then_some(yank),
+            "{content:?} {keys}"
+        );
+        assert_eq!(editor.text(), result, "{content:?} {keys}");
+    }
+}
+
+#[gpui::test]
+fn read_only_directional_delete_preserves_clipboard_but_yank_is_allowed(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "alpha\nbeta",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor
+        .window
+        .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+    editor.keys("d l d j");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+    assert_eq!(editor.text(), "alpha\nbeta");
+    editor.keys("y j");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("alpha\nbeta"));
+    assert_eq!(editor.text(), "alpha\nbeta");
+}
+
+#[gpui::test]
+fn interrupted_operator_does_not_capture_directional_key(cx: &mut TestAppContext) {
+    for operator in ["d", "y"] {
+        let mut editor = open_editor(cx, "alpha\nbeta", true);
+        editor.keys(&format!("{operator} escape j"));
+        assert_eq!(editor.text(), "alpha\nbeta");
+        assert_eq!(editor.cursor(), 6);
+        editor.keys("l");
+        assert_eq!(editor.cursor(), 7);
+    }
+}
+
+#[gpui::test]
 fn empty_buffer_line_operators_do_not_mutate_or_panic(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "", true);
     editor.keys("d d");
@@ -629,7 +734,7 @@ fn interrupted_operators_do_not_capture_a_later_motion(cx: &mut TestAppContext) 
             editor.keys(&format!("{operator} {interruption}"));
             editor.keys("d");
             assert_eq!(editor.text(), "alpha\nbeta", "{operator} {interruption}");
-            editor.keys("j");
+            editor.keys("q");
             assert_eq!(editor.text(), "alpha\nbeta", "{operator} {interruption}");
             assert_eq!(editor.cursor(), 0, "{operator} {interruption}");
             editor.keys("j");
@@ -643,7 +748,7 @@ fn interrupted_operators_do_not_capture_a_later_motion(cx: &mut TestAppContext) 
         editor.focus_document(&document);
         editor.keys("d");
         assert_eq!(editor.text(), "alpha\nbeta", "{operator} focus");
-        editor.keys("j");
+        editor.keys("q");
         assert_eq!(editor.text(), "alpha\nbeta", "{operator} focus");
         assert_eq!(editor.cursor(), 0, "{operator} focus");
         editor.keys("j");
