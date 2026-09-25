@@ -103,6 +103,11 @@ impl Fixture<'_> {
         })
     }
 
+    fn clipboard_text(&mut self) -> Option<String> {
+        self.window
+            .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    }
+
     fn cursor(&mut self) -> usize {
         let document = self.document.clone();
         self.window
@@ -389,6 +394,122 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
         document,
         harness,
         window,
+    }
+}
+
+#[gpui::test]
+fn line_operators_preserve_crlf_unicode_counts_and_undo(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é\r\n中\r\nlast", true);
+    editor.keys("2 y y");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("é\r\n中\r\n"));
+    assert_eq!(editor.text(), "é\r\n中\r\nlast");
+    editor.keys("2 d d");
+    assert_eq!(editor.text(), "last");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("u");
+    assert_eq!(editor.text(), "é\r\n中\r\nlast");
+    editor.set_cursor(4);
+    editor.keys("2 d d");
+    assert_eq!(editor.text(), "é");
+}
+
+#[gpui::test]
+fn line_delete_at_eof_removes_preceding_separator(cx: &mut TestAppContext) {
+    for (content, cursor, keys, expected, yank) in [
+        ("a\nb", 2, "d d", "a", "b"),
+        ("a\r\nb", 3, "d d", "a", "b"),
+        ("a\n", 2, "d d", "a", ""),
+        ("a\r\n", 3, "d d", "a", ""),
+        ("a", 0, "d d", "", "a"),
+        ("a\nb\nc", 2, "2 d d", "a", "b\nc"),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{content:?}");
+        if !yank.is_empty() {
+            assert_eq!(editor.clipboard_text().as_deref(), Some(yank));
+        }
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn pending_operator_is_interrupted_and_readonly_yank_does_not_edit(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "alpha\nbeta",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor.window.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_string()));
+    });
+    editor.keys("d d");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+    assert_eq!(editor.text(), "alpha\nbeta");
+    editor.keys("d q");
+    assert_eq!(editor.text(), "alpha\nbeta");
+    editor.keys("y y");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("alpha\n"));
+    assert_eq!(editor.text(), "alpha\nbeta");
+    editor.keys("d escape d");
+    assert_eq!(editor.text(), "alpha\nbeta");
+}
+
+#[gpui::test]
+fn empty_buffer_line_operators_do_not_mutate_or_panic(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "", true);
+    editor.keys("d d");
+    assert_eq!(editor.text(), "");
+    editor.keys("y y");
+    assert_eq!(editor.text(), "");
+}
+
+#[gpui::test]
+fn yank_trailing_empty_line_copies_its_line_ending(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha\n", true);
+    editor.set_cursor(6);
+    editor.window.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_string()));
+    });
+    editor.keys("y y");
+    assert_eq!(editor.text(), "alpha\n");
+    assert_ne!(editor.clipboard_text().as_deref(), Some("sentinel"));
+    assert_eq!(editor.clipboard_text().as_deref(), None);
+}
+
+#[gpui::test]
+fn interrupted_operators_do_not_capture_a_later_motion(cx: &mut TestAppContext) {
+    for operator in ["d", "y"] {
+        for interruption in ["escape", "ctrl-z", "ctrl-y", "tab"] {
+            let mut editor = open_editor(cx, "alpha\nbeta", true);
+            editor.keys(&format!("{operator} {interruption}"));
+            editor.keys("d");
+            assert_eq!(editor.text(), "alpha\nbeta", "{operator} {interruption}");
+            editor.keys("j");
+            assert_eq!(editor.text(), "alpha\nbeta", "{operator} {interruption}");
+            assert_eq!(editor.cursor(), 0, "{operator} {interruption}");
+            editor.keys("j");
+            assert_eq!(editor.cursor(), 6, "{operator} {interruption}");
+        }
+
+        let mut editor = open_editor(cx, "alpha\nbeta", true);
+        editor.keys(operator);
+        editor.focus_other_input();
+        let document = editor.document.clone();
+        editor.focus_document(&document);
+        editor.keys("d");
+        assert_eq!(editor.text(), "alpha\nbeta", "{operator} focus");
+        editor.keys("j");
+        assert_eq!(editor.text(), "alpha\nbeta", "{operator} focus");
+        assert_eq!(editor.cursor(), 0, "{operator} focus");
+        editor.keys("j");
+        assert_eq!(editor.cursor(), 6, "{operator} focus");
     }
 }
 

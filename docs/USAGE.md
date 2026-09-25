@@ -606,6 +606,7 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `e` / `w` / `b` | Move to the end of a word / start of the next word / start of the previous word |
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
+| Normal | `dd` / `yy` | Delete / yank whole logical lines (`yy` copies to the system clipboard) |
 | Normal | `u` | Undo |
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
@@ -613,8 +614,9 @@ own mode when you switch tabs or move focus away and back.
 | Visual / Visual Line / Visual Block | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
 
-Prefix a motion or `x` / `u` with a count (for example, `3w`, `2x`,
-`2u`). A counted `x` deletes up to the end of the line without joining lines;
+Prefix a motion, `x` / `u`, or `dd` / `yy` with a count (for example, `3w`, `2x`,
+`2u`, `3dd`, `2yy`). A count between the repeated letters also applies (for example,
+`d2d`); prefix and inner counts multiply (`2d3d` affects six lines). A counted `x` deletes up to the end of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
@@ -650,17 +652,21 @@ and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
 
-**Undo.** Each `x` invocation is one undo step, including a counted `x`. Everything typed in one Insert session is
+**Undo.** Each `x` or `dd` invocation is one undo step, including counted commands. Everything typed in one Insert session is
 one undo step, and each new Insert session starts another. `u` undoes the same
 steps as `Ctrl+z` / `Cmd+z`.
 
-**Read-only editors** (routine definitions) accept the motions; `x` and `u`
-do nothing there.
+**Read-only editors** (routine definitions) accept motions and `yy`; `x`, `dd`, and `u`
+do nothing there. A read-only `dd` does not change the clipboard.
 
 **Limitations.**
 
-- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), search,
-  text objects, registers, macros, `.` repeat, `:` commands, or a redo key.
+- Only the commands in the first table exist. `dd` and `yy` operate on whole logical
+  lines, including line endings when present. At EOF, a count stops at the last line;
+  deleting the last line also removes its preceding separator, without inventing
+  a trailing newline for yanks. Motion-based operators (such as `dw` or `yw`) and
+  `c` are not implemented. There is no search, text objects, registers, macros,
+  `.` repeat, `:` commands, or a redo key.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.
 - Normal mode blocks your typing and pasting only. Edits DBFlux makes itself,

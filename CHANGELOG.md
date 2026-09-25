@@ -6,6 +6,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Whole-line Vim commands** — Normal-mode `dd` deletes and `yy` copies whole
+  logical lines to the system clipboard. Prefix counts and counts between the
+  repeated keys apply, stopping at EOF. Existing line endings are preserved in
+  yanks; deleting the final line removes its preceding separator. Read-only
+  `dd` does nothing, and each counted deletion is one undo step. Motion-based
+  operators and `c` remain unsupported.
+
 * **Expanded Vim editing in code editors** — Normal mode now supports `a`/`A`/`I`
   insertion positions, `e`/`E`/`w`/`W`/`b`/`B` word motions, motion counts,
   and counted `x`/`u`. `v` and `V` now select characters or whole lines using
@@ -17,7 +24,7 @@ All notable changes to DBFlux will be documented in this file.
   full buffer for whitespace-only selections. Block columns count Unicode
   scalars, so tabs, wide characters and combining graphemes may not align to
   visual cells. Live UI visual validation remains pending; pixel-perfect
-  alignment is not claimed. Operators are not included.
+  alignment is not claimed. Motion-based operators and `c` are not included.
 
 * **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
   Vim mode toggle, off by default. Code editors then open in Normal mode,

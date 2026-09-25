@@ -42,6 +42,7 @@ pub(crate) enum VimCommand {
     Digit(u8),
     LeaveInsert,
     DeleteChar,
+    Operator(char),
     Undo,
     /// Consumed without effect, so the key neither edits nor reaches other handlers.
     Swallow,
@@ -120,6 +121,8 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
                 "x" if !visual => Some(VimCommand::DeleteChar),
+                "d" if !visual => Some(VimCommand::Operator('d')),
+                "y" if !visual => Some(VimCommand::Operator('y')),
                 "u" if !visual => Some(VimCommand::Undo),
                 _ => None,
             }
@@ -415,6 +418,29 @@ pub(crate) fn visual_range(
     }
 }
 
+/// Whole logical lines, including their terminators when present. The final
+/// unterminated line has no invented newline in the returned range.
+pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let end_row = row.saturating_add(count).min(text.lines_len());
+    text.line_start_offset(row)..if end_row < text.lines_len() {
+        text.line_start_offset(end_row)
+    } else {
+        text.len()
+    }
+}
+
+/// Deleting the last logical line also removes the separator before it.
+pub(crate) fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+    if range.end != text.len() || range.start == 0 {
+        return range;
+    }
+    let content = text.to_string();
+    let before = &content[..range.start];
+    let separator_len = if before.ends_with("\r\n") { 2 } else { 1 };
+    range.start.saturating_sub(separator_len)..range.end
+}
+
 #[cfg(test)]
 pub(crate) fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
     counted_character_range(text, offset, 1)
@@ -485,7 +511,7 @@ mod tests {
             );
         }
 
-        for name in ["o", "p", "d", "/", "escape", "backspace", "space"] {
+        for name in ["o", "p", "/", "escape", "backspace", "space"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
     }
@@ -562,6 +588,20 @@ mod tests {
         assert_eq!(step_word(&text, &chars, 2, WordMotion::Forward, false), 7);
         assert_eq!(step_word(&text, &chars, 7, WordMotion::Backward, false), 2);
         assert_eq!(step_word(&text, &chars, 7, WordMotion::End, false), 11);
+    }
+
+    #[test]
+    fn counted_lines_preserve_terminators_and_eof() {
+        let text = Rope::from("é\r\n\r\n中");
+        assert_eq!(counted_line_range(&text, 0, 2), 0..6);
+        assert_eq!(counted_line_range(&text, 4, 20), 4..9);
+        assert_eq!(counted_line_range(&text, 6, 1), 6..9);
+        let terminated = Rope::from("a\n");
+        assert_eq!(counted_line_range(&terminated, 2, 1), 2..2);
+        assert_eq!(line_delete_range(&terminated, 2..2), 1..2);
+        assert_eq!(line_delete_range(&text, 6..9), 4..9);
+        assert_eq!(line_delete_range(&Rope::from("a\nb"), 2..3), 1..3);
+        assert_eq!(line_delete_range(&Rope::from("a"), 0..1), 0..1);
     }
 
     #[test]

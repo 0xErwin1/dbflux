@@ -49,6 +49,7 @@ pub(super) struct VimState {
     /// any other cursor change (a click, an arrow key, an edit) resets it.
     vertical_goal: Option<(usize, usize)>,
     count: Option<usize>,
+    pending_operator: Option<(char, usize)>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
 }
@@ -170,12 +171,12 @@ impl CodeDocument {
             machine::command_for(self.vim.mode, key)
         };
         let Some(command) = command else {
-            self.vim.count = None;
+            self.clear_vim_count();
             return false;
         };
 
         if let VimCommand::Digit(digit) = command {
-            if digit != 0 || self.vim.count.is_some() {
+            if digit != 0 || self.vim.count.is_some() || self.vim.pending_operator.is_some() {
                 self.vim.count = Some(
                     self.vim
                         .count
@@ -186,6 +187,19 @@ impl CodeDocument {
                 return true;
             }
         }
+        if let Some((operator, prefix)) = self.vim.pending_operator.take() {
+            if let VimCommand::Operator(repeated) = command {
+                if operator == repeated {
+                    let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
+                    self.apply_line_operator(operator, count, window, cx);
+                    return true;
+                }
+            }
+            self.vim.count = None;
+            // An interrupted operator does not turn its next key into a command.
+            return true;
+        }
+
         self.apply_vim_command(command, window, cx);
         true
     }
@@ -258,6 +272,7 @@ impl CodeDocument {
             }
             VimCommand::LeaveInsert => self.leave_insert(window, cx),
             // A read-only document keeps its text: motions work, edits do nothing.
+            VimCommand::Operator(operator) => self.vim.pending_operator = Some((operator, count)),
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
             VimCommand::Undo if !self.read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
@@ -268,6 +283,7 @@ impl CodeDocument {
 
     pub(super) fn clear_vim_count(&mut self) {
         self.vim.count = None;
+        self.vim.pending_operator = None;
     }
 
     fn set_vim_mode(&mut self, mode: VimMode, cx: &mut Context<Self>) {
@@ -290,6 +306,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.clear_vim_count();
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
             return false;
         }
@@ -494,6 +511,40 @@ impl CodeDocument {
         }
     }
 
+    fn apply_line_operator(
+        &mut self,
+        operator: char,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range = {
+            let state = self.editor.input_state.read(cx);
+            machine::counted_line_range(state.text(), self.editor_cursor(cx), count)
+        };
+        let content = self.editor.input_state.read(cx).text().to_string();
+        let selected = content.get(range.clone()).unwrap_or_default().to_string();
+        if operator == 'd' && self.read_only {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        if operator == 'd' {
+            let delete_range = {
+                let state = self.editor.input_state.read(cx);
+                machine::line_delete_range(state.text(), range)
+            };
+            if delete_range.is_empty() {
+                return;
+            }
+            self.vim.vertical_goal = None;
+            self.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(delete_range, cx);
+                state.replace("", window, cx);
+            });
+            self.clamp_cursor_for_normal(cx);
+        }
+    }
+
     fn delete_chars(&mut self, count: usize, window: &mut Window, cx: &mut Context<Self>) {
         let range = {
             let text = self.editor.input_state.read(cx);
@@ -524,6 +575,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.clear_vim_count();
         if !self.vim.enabled
             || self.vim.mode != VimMode::Normal
             || self.vim.history_unlocked
