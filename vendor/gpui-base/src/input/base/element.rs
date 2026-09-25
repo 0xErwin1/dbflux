@@ -492,6 +492,11 @@ impl<M: InputModeKind> TextElement<M> {
             let mut selected_range = *selection;
             let mut cursor = selection.cursor_offset();
             if is_active {
+                if let Some(offset) = state.visual_caret_offset() {
+                    cursor = offset;
+                }
+            }
+            if is_active {
                 if let Some(ime_marked_range) = &state.ime_marked_range {
                     selected_range = (ime_marked_range.end..ime_marked_range.end).into();
                     cursor = ime_marked_range.end;
@@ -528,7 +533,8 @@ impl<M: InputModeKind> TextElement<M> {
 
                 let selection_changed = state.last_selected_range != Some(selected_range);
                 let auto_scrolling = state.auto_scroll.is_active();
-                if selection_changed && !is_selected_all {
+                if selection_changed && (!is_selected_all || state.visual_caret_offset().is_some())
+                {
                     // For Right alignment use 0 margin: cursor is clamped to bounds separately,
                     // so we never scroll the text for cursor-at-edge, avoiding a first-click jump.
                     let safety_margin = match last_layout.text_align {
@@ -568,7 +574,9 @@ impl<M: InputModeKind> TextElement<M> {
                     }
 
                     // For selection to move scroll
-                    if selection.reversed {
+                    if state.visual_caret_offset().is_some() {
+                        // The visual head, not either selection endpoint, owns cursor-follow.
+                    } else if selection.reversed {
                         if scroll_offset.x + cursor_start.x < px(0.) {
                             // selection start is out of left
                             scroll_offset.x = -cursor_start.x;

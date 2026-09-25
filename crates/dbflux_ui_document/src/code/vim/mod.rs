@@ -446,6 +446,7 @@ impl CodeDocument {
                 state.set_columnar_selection(anchor, cursor, cx);
             } else {
                 state.set_selected_range(range, cx);
+                state.set_visual_caret(Some(cursor), cx);
             }
         });
     }

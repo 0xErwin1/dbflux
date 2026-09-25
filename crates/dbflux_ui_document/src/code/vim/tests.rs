@@ -108,6 +108,18 @@ impl Fixture<'_> {
             .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
     }
 
+    fn visual_caret(&mut self) -> Option<usize> {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .visual_caret_offset()
+        })
+    }
+
     fn cursor(&mut self) -> usize {
         let document = self.document.clone();
         self.window
@@ -900,6 +912,28 @@ fn visual_character_selection_tracks_reverse_unicode_and_escape(cx: &mut TestApp
     assert_eq!(editor.selection(), 0..0);
     assert!(editor.editor_focused());
     assert_eq!(editor.text(), "é中🎉x\r\nlast");
+}
+
+#[gpui::test]
+fn visual_caret_tracks_active_row_without_changing_selected_query(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "éx\r\nsecond\nlast", true);
+    editor.keys("shift-v j");
+    assert_eq!(editor.selection(), 0..12);
+    assert_eq!(editor.cursor(), 12);
+    assert_eq!(editor.visual_caret(), Some(5));
+    assert_eq!(editor.selected_query().as_deref(), Some("éx\r\nsecond"));
+    editor.keys("k");
+    assert_eq!(editor.visual_caret(), Some(0));
+    editor.keys("escape");
+    assert_eq!(editor.visual_caret(), None);
+
+    editor.set_cursor(5);
+    editor.keys("v k");
+    assert_eq!(editor.visual_caret(), Some(0));
+    editor.keys("j");
+    assert_eq!(editor.visual_caret(), Some(5));
+    editor.keys("escape");
+    assert_eq!(editor.visual_caret(), None);
 }
 
 #[gpui::test]

@@ -70,6 +70,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Vim Visual selection caret** — Visual character and line selections retain
+  their selected text while rendering the caret at the active head, including
+  upward motions and lines whose selection includes the next line's start.
+  Native selection, blur, and IME take caret ownership back. Live visual
+  verification remains pending.
+
 * **Vim linewise yank of a trailing empty line** — `yy` and linewise `y` motions
   copy the existing LF or CRLF separator instead of an empty clipboard value.
   Unterminated lines and empty buffers do not gain a newline.

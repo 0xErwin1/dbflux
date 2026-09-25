@@ -363,6 +363,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) selected_word_range: Option<CursorSelection>,
     /// The marked range is the temporary insert text on IME typing.
     pub(super) ime_marked_range: Option<CursorSelection>,
+    /// Presentation-only caret offset, bound to the selection that installed it.
+    pub(super) visual_caret: Option<(usize, CursorSelection)>,
     pub(super) last_layout: Option<LastLayout>,
     pub(super) last_cursor: Option<usize>,
     /// The input container bounds
@@ -695,6 +697,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             selections: Selections::default(),
             selected_word_range: None,
             ime_marked_range: None,
+            visual_caret: None,
             input_bounds: Bounds::default(),
             selecting: false,
             disabled: false,
@@ -2250,6 +2253,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.visual_caret = None;
         self.undo_manager.break_transaction_coalescing();
         // Input has its own text selection; suppress the window-level text
         // selection (Root) so it does not start a drag from here.
@@ -2786,6 +2790,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Sets the active selection to the given range, keeping its `reversed`
     /// and `column_anchor` state untouched.
     pub(super) fn set_selection(&mut self, start: usize, end: usize) {
+        self.visual_caret = None;
         let active = self.active_selection_mut();
         active.start = start;
         active.end = end;
@@ -2794,6 +2799,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Collapses the active selection to a cursor at the given offset,
     /// clearing `reversed`.
     pub(super) fn set_cursor_to(&mut self, offset: usize) {
+        self.visual_caret = None;
         let active = self.active_selection_mut();
         active.start = offset;
         active.end = offset;
@@ -2834,6 +2840,29 @@ impl<M: InputModeKind> InputBaseState<M> {
         (*self.selections.active()).into()
     }
 
+    /// Active rendered caret offset, or `None` when native selection/IME owns the caret.
+    pub fn visual_caret_offset(&self) -> Option<usize> {
+        self.visual_caret.and_then(|(offset, selection)| {
+            (self.ime_marked_range.is_none() && selection == *self.selections.active())
+                .then_some(offset)
+        })
+    }
+
+    /// Draw the active caret at `offset` without changing selection or IME state.
+    /// Invalidated by the next native selection change or composition.
+    pub fn set_visual_caret(&mut self, offset: Option<usize>, cx: &mut Context<Self>) {
+        self.visual_caret = offset.map(|offset| {
+            (
+                self.text.clip_offset(offset, Bias::Left),
+                *self.selections.active(),
+            )
+        });
+        if let Some(offset) = self.visual_caret_offset() {
+            self.scroll_to(offset, None, cx);
+        }
+        cx.notify();
+    }
+
     /// Nonempty selection fragments in document order (including multi-cursor blocks).
     pub fn selected_nonempty_ranges(&self) -> Vec<Range<usize>> {
         let mut ranges: Vec<_> = self
@@ -2850,6 +2879,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Select an inclusive display-row rectangle using the Alt-drag block engine.
     /// Offsets are UTF-8 byte positions on the anchor and head glyphs.
     pub fn set_columnar_selection(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+        self.visual_caret = None;
         let anchor = self.text.clip_offset(anchor, Bias::Left);
         let head = self.text.clip_offset(head, Bias::Left);
         self.selected_word_range = None;
@@ -2892,9 +2922,11 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub fn select_all(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.visual_caret = None;
         self.undo_manager.break_transaction_coalescing();
         self.selections.remove_all_but_active();
         self.set_selection(0, self.text.len());
+        self.scroll_to(self.cursor(), None, cx);
         cx.notify();
     }
 
@@ -2903,6 +2935,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Non-empty ranges expand to character boundaries. Empty ranges remain empty and are
     /// clipped to the preceding character boundary.
     pub fn set_selected_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+        self.visual_caret = None;
         let end_bias = if range.start == range.end {
             Bias::Left
         } else {
@@ -3087,6 +3120,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         line_end_affinity: bool,
         cx: &mut Context<Self>,
     ) {
+        self.visual_caret = None;
         M::clear_inline_completion(self, cx);
 
         self.cursor_line_end_affinity = line_end_affinity;
@@ -3107,6 +3141,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         f: impl Fn(&Self, &CursorSelection) -> usize,
         cx: &mut Context<Self>,
     ) {
+        self.visual_caret = None;
         self.pause_blink_cursor(cx);
         self.undo_manager.break_transaction_coalescing();
         M::clear_inline_completion(self, cx);
@@ -3233,6 +3268,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.visual_caret = None;
         if M::is_context_menu_open(self, cx) {
             return;
         }
@@ -4003,6 +4039,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.visual_caret = None;
         let requested_intent = self.undo_manager.take_pending_intent();
         if !self.is_editable() {
             return;
@@ -6053,6 +6090,91 @@ mod tests {
                     state._pending_update,
                     "replace_all on a code editor should request a pending update"
                 );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn visual_caret_preserves_selection_and_resets_on_native_navigation(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.default_value("é\r\nsecond\nlast"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_selected_range(0..11, cx);
+                let selection = state.selected_range();
+                let cursor = state.cursor();
+                state.set_visual_caret(Some(4), cx);
+                assert_eq!(state.visual_caret_offset(), Some(4));
+                assert_eq!(state.selected_range(), selection);
+                assert_eq!(state.cursor(), cursor);
+                state.set_selected_range(4..4, cx);
+                assert_eq!(state.visual_caret_offset(), None);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn visual_caret_scrolls_to_head_and_select_all_resets_equal_range(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let text = (0..50)
+                    .map(|row| format!("row {row}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                state.set_value(text, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let end = state.text.len();
+                state.set_selected_range(0..end, cx);
+                state.active_selection_mut().reversed = true;
+                state.set_visual_caret(Some(end), cx);
+                assert_eq!(state.selected_range(), 0..end);
+                assert_eq!(state.visual_caret_offset(), Some(end));
+                assert!(state.deferred_scroll_offset.expect("head scroll target").y < px(0.));
+                state.select_all(window, cx);
+                assert_eq!(state.selected_range(), 0..end);
+                assert_eq!(state.visual_caret_offset(), None);
+                assert_eq!(state.cursor(), 0);
+                assert_eq!(
+                    state.deferred_scroll_offset.expect("native caret target").y,
+                    px(0.)
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn visual_caret_does_not_resurrect_after_native_keyboard_selection(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.default_value("abcdef"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_selected_range(0..4, cx);
+                state.set_visual_caret(Some(4), cx);
+                assert_eq!(state.visual_caret_offset(), Some(4));
+                state.select_all_cursors_to(|_, _| 2, cx);
+                assert_eq!(state.visual_caret_offset(), None);
+                state.select_all_cursors_to(|_, _| 4, cx);
+                assert_eq!(state.selected_range(), 0..4);
+                assert_eq!(state.visual_caret_offset(), None);
+                assert_eq!(state.cursor(), 4);
+                state.set_visual_caret(Some(0), cx);
+                state.set_selection(0, 2);
+                state.set_selection(0, 4);
+                assert_eq!(state.visual_caret_offset(), None);
+                state.set_visual_caret(Some(0), cx);
+                state.set_cursor_to(4);
+                assert_eq!(state.visual_caret_offset(), None);
+                assert_eq!(state.cursor(), 4);
             });
         });
     }
