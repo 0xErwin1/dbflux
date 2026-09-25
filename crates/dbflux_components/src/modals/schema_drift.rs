@@ -1,5 +1,5 @@
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::Icon;
 use crate::semantic::BannerColors as SemBannerColors;
 use crate::tokens::{FontSizes, Spacing};
@@ -29,7 +29,7 @@ pub struct SchemaDriftDismissed;
 /// in amber. Footer offers two primary actions: refresh-and-rerun or
 /// continue with the stale schema.
 ///
-/// This is an `Entity<ModalSchemaDrift>` rendered inside a `ModalShell`
+/// This is an `Entity<ModalSchemaDrift>` rendered inside a `Modal`
 /// by the code document's render loop via the `pending_schema_drift` pattern.
 pub struct ModalSchemaDrift {
     drift: Option<SchemaDriftDetected>,
@@ -230,28 +230,27 @@ impl Render for ModalSchemaDrift {
                     .into_any_element()
             });
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.schema_drift.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(640.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.refresh(cx)).log_err();
-            }
-        })
-        .confirm_enabled(!loading)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.schema_drift.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::CircleAlert)
+            .variant(ModalVariant::Default)
+            .width(px(640.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.refresh(cx)).log_err();
+                }
+            })
+            .confirm_enabled(!loading)
+            .into_any_element()
     }
 }
 

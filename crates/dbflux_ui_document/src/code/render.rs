@@ -3,9 +3,9 @@ use crate::chrome::compact_top_bar;
 use dbflux_components::composites::SplitButton;
 use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::primitives::{
-    Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text, focus_frame,
+    Badge, BadgeTone, BannerBlock, BannerVariant, FocusShape, Icon, Text, focus_ring,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -269,8 +269,9 @@ impl CodeDocument {
         let bg = cx.theme().background;
         let accent = ChromeColors::tint(cx.theme());
 
-        focus_frame(
+        focus_ring(
             is_focused,
+            FocusShape::Rect,
             Some(accent.opacity(0.3)),
             div()
                 .size_full()
@@ -423,8 +424,9 @@ impl CodeDocument {
         let has_panel = active_panel.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.result_tabs.is_empty();
 
-        focus_frame(
+        focus_ring(
             is_focused,
+            FocusShape::Rect,
             Some(accent.opacity(0.3)),
             div()
                 .size_full()
@@ -491,7 +493,7 @@ impl CodeDocument {
                     .py(Spacing::SM)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(Text::label(status))
+                    .child(Text::body(status))
                     .child(Text::caption(line_count_label))
                     .when(live_output.has_stderr(), |el| {
                         el.child(Badge::new("stderr", BadgeTone::Warning))
@@ -697,7 +699,7 @@ impl CodeDocument {
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted(dbflux_i18n::t!("document.code.result.empty")))
+            .child(Text::caption(dbflux_i18n::t!("document.code.result.empty")))
     }
 
     /// Placeholder shown for a routine document when no connection is active for
@@ -708,7 +710,7 @@ impl CodeDocument {
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted(dbflux_i18n::t!(
+            .child(Text::caption(dbflux_i18n::t!(
                 "document.code.result.awaiting_connection"
             )))
     }
@@ -758,23 +760,22 @@ impl CodeDocument {
             )
             .into_any_element();
 
-        ModalShell::new(
-            dbflux_i18n::t!("document.code.script_confirm.title"),
-            body,
-            footer,
-        )
-        .width(px(460.0))
-        .focus_handle(self.script_confirm_focus.handle())
-        .on_close(move |window, cx| {
-            entity_close.update(cx, |doc, cx| {
-                doc.cancel_script_query(window, cx);
-            });
-        })
-        .on_confirm(move |window, cx| {
-            entity_confirm.update(cx, |doc, cx| {
-                doc.confirm_script_query(window, cx);
-            });
-        })
+        Modal::new(dbflux_i18n::t!("document.code.script_confirm.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Play)
+            .width(px(460.0))
+            .focus_handle(self.script_confirm_focus.handle())
+            .on_close(move |window, cx| {
+                entity_close.update(cx, |doc, cx| {
+                    doc.cancel_script_query(window, cx);
+                });
+            })
+            .on_confirm(move |window, cx| {
+                entity_confirm.update(cx, |doc, cx| {
+                    doc.confirm_script_query(window, cx);
+                });
+            })
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -862,7 +863,10 @@ impl CodeDocument {
             )
             .into_any_element();
 
-        ModalShell::new(title, body, footer)
+        Modal::new(title)
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::TriangleAlert)
             .width(px(460.0))
             .variant(ModalVariant::Danger)
             .focus_handle(self.dangerous_query_focus.handle())

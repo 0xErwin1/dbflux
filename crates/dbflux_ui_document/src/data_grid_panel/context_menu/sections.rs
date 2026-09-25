@@ -2,7 +2,7 @@ use super::{ContextMenuItem, DataGridEvent, DataGridPanel, FilterBackend, TableC
 use dbflux_app::keymap::ContextId;
 use dbflux_components::components::data_table::ContextMenuAction;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, surface_raised};
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
@@ -1372,7 +1372,7 @@ impl DataGridPanel {
                     cx.listener(|this, _, window, cx| this.dismiss_context_menu(window, cx)),
                 )
                 .child(
-                    surface_raised(cx)
+                    surface(SurfaceRole::Raised, cx)
                         .id("context-menu")
                         .absolute()
                         .left(menu_x)

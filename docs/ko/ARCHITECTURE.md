@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["프레젠테이션 — 6개 UI 크레이트"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — dbflux_app 의존 없음)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, 키맵 헬퍼,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, 키맵 헬퍼,<br/>toast + throttle, user_error,<br/>platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(탭/창 시스템, 문서,<br/>data_grid_panel, 거버넌스)"]
         uisidebar["dbflux_ui_sidebar<br/>(연결 + 스크립트 사이드바 트리)"]
         uiwindows["dbflux_ui_windows<br/>(connection_manager + 설정 창)"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # 아이콘 렌더링 헬퍼
       primitives/           # 저수준 빌딩 블록 (배지, 배너, 레이블, 버튼 등)
       controls/             # 입력 컨트롤 (버튼, 확인란, 드롭다운, 입력 필드, 선택 등)
-      composites/           # 조합 패턴 (modal_frame, tab_strip, section_header 등)
+      composites/           # 조합 패턴 (header, tabs, split_button 등)
       components/           # 도메인 컴포넌트
         data_table/         # 커스텀 가상화 데이터 테이블
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # 인라인 JSON 편집기 컴포넌트
         multi_select.rs     # 다중 선택 드롭다운 컴포넌트
         value_source_selector.rs # 값 소스 드롭다운 (환경 변수/비밀/매개변수/인증)
-      modals/               # 재사용 가능한 모달 컴포넌트 (cell_editor, document_preview 등)
+      modals/               # 공유 `Modal`과 그 위에 만든 모달 (cell_editor, document_preview 등)
       result_panel/         # ResultPanel + ViewHandle 범용 크롬 호스트
       chart/                # 차트 엔진 (detect, spec, decimate, axis, legend, engine)
       saved_chart.rs        # SavedChart + SavedChartStore 타입 별칭
@@ -175,7 +175,6 @@ crates/
       toast.rs              # 심각도 인식 토큰 버킷 스로틀이 있는 Toast + ToastHost
       user_error/           # 중앙화된 사용자 대면 오류 보고 (UserFacingError,
                             # ErrorKind, report_error, report_error_async) + 스로틀
-      modal_frame.rs        # 재사용 가능한 모달 크롬/프레임
       platform.rs           # X11/Wayland 감지, 창 옵션
       sql_preview_modal.rs  # SQL/쿼리 미리보기 모달 (이중 모드: SQL 및 범용)
       sso_wizard.rs         # SSO 계정/역할 탐색 마법사 [cfg aws]
@@ -334,14 +333,11 @@ crates/
           # 이전 오버레이 경로의 shim이 dbflux_ui_base / dbflux_components에서 재노출:
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # Shim: pub use dbflux_ui_document::*
         icons/mod.rs        # Shim: AppIcon + embedded_bytes 재노출 (SVG 리소스는 여기에 위치)
         theme.rs            # Shim: pub use dbflux_components::theme::*
         tokens.rs           # Shim: pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # Shim: → dbflux_ui_base::modal_frame
           toast.rs          # Shim: → dbflux_ui_base::toast
         windows/mod.rs      # Shim: pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # Shim: pub use dbflux_ui_sidebar::*
@@ -647,8 +643,8 @@ crates/
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
-- 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
-- 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
+- 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
+- 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.
 - 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다.
 
 ### 대시보드 및 저장된 차트

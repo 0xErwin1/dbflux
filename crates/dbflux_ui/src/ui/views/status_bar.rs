@@ -1,10 +1,10 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::document::{TabManager, TabManagerEvent};
+use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
-use dbflux_components::typography::{InterfaceText, MonoMeta};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -177,17 +177,17 @@ impl StatusBar {
         )
     }
 
-    fn metadata_text(text: impl Into<SharedString>) -> InterfaceText {
-        InterfaceText::meta(text)
+    fn metadata_text(text: impl Into<SharedString>) -> Text {
+        Text::caption(text)
     }
 
     /// Elapsed times and counters stay in the data face so their digits line up.
-    fn readout_text(text: impl Into<SharedString>) -> MonoMeta {
-        MonoMeta::new(text)
+    fn readout_text(text: impl Into<SharedString>) -> Text {
+        Text::code(text).muted_foreground()
     }
 
-    fn status_text(text: impl Into<SharedString>) -> InterfaceText {
-        InterfaceText::caption(text).font_size(FontSizes::SM)
+    fn status_text(text: impl Into<SharedString>) -> Text {
+        Text::caption(text).font_size(FontSizes::SM)
     }
 
     /// Compact badge label and tooltip explaining why the active connection
@@ -444,6 +444,7 @@ impl StatusBar {
 #[cfg(test)]
 mod tests {
     use super::StatusBar;
+    use dbflux_components::primitives::TextVariant;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
 
@@ -451,12 +452,12 @@ mod tests {
     fn status_bar_metadata_uses_small_interface_meta_role() {
         let inspection = StatusBar::metadata_text("dbflux-postgres").inspect();
 
-        assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+        assert_eq!(inspection.family, AppFonts::INTERFACE);
         assert!(inspection.fallbacks.is_empty());
-        assert_eq!(inspection.size_override, Some(FontSizes::SM));
+        assert_eq!(inspection.variant, TextVariant::Caption);
+        assert_eq!(inspection.size_override, None);
         assert_eq!(inspection.weight_override, None);
-        assert!(inspection.uses_muted_foreground_override);
-        assert!(!inspection.has_custom_color_override);
+        assert!(inspection.uses_role_default_color);
     }
 
     #[test]
@@ -465,11 +466,11 @@ mod tests {
         let divider = StatusBar::status_text("|").inspect();
 
         for inspection in [running, divider] {
-            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert_eq!(inspection.family, AppFonts::INTERFACE);
             assert!(inspection.fallbacks.is_empty());
             assert_eq!(inspection.size_override, Some(FontSizes::SM));
             assert_eq!(inspection.weight_override, None);
-            assert!(inspection.uses_muted_foreground_override);
+            assert!(inspection.uses_role_default_color);
             assert!(!inspection.has_custom_color_override);
         }
     }

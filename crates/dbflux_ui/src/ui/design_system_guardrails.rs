@@ -72,12 +72,6 @@ fn representative_overlays_reject_raw_scrim_regressions() {
         !command_palette_source.contains(".bg(gpui::black().opacity(0.5))"),
         "overlays/command_palette.rs reintroduced a raw overlay scrim"
     );
-
-    let modal_frame_source = read_base_source("modal_frame.rs");
-    assert!(
-        !modal_frame_source.contains(".bg(gpui::black().opacity(0.5))"),
-        "modal_frame.rs reintroduced a raw overlay scrim"
-    );
 }
 
 #[test]

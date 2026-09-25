@@ -29,9 +29,11 @@ use crate::object_text::{
 // `CodeDocument` renders its editor with: only it supports the full-height,
 // line-numbered code-editor layout.
 use dbflux_app::keymap::Modifiers;
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput, InputEvent, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DbError;
 use dbflux_ui_base::keymap::modifiers_from_gpui;
@@ -786,123 +788,60 @@ impl ObjectBrowserDocument {
         navigation: &GuardedNavigation,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let key = self
             .editor
             .as_ref()
             .map(|editor| editor.key.clone())
             .unwrap_or_default();
 
-        div()
-            .id("object-browser-unsaved-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(380.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .size(Heights::ICON_MD)
-                                    .warning(),
-                            )
-                            .child(Text::heading(dbflux_i18n::t!(
-                                "document.object_browser.editor.unsaved_confirm.title"
-                            ))),
-                    )
-                    .child(Text::muted(dbflux_i18n::t!(
-                        "document.object_browser.editor.unsaved_confirm.body",
-                        key = key.as_str(),
-                        action = navigation.description().as_str()
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-cancel")
-                                    .flex()
-                                    .items_center()
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_guarded_navigation(cx);
-                                    }))
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.object_browser.editor.unsaved_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-discard")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.discard_and_navigate(window, cx);
-                                    }))
-                                    .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.object_browser.editor.footer.discard"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-save")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.primary)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save_and_navigate(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Save)
-                                            .small()
-                                            .color(theme.primary_foreground),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.save"
-                                        ))
-                                        .color(theme.primary_foreground),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "object-browser-unsaved-cancel",
+                    dbflux_i18n::t!("document.object_browser.editor.unsaved_confirm.cancel"),
+                )
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_guarded_navigation(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "object-browser-unsaved-discard",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                )
+                .icon(AppIcon::RotateCcw)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.discard_and_navigate(window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "object-browser-unsaved-save",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.save"),
+                )
+                .primary()
+                .icon(AppIcon::Save)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.save_and_navigate(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_confirm.title"
+        ))
+        .id("object-browser-unsaved-overlay")
+        .icon(AppIcon::TriangleAlert)
+        .icon_color(cx.theme().warning)
+        .width(px(460.0))
+        .body(Text::body(dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_confirm.body",
+            key = key.as_str(),
+            action = navigation.description().as_str()
+        )))
+        .footer(footer)
     }
 }
 

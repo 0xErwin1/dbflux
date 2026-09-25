@@ -1,5 +1,6 @@
 use dbflux_components::controls::{Button, GpuiInput as Input, InputState};
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::LogErr;
@@ -143,7 +144,7 @@ impl Render for ModalCreateDashboard {
             .flex_col()
             .gap(Spacing::SM)
             .child(
-                Text::label(dbflux_i18n::t!("modals.create_dashboard.name_label"))
+                Text::body(dbflux_i18n::t!("modals.create_dashboard.name_label"))
                     .into_any_element(),
             )
             .child(Input::new(&self.name_input))
@@ -175,27 +176,26 @@ impl Render for ModalCreateDashboard {
                 .on_click(on_confirm),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.create_dashboard.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .width(gpui::px(400.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(create_enabled)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.create_dashboard.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Plus)
+            .width(gpui::px(400.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(create_enabled)
+            .into_any_element()
     }
 }
 

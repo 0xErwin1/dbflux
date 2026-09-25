@@ -3,10 +3,10 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 #[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::{Icon, Kbd, overlay_bg, surface_modal_container};
+use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Icon, Kbd, SurfaceRole, overlay_bg, surface};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChromeColors, Radii, Spacing};
-use dbflux_components::typography::{Body, InterfaceText, MonoCaption};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -443,9 +443,9 @@ fn palette_item_name(
 
     match item {
         PaletteItem::Resource(_) | PaletteItem::Script { .. } | PaletteItem::SavedChart { .. } => {
-            InterfaceText::label(name).color(color).into_any_element()
+            Text::body(name).color(color).into_any_element()
         }
-        _ => Body::new(name).color(color).into_any_element(),
+        _ => Text::body(name).color(color).into_any_element(),
     }
 }
 
@@ -453,8 +453,8 @@ fn palette_category_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> InterfaceText {
-    InterfaceText::caption(label).color(if is_selected {
+) -> Text {
+    Text::caption(label).color(if is_selected {
         ChromeColors::tint(theme).opacity(0.75)
     } else {
         theme.muted_foreground
@@ -465,8 +465,8 @@ fn palette_qualifier_text(
     label: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> InterfaceText {
-    InterfaceText::caption(label).color(if is_selected {
+) -> Text {
+    Text::caption(label).color(if is_selected {
         ChromeColors::tint(theme).opacity(0.65)
     } else {
         theme.muted_foreground
@@ -478,8 +478,10 @@ fn palette_shortcut_text(
     shortcut: impl Into<SharedString>,
     is_selected: bool,
     theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(shortcut).color(text_color_for_selected(is_selected, theme))
+) -> Text {
+    Text::code(shortcut)
+        .muted_foreground()
+        .color(text_color_for_selected(is_selected, theme))
 }
 
 /// Split a shortcut string like "ctrl-shift-k" into Chord parts.
@@ -987,12 +989,8 @@ impl Render for CommandPalette {
                 this.execute_selected(window, cx);
             }))
             .child(
-                surface_modal_container(cx)
+                surface(SurfaceRole::Card, cx)
                     .id("command-palette-container")
-                    // Use the workspace background instead of the default
-                    // ModalContainer popover surface so the palette reads as
-                    // the deepest layer of the window.
-                    .bg(theme.background)
                     .w_full()
                     .max_w(px(560.0))
                     .max_h(px(440.0))
@@ -1018,10 +1016,10 @@ impl Render for CommandPalette {
                                     .flex_1()
                                     .child(Input::new(&input_state).small().cleanable(true)),
                             )
-                            .child(MonoCaption::new(format!(
-                                "{} / {}",
-                                filtered_count, total_count
-                            )))
+                            .child(
+                                Text::code(format!("{} / {}", filtered_count, total_count))
+                                    .muted_foreground(),
+                            )
                             .child(Kbd::new("Esc")),
                     )
                     .child(
@@ -1046,7 +1044,7 @@ impl Render for CommandPalette {
                                         .px(Spacing::MD)
                                         .py(Spacing::XS)
                                         .child(
-                                            InterfaceText::caption(label)
+                                            Text::caption(label)
                                                 .color(theme.muted_foreground)
                                                 .into_any_element(),
                                         )
@@ -1083,7 +1081,8 @@ impl Render for CommandPalette {
                                         .flex()
                                         .justify_center()
                                         .child(
-                                            Body::new(dbflux_i18n::t!("palette.empty")).muted(cx),
+                                            Text::body(dbflux_i18n::t!("palette.empty"))
+                                                .muted_foreground(),
                                         ),
                                 )
                             }),
@@ -1111,7 +1110,7 @@ impl Render for CommandPalette {
                                                 SharedString::from("\u{2193}"),
                                             ]))
                                             .child(
-                                                InterfaceText::caption(dbflux_i18n::t!(
+                                                Text::caption(dbflux_i18n::t!(
                                                     "palette.footer.navigate"
                                                 ))
                                                 .color(theme.muted_foreground),
@@ -1124,7 +1123,7 @@ impl Render for CommandPalette {
                                             .gap(Spacing::XS)
                                             .child(Kbd::new("\u{21B5}"))
                                             .child(
-                                                InterfaceText::caption(dbflux_i18n::t!(
+                                                Text::caption(dbflux_i18n::t!(
                                                     "palette.footer.run"
                                                 ))
                                                 .color(theme.muted_foreground),
@@ -1143,7 +1142,6 @@ mod tests {
         PaletteCommand, PaletteItem, ResourceItem, palette_qualifier_text, palette_shortcut_text,
     };
     use dbflux_components::theme;
-    use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use gpui::TestAppContext;
     use gpui_component::theme::Theme;
@@ -1194,9 +1192,9 @@ mod tests {
         let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
 
         for inspection in [shortcut, selected_shortcut] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
+            assert_eq!(inspection.family, AppFonts::MONO);
             assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.size_override, None);
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);
             assert!(!inspection.uses_muted_foreground_override);
@@ -1220,9 +1218,9 @@ mod tests {
         let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
 
         for inspection in [qualifier, selected] {
-            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert_eq!(inspection.family, AppFonts::INTERFACE);
             assert!(inspection.fallbacks.is_empty());
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
+            assert_eq!(inspection.size_override, None);
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);
         }
@@ -1233,9 +1231,9 @@ mod tests {
         let source = command_palette_source();
 
         assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Card, cx)"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(!source.contains("surface(SurfaceRole::Panel, cx)"));
     }
 
     #[test]
@@ -1251,9 +1249,9 @@ mod tests {
     fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
         let source = command_palette_overlay_source();
 
-        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Card, cx)"));
         assert!(source.contains(".id(\"command-palette-container\")"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(!source.contains("surface(SurfaceRole::Panel, cx)"));
     }
 
     #[test]

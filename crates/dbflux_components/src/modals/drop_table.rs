@@ -1,6 +1,7 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::{Text, surface_raised};
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::{LogErr, RelationKind, RelationRef, SqlDialect};
@@ -130,7 +131,7 @@ fn confirm_hint(table: &str) -> String {
 
 /// Modal entity for "drop table" with TypeToConfirm gate.
 ///
-/// Uses `ModalShell::Danger` (560 px). The "Drop table" button is disabled
+/// Uses `Modal` (`ModalVariant::Danger`) (560 px). The "Drop table" button is disabled
 /// until the user types the exact table name in the confirmation input.
 /// Listens to `InputEvent` changes on the internal `InputState` directly
 /// (no `TypeToConfirm` entity needed — we compare inline to keep this self-contained).
@@ -256,7 +257,7 @@ impl Render for ModalDropTable {
         let drop_enabled = self.drop_enabled;
 
         // Table name badge.
-        let name_badge = surface_raised(cx)
+        let name_badge = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -311,7 +312,7 @@ impl Render for ModalDropTable {
         };
 
         // SQL preview.
-        let sql_block = surface_raised(cx)
+        let sql_block = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -372,28 +373,27 @@ impl Render for ModalDropTable {
                     .on_click(on_drop),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.drop_table.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Danger)
-        .width(px(560.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(drop_enabled)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.drop_table.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Delete)
+            .variant(ModalVariant::Danger)
+            .width(px(560.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(drop_enabled)
+            .into_any_element()
     }
 }
 

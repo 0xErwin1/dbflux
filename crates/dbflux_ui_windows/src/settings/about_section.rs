@@ -1,5 +1,5 @@
 use super::{SettingsSection, SettingsSectionId};
-use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -52,7 +52,7 @@ impl Render for AboutSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.about.title"),
                 dbflux_i18n::t!("settings.about.subtitle"),
                 cx,
@@ -74,11 +74,11 @@ impl Render for AboutSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(Headline::new("DBFlux").xl())
-                                        .child(MonoCaption::new(format!(
-                                            "{} ({})",
-                                            VERSION, PROFILE
-                                        ))),
+                                        .child(Text::heading("DBFlux"))
+                                        .child(
+                                            Text::code(format!("{} ({})", VERSION, PROFILE))
+                                                .muted_foreground(),
+                                        ),
                                 ),
                         )
                         .child(
@@ -100,13 +100,13 @@ impl Render for AboutSection {
                                                 cx.open_url(&issues_url);
                                             })
                                             .child(
-                                                Body::new(dbflux_i18n::t!(
+                                                Text::body(dbflux_i18n::t!(
                                                     "settings.about.report_bug"
                                                 ))
                                                 .color(theme.link),
                                             ),
                                     )
-                                    .child(Body::new(dbflux_i18n::t!("settings.about.or")))
+                                    .child(Text::body(dbflux_i18n::t!("settings.about.or")))
                                     .child(
                                         div()
                                             .id("about-link-repo")
@@ -116,17 +116,17 @@ impl Render for AboutSection {
                                                 cx.open_url(REPOSITORY);
                                             })
                                             .child(
-                                                Body::new(dbflux_i18n::t!(
+                                                Text::body(dbflux_i18n::t!(
                                                     "settings.about.view_source"
                                                 ))
                                                 .color(theme.link),
                                             ),
                                     )
-                                    .child(Body::new(dbflux_i18n::t!("settings.about.on_github"))),
+                                    .child(Text::body(dbflux_i18n::t!("settings.about.on_github"))),
                             ),
                         )
-                        .child(Body::new(copyright_line))
-                        .child(Body::new(license_line))
+                        .child(Text::body(copyright_line))
+                        .child(Text::body(license_line))
                         .child(
                             div()
                                 .mt_4()
@@ -136,15 +136,15 @@ impl Render for AboutSection {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .child(FieldLabel::new(dbflux_i18n::t!(
+                                .child(Text::body(dbflux_i18n::t!(
                                     "settings.about.third_party_licenses"
                                 )))
                                 .child(
-                                    Body::new(dbflux_i18n::t!("settings.about.lucide"))
+                                    Text::body(dbflux_i18n::t!("settings.about.lucide"))
                                         .color(theme.muted_foreground),
                                 )
                                 .child(
-                                    Body::new(dbflux_i18n::t!("settings.about.simple_icons"))
+                                    Text::body(dbflux_i18n::t!("settings.about.simple_icons"))
                                         .color(theme.muted_foreground),
                                 ),
                         ),

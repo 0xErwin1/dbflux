@@ -116,7 +116,7 @@ fn render_header(
                 .small()
                 .color(theme.muted_foreground),
         )
-        .child(Text::label(SharedString::from(source_table)).color(theme.foreground))
+        .child(Text::body(SharedString::from(source_table)).color(theme.foreground))
         .when_some(source_schema, |row, schema| {
             row.child(
                 div()

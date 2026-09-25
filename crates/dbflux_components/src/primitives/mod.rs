@@ -2,7 +2,7 @@ mod badge;
 mod banner;
 mod chamfer;
 mod file_picker;
-mod focus_frame;
+mod focus_ring;
 mod icon;
 mod kbd;
 mod label;
@@ -22,18 +22,15 @@ pub use chamfer::{
     snap_bounds_to_device, snap_length_to_device, transition_color,
 };
 pub use file_picker::{FilePicker, file_picker_label};
-pub use focus_frame::focus_frame;
+pub use focus_ring::{FocusShape, focus_ring};
 pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone};
 pub use label::Label;
 pub use loading_state::{LoadingState, Spinner};
 pub use segmented_control::{SegmentedControl, SegmentedItem, new_active_id};
 pub use status::{Status, StatusIndicator, format_latency};
-pub use surface::{
-    SurfaceInspection, SurfaceRole, SurfaceThemeColorSlot, SurfaceVariant, inspect_surface_role,
-    overlay_bg, surface, surface_card, surface_modal_container, surface_overlay, surface_panel,
-    surface_raised, surface_role,
+pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_bg, surface};
+pub use text::{
+    Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,
 };
-pub use text::{Text, TextVariant};
-pub(crate) use text::{TextColorSelection, TextDefaultColor};
 pub use type_to_confirm::{TypeToConfirm, TypeToConfirmEvent};

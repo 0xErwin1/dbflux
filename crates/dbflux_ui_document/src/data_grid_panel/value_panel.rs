@@ -359,7 +359,7 @@ impl ValuePanelContent {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child(Text::label_sm(self.target.column_name.clone())),
+                    .child(Text::body_sm(self.target.column_name.clone())),
             )
             .child(
                 div()

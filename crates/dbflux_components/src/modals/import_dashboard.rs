@@ -1,7 +1,7 @@
 use crate::components::json_editor_view;
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
@@ -32,7 +32,7 @@ pub const DEFAULT_IMPORT_NAME: &str = "Imported Dashboard";
 
 /// Modal for pasting dashboard JSON and triggering an import.
 ///
-/// Uses the standard `ModalShell` chrome (header / scrollable body / footer
+/// Uses the standard `Modal` chrome (header / scrollable body / footer
 /// with top divider) so it matches the rest of the modal surfaces in the app.
 pub struct ModalImportDashboard {
     visible: bool,
@@ -222,7 +222,7 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "modals.import_dashboard.name_label"
             )))
             .child(Input::new(&self.name_input))
@@ -240,7 +240,7 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "modals.import_dashboard.json_label"
             )))
             .child(
@@ -352,24 +352,23 @@ impl Render for ModalImportDashboard {
                     ),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.import_dashboard.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(720.0))
-        .focus_handle(self.focus.handle())
-        .on_close(close)
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |window, cx| {
-                entity
-                    .update(cx, |this, cx| this.confirm(window, cx))
-                    .log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.import_dashboard.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Download)
+            .variant(ModalVariant::Default)
+            .width(px(720.0))
+            .focus_handle(self.focus.handle())
+            .on_close(close)
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.confirm(window, cx))
+                        .log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 

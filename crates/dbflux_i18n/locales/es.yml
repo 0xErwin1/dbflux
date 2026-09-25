@@ -2292,6 +2292,7 @@ document:
       close_left: Cerrar a la izquierda
       close_others: Cerrar las demás
       close_right: Cerrar a la derecha
+    new: Nueva pestaña
     unsaved_changes: Cambios sin guardar
 document_tree:
   search_placeholder: Buscar...

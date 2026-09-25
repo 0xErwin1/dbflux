@@ -1,5 +1,6 @@
 use crate::controls::Checkbox;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::Text;
 use crate::tokens::{FontSizes, Spacing};
 use dbflux_core::LogErr;
@@ -56,7 +57,7 @@ pub struct UnsavedChangesRequest {
 
 /// Modal entity for the "unsaved changes" confirmation.
 ///
-/// Uses `ModalShell::Default` (520 px).
+/// Uses `Modal` (`ModalVariant::Default`) (520 px).
 pub struct ModalUnsavedChanges {
     entries: Vec<DirtySummaryEntry>,
     selected: HashMap<DocumentId, bool>,
@@ -298,28 +299,27 @@ impl Render for ModalUnsavedChanges {
                     .on_click(on_save),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.unsaved_changes.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(520.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(save_enabled)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.unsaved_changes.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Save)
+            .variant(ModalVariant::Default)
+            .width(px(520.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(save_enabled)
+            .into_any_element()
     }
 }
 

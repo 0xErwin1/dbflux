@@ -1,13 +1,15 @@
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::form_navigation::{
-    FormEditState, FormField, FormNavigation, focus_ring, subscribe_form_input,
+    FormEditState, FormField, FormNavigation, subscribe_form_input,
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{FocusShape, focus_ring};
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_ui_base::modal_frame::ModalFrame;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -785,14 +787,19 @@ impl Render for NewKeyModal {
                             "document.key_value.new_key.ttl.label"
                         )))
                         .child(
-                            focus_ring(show_ring && focus == ModalFocus::TTL, ring_color)
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.enter_edit_mode_for_field(ModalFocus::TTL, window, cx);
-                                    }),
-                                )
-                                .child(Input::new(&self.ttl_input).small().w_full()),
+                            focus_ring(
+                                show_ring && focus == ModalFocus::TTL,
+                                FocusShape::Chamfer(ChamferCut::CONTROL),
+                                Some(ring_color),
+                                Input::new(&self.ttl_input).small().w_full(),
+                                cx,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(ModalFocus::TTL, window, cx);
+                                }),
+                            ),
                         ),
                 ),
         );
@@ -808,14 +815,19 @@ impl Render for NewKeyModal {
                     "document.key_value.new_key.key_name.label"
                 )))
                 .child(
-                    focus_ring(show_ring && focus == ModalFocus::KeyName, ring_color)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.enter_edit_mode_for_field(ModalFocus::KeyName, window, cx);
-                            }),
-                        )
-                        .child(Input::new(&self.key_name_input).small().w_full()),
+                    focus_ring(
+                        show_ring && focus == ModalFocus::KeyName,
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
+                        Some(ring_color),
+                        Input::new(&self.key_name_input).small().w_full(),
+                        cx,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.enter_edit_mode_for_field(ModalFocus::KeyName, window, cx);
+                        }),
+                    ),
                 ),
         );
 
@@ -836,7 +848,10 @@ impl Render for NewKeyModal {
                 row_div = row_div.child(
                     focus_ring(
                         show_ring && focus == ModalFocus::RowField(index),
-                        ring_color,
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
+                        Some(ring_color),
+                        Input::new(&row.field_input).small().w_full(),
+                        cx,
                     )
                     .flex_1()
                     .on_mouse_down(
@@ -844,15 +859,17 @@ impl Render for NewKeyModal {
                         cx.listener(move |this, _, window, cx| {
                             this.enter_edit_mode_for_field(ModalFocus::RowField(index), window, cx);
                         }),
-                    )
-                    .child(Input::new(&row.field_input).small().w_full()),
+                    ),
                 );
 
                 if needs_two_cols {
                     row_div = row_div.child(
                         focus_ring(
                             show_ring && focus == ModalFocus::RowValue(index),
-                            ring_color,
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
+                            Some(ring_color),
+                            Input::new(&row.value_input).small().w_full(),
+                            cx,
                         )
                         .flex_1()
                         .on_mouse_down(
@@ -864,32 +881,33 @@ impl Render for NewKeyModal {
                                     cx,
                                 );
                             }),
-                        )
-                        .child(Input::new(&row.value_input).small().w_full()),
+                        ),
                     );
                 }
 
                 let delete_focused = show_ring && focus == ModalFocus::RowDelete(index);
-                row_div = row_div.child(
-                    focus_ring(delete_focused, ring_color).child(
-                        div()
-                            .w(Heights::ICON_MD)
-                            .h(Heights::ICON_MD)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.danger.opacity(0.15)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.remove_value_row(index, cx);
-                                }),
-                            )
-                            .child(Icon::new(AppIcon::Delete).size(Heights::ICON_SM).muted()),
-                    ),
-                );
+                row_div = row_div.child(focus_ring(
+                    delete_focused,
+                    FocusShape::Rect,
+                    Some(ring_color),
+                    div()
+                        .w(Heights::ICON_MD)
+                        .h(Heights::ICON_MD)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.danger.opacity(0.15)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                this.remove_value_row(index, cx);
+                            }),
+                        )
+                        .child(Icon::new(AppIcon::Delete).size(Heights::ICON_SM).muted()),
+                    cx,
+                ));
 
                 rows_container = rows_container.child(row_div);
             }
@@ -897,31 +915,33 @@ impl Render for NewKeyModal {
             // Add row button
             let add_focused = show_ring && focus == ModalFocus::AddRow;
             rows_container = rows_container.child(
-                div().flex().justify_center().child(
-                    focus_ring(add_focused, ring_color).child(
-                        div()
-                            .w(Heights::ICON_LG)
-                            .h(Heights::ICON_LG)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .bg(theme.primary)
-                            .hover(|d| d.opacity(0.8))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.add_value_row(window, cx);
-                                }),
-                            )
-                            .child(
-                                Icon::new(AppIcon::Plus)
-                                    .size(Heights::ICON_SM)
-                                    .color(theme.primary_foreground),
-                            ),
-                    ),
-                ),
+                div().flex().justify_center().child(focus_ring(
+                    add_focused,
+                    FocusShape::Rect,
+                    Some(ring_color),
+                    div()
+                        .w(Heights::ICON_LG)
+                        .h(Heights::ICON_LG)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .bg(theme.primary)
+                        .hover(|d| d.opacity(0.8))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.add_value_row(window, cx);
+                            }),
+                        )
+                        .child(
+                            Icon::new(AppIcon::Plus)
+                                .size(Heights::ICON_SM)
+                                .color(theme.primary_foreground),
+                        ),
+                    cx,
+                )),
             );
 
             body = body.child(rows_container);
@@ -935,14 +955,19 @@ impl Render for NewKeyModal {
                         "document.key_value.new_key.value.label"
                     )))
                     .child(
-                        focus_ring(show_ring && focus == ModalFocus::Value, ring_color)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(ModalFocus::Value, window, cx);
-                                }),
-                            )
-                            .child(Input::new(&self.value_input).small().w_full()),
+                        focus_ring(
+                            show_ring && focus == ModalFocus::Value,
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
+                            Some(ring_color),
+                            Input::new(&self.value_input).small().w_full(),
+                            cx,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.enter_edit_mode_for_field(ModalFocus::Value, window, cx);
+                            }),
+                        ),
                     ),
             );
         }
@@ -966,37 +991,45 @@ impl Render for NewKeyModal {
                 .flex()
                 .justify_end()
                 .gap(Spacing::SM)
-                .child(
-                    focus_ring(cancel_focused, ring_color).child(
-                        Button::new("new-key-cancel")
-                            .small()
-                            .label(dbflux_i18n::t!("document.key_value.new_key.cancel"))
-                            .with_variant(ButtonVariant::Ghost)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close(cx);
-                            })),
-                    ),
-                )
-                .child(
-                    focus_ring(create_focused, ring_color).child(
-                        Button::new("new-key-create")
-                            .small()
-                            .label(dbflux_i18n::t!("document.key_value.new_key.create"))
-                            .with_variant(ButtonVariant::Primary)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.submit(window, cx);
-                            })),
-                    ),
-                ),
+                .child(focus_ring(
+                    cancel_focused,
+                    FocusShape::Rect,
+                    Some(ring_color),
+                    Button::new("new-key-cancel")
+                        .small()
+                        .label(dbflux_i18n::t!("document.key_value.new_key.cancel"))
+                        .with_variant(ButtonVariant::Ghost)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close(cx);
+                        })),
+                    cx,
+                ))
+                .child(focus_ring(
+                    create_focused,
+                    FocusShape::Rect,
+                    Some(ring_color),
+                    Button::new("new-key-create")
+                        .small()
+                        .label(dbflux_i18n::t!("document.key_value.new_key.create"))
+                        .with_variant(ButtonVariant::Primary)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.submit(window, cx);
+                        })),
+                    cx,
+                )),
         );
 
-        ModalFrame::new("new-key-modal", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.key_value.new_key.title"))
+        Modal::new(dbflux_i18n::t!("document.key_value.new_key.title"))
+            .id("new-key-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Plus)
             .width(px(600.0))
             .max_height(px(500.0))
             .child(body.into_any_element())
-            .render(cx)
+            .top_offset(px(80.0))
+            .into_any_element()
     }
 }
 

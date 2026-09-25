@@ -9,11 +9,9 @@ use dbflux_components::components::form_renderer;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{Badge, BadgeTone, Icon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Widths};
-use dbflux_components::typography::{
-    Body, FieldLabel, InterfaceText, MonoMeta, PanelTitle, SubSectionLabel,
-};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -113,12 +111,12 @@ fn bool_override_index(value: Option<bool>) -> usize {
     }
 }
 
-fn driver_entry_name_text(text: impl Into<SharedString>) -> InterfaceText {
-    InterfaceText::label(text)
+fn driver_entry_name_text(text: impl Into<SharedString>) -> Text {
+    Text::body(text)
 }
 
-fn driver_entry_key_text(text: impl Into<SharedString>) -> MonoMeta {
-    MonoMeta::new(text)
+fn driver_entry_key_text(text: impl Into<SharedString>) -> Text {
+    Text::code(text).muted_foreground()
 }
 
 impl DriversSection {
@@ -710,7 +708,7 @@ impl DriversSection {
 
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::section_container(layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.drivers.section_title"),
                 dbflux_i18n::t!("settings.drivers.section_description"),
                 cx,
@@ -751,7 +749,7 @@ impl DriversSection {
                     .when(self.drv_entries.is_empty(), |d| {
                         d.child(
                             div().p_3().child(
-                                Body::new(dbflux_i18n::t!("settings.drivers.empty"))
+                                Text::body(dbflux_i18n::t!("settings.drivers.empty"))
                                     .color(theme.muted_foreground),
                             ),
                         )
@@ -828,7 +826,7 @@ impl DriversSection {
                 .items_center()
                 .justify_center()
                 .child(
-                    Body::new(dbflux_i18n::t!("settings.drivers.select_hint"))
+                    Text::body(dbflux_i18n::t!("settings.drivers.select_hint"))
                         .color(theme.muted_foreground),
                 );
         };
@@ -858,10 +856,10 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_1()
-                            .child(PanelTitle::new(entry.metadata.display_name.clone()))
-                            .child(MonoMeta::new(entry.driver_key.clone()))
+                            .child(Text::heading(entry.metadata.display_name.clone()))
+                            .child(Text::code(entry.driver_key.clone()).muted_foreground())
                             .child(
-                                Body::new(entry.metadata.description.clone())
+                                Text::body(entry.metadata.description.clone())
                                     .color(theme.muted_foreground),
                             ),
                     ),
@@ -876,9 +874,7 @@ impl DriversSection {
                             .py_1()
                             .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(InterfaceText::caption(
-                                entry.metadata.category.display_name(),
-                            )),
+                            .child(Text::caption(entry.metadata.category.display_name())),
                     )
                     .child(
                         div()
@@ -886,7 +882,7 @@ impl DriversSection {
                             .py_1()
                             .rounded(Radii::SM)
                             .bg(theme.secondary)
-                            .child(InterfaceText::caption(
+                            .child(Text::caption(
                                 entry.metadata.query_language.display_name().to_string(),
                             )),
                     ),
@@ -941,7 +937,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(FieldLabel::new(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "settings.drivers.field.capabilities"
             )))
             .child(
@@ -962,7 +958,7 @@ impl DriversSection {
                                 } else {
                                     gpui::transparent_black()
                                 })
-                                .child(Body::new(format!(
+                                .child(Text::body(format!(
                                     "{} {}",
                                     if supported { "✓" } else { "-" },
                                     label
@@ -984,11 +980,11 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(FieldLabel::new(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "settings.drivers.field.global_overrides"
             )))
             .child(
-                Body::new(dbflux_i18n::t!("settings.drivers.global_overrides_hint"))
+                Text::body(dbflux_i18n::t!("settings.drivers.global_overrides_hint"))
                     .color(theme.muted_foreground),
             )
             .child(
@@ -1004,7 +1000,7 @@ impl DriversSection {
                             .items_center()
                             .gap_3()
                             .child(div().w(Widths::SETTINGS_FORM_LABEL))
-                            .child(div().w(px(160.0)).child(FieldLabel::new(dbflux_i18n::t!(
+                            .child(div().w(px(160.0)).child(Text::body(dbflux_i18n::t!(
                                 "settings.general.override_value_header"
                             )))),
                     )
@@ -1096,9 +1092,9 @@ impl DriversSection {
                                     )
                                     .child(self.drv_refresh_policy_dropdown.clone()),
                             )
-                            .child(InterfaceText::caption(override_default_caption(
-                                &policy_label(global.default_refresh_policy),
-                            ))),
+                            .child(Text::caption(override_default_caption(&policy_label(
+                                global.default_refresh_policy,
+                            )))),
                     )
                     .child(
                         div()
@@ -1192,7 +1188,7 @@ impl DriversSection {
                                             .disabled(!self.drv_override_refresh_interval),
                                     ),
                             )
-                            .child(InterfaceText::caption(override_default_seconds_caption(
+                            .child(Text::caption(override_default_seconds_caption(
                                 global.default_refresh_interval_secs,
                             ))),
                     )
@@ -1233,7 +1229,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_confirm_dangerous_dropdown.clone()),
                             )
-                            .child(InterfaceText::caption(override_default_caption(
+                            .child(Text::caption(override_default_caption(
                                 &bool_override_caption(global.confirm_dangerous_queries),
                             ))),
                     )
@@ -1274,7 +1270,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_where_dropdown.clone()),
                             )
-                            .child(InterfaceText::caption(override_default_caption(
+                            .child(Text::caption(override_default_caption(
                                 &bool_override_caption(global.dangerous_requires_where),
                             ))),
                     )
@@ -1315,7 +1311,7 @@ impl DriversSection {
                                     )
                                     .child(self.drv_requires_preview_dropdown.clone()),
                             )
-                            .child(InterfaceText::caption(override_default_caption(
+                            .child(Text::caption(override_default_caption(
                                 &bool_override_caption(global.dangerous_requires_preview),
                             ))),
                     ),
@@ -1332,11 +1328,11 @@ impl DriversSection {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(FieldLabel::new(dbflux_i18n::t!(
+                .child(Text::body(dbflux_i18n::t!(
                     "settings.drivers.field.driver_settings"
                 )))
                 .child(
-                    Body::new(dbflux_i18n::t!("settings.drivers.no_custom_settings"))
+                    Text::body(dbflux_i18n::t!("settings.drivers.no_custom_settings"))
                         .color(cx.theme().muted_foreground),
                 );
         };
@@ -1345,7 +1341,7 @@ impl DriversSection {
             .flex()
             .flex_col()
             .gap_3()
-            .child(FieldLabel::new(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "settings.drivers.field.driver_settings"
             )))
             .children(
@@ -1358,7 +1354,7 @@ impl DriversSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(SubSectionLabel::new(section.title.clone()))
+                            .child(Text::label(section.title.clone()))
                             .children(section.fields.iter().filter_map(|field| {
                                 let enabled = form_renderer::is_field_enabled(
                                     field,
@@ -1457,8 +1453,8 @@ mod tests {
         CAPABILITY_IDS, bool_override_caption, capability_catalog, driver_entry_key_text,
         driver_entry_name_text, policy_label,
     };
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+    use dbflux_components::primitives::{TextColorSelection, TextDefaultColor};
+    use dbflux_components::typography::AppFonts;
     use dbflux_core::{DriverCapabilities, RefreshPolicySetting};
 
     const CHROME_KEYS: &[&str] = &[
@@ -1586,22 +1582,22 @@ mod tests {
         let name = driver_entry_name_text("PostgreSQL").inspect();
         let key = driver_entry_key_text("postgres").inspect();
 
-        assert_eq!(name.family, Some(AppFonts::INTERFACE));
+        assert_eq!(name.family, AppFonts::INTERFACE);
         assert!(name.fallbacks.is_empty());
-        assert_eq!(name.size_override, Some(FontSizes::BASE));
+        assert_eq!(name.size_override, None);
         assert_eq!(name.weight_override, None);
         assert_eq!(
             name.color_selection,
-            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+            TextColorSelection::RoleDefault(TextDefaultColor::Foreground)
         );
         assert!(name.uses_role_default_color);
         assert!(!name.has_custom_color_override);
 
-        assert_eq!(key.family, Some(AppFonts::MONO));
+        assert_eq!(key.family, AppFonts::MONO);
         assert_eq!(key.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(key.size_override, Some(FontSizes::SM));
+        assert_eq!(key.size_override, None);
         assert_eq!(key.weight_override, None);
-        assert_eq!(key.color_selection, MonoColorSelection::MutedForeground);
+        assert_eq!(key.color_selection, TextColorSelection::MutedForeground);
         assert!(key.uses_muted_foreground_override);
         assert!(!key.has_custom_color_override);
     }

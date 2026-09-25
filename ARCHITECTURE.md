@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["Presentation — 6 UI crates"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — no dbflux_app dep)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(tab/pane system, documents,<br/>data_grid_panel, governance)"]
         uisidebar["dbflux_ui_sidebar<br/>(connections + scripts sidebar tree)"]
         uiwindows["dbflux_ui_windows<br/>(connection_manager + settings windows)"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # Icon rendering helpers
       primitives/           # Low-level building blocks (badge, banner, label, button, etc.)
       controls/             # Input controls (button, checkbox, dropdown, input, select, etc.)
-      composites/           # Composed patterns (modal_frame, tab_strip, section_header, etc.)
+      composites/           # Composed patterns (header, tabs, split_button, etc.)
       components/           # Domain components
         data_table/         # Custom virtualized data table
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # Inline JSON editor component
         multi_select.rs     # Multi-select dropdown component
         value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
-      modals/               # Reusable modal components (cell_editor, document_preview, etc.)
+      modals/               # The shared `Modal` and the modals built on it (cell_editor, document_preview, etc.)
       result_panel/         # ResultPanel + ViewHandle universal chrome host
       chart/                # Chart engine (detect, spec, decimate, axis, legend, engine)
       saved_chart.rs        # SavedChart + SavedChartStore type alias
@@ -175,7 +175,6 @@ crates/
       toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
       user_error/           # Centralized user-facing error reporting (UserFacingError,
                             # ErrorKind, report_error, report_error_async) + throttle
-      modal_frame.rs        # Reusable modal chrome/frame
       platform.rs           # X11/Wayland detection, window options
       sql_preview_modal.rs  # SQL/query preview modal (dual-mode: SQL and generic)
       sso_wizard.rs         # SSO account/role discovery wizard [cfg aws]
@@ -334,14 +333,11 @@ crates/
           # Shims at old overlay paths re-export from dbflux_ui_base / dbflux_components:
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # Shim: pub use dbflux_ui_document::*
         icons/mod.rs        # Shim: re-exports AppIcon + embedded_bytes (SVG resources live here)
         theme.rs            # Shim: pub use dbflux_components::theme::*
         tokens.rs           # Shim: pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # Shim: → dbflux_ui_base::modal_frame
           toast.rs          # Shim: → dbflux_ui_base::toast
         windows/mod.rs      # Shim: pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # Shim: pub use dbflux_ui_sidebar::*
@@ -652,8 +648,8 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 - **Document tree**: `crates/dbflux_components/src/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui_document/src/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
-- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting. (Shim at the old overlay path in `dbflux_ui`.)
-- Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor. (Shim at the old overlay path in `dbflux_ui`.)
+- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
+- Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
 
 ### Dashboards & Saved Charts

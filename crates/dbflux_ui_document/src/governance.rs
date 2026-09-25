@@ -1,7 +1,6 @@
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{ChromeColors, Radii};
-use dbflux_components::typography::{MonoCaption, MonoLabel};
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
@@ -95,12 +94,12 @@ impl McpApprovalsView {
         }
     }
 
-    fn pending_tool_text(text: impl Into<SharedString>) -> MonoLabel {
-        MonoLabel::new(text)
+    fn pending_tool_text(text: impl Into<SharedString>) -> Text {
+        Text::code(text)
     }
 
-    fn pending_actor_text(text: impl Into<SharedString>) -> MonoCaption {
-        MonoCaption::new(text)
+    fn pending_actor_text(text: impl Into<SharedString>) -> Text {
+        Text::code(text).muted_foreground()
     }
 
     fn approve_selected(&mut self, cx: &mut Context<Self>) {
@@ -197,7 +196,7 @@ impl Render for McpApprovalsView {
                             .flex_col()
                             .gap_1()
                             .when(self.pending.is_empty(), |root| {
-                                root.child(Text::muted(dbflux_i18n::t!(
+                                root.child(Text::caption(dbflux_i18n::t!(
                                     "document.governance.no_pending"
                                 )))
                             })
@@ -298,7 +297,7 @@ impl Render for McpApprovalsView {
                         )
                     })
                     .when(self.selected_detail.is_none(), |root| {
-                        root.child(Text::muted(dbflux_i18n::t!(
+                        root.child(Text::caption(dbflux_i18n::t!(
                             "document.governance.select_prompt"
                         )))
                     })
@@ -312,8 +311,8 @@ impl Render for McpApprovalsView {
 #[cfg(test)]
 mod tests {
     use super::McpApprovalsView;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+    use dbflux_components::primitives::{TextColorSelection, TextDefaultColor};
+    use dbflux_components::typography::AppFonts;
     use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
 
     #[test]
@@ -365,22 +364,22 @@ mod tests {
         let tool = McpApprovalsView::pending_tool_text("request_execution").inspect();
         let actor = McpApprovalsView::pending_actor_text("actor: agent-a").inspect();
 
-        assert_eq!(tool.family, Some(AppFonts::MONO));
+        assert_eq!(tool.family, AppFonts::MONO);
         assert_eq!(tool.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(tool.size_override, Some(FontSizes::BASE));
+        assert_eq!(tool.size_override, None);
         assert_eq!(tool.weight_override, None);
         assert_eq!(
             tool.color_selection,
-            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+            TextColorSelection::RoleDefault(TextDefaultColor::Foreground)
         );
         assert!(tool.uses_role_default_color);
         assert!(!tool.uses_muted_foreground_override);
 
-        assert_eq!(actor.family, Some(AppFonts::MONO));
+        assert_eq!(actor.family, AppFonts::MONO);
         assert_eq!(actor.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(actor.size_override, Some(FontSizes::XS));
+        assert_eq!(actor.size_override, None);
         assert_eq!(actor.weight_override, None);
-        assert_eq!(actor.color_selection, MonoColorSelection::MutedForeground);
+        assert_eq!(actor.color_selection, TextColorSelection::MutedForeground);
         assert!(actor.uses_muted_foreground_override);
         assert!(!actor.has_custom_color_override);
     }

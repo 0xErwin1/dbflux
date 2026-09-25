@@ -16,6 +16,7 @@
 pub mod phases;
 mod run;
 
+use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -28,12 +29,12 @@ use dbflux_components::controls::{
     InputState,
 };
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{Connection, TableRef};
 use dbflux_transfer::FileFormat;
 use dbflux_ui_base::app_state_entity::AppStateEntity;
-use dbflux_ui_base::modal_frame::ModalFrame;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -367,15 +368,17 @@ impl Render for ExportWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let frame = ModalFrame::new("export-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.export_wizard.title"))
+        let frame = Modal::new(dbflux_i18n::t!("document.export_wizard.title"))
+            .id("export-wizard")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::ArrowUp)
             .width(WIZARD_MODAL_WIDTH)
             .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
-            .center_vertically()
             .child(self.render_body(cx));
 
-        frame.render(cx).into_any_element()
+        frame.into_any_element()
     }
 }
 
@@ -436,7 +439,7 @@ impl ExportWizard {
             .flex_col()
             .gap(Spacing::MD)
             .size_full()
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.export_wizard.tables.selected_count",
                 count = self.tables.len()
             )))
@@ -469,7 +472,7 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.export_wizard.format_options.format_label"
                     )))
                     .child(self.format_dropdown.clone()),
@@ -479,7 +482,7 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.export_wizard.format_options.output_folder_label"
                     )))
                     .child(Text::caption(folder_label))
@@ -507,7 +510,7 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.export_wizard.format_options.segment_size_label"
                     )))
                     .child(
@@ -538,7 +541,7 @@ impl ExportWizard {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.export_wizard.confirm.title"
             )))
             .child(Text::caption(dbflux_i18n::t!(
@@ -590,7 +593,7 @@ impl ExportWizard {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.export_wizard.running.title"
             )))
             .child(Text::caption(format!("{position_label}: {current_table}")))

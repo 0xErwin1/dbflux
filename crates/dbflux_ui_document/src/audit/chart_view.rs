@@ -263,7 +263,7 @@ impl AuditDocument {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Text::muted(msg))
+                .child(Text::caption(msg))
                 .into_any_element()
         }
     }

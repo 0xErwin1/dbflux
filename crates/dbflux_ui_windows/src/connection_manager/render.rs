@@ -5,11 +5,11 @@ use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, Icon as AppIconElement, Label, Text, focus_frame,
+    BannerBlock, BannerVariant, FocusShape, Icon as AppIconElement, Label, Text, focus_ring,
 };
 use dbflux_components::semantic::BannerColors as SemBannerColors;
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_components::typography::{Body, Headline, SubSectionLabel};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
@@ -72,7 +72,13 @@ impl ConnectionManagerWindow {
         child: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        focus_frame(focused, Some(ring_color), child, cx)
+        focus_ring(
+            focused,
+            FocusShape::Chamfer(ChamferCut::CONTROL),
+            Some(ring_color),
+            child,
+            cx,
+        )
     }
 
     pub(super) fn render_control_focus_shell(
@@ -82,7 +88,13 @@ impl ConnectionManagerWindow {
         child: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        focus_frame(focused, Some(ring_color), child, cx)
+        focus_ring(
+            focused,
+            FocusShape::Chamfer(ChamferCut::CONTROL),
+            Some(ring_color),
+            child,
+            cx,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -211,7 +223,7 @@ impl ConnectionManagerWindow {
                                             cx.notify();
                                         })),
                                 )
-                                .child(Body::new(dbflux_i18n::t!(
+                                .child(Text::body(dbflux_i18n::t!(
                                     "connection_manager.action.save"
                                 ))),
                         )
@@ -253,7 +265,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(SubSectionLabel::new(title))
+            .child(Text::label(title))
             .child(content)
     }
 
@@ -340,7 +352,7 @@ impl ConnectionManagerWindow {
                                         .color(theme.foreground),
                                 )
                             })
-                            .child(Headline::new(title).xl())
+                            .child(Text::heading(title))
                     })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
@@ -991,7 +1003,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(SubSectionLabel::new(section.title.clone()))
+                    .child(Text::label(section.title.clone()))
                     .children(field_elements)
                     .into_any_element(),
             );

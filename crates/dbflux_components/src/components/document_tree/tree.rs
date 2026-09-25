@@ -619,7 +619,7 @@ fn render_tree_row(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(Text::label_sm(node.key.to_string()).color(key_color))
+                .child(Text::body_sm(node.key.to_string()).color(key_color))
                 .child(
                     Text::caption(":")
                         .font_size(FontSizes::XS)

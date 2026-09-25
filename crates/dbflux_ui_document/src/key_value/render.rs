@@ -484,7 +484,7 @@ impl Render for super::KeyValueDocument {
                             .justify_center()
                             .border_l_1()
                             .border_color(theme.border)
-                            .child(Text::muted(dbflux_i18n::t!("document.data.grid.empty"))),
+                            .child(Text::caption(dbflux_i18n::t!("document.data.grid.empty"))),
                     );
                 }
             } else if is_structured {
@@ -779,10 +779,10 @@ impl Render for super::KeyValueDocument {
                                 .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                 .color(theme.muted_foreground),
                         )
-                        .child(Text::muted(dbflux_i18n::t!("document.data.grid.loading")))
+                        .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
                         .into_any_element()
                 } else {
-                    Text::muted(dbflux_i18n::t!(
+                    Text::caption(dbflux_i18n::t!(
                         "document.key_value.render.select_key_prompt"
                     ))
                     .into_any_element()

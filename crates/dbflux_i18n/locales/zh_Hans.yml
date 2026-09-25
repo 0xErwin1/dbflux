@@ -2292,6 +2292,7 @@ document:
       close_left: 关闭左侧
       close_others: 关闭其他
       close_right: 关闭右侧
+    new: 新建标签页
     unsaved_changes: 未保存的更改
 document_tree:
   search_placeholder: 搜索…

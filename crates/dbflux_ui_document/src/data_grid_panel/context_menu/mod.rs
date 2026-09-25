@@ -7,8 +7,10 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
 use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
@@ -1329,11 +1331,9 @@ impl DataGridPanel {
 
     pub(super) fn render_delete_confirm_modal(
         &self,
-        theme: &gpui_component::theme::Theme,
+        _theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let btn_hover = theme.muted;
-
         let count = self
             .pending_delete_confirm
             .as_ref()
@@ -1342,93 +1342,38 @@ impl DataGridPanel {
 
         let (title, description) = crate::labels::delete_confirm_copy(count);
 
-        // Backdrop with centered modal
-        div()
-            .id("delete-modal-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(300.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .medium()
-                                    .color(theme.warning),
-                            )
-                            .child(Text::heading(title)),
-                    )
-                    .child(Text::muted(description))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("delete-cancel-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(btn_hover))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.cancel_delete(window, cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
-                                    )
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.data.context_menu.delete_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("delete-confirm-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm_delete(window, cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete).small().color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.data.context_menu.delete_confirm.delete"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "delete-cancel-btn",
+                    dbflux_i18n::t!("document.data.context_menu.delete_confirm.cancel"),
+                )
+                .icon(AppIcon::X)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_delete(window, cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "delete-confirm-btn",
+                    dbflux_i18n::t!("document.data.context_menu.delete_confirm.delete"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.confirm_delete(window, cx);
+                })),
+            );
+
+        Modal::new(title)
+            .id("delete-modal-overlay")
+            .danger()
+            .icon(AppIcon::TriangleAlert)
+            .width(px(420.0))
+            .body(Text::body(description))
+            .footer(footer)
     }
 
     pub(super) fn render_context_menu(

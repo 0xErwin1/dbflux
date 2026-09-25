@@ -348,7 +348,7 @@ impl Render for TasksPanel {
                         .items_center()
                         .justify_center()
                         .py_4()
-                        .child(Text::muted(dbflux_i18n::t!("tasks_panel.empty"))),
+                        .child(Text::caption(dbflux_i18n::t!("tasks_panel.empty"))),
                 )
             })
             .children(task_rows)

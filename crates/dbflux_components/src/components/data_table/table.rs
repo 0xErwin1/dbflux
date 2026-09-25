@@ -831,7 +831,7 @@ impl DataTable {
                             // It pushes the (secondary) type label out of the cell
                             // before its own characters get truncated.
                             .child(div().flex_shrink_0().whitespace_nowrap().child(
-                                Text::label_sm(col_spec.title.clone()).color(if is_sorted {
+                                Text::body_sm(col_spec.title.clone()).color(if is_sorted {
                                     ChromeColors::tint(theme)
                                 } else {
                                     theme.foreground

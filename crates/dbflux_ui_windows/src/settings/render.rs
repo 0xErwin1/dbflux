@@ -1,10 +1,10 @@
 use dbflux_components::components::tree_nav::{self, FlatRow};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
+use dbflux_components::primitives::Text;
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
@@ -19,16 +19,8 @@ use super::{
 const INDENT_PX: f32 = 16.0;
 
 impl SettingsCoordinator {
-    fn settings_nav_row_label(
-        label: SharedString,
-        is_active: bool,
-        text_color: Hsla,
-    ) -> AnyElement {
-        if is_active {
-            FieldLabel::new(label).color(text_color).into_any_element()
-        } else {
-            Body::new(label).color(text_color).into_any_element()
-        }
+    fn settings_nav_row_label(label: SharedString, text_color: Hsla) -> AnyElement {
+        Text::body(label).color(text_color).into_any_element()
     }
 
     fn section_display_name(section: super::SettingsSectionId) -> String {
@@ -134,7 +126,7 @@ impl SettingsCoordinator {
                 let _ = this.sidebar_tree.activate();
                 cx.notify();
             }))
-            .child(SidebarGroupLabel::new(row.label.clone()))
+            .child(Text::label(row.label.clone()))
             .into_any_element()
     }
 
@@ -174,11 +166,7 @@ impl SettingsCoordinator {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .child(Self::settings_nav_row_label(
-                        row.label.clone(),
-                        show_active,
-                        text_color,
-                    )),
+                    .child(Self::settings_nav_row_label(row.label.clone(), text_color)),
             );
 
         div()
@@ -304,7 +292,7 @@ impl Render for SettingsCoordinator {
                             });
                             true
                         })
-                        .child(Body::new(crate::labels::settings_discard_body(
+                        .child(Text::body(crate::labels::settings_discard_body(
                             &section_name,
                         ))),
                 )

@@ -13,7 +13,7 @@ use crate::handle::DocumentEvent;
 use dbflux_components::chart::YScale;
 use dbflux_components::controls::{GpuiInput as Input, InputState, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
+use dbflux_components::primitives::{Icon, Label, SurfaceRole, Text, surface};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
@@ -243,7 +243,7 @@ impl AuditDocument {
         let position = menu.position;
 
         let element = deferred(
-            surface_raised(cx)
+            surface(SurfaceRole::Raised, cx)
                 .absolute()
                 .top(position.y)
                 .left(position.x)
@@ -551,7 +551,7 @@ impl AuditDocument {
                 .flex_1()
                 .items_center()
                 .justify_center()
-                .child(Text::muted(self.source_loading_label()))
+                .child(Text::caption(self.source_loading_label()))
                 .into_any_element();
         }
 
@@ -567,7 +567,9 @@ impl AuditDocument {
                 .justify_center()
                 .gap_3()
                 .child(Text::heading(self.source_error_heading()).danger())
-                .child(Text::muted(self.status_message.clone().unwrap_or_default()))
+                .child(Text::caption(
+                    self.status_message.clone().unwrap_or_default(),
+                ))
                 .child(
                     gpui_component::button::Button::new("audit-retry")
                         .label(dbflux_i18n::t!("document.audit.filter.retry"))
@@ -586,7 +588,7 @@ impl AuditDocument {
                 .items_center()
                 .justify_center()
                 .gap_3()
-                .child(Text::muted(self.source_empty_label()))
+                .child(Text::caption(self.source_empty_label()))
                 .into_any_element();
         }
 
@@ -707,7 +709,7 @@ impl AuditDocument {
                                     .child(
                                         div()
                                             .truncate()
-                                            .child(Text::label_sm(value).font_size(FontSizes::XS)),
+                                            .child(Text::body_sm(value).font_size(FontSizes::XS)),
                                     ),
                             )
                         })
@@ -722,7 +724,7 @@ impl AuditDocument {
                                 .bg(Self::level_bg_color(Some(l), &banners, &theme))
                                 .flex_shrink_0()
                                 .child(
-                                    Text::label_sm(Self::short_level_label(l))
+                                    Text::body_sm(Self::short_level_label(l))
                                         .font_size(FontSizes::XS)
                                         .color(Self::level_color(Some(l), &banners, &theme)),
                                 )
@@ -744,7 +746,7 @@ impl AuditDocument {
                             .bg(neutral_bg)
                             .flex_shrink_0()
                             .child(
-                                Text::label_sm(category)
+                                Text::body_sm(category)
                                     .font_size(FontSizes::XS)
                                     .color(theme.muted_foreground),
                             );
@@ -1170,7 +1172,7 @@ impl AuditDocument {
 
         // Identical to DataGridPanel::render_export_menu container.
         deferred(
-            surface_raised(cx)
+            surface(SurfaceRole::Raised, cx)
                 .absolute()
                 .bottom_full()
                 .right_0()
@@ -1307,7 +1309,9 @@ impl AuditDocument {
                                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
-                            .child(Text::dim(dbflux_i18n::t!("document.audit.filter.loading"))),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.audit.filter.loading"
+                            ))),
                     )
                 },
             );

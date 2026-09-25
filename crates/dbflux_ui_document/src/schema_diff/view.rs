@@ -2091,7 +2091,7 @@ impl SchemaDiffDocument {
             .border_b_1()
             .border_color(border)
             .child(
-                Text::label_sm(dbflux_i18n::t!("document.schema_diff.view.compare_against"))
+                Text::body_sm(dbflux_i18n::t!("document.schema_diff.view.compare_against"))
                     .muted_foreground(),
             )
             .child(mode_toggle)
@@ -2204,7 +2204,7 @@ impl SchemaDiffDocument {
 
         if !database_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm(dbflux_i18n::t!(
+                Text::body_sm(dbflux_i18n::t!(
                     "document.schema_diff.view.source.database_section"
                 ))
                 .muted_foreground()
@@ -2238,7 +2238,7 @@ impl SchemaDiffDocument {
 
         if !connection_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm(dbflux_i18n::t!(
+                Text::body_sm(dbflux_i18n::t!(
                     "document.schema_diff.view.source.connection_section"
                 ))
                 .muted_foreground()

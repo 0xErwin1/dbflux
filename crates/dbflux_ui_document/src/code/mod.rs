@@ -15,10 +15,10 @@ use dbflux_components::controls::{
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::modals::schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
-use dbflux_components::modals::shell::ModalFocus;
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;

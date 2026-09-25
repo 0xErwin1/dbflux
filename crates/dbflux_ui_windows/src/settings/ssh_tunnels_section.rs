@@ -10,10 +10,11 @@ use crate::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::focus_frame;
+use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{FocusShape, focus_ring};
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{Body, InterfaceText, MonoMeta, PanelTitle};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
@@ -375,8 +376,9 @@ impl SshTunnelsSection {
             .gap_1()
             .child(Label::new(label.to_string()))
             .child(
-                focus_frame(
+                focus_ring(
                     is_focused,
+                    FocusShape::Chamfer(ChamferCut::CONTROL),
                     Some(tint),
                     layout::compact_input_shell(
                         Input::new(input).small().when(is_secret, |input| {
@@ -584,7 +586,7 @@ impl SshTunnelsSection {
                     }),
             )
             .child(
-                Body::new(dbflux_i18n::t!("ssh.private_key_hint"))
+                Text::body(dbflux_i18n::t!("ssh.private_key_hint"))
                     .color(cx.theme().muted_foreground),
             )
             .child(
@@ -611,7 +613,7 @@ impl SshTunnelsSection {
                     .when_some(save_checkbox, |div, checkbox| div.child(checkbox)),
             )
             .child(
-                Body::new(dbflux_i18n::t!("ssh.passphrase_hint"))
+                Text::body(dbflux_i18n::t!("ssh.passphrase_hint"))
                     .color(cx.theme().muted_foreground),
             )
     }
@@ -739,7 +741,7 @@ impl SshTunnelsSection {
                     .when(tunnels.is_empty(), |root: Div| {
                         root.child(
                             div().p_4().child(
-                                Body::new(dbflux_i18n::t!("settings.ssh_tunnels.empty"))
+                                Text::body(dbflux_i18n::t!("settings.ssh_tunnels.empty"))
                                     .color(theme.muted_foreground),
                             ),
                         )
@@ -801,9 +803,9 @@ impl SshTunnelsSection {
                                             .flex_col()
                                             .min_w_0()
                                             .gap_1()
-                                            .child(Body::new(tunnel.name.clone()))
-                                            .child(MonoMeta::new(subtitle))
-                                            .child(InterfaceText::caption(auth_label)),
+                                            .child(Text::body(tunnel.name.clone()))
+                                            .child(Text::code(subtitle).muted_foreground())
+                                            .child(Text::caption(auth_label)),
                                     ),
                             )
                     })),
@@ -814,17 +816,17 @@ impl SshTunnelsSection {
         match self.ssh_test_status {
             SshTestStatus::None => None,
             SshTestStatus::Testing => Some(
-                Body::new(dbflux_i18n::t!("access.testing_ssh"))
+                Text::body(dbflux_i18n::t!("access.testing_ssh"))
                     .color(_cx.theme().muted_foreground)
                     .into_any_element(),
             ),
             SshTestStatus::Success => Some(
-                Body::new(dbflux_i18n::t!("access.ssh_success"))
+                Text::body(dbflux_i18n::t!("access.ssh_success"))
                     .color(_cx.theme().success)
                     .into_any_element(),
             ),
             SshTestStatus::Failed => Some(
-                Body::new(
+                Text::body(
                     self.ssh_test_error
                         .clone()
                         .unwrap_or_else(|| dbflux_i18n::t!("access.ssh_failed")),
@@ -848,7 +850,7 @@ impl SshTunnelsSection {
         let field = self.ssh_form_field;
 
         layout::sticky_form_shell(
-            PanelTitle::new(layout::editor_panel_title(
+            Text::heading(layout::editor_panel_title(
                 &dbflux_i18n::t!("access.ssh_tunnel_label"),
                 editing_id.is_some(),
             )),
@@ -1071,7 +1073,7 @@ impl Render for SshTunnelsSection {
             .unwrap_or_default();
 
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.ssh_tunnels.section_title"),
                 dbflux_i18n::t!("settings.ssh_tunnels.section_description"),
                 cx,

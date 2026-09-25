@@ -32,7 +32,9 @@ use super::configure_popover;
 use super::{DASHBOARD_GRID_COLUMNS, DASHBOARD_ROW_PX, DashboardDocument, DashboardPanelSlot};
 use dbflux_components::composites::render_menu_overlay;
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Text, surface_card};
+use dbflux_components::primitives::{Chamfer, FocusShape};
+use dbflux_components::primitives::{SurfaceRole, Text, surface};
+use dbflux_components::tokens::ChamferCut;
 use gpui::prelude::*;
 use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
@@ -226,7 +228,8 @@ impl Render for DashboardDocument {
                 let card_focus_decoration =
                     move |card: gpui::Stateful<gpui::Div>| -> gpui::Stateful<gpui::Div> {
                         if is_focused {
-                            card.border_2().border_color(ring_color)
+                            let shape = FocusShape::Chamfer(ChamferCut::CARD);
+                            card.child(Chamfer::new(ChamferCut::CARD).ring(shape.ring(ring_color)))
                         } else {
                             card
                         }
@@ -251,7 +254,7 @@ impl Render for DashboardDocument {
 
                 let panel_card = match slot {
                     DashboardPanelSlot::Loaded { panel, .. } => card_focus_decoration(
-                        surface_card(cx)
+                        surface(SurfaceRole::Card, cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .overflow_hidden()
@@ -267,7 +270,7 @@ impl Render for DashboardDocument {
                     )
                     .into_any_element(),
                     DashboardPanelSlot::Orphan { .. } => card_focus_decoration(
-                        surface_card(cx)
+                        surface(SurfaceRole::Card, cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .relative()
@@ -311,7 +314,7 @@ impl Render for DashboardDocument {
                             .into_any_element()
                     }
                     DashboardPanelSlot::Inspector { entity, .. } => card_focus_decoration(
-                        surface_card(cx)
+                        surface(SurfaceRole::Card, cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .overflow_hidden()

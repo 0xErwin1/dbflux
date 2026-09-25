@@ -20,6 +20,7 @@ pub mod phases;
 pub mod source_target;
 pub mod tree_model;
 
+use dbflux_core::keymap_types::ContextId;
 use std::sync::Arc;
 
 use dbflux_components::composites::{
@@ -27,6 +28,7 @@ use dbflux_components::composites::{
 };
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
@@ -36,7 +38,6 @@ use dbflux_core::{
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::migration::{MigratedTable, MigrationOptions, MigrationTablePlan};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
-use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -1325,15 +1326,17 @@ impl Render for MigrateWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.migrate_wizard.title"))
+        let frame = Modal::new(dbflux_i18n::t!("document.migrate_wizard.title"))
+            .id("migrate-wizard")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::ArrowUpDown)
             .width(WIZARD_MODAL_WIDTH)
             .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
-            .center_vertically()
             .child(self.render_body(cx));
 
-        frame.render(cx).into_any_element()
+        frame.into_any_element()
     }
 }
 

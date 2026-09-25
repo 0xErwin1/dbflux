@@ -1,10 +1,8 @@
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{
-    Body, InterfaceText, MonoCaption, MonoLabel, MonoMeta, PanelTitle,
-};
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -812,7 +810,7 @@ impl ServicesSection {
         let editing_idx = self.editing_svc_idx;
 
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 services_section_title(),
                 services_section_description(),
                 cx,
@@ -880,7 +878,7 @@ impl ServicesSection {
                     .gap_1()
                     .when(services.is_empty(), |container| {
                         container.child(div().p_4().child(
-                            Body::new(empty_services_message()).color(theme.muted_foreground),
+                            Text::body(empty_services_message()).color(theme.muted_foreground),
                         ))
                     })
                     .children(services.iter().enumerate().map(|(idx, service)| {
@@ -939,11 +937,11 @@ impl ServicesSection {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(if is_disabled {
-                                                        MonoLabel::new(service.socket_id.clone())
+                                                        Text::code(service.socket_id.clone())
                                                             .color(theme.muted_foreground)
                                                             .into_any_element()
                                                     } else {
-                                                        MonoLabel::new(service.socket_id.clone())
+                                                        Text::code(service.socket_id.clone())
                                                             .into_any_element()
                                                     })
                                                     .when(is_disabled, |container| {
@@ -952,7 +950,7 @@ impl ServicesSection {
                                                                 .px_1()
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
-                                                                .child(InterfaceText::caption(
+                                                                .child(Text::caption(
                                                                     dbflux_i18n::t!(
                                                                         "settings.rpc_services.field.disabled"
                                                                     ),
@@ -960,7 +958,7 @@ impl ServicesSection {
                                                         )
                                                     }),
                                             )
-                                            .child(MonoMeta::new(subtitle)),
+                                            .child(Text::code(subtitle).muted_foreground()),
                                     ),
                             )
                     })),
@@ -985,7 +983,7 @@ impl ServicesSection {
         };
 
         layout::sticky_form_shell(
-            PanelTitle::new(title),
+            Text::heading(title),
             div()
                 .flex()
                 .flex_col()
@@ -1145,7 +1143,7 @@ impl ServicesSection {
                         cx.notify();
                     })),
             )
-            .child(Body::new(enable_label))
+            .child(Text::body(enable_label))
     }
 
     fn render_radio_button(selected: bool, tint: Hsla, border: Hsla) -> Div {
@@ -1420,7 +1418,7 @@ impl ServicesSection {
                                     )
                                     .child(Input::new(key_input).small()),
                             )
-                            .child(MonoCaption::new("="))
+                            .child(Text::code("=").muted_foreground())
                             .child(
                                 div()
                                     .flex_1()

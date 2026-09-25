@@ -377,7 +377,7 @@ impl Palette {
             alternating_row_wash: rgb_to_hsla_alpha(0xFFFFFF, 0.012),
             selected_row_wash: rgb_to_hsla_alpha(0xD48CC8, 0.07),
             selected_item_wash: rgb_to_hsla_alpha(0xD48CC8, 0.12),
-            overlay: rgb_to_hsla_alpha(0x000000, 0.60),
+            overlay: rgb_to_hsla_alpha(0x050507, 0.62),
             progress: tint,
 
             syntax: SyntaxColors::dark(),
@@ -419,7 +419,7 @@ impl Palette {
             alternating_row_wash: rgb_to_hsla_alpha(0x141118, 0.015),
             selected_row_wash: rgb_to_hsla_alpha(0x702963, 0.07),
             selected_item_wash: rgb_to_hsla_alpha(0x702963, 0.14),
-            overlay: rgb_to_hsla_alpha(0x141118, 0.35),
+            overlay: rgb_to_hsla_alpha(0x1E1423, 0.28),
             progress: byzantine,
 
             syntax: SyntaxColors::light(),

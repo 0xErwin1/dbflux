@@ -9,7 +9,8 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
-use crate::primitives::{Badge, BadgeTone, Icon, Text, focus_frame};
+use crate::controls::Button;
+use crate::primitives::{Badge, BadgeTone, FocusShape, Text, focus_ring};
 use crate::tokens::{ChromeColors, Radii, Spacing, Widths};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,8 +90,6 @@ struct RowColors {
 fn render_action_button(
     kind: MasterDetailActionKind,
     action: MasterDetailAction,
-    colors: &RowColors,
-    cx: &App,
     on_action: impl Fn(MasterDetailActionKind, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let element_id = match kind {
@@ -98,34 +97,13 @@ fn render_action_button(
         MasterDetailActionKind::Secondary => "master-detail-list-secondary-action",
     };
 
-    div()
-        .id(element_id)
-        .rounded(Radii::SM)
-        .child(focus_frame(
-            action.focused,
-            None,
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(Spacing::XS)
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .rounded(Radii::SM)
-                .when(action.enabled, |el| {
-                    el.cursor_pointer().hover({
-                        let secondary = colors.secondary;
-                        move |style| style.bg(secondary)
-                    })
-                })
-                .when(!action.enabled, |el| el.opacity(0.5))
-                .child(Icon::new(crate::icons::AppIcon::Plus).size(px(14.0)))
-                .child(Text::body(action.label)),
-            cx,
-        ))
-        .when(action.enabled, |el| {
-            el.on_click(move |_event, window, cx| on_action(kind, window, cx))
-        })
+    Button::new(element_id, action.label)
+        .ghost()
+        .small()
+        .icon(crate::icons::AppIcon::Plus)
+        .focused(action.focused)
+        .disabled(!action.enabled)
+        .on_click(move |_event, window, cx| on_action(kind, window, cx))
 }
 
 fn render_row<S>(
@@ -178,7 +156,7 @@ where
                 }),
         );
 
-    focus_frame(ring_color.is_some(), ring_color, row, cx).rounded(Radii::SM)
+    focus_ring(ring_color.is_some(), FocusShape::Rect, ring_color, row, cx)
 }
 
 pub fn render_master_detail_list<S, A>(
@@ -216,8 +194,6 @@ where
                     el.child(render_action_button(
                         MasterDetailActionKind::New,
                         action,
-                        &colors,
-                        cx,
                         move |kind, window, cx| on_action(kind, window, cx),
                     ))
                 })
@@ -226,8 +202,6 @@ where
                     el.child(render_action_button(
                         MasterDetailActionKind::Secondary,
                         action,
-                        &colors,
-                        cx,
                         move |kind, window, cx| on_action(kind, window, cx),
                     ))
                 }),

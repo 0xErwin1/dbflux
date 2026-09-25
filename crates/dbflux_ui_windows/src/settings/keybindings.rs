@@ -1,9 +1,9 @@
 use dbflux_app::keymap::{ContextId, KeyChord};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::Text;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon as FluxIcon, Kbd};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_components::typography::{Body, FieldLabel, InterfaceText};
 use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
 use gpui::prelude::*;
 use gpui::*;
@@ -143,7 +143,7 @@ impl KeybindingsSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.keybindings.title"),
                 dbflux_i18n::t!("settings.keybindings.subtitle"),
                 cx,
@@ -246,11 +246,11 @@ impl KeybindingsSection {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .child(FieldLabel::new(
+                                            .child(Text::body(
                                                 crate::labels::keybinding_context_name(&context),
                                             ))
                                             .child(
-                                                Body::new(
+                                                Text::body(
                                                     crate::labels::keybindings_binding_count(
                                                         binding_count,
                                                     ),
@@ -260,7 +260,7 @@ impl KeybindingsSection {
                                     )
                                     // Inherits info
                                     .when(has_parent, |d| {
-                                        d.child(InterfaceText::caption(
+                                        d.child(Text::caption(
                                             crate::labels::keybindings_inherits_from(&parent_name),
                                         ))
                                     })
@@ -352,9 +352,9 @@ impl KeybindingsSection {
                     .child(Kbd::chord(chord_display_parts(chord))),
             )
             .child(div().flex_1().child(if is_inherited {
-                Body::new(cmd_name.to_string()).color(muted_foreground)
+                Text::body(cmd_name.to_string()).color(muted_foreground)
             } else {
-                Body::new(cmd_name.to_string())
+                Text::body(cmd_name.to_string())
             }))
             .when(is_inherited, |d| {
                 d.child(
@@ -363,7 +363,7 @@ impl KeybindingsSection {
                         .py(px(2.0))
                         .rounded(Radii::SM)
                         .bg(secondary)
-                        .child(InterfaceText::caption(inherited_label.to_string())),
+                        .child(Text::caption(inherited_label.to_string())),
                 )
             })
     }

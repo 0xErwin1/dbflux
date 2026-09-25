@@ -9,7 +9,6 @@ use dbflux_components::controls::{
 };
 use dbflux_components::primitives::{Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChromeColors, Radii};
-use dbflux_components::typography::{FieldLabel, SubSectionLabel};
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use dbflux_ui_base::AppStateEntity;
@@ -572,8 +571,6 @@ impl AuditSection {
     pub(super) fn render_audit_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let tint = ChromeColors::tint(theme);
-        let border = theme.border;
-        let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
         let cursor = self.audit_form_cursor;
         let rows = audit_form_rows();
@@ -587,7 +584,7 @@ impl AuditSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.audit.section_title"),
                 dbflux_i18n::t!("settings.audit.section_description"),
                 cx,
@@ -603,14 +600,12 @@ impl AuditSection {
                     .gap_5()
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.status"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_status_indicator(cx))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.enable_disable"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_checkbox(
                         "audit-enabled",
@@ -623,8 +618,7 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.capture_settings"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_unsupported_checkbox(
                         "capture-user-actions",
@@ -658,8 +652,7 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.privacy"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_checkbox(
                         "redact-sensitive",
@@ -672,8 +665,7 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.retention"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_input_field(
                         &dbflux_i18n::t!("settings.audit.field.retention_days"),
@@ -693,8 +685,7 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.purge"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_checkbox(
                         "purge-on-startup",
@@ -715,8 +706,7 @@ impl AuditSection {
                     ))
                     .child(self.render_audit_group_header(
                         dbflux_i18n::t!("settings.audit.group.log_capture"),
-                        border,
-                        muted_fg,
+                        cx,
                     ))
                     .child(self.render_audit_dropdown(
                         &dbflux_i18n::t!("settings.audit.field.min_log_level"),
@@ -827,22 +817,16 @@ impl AuditSection {
                     cx.notify();
                 }),
             )
-            .child(FieldLabel::new(label.to_string()))
+            .child(Text::body(label.to_string()))
             .child(div().min_w(px(120.0)).child(dropdown.clone()))
     }
 
     fn render_audit_group_header(
         &self,
         label: impl Into<SharedString>,
-        border: Hsla,
-        _muted_fg: Hsla,
+        cx: &App,
     ) -> impl IntoElement {
-        div()
-            .pt_2()
-            .pb_1()
-            .border_b_1()
-            .border_color(border)
-            .child(SubSectionLabel::new(label))
+        dbflux_components::composites::section_header(label, None, cx)
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -963,8 +947,8 @@ impl AuditSection {
                 }),
             )
             .child(Checkbox::new(id).checked(checked).aria_label(label.clone()))
-            .child(Text::muted(label))
-            .child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
+            .child(Text::caption(label))
+            .child(div().italic().child(Text::caption(dbflux_i18n::t!(
                 "settings.audit.field.not_wired"
             ))))
     }
@@ -992,12 +976,12 @@ impl AuditSection {
                     .items_center()
                     .gap_2()
                     .child(if unsupported {
-                        Text::label_sm(label.to_string()).muted_foreground()
+                        Text::body_sm(label.to_string()).muted_foreground()
                     } else {
-                        Text::label_sm(label.to_string())
+                        Text::body_sm(label.to_string())
                     })
                     .when(unsupported, |this| {
-                        this.child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
+                        this.child(div().italic().child(Text::caption(dbflux_i18n::t!(
                             "settings.audit.field.not_wired"
                         ))))
                     }),

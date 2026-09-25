@@ -9,10 +9,11 @@ use crate::labels::proxies_delete_body;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::focus_frame;
+use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{FocusShape, focus_ring};
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{ChromeColors, Heights, Radii};
-use dbflux_components::typography::{Body, InterfaceText, MonoMeta, PanelTitle};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
@@ -277,8 +278,9 @@ impl ProxiesSection {
             .gap_1()
             .child(Label::new(label.to_string()))
             .child(
-                focus_frame(
+                focus_ring(
                     is_focused,
+                    FocusShape::Chamfer(ChamferCut::CONTROL),
                     Some(tint),
                     layout::compact_input_shell(
                         Input::new(input).small().when(is_secret, |input| {
@@ -628,7 +630,7 @@ impl ProxiesSection {
                     .when(proxies.is_empty(), |root: Div| {
                         root.child(
                             div().p_4().child(
-                                Body::new(dbflux_i18n::t!("settings.proxies.empty"))
+                                Text::body(dbflux_i18n::t!("settings.proxies.empty"))
                                     .color(theme.muted_foreground),
                             ),
                         )
@@ -685,7 +687,7 @@ impl ProxiesSection {
                                                     .color(theme.muted_foreground),
                                             )
                                             .when(!proxy.enabled, |root| {
-                                                root.child(InterfaceText::caption(dbflux_i18n::t!(
+                                                root.child(Text::caption(dbflux_i18n::t!(
                                                     "settings.proxies.status.disabled_caption"
                                                 )))
                                             }),
@@ -696,8 +698,8 @@ impl ProxiesSection {
                                             .flex_col()
                                             .min_w_0()
                                             .gap_1()
-                                            .child(Body::new(proxy.name.clone()))
-                                            .child(MonoMeta::new(subtitle)),
+                                            .child(Text::body(proxy.name.clone()))
+                                            .child(Text::code(subtitle).muted_foreground()),
                                     ),
                             )
                     })),
@@ -718,7 +720,7 @@ impl ProxiesSection {
         let field = self.proxy_form_field;
 
         layout::sticky_form_shell(
-            PanelTitle::new(layout::editor_panel_title(
+            Text::heading(layout::editor_panel_title(
                 &dbflux_i18n::t!("settings.proxies.panel_title"),
                 editing_id.is_some(),
             )),
@@ -782,7 +784,7 @@ impl ProxiesSection {
                             cx,
                         ))
                         .child(
-                            Body::new(dbflux_i18n::t!("settings.proxies.hint.no_proxy_list"))
+                            Text::body(dbflux_i18n::t!("settings.proxies.hint.no_proxy_list"))
                                 .color(theme.muted_foreground),
                         ),
                 )
@@ -812,7 +814,7 @@ impl ProxiesSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(enabled_label))
+                        .child(Text::body(enabled_label))
                 }),
             None,
             &theme,
@@ -1082,7 +1084,7 @@ impl Render for ProxiesSection {
             .unwrap_or_default();
 
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.proxies.section_title"),
                 dbflux_i18n::t!("settings.proxies.section_description"),
                 cx,

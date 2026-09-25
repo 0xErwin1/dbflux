@@ -94,6 +94,108 @@ impl ChamferCut {
     pub const MODAL: Pixels = px(18.0);
 }
 
+/// Geometry of `modals::Modal`, taken from the P1Modals board.
+pub struct ModalMetrics;
+
+impl ModalMetrics {
+    /// Header bar height.
+    pub const HEADER_HEIGHT: Pixels = px(46.0);
+    /// Horizontal padding of header, body and footer; also the body padding.
+    pub const PADDING: Pixels = px(18.0);
+    /// Gap between header items and between icon and title.
+    pub const HEADER_GAP: Pixels = px(10.0);
+    /// Gap between body blocks.
+    pub const BODY_GAP: Pixels = px(14.0);
+    /// Vertical padding of the footer.
+    pub const FOOTER_PADDING_Y: Pixels = px(12.0);
+    /// Gap between footer buttons.
+    pub const FOOTER_GAP: Pixels = px(8.0);
+    /// Title size (Archivo 700).
+    pub const TITLE_SIZE: Pixels = px(14.0);
+    /// Leading header icon.
+    pub const ICON: Pixels = px(16.0);
+    /// Close icon at the end of the header.
+    pub const CLOSE_ICON: Pixels = px(13.0);
+    /// Thickness of the danger edge along the top of the header.
+    pub const DANGER_EDGE: Pixels = px(2.0);
+    /// Smallest height of the body area, padding included.
+    pub const BODY_MIN_HEIGHT: Pixels = px(96.0);
+    /// Default width.
+    pub const WIDTH: Pixels = px(480.0);
+}
+
+/// Geometry of the three tab kinds (document, result, inline), taken from the
+/// AppByzTable, AppByzEditor and P1ConnForm boards.
+pub struct TabMetrics;
+
+impl TabMetrics {
+    /// Height of the document tab bar; tabs sit at its bottom.
+    pub const DOCUMENT_BAR_HEIGHT: Pixels = px(42.0);
+    /// Height of one document tab.
+    pub const DOCUMENT_TAB_HEIGHT: Pixels = px(36.0);
+    /// Space above a document tab inside its bar.
+    pub const DOCUMENT_TAB_TOP: Pixels = px(6.0);
+    /// Horizontal padding of a document tab.
+    pub const DOCUMENT_TAB_PADDING_X: Pixels = px(14.0);
+    /// Left padding of the active document tab, which clears its cut.
+    pub const DOCUMENT_TAB_ACTIVE_PADDING_LEFT: Pixels = px(16.0);
+    /// Gap between icon, title and trailing items of a document tab.
+    pub const DOCUMENT_TAB_GAP: Pixels = px(9.0);
+    /// Leading icon of a document tab.
+    pub const ICON: Pixels = px(15.0);
+    /// Close icon and spinner of a document tab.
+    pub const CLOSE_ICON: Pixels = px(13.0);
+    /// Left padding of the document tab bar.
+    pub const DOCUMENT_BAR_PADDING_LEFT: Pixels = px(8.0);
+    /// Gap between neighbouring tabs of a document or result bar.
+    pub const BAR_GAP: Pixels = px(2.0);
+    /// Height of the result tab bar.
+    pub const RESULT_BAR_HEIGHT: Pixels = px(40.0);
+    /// Horizontal padding of the result tab bar.
+    pub const RESULT_BAR_PADDING_X: Pixels = px(10.0);
+    /// Height of one result tab.
+    pub const RESULT_TAB_HEIGHT: Pixels = px(34.0);
+    /// Horizontal padding of a result tab.
+    pub const RESULT_TAB_PADDING_X: Pixels = px(12.0);
+    /// Gap inside a result or inline tab.
+    pub const RESULT_TAB_GAP: Pixels = px(8.0);
+    /// Size of the row count and statement range of a result tab.
+    pub const RESULT_META_SIZE: Pixels = px(11.0);
+    /// Height of one inline tab.
+    pub const INLINE_TAB_HEIGHT: Pixels = px(42.0);
+    /// Horizontal padding of an inline tab.
+    pub const INLINE_TAB_PADDING_X: Pixels = px(14.0);
+    /// Horizontal padding of the inline tab bar.
+    pub const INLINE_BAR_PADDING_X: Pixels = px(12.0);
+    /// Thickness of the byzantine edge that marks the active tab.
+    pub const ACTIVE_EDGE: Pixels = px(2.0);
+}
+
+/// Geometry of the panel and section headers, taken from AppByzTable and
+/// P1SettingsGeneral.
+pub struct HeaderMetrics;
+
+impl HeaderMetrics {
+    /// Panel header height.
+    pub const PANEL_HEIGHT: Pixels = px(40.0);
+    /// Left padding of a panel header.
+    pub const PANEL_PADDING_LEFT: Pixels = px(16.0);
+    /// Right padding of a panel header, which sits next to its actions.
+    pub const PANEL_PADDING_RIGHT: Pixels = px(12.0);
+    /// Gap between the items of a panel header.
+    pub const PANEL_GAP: Pixels = px(8.0);
+    /// Top padding of a settings page head.
+    pub const SECTION_PADDING_TOP: Pixels = px(22.0);
+    /// Bottom padding of a settings page head.
+    pub const SECTION_PADDING_BOTTOM: Pixels = px(8.0);
+    /// Gap between the title and the description of a settings page head.
+    pub const SECTION_GAP: Pixels = px(4.0);
+    /// Top padding of a section label row.
+    pub const LABEL_PADDING_TOP: Pixels = px(18.0);
+    /// Bottom padding and bottom margin of a section label row.
+    pub const LABEL_PADDING_BOTTOM: Pixels = px(6.0);
+}
+
 /// Geometry of `controls::Button` and `composites::SplitButton`, taken from
 /// the DSApp "Buttons" row and the DSStates board.
 pub struct ButtonMetrics;

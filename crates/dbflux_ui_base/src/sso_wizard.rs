@@ -1,15 +1,16 @@
 use crate::app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
-use crate::modal_frame::ModalFrame;
 use crate::platform;
 use dbflux_components::composites::{RailItem, field_row_vertical, render_wizard_rail};
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 #[cfg(feature = "aws")]
 use dbflux_components::tokens::Radii;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::AuthProfile;
+use dbflux_core::keymap_types::ContextId;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 #[cfg(feature = "aws")]
@@ -368,10 +369,15 @@ impl SsoWizard {
             let _ = close_entity.update(cx, |this, cx| this.close(cx));
         };
 
-        let mut frame = ModalFrame::new("sso-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("sso_wizard.title"))
+        let mut frame = Modal::new(dbflux_i18n::t!("sso_wizard.title"))
+            .id("sso-wizard")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Lock)
-            .width(px(680.0));
+            .width(px(680.0))
+            .height(px(600.0))
+            .top_offset(px(80.0));
 
         let body = div()
             .flex()
@@ -671,7 +677,7 @@ impl SsoWizard {
                 ))
                 .child(body),
         );
-        frame.render(cx)
+        frame.into_any_element()
     }
 }
 

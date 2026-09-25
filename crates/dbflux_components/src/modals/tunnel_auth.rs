@@ -1,6 +1,7 @@
 use crate::controls::{Checkbox, Input, InputState};
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::{BannerBlock, BannerVariant, surface_raised};
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{BannerBlock, BannerVariant, SurfaceRole, surface};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
@@ -70,7 +71,7 @@ fn prompt(tunnel_name: &str) -> String {
 
 /// Modal entity for SSH passphrase prompt.
 ///
-/// Uses `ModalShell::Default` (480 px). The parent opens it via
+/// Uses `Modal` (`ModalVariant::Default`) (480 px). The parent opens it via
 /// `pending_tunnel_auth_open: Option<TunnelAuthRequest>` and subscribes to
 /// `TunnelAuthOutcome` events.
 pub struct ModalTunnelAuth {
@@ -212,7 +213,7 @@ impl Render for ModalTunnelAuth {
                     .child(prompt(&tunnel_name)),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -267,28 +268,27 @@ impl Render for ModalTunnelAuth {
                     .on_click(on_connect),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.tunnel_auth.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(480.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(connect_enabled)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.tunnel_auth.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::KeyRound)
+            .variant(ModalVariant::Default)
+            .width(px(480.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(connect_enabled)
+            .into_any_element()
     }
 }
 

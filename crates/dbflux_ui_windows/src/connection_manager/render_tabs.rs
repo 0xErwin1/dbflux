@@ -1,4 +1,5 @@
 use dbflux_components::components::form_renderer;
+use dbflux_components::composites::{inline_tab, inline_tab_bar};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 #[cfg(feature = "mcp")]
@@ -7,8 +8,8 @@ use dbflux_components::primitives::{
     FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem, Text,
 };
 #[cfg(feature = "mcp")]
-use dbflux_components::tokens::{ChromeColors, Spacing};
-use dbflux_components::tokens::{Radii, Widths};
+use dbflux_components::tokens::Spacing;
+use dbflux_components::tokens::{ChromeColors, Radii, Widths};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
@@ -17,23 +18,16 @@ use gpui_component::checkbox::Checkbox;
 #[cfg(feature = "mcp")]
 use gpui_component::scroll::ScrollableElement;
 
-use dbflux_components::typography::SubSectionLabel;
-
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, cm_setting_id};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let border_color = cx.theme().border;
         let active_tab = self.active_tab;
         let show_access_tab = !self.uses_file_form();
 
-        div()
+        inline_tab_bar(cx)
             .id("cm-tab-list")
             .role(Role::TabList)
-            .flex()
-            .items_center()
-            .border_b_1()
-            .border_color(border_color)
             .child(self.render_tab_trigger(
                 "tab-main",
                 dbflux_i18n::t!("connection_manager.tab.main"),
@@ -81,37 +75,20 @@ impl ConnectionManagerWindow {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let color = if is_active {
-            theme.foreground
+            ChromeColors::strong(theme)
         } else {
             theme.muted_foreground
         };
 
-        div()
-            .id(id)
+        inline_tab(id, is_active, cx)
             .role(Role::Tab)
             .aria_selected(is_active)
-            .px_4()
-            .py_2()
-            .cursor_pointer()
-            .border_b_2()
-            .border_color(if is_active {
-                ChromeColors::tint(theme)
-            } else {
-                gpui::transparent_black()
-            })
-            .hover(|d| d.bg(theme.secondary))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.active_tab = tab;
                 cx.notify();
             }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(AppIconElement::new(icon).small().color(color))
-                    .child(Text::caption(label).color(color)),
-            )
+            .child(AppIconElement::new(icon).small().color(color))
+            .child(Text::body(label).color(color))
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -230,7 +207,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(SubSectionLabel::new(dbflux_i18n::t!(
+            .child(Text::label(dbflux_i18n::t!(
                 "connection_manager.section.transport"
             )))
             .child(ssl_row);
@@ -800,7 +777,7 @@ impl ConnectionManagerWindow {
 
         if sections.len() == 1 {
             sections.push(
-                Text::muted(dbflux_i18n::t!(
+                Text::caption(dbflux_i18n::t!(
                     "connection_manager.driver_no_custom_settings"
                 ))
                 .into_any_element(),
@@ -1079,7 +1056,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Text::label(dbflux_i18n::t!(
+                        .child(Text::body(dbflux_i18n::t!(
                             "connection_manager.policy_label"
                         )))
                         .child(Text::caption(dbflux_i18n::t!(

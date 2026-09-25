@@ -2,7 +2,6 @@ use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::ChromeColors;
-use dbflux_components::typography::InterfaceText;
 use gpui::FontWeight;
 
 fn sidebar_tree_label(
@@ -11,7 +10,7 @@ fn sidebar_tree_label(
     is_active: bool,
     is_active_database: bool,
     color: Hsla,
-) -> InterfaceText {
+) -> Text {
     let weight = if (node_kind == SchemaNodeKind::Profile && is_active) || is_active_database {
         FontWeight::SEMIBOLD
     } else if matches!(
@@ -30,7 +29,7 @@ fn sidebar_tree_label(
         FontWeight::NORMAL
     };
 
-    InterfaceText::label(label).font_weight(weight).color(color)
+    Text::body(label).font_weight(weight).color(color)
 }
 
 pub(super) struct TreeRenderParams {
@@ -1276,7 +1275,6 @@ fn resolve_label_color(
 #[cfg(test)]
 mod tests {
     use super::{icon_for_node_kind, sidebar_tree_label};
-    use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use dbflux_core::SchemaNodeKind;
     use gpui::FontWeight;
@@ -1321,9 +1319,9 @@ mod tests {
         .inspect();
 
         for inspection in [leaf, folder, active_profile, active_database] {
-            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert_eq!(inspection.family, AppFonts::INTERFACE);
             assert!(inspection.fallbacks.is_empty());
-            assert_eq!(inspection.size_override, Some(FontSizes::BASE));
+            assert_eq!(inspection.size_override, None);
             assert!(inspection.has_custom_color_override);
         }
 

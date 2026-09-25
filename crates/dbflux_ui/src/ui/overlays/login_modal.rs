@@ -3,10 +3,11 @@ use crate::ui::labels::{
     login_browser_open_failed_message, login_elapsed_message, login_sign_in_prompt,
 };
 use dbflux_components::controls::Button;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Spinner, Text};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::PipelineState;
-use dbflux_ui_base::modal_frame::ModalFrame;
+use dbflux_core::keymap_types::ContextId;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -306,11 +307,15 @@ impl Render for LoginModal {
             entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let mut frame = ModalFrame::new("sso-login-modal", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("login.window_title"))
+        let mut frame = Modal::new(dbflux_i18n::t!("login.window_title"))
+            .id("sso-login-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Lock)
             .width(px(640.0))
-            .max_height(px(500.0));
+            .max_height(px(500.0))
+            .top_offset(px(80.0));
 
         frame = match &self.state {
             LoginModalState::WaitingForBrowser {
@@ -456,7 +461,7 @@ impl Render for LoginModal {
             _ => frame,
         };
 
-        frame.render(cx)
+        frame.into_any_element()
     }
 }
 

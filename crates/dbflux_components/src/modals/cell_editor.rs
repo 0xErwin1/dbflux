@@ -1,9 +1,6 @@
 use crate::components::json_editor_view::{self, JsonEditorView};
-use crate::composites::ModalFrame;
-use crate::icon::IconSource;
 use crate::icons::AppIcon;
-use crate::primitives::Icon;
-use crate::tokens::Heights;
+use crate::modals::Modal;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -170,19 +167,21 @@ impl Render for CellEditorModal {
             );
         }
 
-        ModalFrame::new("cell-editor-modal", &self.focus_handle, close)
-            .key_context(ContextId::CellEditorModal.as_gpui_context())
-            .close_icon(IconSource::Svg(AppIcon::X.path().into()))
-            .header_leading(Icon::new(AppIcon::Pencil).size(Heights::ICON_SM).primary())
-            .title(if is_json {
-                dbflux_i18n::t!("modals.cell_editor.title_json")
-            } else {
-                dbflux_i18n::t!("modals.cell_editor.title_text")
-            })
-            .width(px(900.0))
-            .height(px(600.0))
-            .child(editor.render(cx))
-            .render(cx)
+        Modal::new(if is_json {
+            dbflux_i18n::t!("modals.cell_editor.title_json")
+        } else {
+            dbflux_i18n::t!("modals.cell_editor.title_text")
+        })
+        .id("cell-editor-modal")
+        .focus_handle(&self.focus_handle)
+        .on_close(close)
+        .key_context(ContextId::CellEditorModal.as_gpui_context())
+        .icon(AppIcon::Pencil)
+        .width(px(900.0))
+        .height(px(600.0))
+        .child(editor.render(cx))
+        .top_offset(px(80.0))
+        .into_any_element()
     }
 }
 

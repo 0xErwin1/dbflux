@@ -12,7 +12,6 @@ pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;
 pub mod keymap;
-pub mod modal_frame;
 pub mod modals;
 pub mod object_tree;
 pub mod open_external;

@@ -329,7 +329,7 @@ pub struct Workspace {
     #[cfg(feature = "mcp")]
     mcp_approvals_view: Entity<McpApprovalsView>,
 
-    /// S8 modals — rendered as full-screen overlays via `ModalShell`.
+    /// S8 modals — rendered as full-screen overlays via `Modal`.
     modal_delete_connection: Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
     /// "Active query running" prompt shown before a disconnect or quit that
     /// would abandon a running query.

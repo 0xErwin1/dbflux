@@ -117,7 +117,7 @@ impl ConnectionManagerWindow {
                     )
                     .child(div().text_size(FontSizes::SM).text_color(muted).child("·"))
                     .child(
-                        Text::muted(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
+                        Text::caption(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
                             .font_size(FontSizes::SM),
                     ),
             )
@@ -174,7 +174,7 @@ impl ConnectionManagerWindow {
 
         if visible.is_empty() {
             body = body.child(div().flex().items_center().justify_center().py_8().child(
-                Text::muted(dbflux_i18n::t!(
+                Text::caption(dbflux_i18n::t!(
                     "connection_manager.driver_select.empty_state"
                 )),
             ));
@@ -226,7 +226,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .child(Text::heading(driver.name.clone()).font_size(FontSizes::BASE))
-                    .child(Text::muted(driver.description.clone()).font_size(FontSizes::XS)),
+                    .child(Text::caption(driver.description.clone()).font_size(FontSizes::XS)),
             )
             .when_some(port_hint, |card, hint| {
                 card.child(div().h(px(1.0)).bg(theme.border)).child(
@@ -234,7 +234,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .child(Text::muted(hint).font_size(FontSizes::XS)),
+                        .child(Text::caption(hint).font_size(FontSizes::XS)),
                 )
             })
     }

@@ -692,7 +692,7 @@ impl ObjectBrowserDocument {
             .justify_center()
             .gap(Spacing::SM)
             .child(Icon::new(AppIcon::Folder).size(Heights::ICON_LG).muted())
-            .child(Text::muted(message))
+            .child(Text::caption(message))
             .into_any_element()
     }
 

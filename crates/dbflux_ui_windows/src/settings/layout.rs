@@ -270,7 +270,7 @@ mod tests {
     fn representative_settings_sections_call_the_canonical_section_header_directly() {
         for (file_name, source) in representative_settings_section_sources() {
             assert!(
-                source.contains("dbflux_components::composites::section_header("),
+                source.contains("dbflux_components::composites::page_header("),
                 "{file_name} should call the canonical section_header"
             );
             assert!(

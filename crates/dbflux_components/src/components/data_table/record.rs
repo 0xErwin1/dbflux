@@ -73,7 +73,7 @@ pub(super) fn render_record(
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted(dbflux_i18n::t!(
+            .child(Text::caption(dbflux_i18n::t!(
                 "components.data_table.record.empty"
             )))
             .into_any_element();
@@ -170,7 +170,7 @@ fn render_record_header(visual_ix: usize, row_count: usize, cx: &App) -> AnyElem
                 .px(CELL_PADDING_X)
                 .border_r_1()
                 .border_color(theme.border)
-                .child(Text::label_sm(dbflux_i18n::t!(
+                .child(Text::body_sm(dbflux_i18n::t!(
                     "components.data_table.record.name_header"
                 ))),
         )
@@ -187,7 +187,7 @@ fn render_record_header(visual_ix: usize, row_count: usize, cx: &App) -> AnyElem
                 // The scrollbar floats over the right edge; keep the position
                 // readout clear of it.
                 .pr(SCROLLBAR_WIDTH)
-                .child(Text::label_sm(dbflux_i18n::t!(
+                .child(Text::body_sm(dbflux_i18n::t!(
                     "components.data_table.record.value_header"
                 )))
                 .child(
@@ -298,7 +298,7 @@ fn render_fields(
                     div()
                         .flex_shrink_0()
                         .whitespace_nowrap()
-                        .child(Text::label_sm(name)),
+                        .child(Text::body_sm(name)),
                 )
                 .when(!type_label.is_empty(), |d| {
                     d.child(

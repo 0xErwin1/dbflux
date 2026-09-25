@@ -1,4 +1,4 @@
-use dbflux_components::primitives::{Text, surface_card};
+use dbflux_components::primitives::{SurfaceRole, Text, surface};
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -142,7 +142,7 @@ impl Render for PipelineProgress {
         let current_label = active_stage_label(&self.state);
         let is_waiting_sso = matches!(self.state, PipelineState::WaitingForLogin { .. });
 
-        surface_card(cx)
+        surface(SurfaceRole::Card, cx)
             .flex()
             .flex_col()
             .gap(Spacing::XS)
@@ -159,7 +159,7 @@ impl Render for PipelineProgress {
                             .size(px(14.0))
                             .text_color(ChromeColors::tint(theme)),
                     )
-                    .child(Text::label(format!("Connecting: {}", self.profile_name))),
+                    .child(Text::body(format!("Connecting: {}", self.profile_name))),
             )
             // Completed stages (checkmarks)
             .children(self.completed_stages.iter().map(|stage| {

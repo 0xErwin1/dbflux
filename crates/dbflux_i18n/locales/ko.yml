@@ -2292,6 +2292,7 @@ document:
       close_left: 왼쪽 탭 닫기
       close_others: 다른 탭 닫기
       close_right: 오른쪽 탭 닫기
+    new: 새 탭
     unsaved_changes: 저장되지 않은 변경 사항
 document_tree:
   search_placeholder: 검색...

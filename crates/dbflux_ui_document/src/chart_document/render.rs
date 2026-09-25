@@ -203,7 +203,7 @@ impl Render for ChartDocument {
                             .flex()
                             .flex_col()
                             .gap(Spacing::MD)
-                            .child(Text::label(dbflux_i18n::t!(
+                            .child(Text::body(dbflux_i18n::t!(
                                 "document.chart.toolbar.save_chart"
                             )))
                             .child(Input::new(&input).placeholder(dbflux_i18n::t!(
@@ -312,7 +312,7 @@ impl ChartDocument {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Text::muted(msg))
+                .child(Text::caption(msg))
                 .into_any_element()
         };
 

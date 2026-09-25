@@ -1,4 +1,4 @@
-//! Layout regression tests for modals rendered in `ModalShell`.
+//! Layout regression tests for modals rendered in `Modal`.
 //!
 //! A body that fits in the window must get the height it needs: the footer is
 //! laid out after the body and never covers any of its content. A body taller
@@ -8,11 +8,11 @@ use dbflux_components::modals::active_query::{
     ACTIVE_QUERY_PREVIEW_SELECTOR, QUERY_PREVIEW_MAX_LINES,
 };
 use dbflux_components::modals::delete_connection::DELETE_CONNECTION_NAME_SELECTOR;
-use dbflux_components::modals::shell::{MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR};
+use dbflux_components::modals::modal::{MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR};
 use dbflux_components::modals::{
     ActiveQueryRequest, ActiveQueryTrigger, CloseAction, DeleteConnectionRequest,
-    DirtySummaryEntry, DropTableRequest, ModalActiveQuery, ModalDeleteConnection, ModalDropTable,
-    ModalMutationConfirmHard, ModalShell, ModalUnsavedChanges, MutationConfirmHardRequest,
+    DirtySummaryEntry, DropTableRequest, Modal, ModalActiveQuery, ModalDeleteConnection,
+    ModalDropTable, ModalMutationConfirmHard, ModalUnsavedChanges, MutationConfirmHardRequest,
     UnsavedChangesRequest,
 };
 use dbflux_components::theme;
@@ -83,8 +83,8 @@ fn delete_connection_name_box_is_not_covered_by_the_footer(cx: &mut TestAppConte
         },
         &[
             DELETE_CONNECTION_NAME_SELECTOR,
-            MODAL_SHELL_BODY_SELECTOR,
-            MODAL_SHELL_FOOTER_SELECTOR,
+            MODAL_BODY_SELECTOR,
+            MODAL_FOOTER_SELECTOR,
         ],
     );
 
@@ -115,7 +115,7 @@ fn drop_table_body_is_not_covered_by_the_footer(cx: &mut TestAppContext) {
             });
             modal.into()
         },
-        &[MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR],
+        &[MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR],
     );
 
     assert_above_footer("the body", bounds[0], bounds[1]);
@@ -150,7 +150,7 @@ fn unsaved_changes_body_is_not_covered_by_the_footer(cx: &mut TestAppContext) {
             });
             modal.into()
         },
-        &[MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR],
+        &[MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR],
     );
 
     assert_above_footer("the body", bounds[0], bounds[1]);
@@ -181,7 +181,7 @@ fn mutation_confirm_hard_body_is_not_covered_by_the_footer(cx: &mut TestAppConte
             });
             modal.into()
         },
-        &[MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR],
+        &[MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR],
     );
 
     assert_above_footer("the body", bounds[0], bounds[1]);
@@ -212,7 +212,7 @@ fn active_query_preview_and_elapsed_line_are_not_covered_by_the_footer(cx: &mut 
             });
             modal.into()
         },
-        &[MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR],
+        &[MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR],
     );
 
     // The query preview and the "Running for" line are in-flow children of
@@ -331,7 +331,7 @@ impl Render for TallBody {
             .children((0..40).map(|_| div().h(px(50.0)).flex_shrink_0().into_any_element()));
         let footer = div().h(px(28.0)).child("Confirm");
 
-        ModalShell::new("Tall", body.into_any_element(), footer.into_any_element())
+        Modal::new("Tall").body(body).footer(footer)
     }
 }
 
@@ -340,7 +340,7 @@ fn a_body_taller_than_the_window_scrolls_above_a_whole_footer(cx: &mut TestAppCo
     let bounds = render_modal(
         cx,
         |_, cx| cx.new(|_| TallBody).into(),
-        &[MODAL_SHELL_BODY_SELECTOR, MODAL_SHELL_FOOTER_SELECTOR],
+        &[MODAL_BODY_SELECTOR, MODAL_FOOTER_SELECTOR],
     );
     let (body, footer) = (bounds[0], bounds[1]);
 

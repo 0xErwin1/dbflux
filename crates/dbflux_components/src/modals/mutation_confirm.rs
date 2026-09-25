@@ -1,6 +1,7 @@
 use crate::controls::{Button, ButtonVariant, Checkbox, InputEvent, InputState};
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::surface_raised;
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{SurfaceRole, surface};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
@@ -116,7 +117,7 @@ impl Render for ModalMutationConfirm {
                     .child(SharedString::from(summary)),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -163,7 +164,12 @@ impl Render for ModalMutationConfirm {
                     table = table.child(data_row);
                 }
 
-                body = body.child(surface_raised(cx).w_full().p(Spacing::SM).child(table));
+                body = body.child(
+                    surface(SurfaceRole::Raised, cx)
+                        .w_full()
+                        .p(Spacing::SM)
+                        .child(table),
+                );
             }
             Some(_) | None => {
                 body = body.child(
@@ -203,27 +209,26 @@ impl Render for ModalMutationConfirm {
                 })),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.mutation_confirm.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(520.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.mutation_confirm.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::TriangleAlert)
+            .variant(ModalVariant::Default)
+            .width(px(520.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 
@@ -402,7 +407,7 @@ impl Render for ModalMutationConfirmHard {
                     .child(SharedString::from(summary)),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -448,7 +453,12 @@ impl Render for ModalMutationConfirmHard {
                     table = table.child(data_row);
                 }
 
-                body = body.child(surface_raised(cx).w_full().p(Spacing::SM).child(table));
+                body = body.child(
+                    surface(SurfaceRole::Raised, cx)
+                        .w_full()
+                        .p(Spacing::SM)
+                        .child(table),
+                );
             }
             Some(_) | None => {
                 body = body.child(
@@ -519,28 +529,26 @@ impl Render for ModalMutationConfirmHard {
                 })),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.mutation_confirm.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Danger)
-        .width(px(560.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(confirm_enabled)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.mutation_confirm.title"))
+            .body(body)
+            .footer(footer)
+            .variant(ModalVariant::Danger)
+            .width(px(560.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(confirm_enabled)
+            .into_any_element()
     }
 }
 

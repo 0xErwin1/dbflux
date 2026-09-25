@@ -5,7 +5,7 @@ use dbflux_components::actions::{
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_modal_container};
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{HistoryEntry, SavedQuery};
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -498,7 +498,7 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                surface_modal_container(cx)
+                surface(SurfaceRole::Modal, cx)
                     .w_full()
                     .max_w(px(620.0))
                     .max_h(px(520.0))
@@ -684,7 +684,7 @@ impl HistoryModal {
                     ))
                     .when(entries.is_empty(), |d| {
                         d.child(div().px(Spacing::SM).py(Spacing::LG).text_center().child(
-                            Text::muted(dbflux_i18n::t!(
+                            Text::caption(dbflux_i18n::t!(
                                 "document.key_value.history_modal.empty.recent"
                             )),
                         ))
@@ -787,7 +787,7 @@ impl HistoryModal {
                     }))
                     .when(entries.is_empty(), |d| {
                         d.child(div().px(Spacing::SM).py(Spacing::LG).text_center().child(
-                            Text::muted(dbflux_i18n::t!(
+                            Text::caption(dbflux_i18n::t!(
                                 "document.key_value.history_modal.empty.saved"
                             )),
                         ))
@@ -849,7 +849,7 @@ impl HistoryModal {
                 this.close(cx);
             }))
             .child(
-                surface_modal_container(cx)
+                surface(SurfaceRole::Modal, cx)
                     .w_full()
                     .max_w(px(420.0))
                     .shadow_lg()
@@ -931,7 +931,7 @@ mod source_contract_tests {
         let source = history_modal_source();
 
         assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Modal, cx)"));
         assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
 
@@ -939,8 +939,8 @@ mod source_contract_tests {
     fn save_modal_stops_reusing_panel_surface_for_modal_chrome() {
         let source = history_modal_source();
 
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Modal, cx)"));
+        assert!(!source.contains("surface(SurfaceRole::Panel, cx)"));
     }
 
     #[test]
@@ -948,8 +948,8 @@ mod source_contract_tests {
         let source = history_modal_render_source("render_browse");
 
         assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Modal, cx)"));
+        assert!(!source.contains("surface(SurfaceRole::Panel, cx)"));
     }
 
     #[test]
@@ -957,8 +957,8 @@ mod source_contract_tests {
         let source = history_modal_render_source("render_save");
 
         assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(source.contains("surface(SurfaceRole::Modal, cx)"));
+        assert!(!source.contains("surface(SurfaceRole::Panel, cx)"));
     }
 }
 

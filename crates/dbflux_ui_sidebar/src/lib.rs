@@ -21,7 +21,7 @@ use dbflux_app::AppState;
 use dbflux_components::components::tree_nav::{self, GutterInfo};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::ModalFocus;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::ConnectedProfile;

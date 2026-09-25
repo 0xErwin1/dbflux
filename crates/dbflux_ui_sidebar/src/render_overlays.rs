@@ -1,5 +1,6 @@
 use super::*;
 use dbflux_components::primitives::Icon;
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Heights;
 use gpui_component::scroll::ScrollableElement;
 
@@ -490,7 +491,7 @@ impl Sidebar {
                 div()
                     .px(Spacing::MD)
                     .pt(Spacing::SM)
-                    .child(Text::muted(subtitle).font_size(FontSizes::XS)),
+                    .child(Text::caption(subtitle).font_size(FontSizes::XS)),
             )
             .child(
                 div()
@@ -566,8 +567,10 @@ impl Sidebar {
                     .when(visible_rows.is_empty(), |el| {
                         el.child(
                             div().px(Spacing::MD).py(Spacing::SM).child(
-                                Text::muted(dbflux_i18n::t!("sidebar.overlay.child_picker.empty"))
-                                    .font_size(FontSizes::SM),
+                                Text::caption(dbflux_i18n::t!(
+                                    "sidebar.overlay.child_picker.empty"
+                                ))
+                                .font_size(FontSizes::SM),
                             ),
                         )
                     })

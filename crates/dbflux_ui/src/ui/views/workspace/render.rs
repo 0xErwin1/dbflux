@@ -1,12 +1,11 @@
 use super::*;
 use crate::keymap::ContextId;
-use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
+use dbflux_components::composites::panel_header_collapsible;
 use dbflux_components::controls::Button;
-use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::modals::Modal;
+use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::{Icon, Kbd, Text};
-use dbflux_components::typography::Body;
 use dbflux_ui_base::keymap::chord_display_parts;
-use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::platform;
 use gpui_component::IconName;
 
@@ -74,7 +73,7 @@ fn empty_state_shortcut(
             .items_center()
             .gap_2()
             .child(Kbd::chord(keys))
-            .child(Text::dim_secondary(description)),
+            .child(Text::caption(description)),
     )
 }
 
@@ -232,10 +231,9 @@ impl Render for Workspace {
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();
-            let tasks_header = panel_header_collapsible_variant(
+            let tasks_header = panel_header_collapsible(
                 "panel-header-Background Tasks",
                 dbflux_i18n::t!("workspace.background_tasks"),
-                PanelHeaderVariant::WorkspaceTasks,
                 !tasks_expanded,
                 tasks_focused,
                 Some(IconName::Loader),
@@ -342,10 +340,9 @@ impl Render for Workspace {
         } else {
             // Empty state: welcome message + tasks panel
             let workspace = cx.entity().clone();
-            let tasks_header_empty = panel_header_collapsible_variant(
+            let tasks_header_empty = panel_header_collapsible(
                 "panel-header-Background Tasks",
                 dbflux_i18n::t!("workspace.background_tasks"),
-                PanelHeaderVariant::WorkspaceTasks,
                 !tasks_expanded,
                 tasks_focused,
                 Some(IconName::Loader),
@@ -378,8 +375,8 @@ impl Render for Workspace {
                                         .color(muted_fg.opacity(0.5)),
                                 )
                                 .child(
-                                    Body::new(dbflux_i18n::t!("workspace.empty_documents"))
-                                        .muted(cx),
+                                    Text::body(dbflux_i18n::t!("workspace.empty_documents"))
+                                        .muted_foreground(),
                                 )
                                 .child(
                                     div()
@@ -722,7 +719,7 @@ impl Render for Workspace {
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
             .child(sso_wizard)
-            // S8 modals — rendered as full-screen overlays using ModalShell chrome.
+            // S8 modals — rendered as full-screen overlays using the shared `Modal` chrome.
             .when(self.modal_delete_connection.read(cx).is_visible(), |root| {
                 root.child(self.modal_delete_connection.clone())
             })
@@ -896,24 +893,22 @@ impl Render for Workspace {
                 });
 
                 root.child(
-                    ModalFrame::new(
-                        "event-stream-child-picker",
-                        &focus_handle,
-                        move |_window, cx| {
+                    Modal::new(dbflux_i18n::t!("workspace.event_streams"))
+                        .id("event-stream-child-picker")
+                        .focus_handle(&focus_handle)
+                        .on_close(move |_window, cx| {
                             sidebar_entity.update(cx, |sidebar, cx| {
                                 sidebar.close_child_picker(cx);
                             });
-                        },
-                    )
-                    .context_id(ContextId::EventStreamsPicker)
-                    .icon(AppIcon::ScrollText)
-                    .title(dbflux_i18n::t!("workspace.event_streams"))
-                    .width(px(1000.0))
-                    .height(px(720.0))
-                    .top_offset(px(60.0))
-                    .block_scroll()
-                    .child(content)
-                    .render(cx),
+                        })
+                        .key_context(ContextId::EventStreamsPicker.as_gpui_context())
+                        .icon(AppIcon::ScrollText)
+                        .width(px(1000.0))
+                        .height(px(720.0))
+                        .top_offset(px(60.0))
+                        .block_scroll()
+                        .child(content)
+                        .into_any_element(),
                 )
             })
             // Context menu rendered at workspace level for proper positioning
@@ -1149,7 +1144,10 @@ impl Render for Workspace {
                         .into_any_element();
 
                     el.child(
-                        ModalShell::new(title, body, footer)
+                        Modal::new(title)
+                            .body(body)
+                            .footer(footer)
+                            .icon(AppIcon::Delete)
                             .width(px(360.0))
                             .variant(variant)
                             .focus_handle(&focus_handle)
@@ -1175,16 +1173,7 @@ mod tests {
     use std::fs;
     use std::rc::Rc;
 
-    use gpui::{
-        Context, FontWeight, IntoElement, Render, TestAppContext, VisualTestContext, Window, div,
-    };
-
-    use dbflux_components::composites::{
-        PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
-    };
-    use dbflux_components::primitives::SurfaceRole;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
+    use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
     use dbflux_ui_base::keymap::chord_display_parts;
 
@@ -1195,27 +1184,10 @@ mod tests {
     use crate::keymap::{Command, KeyChord, Modifiers};
 
     #[test]
-    fn panel_headers_use_interface_family_and_focus_weight_difference() {
-        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
-        let unfocused =
-            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
-
-        for inspection in [&focused.title, &unfocused.title] {
-            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
-            assert!(inspection.fallbacks.is_empty());
-            assert_eq!(inspection.size_override, Some(FontSizes::SM));
-        }
-
-        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
-        assert_eq!(unfocused.title.weight_override, Some(FontWeight::MEDIUM));
-    }
-
-    #[test]
     fn workspace_render_uses_canonical_panel_header_contract() {
         let source = workspace_render_source();
 
-        assert!(source.contains("panel_header_collapsible_variant("));
-        assert!(source.contains("PanelHeaderVariant::WorkspaceTasks"));
+        assert!(source.contains("panel_header_collapsible("));
         assert!(!source.contains("fn background_tasks_panel_header("));
         assert!(!source.contains("fn render_panel_header("));
         assert!(!source.contains("fn panel_header_title("));
@@ -1238,40 +1210,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_tasks_panel_variant_matches_expected_shared_chrome() {
-        let collapsed =
-            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
-
-        assert_eq!(collapsed.background, PanelHeaderBackground::ThemeTabBar);
-        assert_eq!(
-            collapsed.hover_background,
-            Some(PanelHeaderBackground::Surface(SurfaceRole::Card))
-        );
-        assert_eq!(
-            collapsed.base_title_color,
-            PanelHeaderTitleColor::Foreground
-        );
-
-        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
-
-        assert_eq!(
-            focused.focus_title_color,
-            Some(PanelHeaderTitleColor::Primary)
-        );
-        assert_eq!(focused.title.family, Some(AppFonts::INTERFACE));
-        assert_eq!(focused.title.size_override, Some(FontSizes::SM));
-        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
-    }
-
-    #[test]
     fn tabbed_and_empty_workspace_paths_both_use_the_workspace_tasks_contract() {
         let invocations = background_tasks_header_invocations();
 
         assert_eq!(invocations.len(), 2);
 
         for invocation in invocations {
-            assert!(invocation.contains("panel_header_collapsible_variant("));
-            assert!(invocation.contains("PanelHeaderVariant::WorkspaceTasks"));
+            assert!(invocation.contains("panel_header_collapsible("));
             assert!(invocation.contains("tasks_focused"));
             assert!(invocation.contains("Some(IconName::Loader)"));
         }
@@ -1454,12 +1399,12 @@ mod tests {
         let mut invocations = Vec::new();
         let mut remaining = source.as_str();
 
-        while let Some(start) = remaining.find("panel_header_collapsible_variant(") {
+        while let Some(start) = remaining.find("panel_header_collapsible(") {
             let tail = &remaining[start..];
             let end = tail
                 .find(",\n                cx,\n            );")
                 .map(|index| index + ",\n                cx,\n            );".len())
-                .expect("workspace render should close the panel_header_collapsible_variant call");
+                .expect("workspace render should close the panel_header_collapsible call");
 
             invocations.push(tail[..end].to_string());
             remaining = &tail[end..];

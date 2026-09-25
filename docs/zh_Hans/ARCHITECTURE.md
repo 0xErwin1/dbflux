@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["呈现层 —— 6 个 UI crate"]
         uicomp["dbflux_components<br/>（主题、设计令牌、图标、基础组件、<br/>复合组件、控件、数据表格、<br/>文档树、结果面板、图表、<br/>模态框、已保存图表（saved_chart）<br/>—— 不依赖 dbflux_app）"]
-        uibase["dbflux_ui_base<br/>（AppStateEntity、事件、键位映射辅助、<br/>Toast 提示 + 节流、用户错误上报（user_error）、<br/>模态框架（modal_frame）、平台（platform）、<br/>SQL 预览模态框（sql_preview_modal）、SSO 向导（sso_wizard））"]
+        uibase["dbflux_ui_base<br/>（AppStateEntity、事件、键位映射辅助、<br/>Toast 提示 + 节流、用户错误上报（user_error）、<br/>平台（platform）、<br/>SQL 预览模态框（sql_preview_modal）、SSO 向导（sso_wizard））"]
         uidoc["dbflux_ui_document<br/>（标签页/面板系统、文档、<br/>数据网格面板（data_grid_panel）、治理）"]
         uisidebar["dbflux_ui_sidebar<br/>（连接 + 脚本侧边栏树）"]
         uiwindows["dbflux_ui_windows<br/>（连接管理器 + 设置窗口）"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # 图标渲染辅助函数
       primitives/           # 底层构建块（徽标、横幅、标签、按钮等）
       controls/             # 输入控件（按钮、复选框、下拉框、输入框、选择器等）
-      composites/           # 组合模式（modal_frame、tab_strip、section_header 等）
+      composites/           # 组合模式（header、tabs、split_button 等）
       components/           # 领域组件
         data_table/         # 自研的虚拟化数据表格
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # 内联 JSON 编辑器组件
         multi_select.rs     # 多选下拉框组件
         value_source_selector.rs # 取值来源下拉框（Env/Secret/Parameter/Auth）
-      modals/               # 可复用的模态框组件（cell_editor、document_preview 等）
+      modals/               # 共享的 `Modal` 及基于它构建的模态框（cell_editor、document_preview 等）
       result_panel/         # ResultPanel + ViewHandle 通用框架宿主
       chart/                # 图表引擎（detect、spec、decimate、axis、legend、engine）
       saved_chart.rs        # SavedChart 与 SavedChartStore 类型别名
@@ -175,7 +175,6 @@ crates/
       toast.rs              # Toast 提示 + ToastHost，带按严重级别区分的令牌桶节流
       user_error/           # 集中式面向用户的错误上报（UserFacingError、
                             # ErrorKind、report_error、report_error_async）+ 节流
-      modal_frame.rs        # 可复用的模态框架
       platform.rs           # X11/Wayland 检测、窗口选项
       sql_preview_modal.rs  # SQL/查询预览模态框（双模式：SQL 与通用）
       sso_wizard.rs         # SSO 账户/角色发现向导 [cfg aws]
@@ -334,14 +333,11 @@ crates/
           # 旧浮层路径上的垫片，从 dbflux_ui_base / dbflux_components 重新导出：
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # 垫片：pub use dbflux_ui_document::*
         icons/mod.rs        # 垫片：重新导出 AppIcon + embedded_bytes（SVG 资源也在这里）
         theme.rs            # 垫片：pub use dbflux_components::theme::*
         tokens.rs           # 垫片：pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # 垫片：→ dbflux_ui_base::modal_frame
           toast.rs          # 垫片：→ dbflux_ui_base::toast
         windows/mod.rs      # 垫片：pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # 垫片：pub use dbflux_ui_sidebar::*
@@ -643,8 +639,8 @@ crates/
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
-- 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。（`dbflux_ui` 中旧浮层路径上留有垫片（Shim）。）
-- 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。（`dbflux_ui` 中旧浮层路径上留有垫片。）
+- 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
+- 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
 - 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。
 
 ### 仪表盘与已保存图表

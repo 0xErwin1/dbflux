@@ -15,7 +15,7 @@ use super::tree::ObjectTreeNodeId;
 use super::{ObjectAction, ObjectBrowserDocument, ObjectBrowserFocusMode};
 use dbflux_app::keymap::Command;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, surface_raised};
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
@@ -399,7 +399,7 @@ impl ObjectBrowserDocument {
                     }),
                 )
                 .child(
-                    surface_raised(cx)
+                    surface(SurfaceRole::Raised, cx)
                         .id("object-browser-context-menu")
                         .absolute()
                         .left(menu_x)

@@ -183,7 +183,7 @@ impl ObjectEditorDocument {
                     theme.muted_foreground
                 }),
             )
-            .child(Text::muted(message))
+            .child(Text::caption(message))
             .when_some(action, |this, action| this.child(action))
             .into_any_element()
     }

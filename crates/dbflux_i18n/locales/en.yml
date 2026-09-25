@@ -2292,6 +2292,7 @@ document:
       close_left: Close to the Left
       close_others: Close Others
       close_right: Close to the Right
+    new: New tab
     unsaved_changes: Unsaved changes
 document_tree:
   search_placeholder: Search...

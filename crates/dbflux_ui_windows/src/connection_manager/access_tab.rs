@@ -72,7 +72,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .child(Text::muted(dbflux_i18n::t!("access.direct_hint")))
+                        .child(Text::caption(dbflux_i18n::t!("access.direct_hint")))
                         .child(
                             div()
                                 .flex()
@@ -486,7 +486,7 @@ impl ConnectionManagerWindow {
                             .flex_col()
                             .items_center()
                             .gap_2()
-                            .child(Text::muted(dbflux_i18n::t!("access.proxy_no_profiles")))
+                            .child(Text::caption(dbflux_i18n::t!("access.proxy_no_profiles")))
                             .child(Text::caption(dbflux_i18n::t!(
                                 "access.proxy_no_profiles_hint"
                             ))),
@@ -922,7 +922,7 @@ impl ConnectionManagerWindow {
             let status_el: Option<AnyElement> = match ssh_test_status {
                 TestStatus::None => None,
                 TestStatus::Testing => {
-                    Some(Text::muted(dbflux_i18n::t!("access.testing_ssh")).into_any_element())
+                    Some(Text::caption(dbflux_i18n::t!("access.testing_ssh")).into_any_element())
                 }
                 TestStatus::Success | TestStatus::SuccessWithWarning => Some(
                     StatusIndicator::new(Status::Connected)
@@ -1022,7 +1022,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Text::muted(dbflux_i18n::t!("access.ssh_disabled_hint")))
+                    .child(Text::caption(dbflux_i18n::t!("access.ssh_disabled_hint")))
                     .into_any_element(),
             );
         }

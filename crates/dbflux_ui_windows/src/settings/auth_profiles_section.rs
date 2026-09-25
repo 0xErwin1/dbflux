@@ -10,8 +10,9 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::focus_frame;
+use dbflux_components::primitives::{FocusShape, focus_ring};
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
@@ -2065,8 +2066,9 @@ impl AuthProfilesSection {
                     .child(Text::body(display)),
             )
         } else {
-            focus_frame(
+            focus_ring(
                 is_focused,
+                FocusShape::Chamfer(ChamferCut::CONTROL),
                 Some(tint),
                 layout::compact_input_shell(Input::new(input).small().secret(is_secret)),
                 cx,
@@ -2278,7 +2280,7 @@ impl AuthProfilesSection {
         layout::sticky_form_shell(
             div()
                 .child(Label::new(profile_name))
-                .child(Text::muted(provider_label)),
+                .child(Text::caption(provider_label)),
             div()
                 .flex()
                 .flex_col()
@@ -2498,7 +2500,7 @@ impl AuthProfilesSection {
                     &dbflux_i18n::t!("settings.auth_profiles.auth_profile_label"),
                     is_editing,
                 )))
-                .child(Text::muted(dbflux_i18n::t!(
+                .child(Text::caption(dbflux_i18n::t!(
                     "settings.auth_profiles.editor_subtitle"
                 ))),
             div()
@@ -2971,7 +2973,7 @@ impl Render for AuthProfilesSection {
 
         layout::section_container(
             layout::split_section_shell(
-                dbflux_components::composites::section_header(
+                dbflux_components::composites::page_header(
                     dbflux_i18n::t!("settings.auth_profiles.section_title"),
                     dbflux_i18n::t!("settings.auth_profiles.section_description"),
                     cx,

@@ -4,9 +4,9 @@ pub mod delete_connection;
 pub mod document_preview;
 pub mod drop_table;
 pub mod import_dashboard;
+pub mod modal;
 pub mod mutation_confirm;
 pub mod schema_drift;
-pub mod shell;
 pub mod tunnel_auth;
 pub mod unsaved_changes;
 
@@ -24,6 +24,7 @@ pub use drop_table::{DropTableOutcome, DropTableRequest, ModalDropTable};
 pub use import_dashboard::{
     ImportDashboardCancelled, ImportDashboardConfirmed, ModalImportDashboard,
 };
+pub use modal::{Modal, ModalFocus, ModalVariant};
 pub use mutation_confirm::{
     ModalMutationConfirm, ModalMutationConfirmHard, MutationConfirmHardRequest,
     MutationConfirmOutcome, MutationConfirmRequest,
@@ -31,7 +32,6 @@ pub use mutation_confirm::{
 pub use schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
-pub use shell::{ModalShell, ModalVariant};
 pub use tunnel_auth::{ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest};
 pub use unsaved_changes::{
     CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
@@ -39,7 +39,8 @@ pub use unsaved_changes::{
 };
 
 /// Binds Escape to [`crate::actions::Cancel`] inside the cell editor and the
-/// document preview. Both render in a `ModalFrame`, which closes on `Cancel`;
+/// document preview. Both render in a `Modal` with a key context, which closes
+/// on `Cancel`;
 /// a focused editor only lets Escape through when it has nothing of its own
 /// to cancel.
 pub fn register_modal_keybindings(cx: &mut gpui::App) {

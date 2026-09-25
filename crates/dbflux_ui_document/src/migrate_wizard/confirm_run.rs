@@ -637,7 +637,7 @@ impl ConfirmRunPhase {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.migrate_wizard.confirm.review_plan"
             )))
             .child(Text::caption(format!(
@@ -919,7 +919,7 @@ impl ConfirmRunPhase {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.migrate_wizard.running.title"
                     )))
                     .child(Text::caption(format_elapsed(elapsed)).muted_foreground()),

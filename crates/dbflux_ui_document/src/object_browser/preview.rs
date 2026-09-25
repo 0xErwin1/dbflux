@@ -712,13 +712,9 @@ impl ObjectBrowserDocument {
             .py(Spacing::XS)
             .border_t_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .pb(Spacing::XS)
-                    .child(Text::subsection_label(dbflux_i18n::t!(
-                        "document.object_browser.metadata.section"
-                    ))),
-            )
+            .child(div().pb(Spacing::XS).child(Text::label(dbflux_i18n::t!(
+                "document.object_browser.metadata.section"
+            ))))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.key"),
                 Text::code(metadata.key.clone()).into_any_element(),

@@ -10,8 +10,8 @@ use dbflux_components::controls::{
     InputState,
 };
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Text, surface_raised};
+use dbflux_components::modals::modal::{Modal, ModalFocus};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
@@ -1046,7 +1046,10 @@ impl Render for ExportBundleModal {
             None => dbflux_i18n::t!("connection_manager.export.title"),
         };
 
-        let shell = ModalShell::new(title, body.into_any_element(), footer.into_any_element())
+        let shell = Modal::new(title)
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::ArrowUp)
             .width(px(640.0))
             .focus_handle(self.focus.handle())
             .on_confirm({
@@ -1104,7 +1107,7 @@ impl ExportBundleModal {
             }
         }
 
-        let mut block = surface_raised(cx)
+        let mut block = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)

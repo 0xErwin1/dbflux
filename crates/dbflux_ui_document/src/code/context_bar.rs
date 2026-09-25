@@ -1,7 +1,8 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::primitives::{Icon, Text, focus_frame};
+use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
@@ -1386,12 +1387,13 @@ impl CodeDocument {
                 div()
                     .flex_none()
                     .min_w(context_dropdown_min_width(0))
-                    .child(focus_frame(
+                    .child(focus_ring(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
                             ContextBarSlot::Connection,
                         ),
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(theme.ring),
                         control_shell(self.source.connection_dropdown.clone(), cx),
                         cx,
@@ -1416,12 +1418,13 @@ impl CodeDocument {
                                 )),
                             )
                             .child(
-                                div().flex_none().min_w(px(180.0)).child(focus_frame(
+                                div().flex_none().min_w(px(180.0)).child(focus_ring(
                                     context_slot_is_keyboard_focused(
                                         self.focus_mode,
                                         self.context_bar_slot,
                                         ContextBarSlot::SourceQueryMode,
                                     ),
+                                    FocusShape::Chamfer(ChamferCut::CONTROL),
                                     Some(theme.ring),
                                     control_shell(
                                         self.source.source_query_mode_dropdown.clone(),
@@ -1439,12 +1442,13 @@ impl CodeDocument {
                     .child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
                         "document.code.context_bar.label.source"
                     ))))
-                    .child(div().flex_none().min_w(px(260.0)).child(focus_frame(
+                    .child(div().flex_none().min_w(px(260.0)).child(focus_ring(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
                             ContextBarSlot::SourceTargets,
                         ),
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(theme.ring),
                         control_shell(self.source.source_targets.clone(), cx),
                         cx,
@@ -1495,12 +1499,13 @@ impl CodeDocument {
                                     }),
                             )),
                         )
-                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::SourceStart,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
                             control_shell(
                                 Input::new(&self.source.source_start_input).appearance(false),
@@ -1517,12 +1522,13 @@ impl CodeDocument {
                                     }),
                             )),
                         )
-                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::SourceEnd,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
                             control_shell(
                                 Input::new(&self.source.source_end_input).appearance(false),
@@ -1541,12 +1547,13 @@ impl CodeDocument {
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(1))
-                        .child(focus_frame(
+                        .child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::Database,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
                             control_shell(self.source.database_dropdown.clone(), cx),
                             cx,
@@ -1561,12 +1568,13 @@ impl CodeDocument {
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(2))
-                        .child(focus_frame(
+                        .child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::Schema,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
                             control_shell(self.source.schema_dropdown.clone(), cx),
                             cx,

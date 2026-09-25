@@ -3,8 +3,6 @@ mod checkbox;
 mod dropdown;
 mod input;
 mod readonly_text_view;
-mod selectable_text;
-mod tab_trigger;
 
 pub use button::{
     Button, ButtonFills, ButtonSize, ButtonVariant, button_colors, is_activation_key,
@@ -18,5 +16,3 @@ pub use input::{
     TriggerCompletion, register_input_overrides,
 };
 pub use readonly_text_view::ReadonlyTextView;
-pub use selectable_text::SelectableText;
-pub use tab_trigger::TabTrigger;

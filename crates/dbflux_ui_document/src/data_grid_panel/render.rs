@@ -19,7 +19,7 @@ use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_components::components::filter_bar::FilterField;
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, SurfaceRole, Text, surface};
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
@@ -657,12 +657,12 @@ impl DataGridPanel {
                                             .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                             .color(theme.muted_foreground),
                                     )
-                                    .child(Text::muted(dbflux_i18n::t!(
+                                    .child(Text::caption(dbflux_i18n::t!(
                                         "document.data.grid.loading"
                                     )))
                                     .into_any_element()
                             } else {
-                                Text::muted(dbflux_i18n::t!("document.data.grid.empty"))
+                                Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
                                     .into_any_element()
                             })
                     },
@@ -837,7 +837,7 @@ pub(super) fn render_filter_bar_as_segment(
                 .when(!source_query_prefix.is_empty(), |d| {
                     d.child(Text::caption(source_query_prefix).primary())
                 })
-                .child(Text::label(source_name)),
+                .child(Text::body(source_name)),
         )
         // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | Builder | Refresh.
         .child({
@@ -957,7 +957,7 @@ pub(super) fn render_filter_bar_as_segment(
                             });
                         })
                         .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
-                        .child(Text::muted(dbflux_i18n::t!(
+                        .child(Text::caption(dbflux_i18n::t!(
                             "document.data.grid.toolbar.builder"
                         ))),
                 )
@@ -1094,7 +1094,7 @@ impl DataGridPanel {
                     .when(!source_query_prefix.is_empty(), |d| {
                         d.child(Text::caption(source_query_prefix.to_string()).primary())
                     })
-                    .child(Text::label(source_name.to_string())),
+                    .child(Text::body(source_name.to_string())),
             )
             // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | view toggle | Builder | Refresh.
             .child({
@@ -1208,7 +1208,7 @@ impl DataGridPanel {
                             this.toggle_view_mode(cx);
                         }))
                         .child(Icon::new(view_icon).small().color(theme.muted_foreground))
-                        .child(Text::muted(mode.label())),
+                        .child(Text::caption(mode.label())),
                 )
             })
             .when(self.can_open_builder(cx), |d| {
@@ -1232,7 +1232,7 @@ impl DataGridPanel {
                                 .small()
                                 .color(theme.muted_foreground),
                         )
-                        .child(Text::muted(dbflux_i18n::t!(
+                        .child(Text::caption(dbflux_i18n::t!(
                             "document.data.grid.toolbar.builder"
                         ))),
                 )
@@ -1580,7 +1580,7 @@ impl DataGridPanel {
             .flex()
             .pl(indent)
             .gap(Spacing::SM)
-            .child(Text::label_sm(format!("{}:", name)).muted_foreground())
+            .child(Text::body_sm(format!("{}:", name)).muted_foreground())
             .child(self.render_value(value, theme, depth))
     }
 
@@ -2257,7 +2257,7 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.data.chart_dock.save.title"
                     )))
                     .child(Input::new(&name_input).placeholder(dbflux_i18n::t!(
@@ -3692,7 +3692,7 @@ impl DataGridPanel {
 
     fn result_mode_label(label: impl Into<SharedString>, is_active: bool) -> Text {
         if is_active {
-            Text::label_sm(label).font_size(FontSizes::XS)
+            Text::body_sm(label).font_size(FontSizes::XS)
         } else {
             Text::caption(label).font_size(FontSizes::XS)
         }
@@ -3836,7 +3836,7 @@ impl DataGridPanel {
         }
 
         deferred(
-            surface_raised(cx)
+            surface(SurfaceRole::Raised, cx)
                 .absolute()
                 .bottom_full()
                 .right_0()

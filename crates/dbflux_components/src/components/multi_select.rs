@@ -287,7 +287,7 @@ impl Render for MultiSelect {
             .child(div().flex_1().truncate().child(if has_selection {
                 Text::body(label)
             } else {
-                Text::muted(label)
+                Text::caption(label)
             }))
             .child(Text::caption(if self.open { "▴" } else { "▾" }))
             .when(!is_empty, |el| {

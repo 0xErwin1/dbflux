@@ -1,5 +1,6 @@
 use dbflux_components::controls::{Button, GpuiInput as Input, InputState};
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::LogErr;
@@ -186,7 +187,10 @@ impl Render for ModalRenameItem {
                 .on_click(on_confirm),
             );
 
-        ModalShell::new(title, body.into_any_element(), footer.into_any_element())
+        Modal::new(title)
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Pencil)
             .width(gpui::px(400.0))
             .focus_handle(self.focus.handle())
             .on_close({

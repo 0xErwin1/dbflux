@@ -2,8 +2,8 @@ use dbflux_app::keymap::{KeyChord, Modifiers};
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::Dropdown;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{ChromeColors, Radii};
-use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -583,7 +583,6 @@ impl GeneralSection {
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let tint = ChromeColors::tint(theme);
-        let border = theme.border;
         let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
         let cursor = self.gen_form_cursor;
@@ -593,7 +592,7 @@ impl GeneralSection {
             |row: GeneralFormRow| -> bool { is_focused && rows.get(cursor).copied() == Some(row) };
 
         layout::single_form_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.general.header.title"),
                 dbflux_i18n::t!("settings.general.header.subtitle"),
                 cx,
@@ -604,8 +603,7 @@ impl GeneralSection {
                 .gap_6()
                 .child(self.render_gen_group_header(
                     dbflux_i18n::t!("settings.general.appearance.group"),
-                    border,
-                    muted_fg,
+                    cx,
                 ))
                 .child(self.render_gen_dropdown(
                     dbflux_i18n::t!("settings.general.theme.label"),
@@ -632,13 +630,14 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(div().px_2().child(
-                    Body::new(dbflux_i18n::t!("settings.general.language.notice")).color(muted_fg),
+                    Text::body(dbflux_i18n::t!("settings.general.language.notice")).color(muted_fg),
                 ))
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.editor.group"),
-                    border,
-                    muted_fg,
-                ))
+                .child(
+                    self.render_gen_group_header(
+                        dbflux_i18n::t!("settings.general.editor.group"),
+                        cx,
+                    ),
+                )
                 .child(self.render_gen_checkbox(
                     "vim-mode",
                     dbflux_i18n::t!("settings.general.vim_mode.label"),
@@ -649,13 +648,14 @@ impl GeneralSection {
                     cx,
                 ))
                 .child(div().px_2().child(
-                    Body::new(dbflux_i18n::t!("settings.general.vim_mode.hint")).color(muted_fg),
+                    Text::body(dbflux_i18n::t!("settings.general.vim_mode.hint")).color(muted_fg),
                 ))
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.startup.group"),
-                    border,
-                    muted_fg,
-                ))
+                .child(
+                    self.render_gen_group_header(
+                        dbflux_i18n::t!("settings.general.startup.group"),
+                        cx,
+                    ),
+                )
                 .child(self.render_gen_checkbox(
                     "restore-session",
                     dbflux_i18n::t!("settings.general.restore_session.label"),
@@ -698,11 +698,12 @@ impl GeneralSection {
                     GeneralFormRow::AutoSaveInterval,
                     cx,
                 ))
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.refresh.group"),
-                    border,
-                    muted_fg,
-                ))
+                .child(
+                    self.render_gen_group_header(
+                        dbflux_i18n::t!("settings.general.refresh.group"),
+                        cx,
+                    ),
+                )
                 .child(self.render_gen_dropdown(
                     dbflux_i18n::t!("settings.general.refresh_policy.label"),
                     &self.dropdown_refresh_policy,
@@ -745,11 +746,12 @@ impl GeneralSection {
                     |this, value, _cx| this.gen_settings.auto_refresh_only_if_visible = value,
                     cx,
                 ))
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.safety.group"),
-                    border,
-                    muted_fg,
-                ))
+                .child(
+                    self.render_gen_group_header(
+                        dbflux_i18n::t!("settings.general.safety.group"),
+                        cx,
+                    ),
+                )
                 .child(self.render_gen_checkbox(
                     "confirm-dangerous",
                     dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
@@ -787,8 +789,7 @@ impl GeneralSection {
                 ))
                 .child(self.render_gen_group_header(
                     dbflux_i18n::t!("settings.general.object_storage.group"),
-                    border,
-                    muted_fg,
+                    cx,
                 ))
                 .child(self.render_gen_input_field(
                     dbflux_i18n::t!("settings.general.object_preview_limit.label"),
@@ -800,7 +801,7 @@ impl GeneralSection {
                 ))
                 .child(
                     div().px_2().child(
-                        Body::new(dbflux_i18n::t!(
+                        Text::body(dbflux_i18n::t!(
                             "settings.general.object_preview_hint.label"
                         ))
                         .color(muted_fg),
@@ -808,8 +809,7 @@ impl GeneralSection {
                 )
                 .child(self.render_gen_group_header(
                     dbflux_i18n::t!("settings.general.key_value.group"),
-                    border,
-                    muted_fg,
+                    cx,
                 ))
                 .child(self.render_gen_input_field(
                     dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
@@ -821,7 +821,7 @@ impl GeneralSection {
                 ))
                 .child(
                     div().px_2().child(
-                        Body::new(dbflux_i18n::t!(
+                        Text::body(dbflux_i18n::t!(
                             "settings.general.key_value_size_limit_hint.label"
                         ))
                         .color(muted_fg),
@@ -831,8 +831,7 @@ impl GeneralSection {
                     column
                         .child(self.render_gen_group_header(
                             dbflux_i18n::t!("settings.general.storage.group"),
-                            border,
-                            muted_fg,
+                            cx,
                         ))
                         .child(self.render_gen_checkbox(
                             "share-stable-db",
@@ -845,8 +844,10 @@ impl GeneralSection {
                         ))
                         .child(
                             div().px_2().child(
-                                Body::new(dbflux_i18n::t!("settings.general.share_stable_db.hint"))
-                                    .color(muted_fg),
+                                Text::body(dbflux_i18n::t!(
+                                    "settings.general.share_stable_db.hint"
+                                ))
+                                .color(muted_fg),
                             ),
                         )
                 }),
@@ -888,15 +889,9 @@ impl GeneralSection {
     fn render_gen_group_header(
         &self,
         label: impl Into<SharedString>,
-        border: Hsla,
-        _muted_fg: Hsla,
+        cx: &App,
     ) -> impl IntoElement {
-        div()
-            .pt_2()
-            .pb_1()
-            .border_b_1()
-            .border_color(border)
-            .child(SubSectionLabel::new(label))
+        dbflux_components::composites::section_header(label, None, cx)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -949,7 +944,7 @@ impl GeneralSection {
                         cx.notify();
                     })),
             )
-            .child(Body::new(label))
+            .child(Text::body(label))
     }
 
     fn render_gen_dropdown(
@@ -988,7 +983,7 @@ impl GeneralSection {
                     cx.notify();
                 }),
             )
-            .child(FieldLabel::new(label))
+            .child(Text::body(label))
             .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
 
@@ -1016,7 +1011,7 @@ impl GeneralSection {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(FieldLabel::new(label))
+                .child(Text::body(label))
                 .child(
                     div()
                         .w_full()

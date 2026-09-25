@@ -1396,7 +1396,7 @@ impl ChartDocument {
                 index: 0,
                 builder: Box::new(move |_window, cx| {
                     let title = e_title.read(cx).title.clone();
-                    Text::label(title).into_any_element()
+                    Text::body(title).into_any_element()
                 }),
             },
             ToolbarSegment {

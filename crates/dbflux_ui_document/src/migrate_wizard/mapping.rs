@@ -753,10 +753,10 @@ impl MappingPhase {
                     .flex_row()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                    .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
                         "document.migrate_wizard.mapping.target_column_header"
                     ))))
-                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                    .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
                         "document.migrate_wizard.mapping.source_column_header"
                     )))),
             )
@@ -799,17 +799,17 @@ fn render_grid_header(cx: &mut Context<MappingPhase>) -> impl IntoElement {
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .child(Text::label(dbflux_i18n::t!(
+                .child(Text::body(dbflux_i18n::t!(
                     "document.migrate_wizard.mapping.header_source"
                 ))),
         )
-        .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_target"
         ))))
-        .child(div().w(MODE_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(MODE_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_mapping_mode"
         ))))
-        .child(div().w(TRANSFORM_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(TRANSFORM_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_transform"
         ))))
 }

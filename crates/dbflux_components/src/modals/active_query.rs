@@ -1,5 +1,6 @@
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::{Text, surface_raised};
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
@@ -59,7 +60,7 @@ pub struct ActiveQueryRequest {
 
 /// Modal entity for "active query running" confirmation.
 ///
-/// Uses `ModalShell::Default` (520 px). Displays an elapsed timer that ticks
+/// Uses `Modal` (`ModalVariant::Default`) (520 px). Displays an elapsed timer that ticks
 /// every second via a background task.
 pub struct ModalActiveQuery {
     request: Option<ActiveQueryRequest>,
@@ -247,7 +248,7 @@ impl Render for ModalActiveQuery {
             .gap(Spacing::MD)
             .child(Text::body(prompt).into_any_element())
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -319,29 +320,28 @@ impl Render for ModalActiveQuery {
                     .on_click(on_cancel_query),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.active_query.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(520.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity
-                    .update(cx, |this, cx| this.keep_waiting(cx))
-                    .log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.active_query.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Loader)
+            .variant(ModalVariant::Default)
+            .width(px(520.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity
+                        .update(cx, |this, cx| this.keep_waiting(cx))
+                        .log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 

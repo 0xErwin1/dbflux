@@ -1,4 +1,3 @@
-pub mod common;
 pub mod components;
 pub mod dock;
 pub mod document;

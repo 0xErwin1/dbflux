@@ -20,7 +20,7 @@ use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
-use dbflux_components::modals::shell::ModalFocus;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::toast::Toast;

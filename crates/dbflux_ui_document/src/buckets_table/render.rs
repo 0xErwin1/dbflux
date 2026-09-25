@@ -10,9 +10,10 @@ use super::{BucketsFocusMode, BucketsTableDocument};
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::controls::Input;
+use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
@@ -518,7 +519,7 @@ impl BucketsTableDocument {
             .child(if is_error {
                 Text::body(message).danger()
             } else {
-                Text::muted(message)
+                Text::caption(message)
             })
             .when_some(refresh_hint(), |this, hint| {
                 this.child(Text::key_hint(hint))
@@ -527,98 +528,42 @@ impl BucketsTableDocument {
     }
 
     fn render_delete_confirm(&self, bucket: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .id("buckets-delete-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(340.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .size(Heights::ICON_MD)
-                                    .warning(),
-                            )
-                            .child(Text::heading(dbflux_i18n::t!(
-                                "document.buckets_table.delete_confirm.title"
-                            ))),
-                    )
-                    .child(Text::muted(dbflux_i18n::t!(
-                        "document.buckets_table.delete_confirm.body",
-                        bucket = bucket
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("buckets-delete-cancel")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_delete_bucket(cx);
-                                    }))
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.buckets_table.delete_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("buckets-delete-confirm")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_delete_bucket(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete)
-                                            .size(Heights::ICON_SM)
-                                            .color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.buckets_table.delete_confirm.confirm"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "buckets-delete-cancel",
+                    dbflux_i18n::t!("document.buckets_table.delete_confirm.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_delete_bucket(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "buckets-delete-confirm",
+                    dbflux_i18n::t!("document.buckets_table.delete_confirm.confirm"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_delete_bucket(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!(
+            "document.buckets_table.delete_confirm.title"
+        ))
+        .id("buckets-delete-overlay")
+        .danger()
+        .icon(AppIcon::TriangleAlert)
+        .width(px(420.0))
+        .body(Text::body(dbflux_i18n::t!(
+            "document.buckets_table.delete_confirm.body",
+            bucket = bucket
+        )))
+        .footer(footer)
     }
 }
 

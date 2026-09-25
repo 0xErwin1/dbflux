@@ -11,6 +11,7 @@
 
 mod column_mapping;
 
+use dbflux_core::keymap_types::ContextId;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +21,7 @@ use dbflux_components::composites::{
 };
 use dbflux_components::controls::{Button, Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::{
@@ -31,7 +33,6 @@ use dbflux_transfer::import::{
 use dbflux_transfer::manifest::read_manifest;
 use dbflux_transfer::{TableTransferStatus, TransferError};
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
-use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::toast::Toast;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
@@ -798,15 +799,17 @@ impl Render for ImportWizard {
             close_entity.update(cx, |this, cx| this.close(cx)).ok();
         };
 
-        let mut frame = ModalFrame::new("import-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.import_wizard.title"))
+        let mut frame = Modal::new(dbflux_i18n::t!("document.import_wizard.title"))
+            .id("import-wizard")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Download)
             .width(WIZARD_MODAL_WIDTH)
-            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
-            .center_vertically();
+            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION);
 
         frame = frame.child(self.render_body(cx));
-        frame.render(cx).into_any_element()
+        frame.into_any_element()
     }
 }
 

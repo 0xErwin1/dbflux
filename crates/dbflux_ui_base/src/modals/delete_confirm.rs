@@ -1,7 +1,7 @@
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use dbflux_components::primitives::{Icon, Text, surface_raised};
+use dbflux_components::modals::modal::{Modal, ModalFocus, ModalVariant};
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
@@ -148,7 +148,7 @@ impl Render for ModalDeleteDashboardConfirm {
                     )),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -184,27 +184,26 @@ impl Render for ModalDeleteDashboardConfirm {
                 .on_click(on_confirm),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.delete_confirm.dashboard.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Danger)
-        .width(px(460.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.delete_confirm.dashboard.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Delete)
+            .variant(ModalVariant::Danger)
+            .width(px(460.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 
@@ -362,27 +361,26 @@ impl Render for ModalDeleteSavedChartConfirm {
                 .on_click(on_confirm),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.delete_confirm.saved_chart.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Danger)
-        .width(px(460.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.delete_confirm.saved_chart.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Delete)
+            .variant(ModalVariant::Danger)
+            .width(px(460.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 

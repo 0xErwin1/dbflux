@@ -15,8 +15,10 @@
 
 use super::KeyValueDocument;
 use super::context_menu::{KvContextMenu, KvMenuAction};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
@@ -50,97 +52,44 @@ pub(super) fn render_delete_confirm_modal(
     message: &str,
     cx: &mut Context<KeyValueDocument>,
 ) -> impl IntoElement {
-    let theme = cx.theme();
-    let btn_hover = theme.muted;
-
-    div()
-        .id("kv-delete-modal-overlay")
-        .absolute()
-        .inset_0()
-        .bg(overlay_bg(theme))
+    let footer = div()
         .flex()
-        .items_center()
-        .justify_center()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-        })
+        .gap(Spacing::SM)
         .child(
-            surface_panel(cx)
-                .rounded(Radii::MD)
-                .min_w(px(300.0))
-                .flex()
-                .flex_col()
-                .gap(Spacing::MD)
-                .p(Spacing::MD)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(Icon::new(AppIcon::TriangleAlert).size(px(20.0)).warning())
-                        .child(Text::heading(title.to_string())),
-                )
-                .child(Text::muted(message.to_string()))
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(Spacing::SM)
-                        .child(
-                            div()
-                                .id("kv-delete-cancel-btn")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px(Spacing::SM)
-                                .py(Spacing::XS)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.secondary)
-                                .hover(move |d| d.bg(btn_hover))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.pending_key_delete = None;
-                                    this.pending_member_delete = None;
-                                    cx.notify();
-                                }))
-                                .child(Icon::new(AppIcon::X).size(Heights::ICON_SM).muted())
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.key_value.render.delete_confirm.cancel"
-                                ))),
-                        )
-                        .child(
-                            div()
-                                .id("kv-delete-confirm-btn")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px(Spacing::SM)
-                                .py(Spacing::XS)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.danger)
-                                .hover(|d| d.opacity(0.9))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if this.pending_key_delete.is_some() {
-                                        this.confirm_delete_key(cx);
-                                    } else if this.pending_member_delete.is_some() {
-                                        this.confirm_delete_member(cx);
-                                    }
-                                }))
-                                .child(
-                                    Icon::new(AppIcon::Delete)
-                                        .size(Heights::ICON_SM)
-                                        .color(theme.background),
-                                )
-                                .child(
-                                    Text::caption(dbflux_i18n::t!(
-                                        "document.key_value.render.delete_confirm.delete"
-                                    ))
-                                    .color(theme.background),
-                                ),
-                        ),
-                ),
+            Button::new(
+                "kv-delete-cancel-btn",
+                dbflux_i18n::t!("document.key_value.render.delete_confirm.cancel"),
+            )
+            .icon(AppIcon::X)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.pending_key_delete = None;
+                this.pending_member_delete = None;
+                cx.notify();
+            })),
         )
+        .child(
+            Button::new(
+                "kv-delete-confirm-btn",
+                dbflux_i18n::t!("document.key_value.render.delete_confirm.delete"),
+            )
+            .danger()
+            .icon(AppIcon::Delete)
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.pending_key_delete.is_some() {
+                    this.confirm_delete_key(cx);
+                } else if this.pending_member_delete.is_some() {
+                    this.confirm_delete_member(cx);
+                }
+            })),
+        );
+
+    Modal::new(title.to_string())
+        .id("kv-delete-modal-overlay")
+        .danger()
+        .icon(AppIcon::TriangleAlert)
+        .width(px(420.0))
+        .body(Text::body(message.to_string()))
+        .footer(footer)
 }
 
 /// Renders the deferred right-click context menu overlay.
@@ -267,7 +216,7 @@ pub(super) fn render_kv_context_menu(
                 }),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .id("kv-context-menu")
                     .absolute()
                     .left(menu_x)

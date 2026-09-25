@@ -2,7 +2,6 @@ use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, SyntaxColors};
-use dbflux_components::typography::{Body, InterfaceText};
 use gpui::FontWeight;
 
 fn sidebar_tab_text(
@@ -10,7 +9,7 @@ fn sidebar_tab_text(
     active: bool,
     focused: bool,
     color: Hsla,
-) -> InterfaceText {
+) -> Text {
     let weight = if active && focused {
         FontWeight::BOLD
     } else if active {
@@ -19,7 +18,7 @@ fn sidebar_tab_text(
         FontWeight::MEDIUM
     };
 
-    InterfaceText::caption(label)
+    Text::caption(label)
         .font_weight(weight)
         .color(color)
         .font_size(FontSizes::SM)
@@ -130,7 +129,7 @@ impl Sidebar {
                             this.toggle_add_menu(cx);
                         });
                     })
-                    .child(Text::muted("+"))
+                    .child(Text::caption("+"))
             })
     }
 
@@ -162,7 +161,6 @@ impl Sidebar {
         &self,
         tree_params: TreeRenderParams,
         sidebar_entity: &Entity<Self>,
-        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
         let sidebar_for_root_drop = sidebar_entity.clone();
@@ -234,10 +232,12 @@ impl Sidebar {
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
                         .child(
-                            Body::new(dbflux_i18n::t!("sidebar.empty.connections_title")).muted(cx),
+                            Text::body(dbflux_i18n::t!("sidebar.empty.connections_title"))
+                                .muted_foreground(),
                         )
                         .child(
-                            Body::new(dbflux_i18n::t!("sidebar.empty.connections_hint")).muted(cx),
+                            Text::body(dbflux_i18n::t!("sidebar.empty.connections_hint"))
+                                .muted_foreground(),
                         ),
                 )
             })
@@ -338,8 +338,14 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Body::new(dbflux_i18n::t!("sidebar.empty.scripts_title")).muted(cx))
-                        .child(Body::new(dbflux_i18n::t!("sidebar.empty.scripts_hint")).muted(cx)),
+                        .child(
+                            Text::body(dbflux_i18n::t!("sidebar.empty.scripts_title"))
+                                .muted_foreground(),
+                        )
+                        .child(
+                            Text::body(dbflux_i18n::t!("sidebar.empty.scripts_hint"))
+                                .muted_foreground(),
+                        ),
                 )
             })
     }
@@ -457,7 +463,7 @@ impl Render for Sidebar {
             )
             .child(self.render_action_bars(cx))
             .when(active_tab == SidebarTab::Connections, |el| {
-                el.child(self.render_connections_content(tree_params, &sidebar_entity, cx))
+                el.child(self.render_connections_content(tree_params, &sidebar_entity))
             })
             .when(active_tab == SidebarTab::Scripts, |el| {
                 el.child(self.render_scripts_content(cx))
@@ -493,7 +499,7 @@ mod tests {
         let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
 
         for inspection in [inactive, active, focused] {
-            assert_eq!(inspection.family, Some(AppFonts::INTERFACE));
+            assert_eq!(inspection.family, AppFonts::INTERFACE);
             assert!(inspection.fallbacks.is_empty());
             // Tab labels use SM (13px) — the bigger size matches the
             // design after the visual review pass; the original XS was

@@ -1,9 +1,10 @@
 use crate::app_state_entity::AppStateEntity;
-use crate::modal_frame::ModalFrame;
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_core::keymap_types::ContextId;
 // SqlGenerationType and SqlPreviewContext now live in dbflux_components;
 // re-export here so existing call-sites via this module path are unchanged.
 pub use dbflux_components::{SqlGenerationType, SqlPreviewContext};
@@ -517,8 +518,11 @@ impl Render for SqlPreviewModal {
             .bg(theme.secondary)
             .child(Text::caption(badge_text).font_size(FontSizes::XS));
 
-        let mut frame = ModalFrame::new("sql-preview-modal", &self.focus_handle, close)
-            .title(title)
+        let mut frame = Modal::new(title)
+            .id("sql-preview-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Code)
             .width(px(1000.0))
             .max_height(px(800.0))
@@ -538,7 +542,8 @@ impl Render for SqlPreviewModal {
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
-            );
+            )
+            .top_offset(px(80.0));
 
         // -- Options (SQL mode, DML only) --
 
@@ -561,7 +566,7 @@ impl Render for SqlPreviewModal {
                     .items_center()
                     .gap(Spacing::LG)
                     .child(
-                        Text::label_sm(dbflux_i18n::t!("sql_preview.options.label"))
+                        Text::body_sm(dbflux_i18n::t!("sql_preview.options.label"))
                             .muted_foreground(),
                     )
                     .child(
@@ -690,7 +695,7 @@ impl Render for SqlPreviewModal {
 
         frame = frame.child(footer);
 
-        frame.render(cx)
+        frame.into_any_element()
     }
 }
 

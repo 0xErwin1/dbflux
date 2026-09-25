@@ -200,7 +200,7 @@ pub fn render_csd_title_bar_with_crumbs(
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
                 window.start_window_move();
             })
-            .child(Text::label_sm(title_text));
+            .child(Text::body_sm(title_text));
 
         for crumb in crumbs {
             drag_area = drag_area
@@ -218,7 +218,7 @@ pub fn render_csd_title_bar_with_crumbs(
                         crumb_el = crumb_el.child(Icon::new(icon).size(Spacing::MD).muted());
                     }
 
-                    crumb_el.child(Text::label_sm(crumb.label.clone()))
+                    crumb_el.child(Text::body_sm(crumb.label.clone()))
                 });
         }
 

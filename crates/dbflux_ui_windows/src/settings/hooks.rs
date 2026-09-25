@@ -2,11 +2,12 @@ use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::ChamferCut;
 
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Label, focus_frame};
+use dbflux_components::primitives::{FocusShape, Icon, Label, focus_ring};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing, Widths};
-use dbflux_components::typography::{Body, InterfaceText, MonoCaption, MonoLabel, PanelTitle};
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
@@ -1298,7 +1299,7 @@ impl HooksSection {
 
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.hooks.header.title"),
                 dbflux_i18n::t!("settings.hooks.header.subtitle"),
                 cx,
@@ -1360,7 +1361,7 @@ impl HooksSection {
                     .gap_1()
                     .when(hook_ids.is_empty(), |container| {
                         container.child(
-                            Body::new(dbflux_i18n::t!("settings.hooks.list.empty"))
+                            Text::body(dbflux_i18n::t!("settings.hooks.list.empty"))
                                 .color(theme.muted_foreground),
                         )
                     })
@@ -1406,10 +1407,10 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(MonoLabel::new(hook_id.clone()))
+                                            .child(Text::code(hook_id.clone()))
                                             .when_some(hook, |container, hook| {
                                                 container.child(
-                                                    Body::new(hook.summary())
+                                                    Text::body(hook.summary())
                                                         .color(theme.muted_foreground),
                                                 )
                                             }),
@@ -1441,10 +1442,8 @@ impl HooksSection {
                 container
                     .child(
                         div().mt_2().child(
-                            InterfaceText::caption(dbflux_i18n::t!(
-                                "settings.hooks.list.unreadable.title"
-                            ))
-                            .color(theme.muted_foreground),
+                            Text::caption(dbflux_i18n::t!("settings.hooks.list.unreadable.title"))
+                                .color(theme.muted_foreground),
                         ),
                     )
                     .children(protected.into_iter().map(|(row_id, label)| {
@@ -1479,9 +1478,9 @@ impl HooksSection {
                                             .flex()
                                             .flex_col()
                                             .gap_1()
-                                            .child(MonoLabel::new(label))
+                                            .child(Text::code(label))
                                             .child(
-                                                Body::new(dbflux_i18n::t!(
+                                                Text::body(dbflux_i18n::t!(
                                                     "settings.hooks.list.unreadable.hint"
                                                 ))
                                                 .color(theme.muted_foreground),
@@ -1520,7 +1519,14 @@ impl HooksSection {
     ) -> Div {
         let is_focused = self.hook_focus == HookFocus::Form && self.hook_form_field == field;
 
-        focus_frame(is_focused, Some(tint), child, cx).on_mouse_down(
+        focus_ring(
+            is_focused,
+            FocusShape::Chamfer(ChamferCut::CONTROL),
+            Some(tint),
+            child,
+            cx,
+        )
+        .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
                 this.switching_input = true;
@@ -1557,7 +1563,7 @@ impl HooksSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(dbflux_i18n::t!(
+                        .child(Text::body(dbflux_i18n::t!(
                             "settings.hooks.form.capability.logging"
                         ))),
                     cx,
@@ -1582,7 +1588,7 @@ impl HooksSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(dbflux_i18n::t!(
+                        .child(Text::body(dbflux_i18n::t!(
                             "settings.hooks.form.capability.env_read"
                         ))),
                     cx,
@@ -1607,7 +1613,7 @@ impl HooksSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(dbflux_i18n::t!(
+                        .child(Text::body(dbflux_i18n::t!(
                             "settings.hooks.form.capability.connection_metadata"
                         ))),
                     cx,
@@ -1632,7 +1638,7 @@ impl HooksSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(dbflux_i18n::t!(
+                        .child(Text::body(dbflux_i18n::t!(
                             "settings.hooks.form.capability.process_run"
                         ))),
                     cx,
@@ -1660,7 +1666,7 @@ impl HooksSection {
                                 cx.notify();
                             })),
                     )
-                    .child(Body::new(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "settings.hooks.form.capability.logging"
                     ))),
             )
@@ -1678,7 +1684,7 @@ impl HooksSection {
                                 cx.notify();
                             })),
                     )
-                    .child(Body::new(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "settings.hooks.form.capability.env_read"
                     ))),
             )
@@ -1698,7 +1704,7 @@ impl HooksSection {
                                 cx.notify();
                             })),
                     )
-                    .child(Body::new(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "settings.hooks.form.capability.connection_metadata"
                     ))),
             )
@@ -1718,7 +1724,7 @@ impl HooksSection {
                                 cx.notify();
                             })),
                     )
-                    .child(Body::new(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "settings.hooks.form.capability.process_run"
                     ))),
             )
@@ -1745,7 +1751,7 @@ impl HooksSection {
             self.hook_focus == HookFocus::Form && is_kind_form_field(self.hook_form_field);
 
         layout::sticky_form_shell(
-            PanelTitle::new(title),
+            Text::heading(title),
             div()
             .on_mouse_down(
                 MouseButton::Left,
@@ -1777,8 +1783,8 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.kind")))
-                            .child(focus_frame(
-                                kind_focused,
+                            .child(focus_ring(
+                                kind_focused, FocusShape::Chamfer(ChamferCut::CONTROL),
                                 Some(tint),
                                 div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_kind_dropdown.clone()),
                                 cx,
@@ -1809,7 +1815,7 @@ impl HooksSection {
                                         .flex_col()
                                         .gap_1()
                                         .child(Label::new(dbflux_i18n::t!("settings.hooks.form.args")))
-                                        .child(Body::new(dbflux_i18n::t!("settings.hooks.form.args_hint")).color(
+                                        .child(Text::body(dbflux_i18n::t!("settings.hooks.form.args_hint")).color(
                                             theme.muted_foreground,
                                         ))
                                         .child(self.hook_field_frame(
@@ -1856,7 +1862,7 @@ impl HooksSection {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .child(Body::new(dbflux_i18n::t!("settings.hooks.form.file_path_hint")).color(theme.muted_foreground))
+                                        .child(Text::body(dbflux_i18n::t!("settings.hooks.form.file_path_hint")).color(theme.muted_foreground))
                                         .child(self.hook_field_frame(
                                             HookFormField::FilePath,
                                             tint,
@@ -1896,7 +1902,7 @@ impl HooksSection {
                                             .flex_col()
                                             .gap_1()
                                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.interpreter")))
-                                            .child(Body::new(hooks_form_interpreter_hint(&default_interpreter)).color(theme.muted_foreground))
+                                            .child(Text::body(hooks_form_interpreter_hint(&default_interpreter)).color(theme.muted_foreground))
                                             .child(self.hook_field_frame(
                                                 HookFormField::Interpreter,
                                                 tint,
@@ -1913,7 +1919,7 @@ impl HooksSection {
                                             .gap_2()
                                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.capabilities")))
                                             .child(self.render_hook_lua_capability_rows(tint, cx))
-                                            .child(Body::new(
+                                            .child(Text::body(
                                                 dbflux_i18n::t!("settings.hooks.form.capability.process_run_hint"),
                                             )
                                             .color(theme.muted_foreground)),
@@ -1928,7 +1934,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.execution_mode")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint")).color(theme.muted_foreground))
+                            .child(Text::body(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint")).color(theme.muted_foreground))
                             .child(self.hook_field_frame(
                                 HookFormField::ExecutionMode,
                                 tint,
@@ -1944,7 +1950,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.ready_signal")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.ready_signal_hint")).color(theme.muted_foreground))
+                            .child(Text::body(dbflux_i18n::t!("settings.hooks.form.ready_signal_hint")).color(theme.muted_foreground))
                             .child(self.hook_field_frame(
                                 HookFormField::ReadySignal,
                                 tint,
@@ -1975,7 +1981,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_hint")).color(theme.muted_foreground))
+                            .child(Text::body(dbflux_i18n::t!("settings.hooks.form.env_hint")).color(theme.muted_foreground))
                             .child(self.hook_field_frame(
                                 HookFormField::Environment,
                                 tint,
@@ -1991,7 +1997,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env_denylist")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_denylist_hint")).color(theme.muted_foreground))
+                            .child(Text::body(dbflux_i18n::t!("settings.hooks.form.env_denylist_hint")).color(theme.muted_foreground))
                             .child(self.hook_field_frame(
                                 HookFormField::EnvDenylist,
                                 tint,
@@ -2019,7 +2025,7 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.resolved_command")))
-                            .child(MonoCaption::new(preview)),
+                            .child(Text::code(preview).muted_foreground()),
                     )
                     .when(!warnings.is_empty(), |container| {
                         container.child(
@@ -2042,7 +2048,7 @@ impl HooksSection {
                                         ),
                                     )
                                     .child(
-                                        Body::new(warning.clone()).color(theme.warning),
+                                        Text::body(warning.clone()).color(theme.warning),
                                     )
                             })),
                         )
@@ -2063,7 +2069,7 @@ impl HooksSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.enabled"))),
+                            .child(Text::body(dbflux_i18n::t!("settings.hooks.form.enabled"))),
                         cx,
                     ))
                     .when(!is_lua, |container| {
@@ -2083,7 +2089,7 @@ impl HooksSection {
                                             cx.notify();
                                         })),
                                 )
-                                .child(Body::new(dbflux_i18n::t!("settings.hooks.form.inherit_env"))),
+                                .child(Text::body(dbflux_i18n::t!("settings.hooks.form.inherit_env"))),
                             cx,
                         ))
                     })

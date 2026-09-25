@@ -11,9 +11,10 @@ use dbflux_components::composites::{
 use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{BadgeTone, Label, focus_frame};
+use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{BadgeTone, FocusShape, Label, focus_ring};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{ChromeColors, Widths};
-use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -850,7 +851,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.mcp.trusted_clients_title"),
                 dbflux_i18n::t!("settings.mcp.trusted_clients_form_description"),
                 cx,
@@ -887,9 +888,10 @@ impl McpSection {
                         ChromeColors::tint(&theme),
                         cx,
                     ))
-                    .child(focus_frame(
+                    .child(focus_ring(
                         self.mcp_focus == McpFocus::Form
                             && self.mcp_form_field == McpFormField::ClientActive,
+                        FocusShape::Rect,
                         Some(ChromeColors::tint(&theme)),
                         div()
                             .flex()
@@ -904,7 +906,7 @@ impl McpSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Body::new(dbflux_i18n::t!("settings.mcp.field.active"))),
+                            .child(Text::body(dbflux_i18n::t!("settings.mcp.field.active"))),
                         cx,
                     )),
             );
@@ -945,7 +947,14 @@ impl McpSection {
     ) -> impl IntoElement {
         let is_focused = self.mcp_focus == McpFocus::Form && self.mcp_form_field == field;
 
-        focus_frame(is_focused, Some(tint), Input::new(input).small(), cx).on_mouse_down(
+        focus_ring(
+            is_focused,
+            FocusShape::Chamfer(ChamferCut::CONTROL),
+            Some(tint),
+            Input::new(input).small(),
+            cx,
+        )
+        .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
                 this.switching_input = true;
@@ -1017,7 +1026,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.mcp.roles_title"),
                 dbflux_i18n::t!("settings.mcp.roles_form_description"),
                 cx,
@@ -1040,11 +1049,12 @@ impl McpSection {
                     ))
                     .child(Label::new(dbflux_i18n::t!("settings.mcp.field.policies")))
                     .child(
-                        Body::new(dbflux_i18n::t!("settings.mcp.hint.select_policies"))
+                        Text::body(dbflux_i18n::t!("settings.mcp.hint.select_policies"))
                             .color(theme.muted_foreground),
                     )
-                    .child(focus_frame(
+                    .child(focus_ring(
                         role_policies_focused,
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(ChromeColors::tint(&theme)),
                         self.role_policies_multiselect.clone(),
                         cx,
@@ -1146,7 +1156,7 @@ impl McpSection {
             .h_full()
             .flex()
             .flex_col()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.mcp.policies_title"),
                 dbflux_i18n::t!("settings.mcp.policies_form_description"),
                 cx,
@@ -1178,8 +1188,9 @@ impl McpSection {
                                 let is_focused =
                                     is_form_focused && field == McpFormField::PolicyClass(index);
 
-                                focus_frame(
+                                focus_ring(
                                     is_focused,
+                                    FocusShape::Rect,
                                     Some(ChromeColors::tint(&theme)),
                                     div()
                                         .flex()
@@ -1211,9 +1222,9 @@ impl McpSection {
                                                 .flex()
                                                 .flex_col()
                                                 .gap_0p5()
-                                                .child(FieldLabel::new(label.clone()))
+                                                .child(Text::body(label.clone()))
                                                 .child(
-                                                    Body::new(description.clone())
+                                                    Text::body(description.clone())
                                                         .color(theme.muted_foreground),
                                                 ),
                                         ),
@@ -1230,7 +1241,7 @@ impl McpSection {
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(SubSectionLabel::new(tool_group_label(group_id)))
+                            .child(Text::label(tool_group_label(group_id)))
                             .child(div().flex().flex_col().gap_2().pl_2().children(
                                 tools.iter().map(|&tool| {
                                     let index = tool_index;
@@ -1241,8 +1252,9 @@ impl McpSection {
                                     let is_focused =
                                         is_form_focused && field == McpFormField::PolicyTool(index);
 
-                                    focus_frame(
+                                    focus_ring(
                                         is_focused,
+                                        FocusShape::Rect,
                                         Some(ChromeColors::tint(&theme)),
                                         div()
                                             .flex()
@@ -1275,9 +1287,9 @@ impl McpSection {
                                                     .flex()
                                                     .flex_col()
                                                     .gap_0p5()
-                                                    .child(FieldLabel::new(label))
+                                                    .child(Text::body(label))
                                                     .child(
-                                                        Body::new(description)
+                                                        Text::body(description)
                                                             .color(theme.muted_foreground),
                                                     ),
                                             ),
@@ -1340,7 +1352,7 @@ impl McpSection {
             .justify_end()
             .gap_3()
             .child(
-                Body::new(if self.client_has_unsaved_changes(cx) {
+                Text::body(if self.client_has_unsaved_changes(cx) {
                     dbflux_i18n::t!("settings.mcp.status.unsaved")
                 } else {
                     dbflux_i18n::t!("settings.mcp.status.saved")
@@ -1414,7 +1426,7 @@ impl McpSection {
             .gap_3()
             .when(role_is_builtin, |div| {
                 div.child(
-                    Body::new(dbflux_i18n::t!("settings.mcp.error.builtin_role_readonly"))
+                    Text::body(dbflux_i18n::t!("settings.mcp.error.builtin_role_readonly"))
                         .color(cx.theme().muted_foreground),
                 )
             })
@@ -1474,7 +1486,7 @@ impl McpSection {
             .gap_3()
             .when(policy_is_builtin, |div| {
                 div.child(
-                    Body::new(dbflux_i18n::t!(
+                    Text::body(dbflux_i18n::t!(
                         "settings.mcp.error.builtin_policy_readonly"
                     ))
                     .color(cx.theme().muted_foreground),
@@ -2058,7 +2070,7 @@ impl Render for McpSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 title,
                 description,
                 cx,
