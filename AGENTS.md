@@ -657,8 +657,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 ### Platform Detection
 
 `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences:
-- X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
-- `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
+- `floating_window_kind()` returns `WindowKind::Floating` on every platform. On Linux, gpui parents a floating window to the window holding keyboard focus when it opens (`xdg_toplevel.set_parent` on Wayland, `WM_TRANSIENT_FOR` on X11), so tiling compositors float it at its requested size. Do not use `WindowKind::Dialog` for secondary windows: it is modal and blocks input to the parent.
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
 
 A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/platform.rs` for internal compatibility.

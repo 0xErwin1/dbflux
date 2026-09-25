@@ -324,10 +324,6 @@ pub fn render_linux_title_bar(window: &mut Window, cx: &mut App) -> impl IntoEle
 
 /// Returns true if running on X11 (not Wayland, macOS, or Windows).
 ///
-/// X11 has issues with `WindowKind::Floating` where it treats floating
-/// windows as transient dialogs, which can cause rendering problems in
-/// some compositors. On X11, we avoid using `WindowKind::Floating`.
-///
 /// Detection is based on environment variables:
 /// - `WAYLAND_DISPLAY` indicates Wayland
 /// - `DISPLAY` indicates X11 (if WAYLAND_DISPLAY is not set)
@@ -350,19 +346,16 @@ pub fn is_x11() -> bool {
     }
 }
 
-/// Returns the appropriate window kind for floating windows based on the platform.
+/// Returns the window kind for secondary windows (Settings, Connection Manager, etc.).
 ///
-/// - On X11: returns `None` (use default window kind to avoid transient dialog issues)
-/// - On other platforms (Wayland, macOS, Windows): returns `Some(WindowKind::Floating)`
-///
-/// Use this when creating secondary windows (Settings, Connection Manager, etc.)
-/// that should float on supported platforms but work correctly on X11.
-pub fn floating_window_kind() -> Option<WindowKind> {
-    if is_x11() {
-        None
-    } else {
-        Some(WindowKind::Floating)
-    }
+/// `WindowKind::Floating` on every platform. On Linux, gpui parents a floating
+/// window to the window that holds keyboard focus when it opens: Wayland sets
+/// the `xdg_toplevel` parent and X11 sets `WM_TRANSIENT_FOR`. Tiling
+/// compositors such as Hyprland float a window with a parent at its requested
+/// size instead of tiling it. The window is not modal: `WindowKind::Dialog`
+/// would block input to its parent.
+pub fn floating_window_kind() -> WindowKind {
+    WindowKind::Floating
 }
 
 /// Space kept free between a secondary window and each edge of the display's
@@ -403,15 +396,13 @@ pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<g
 }
 
 /// Applies standard DBFlux window options for secondary windows (Settings, Connection
-/// Manager, SSO Wizard, etc.): floating kind (where supported), min size so X11 window
+/// Manager, SSO Wizard, etc.): floating kind, min size so X11 window
 /// managers emit `WM_NORMAL_HINTS`, and platform-appropriate decorations.
 ///
 /// On Linux, requests CSD so secondary windows match the main window behavior and
 /// render their own title bars. On other platforms, requests server-side decorations.
 pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_height: f32) {
-    if let Some(kind) = floating_window_kind() {
-        options.kind = kind;
-    }
+    options.kind = floating_window_kind();
 
     // A minimum larger than the window it applies to would force the window
     // past the display, so it never exceeds the fitted initial size.
