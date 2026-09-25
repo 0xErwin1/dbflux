@@ -15,8 +15,9 @@ use gpui::{
     div, px,
 };
 // Only the CSD title bar uses these, and it is compiled on Linux alone.
+use gpui::InteractiveElement;
 #[cfg(target_os = "linux")]
-use gpui::{ClickEvent, Decorations, InteractiveElement, ParentElement, Styled};
+use gpui::{ClickEvent, Decorations, ParentElement, Styled};
 #[cfg(target_os = "linux")]
 use gpui_component::ActiveTheme;
 #[cfg(target_os = "linux")]
@@ -133,41 +134,20 @@ pub fn render_csd_title_bar_with_crumbs(
     crumbs: &[TitleCrumb],
     on_close: Option<TitleBarHandler>,
 ) -> Option<Stateful<gpui::Div>> {
+    if !prepare_client_decorations(window) {
+        return None;
+    }
+
     // Only the Linux CSD branch reads these; the signature stays uniform so
     // callers do not need their own cfg.
     #[cfg(not(target_os = "linux"))]
     let _ = (cx, title, crumbs, on_close);
 
-    if !should_render_csd(window) {
-        #[cfg(target_os = "linux")]
-        window.set_client_inset(px(0.0));
-        return None;
-    }
-
-    window.set_client_inset(TITLE_BAR_HEIGHT);
-
     #[cfg(target_os = "linux")]
     {
-        let controls = window.window_controls();
         let theme = cx.theme();
-        let title_text = title.to_string();
-
-        let make_button = |icon: AppIcon, handler: TitleBarHandler| {
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(46.0))
-                .h_full()
-                .cursor_pointer()
-                .hover(move |d| d.bg(theme.secondary))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                    handler(window, cx);
-                })
-                .child(Icon::new(icon).size(Heights::ICON_SM).muted())
-        };
-
-        let mut title_bar = div()
+        let sep_color = ChromeColors::ghost_border(theme);
+        let title_bar = div()
             .id("linux-csd-title-bar")
             .flex()
             .flex_row()
@@ -175,20 +155,9 @@ pub fn render_csd_title_bar_with_crumbs(
             .h(TITLE_BAR_HEIGHT)
             .bg(theme.tab_bar)
             .border_b_1()
-            .border_color(theme.border)
-            .on_double_click(|_: &ClickEvent, window: &mut Window, _cx: &mut App| {
-                window.zoom_window();
-            })
-            .on_mouse_down(
-                gpui::MouseButton::Right,
-                |event: &gpui::MouseDownEvent, window: &mut Window, _cx: &mut App| {
-                    window.show_window_menu(event.position);
-                },
-            );
+            .border_color(theme.border);
 
-        let sep_color = ChromeColors::ghost_border(theme);
-
-        let mut drag_area = div()
+        let mut drag_area = csd_drag_area("linux-csd-drag-area")
             .flex()
             .flex_row()
             .items_center()
@@ -196,11 +165,7 @@ pub fn render_csd_title_bar_with_crumbs(
             .h_full()
             .pl_3()
             .gap_2()
-            .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
-                window.start_window_move();
-            })
-            .child(Text::body_sm(title_text));
+            .child(Text::body_sm(title.to_string()));
 
         for crumb in crumbs {
             drag_area = drag_area
@@ -222,17 +187,114 @@ pub fn render_csd_title_bar_with_crumbs(
                 });
         }
 
-        title_bar = title_bar.child(drag_area);
+        Some(
+            title_bar
+                .child(drag_area)
+                .child(render_csd_window_controls(window, cx, on_close)),
+        )
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Reports whether the app draws its own title bar this frame and sets the
+/// client inset to match.
+///
+/// Call once per render of a top-level window that embeds its own title bar
+/// row. When CSD is active the inset is set to `TITLE_BAR_HEIGHT`; otherwise,
+/// on Linux, it is reset to zero so a window that left CSD mode does not keep
+/// a stale inset.
+pub fn prepare_client_decorations(window: &mut Window) -> bool {
+    if !should_render_csd(window) {
+        #[cfg(target_os = "linux")]
+        window.set_client_inset(px(0.0));
+        return false;
+    }
+
+    window.set_client_inset(TITLE_BAR_HEIGHT);
+    true
+}
+
+/// The window-management area of a CSD title bar: dragging moves the window,
+/// a double click maximizes or restores it, and a right click opens the
+/// window menu. Elsewhere it is a plain element.
+pub fn csd_drag_area(id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
+    let area = div().id(id);
+
+    #[cfg(target_os = "linux")]
+    let area = area
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
+            window.start_window_move();
+        })
+        .on_double_click(|_: &ClickEvent, window: &mut Window, _cx: &mut App| {
+            window.zoom_window();
+        })
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            |event: &gpui::MouseDownEvent, window: &mut Window, _cx: &mut App| {
+                window.show_window_menu(event.position);
+            },
+        );
+
+    area
+}
+
+/// Minimize, maximize and close buttons of a CSD title bar, as the compositor
+/// allows them, each 46 px wide and filling the bar's height.
+///
+/// `on_close` replaces the close button's action; `None` keeps the default of
+/// removing the window. Returns an empty element off Linux.
+pub fn render_csd_window_controls(
+    window: &mut Window,
+    cx: &mut App,
+    on_close: Option<TitleBarHandler>,
+) -> gpui::AnyElement {
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, cx, on_close);
+
+    #[cfg(target_os = "linux")]
+    {
+        let controls = window.window_controls();
+        let hover = cx.theme().secondary;
+
+        let make_button = |id: &'static str, icon: AppIcon, handler: TitleBarHandler| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(46.0))
+                .h_full()
+                .cursor_pointer()
+                .hover(move |d| d.bg(hover))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    handler(window, cx);
+                })
+                .child(Icon::new(icon).size(Heights::ICON_SM).muted())
+        };
+
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .h_full();
 
         if controls.minimize {
-            title_bar = title_bar.child(make_button(
+            row = row.child(make_button(
+                "csd-minimize",
                 AppIcon::Minimize2,
                 Box::new(|window, _cx| window.minimize_window()),
             ));
         }
 
         if controls.maximize {
-            title_bar = title_bar.child(make_button(
+            row = row.child(make_button(
+                "csd-maximize",
                 AppIcon::Maximize2,
                 Box::new(|window, _cx| window.zoom_window()),
             ));
@@ -240,14 +302,14 @@ pub fn render_csd_title_bar_with_crumbs(
 
         let close_handler =
             on_close.unwrap_or_else(|| Box::new(|window, _cx| window.remove_window()));
-        title_bar = title_bar.child(make_button(AppIcon::X, close_handler));
+        row = row.child(make_button("csd-close", AppIcon::X, close_handler));
 
-        Some(title_bar)
+        row.into_any_element()
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        None
+        div().into_any_element()
     }
 }
 

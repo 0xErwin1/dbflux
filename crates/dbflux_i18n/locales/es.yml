@@ -3538,6 +3538,13 @@ shutdown:
   failed: Error al cerrar
 
 sidebar:
+  header:
+    add: "Agregar"
+    filter: "Filtrar"
+  failure:
+    retry: "Reintentar"
+    edit: "Editar la conexión"
+    audit: "Ver en Auditoría"
   confirm:
     delete_hint: Presiona x para confirmar la eliminación, ESC para cancelar
     items:
@@ -3626,6 +3633,9 @@ sidebar:
       one: Se omitió 1 tabla fuera del perfil/base de datos activos
       many: "Se omitieron %{count} tablas fuera del perfil/base de datos activos"
   status:
+    connected: "%{count} conectadas"
+    idle: "%{count} inactivas"
+    no_connections: "Todavía no hay conexiones"
     connection_summary: "%{connected} conectadas · %{idle} inactivas"
     profile_fallback_name: conexión
   tabs:
@@ -3742,6 +3752,8 @@ sidebar:
       instance_overview: Resumen de instancia
       untitled_chart: Gráfico sin título
     status:
+      connecting_inline: "conectando"
+      retry_inline: "reintentar"
       loading: Cargando…
       profile_connecting: "Conectando a %{name}…"
       database_loading: "%{name} (cargando…)"
@@ -3843,6 +3855,15 @@ sso_wizard:
     roles_failed: "Error al descubrir roles: %{error}"
     profile_created: Perfil de autenticación de AWS SSO creado
 status_bar:
+  no_connection: "Sin conexión"
+  ready: "Listo"
+  tasks_failed: "%{count} con error"
+  background_tasks:
+    one: "1 tarea en segundo plano"
+    many: "%{count} tareas en segundo plano"
+  approvals:
+    one: "1 aprobación"
+    many: "%{count} aprobaciones"
   disconnected: desconectado
   read_only:
     profile:
@@ -3856,6 +3877,12 @@ status_bar:
     one: "1 en curso"
     many: "%{count} en curso"
 tasks_panel:
+  title: "Tareas en segundo plano"
+  running: "%{count} en curso"
+  failed: "%{count} con error"
+  clear_finished: "Limpiar terminadas"
+  cancel: "Cancelar tarea"
+  dismiss: "Descartar"
   empty: No hay tareas en segundo plano
   output_truncated: ... salida truncada en el panel
 toast:
@@ -3864,6 +3891,28 @@ toast:
     show_details: Mostrar detalles
     hide_details: Ocultar detalles
 workspace:
+  rail:
+    connections: "Conexiones"
+    scripts: "Scripts"
+    approvals: "Aprobaciones de MCP"
+    audit: "Auditoría"
+    settings: "Configuración"
+  title_bar:
+    command_search: "Buscar o ejecutar un comando"
+    approvals: "Aprobaciones de MCP"
+    collapse_sidebar: "Contraer la barra lateral"
+    expand_sidebar: "Expandir la barra lateral"
+  empty:
+    title: "Ninguna pestaña abierta"
+    subtitle: "Abre algo desde la barra lateral o empieza aquí."
+    start: "Empezar"
+    recent: "Recientes"
+  recent:
+    just_now: "ahora"
+    minutes_ago: "hace %{count} min"
+    hours_ago: "hace %{count} h"
+    yesterday: "ayer"
+    days_ago: "hace %{count} días"
   background_tasks: Tareas en segundo plano
   background_tasks_idle: inactivo
   empty_documents: No hay documentos abiertos

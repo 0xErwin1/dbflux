@@ -13,6 +13,38 @@ enum ConnectionKeyboardMovePlan {
 }
 
 impl Sidebar {
+    fn is_failure_row(state: &TreeState, index: usize) -> bool {
+        state.entry(index).is_some_and(|entry| {
+            crate::connection_failure::is_failure_row_id(entry.item().id.as_ref())
+        })
+    }
+
+    /// The entry one `step` away from `current`, past the rows that carry a
+    /// failed-connection block.
+    fn step_over_failure_rows(
+        state: &TreeState,
+        current: usize,
+        step: isize,
+        visible_count: usize,
+    ) -> usize {
+        crate::connection_failure::next_selectable_index(current, step, visible_count, |index| {
+            Self::is_failure_row(state, index)
+        })
+    }
+
+    fn first_tree_row_index(state: &TreeState, visible_count: usize) -> usize {
+        (0..visible_count)
+            .find(|index| !Self::is_failure_row(state, *index))
+            .unwrap_or(0)
+    }
+
+    fn last_tree_row_index(state: &TreeState, visible_count: usize) -> usize {
+        (0..visible_count)
+            .rev()
+            .find(|index| !Self::is_failure_row(state, *index))
+            .unwrap_or(visible_count.saturating_sub(1))
+    }
+
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
         let visible_count = self.active_visible_entry_count(cx);
         if visible_count == 0 {
@@ -24,8 +56,8 @@ impl Sidebar {
         let tree = self.active_tree_state().clone();
         tree.update(cx, |state, cx| {
             let next = match state.selected_index() {
-                Some(current) => (current + 1).min(visible_count.saturating_sub(1)),
-                None => 0,
+                Some(current) => Self::step_over_failure_rows(state, current, 1, visible_count),
+                None => Self::first_tree_row_index(state, visible_count),
             };
             state.set_selected_index(Some(next), cx);
             state.scroll_to_item(next, gpui::ScrollStrategy::Center);
@@ -49,8 +81,8 @@ impl Sidebar {
         let tree = self.active_tree_state().clone();
         tree.update(cx, |state, cx| {
             let prev = match state.selected_index() {
-                Some(current) => current.saturating_sub(1),
-                None => visible_count.saturating_sub(1),
+                Some(current) => Self::step_over_failure_rows(state, current, -1, visible_count),
+                None => Self::last_tree_row_index(state, visible_count),
             };
             state.set_selected_index(Some(prev), cx);
             state.scroll_to_item(prev, gpui::ScrollStrategy::Center);
@@ -71,8 +103,9 @@ impl Sidebar {
 
         let tree = self.active_tree_state().clone();
         tree.update(cx, |state, cx| {
-            state.set_selected_index(Some(0), cx);
-            state.scroll_to_item(0, gpui::ScrollStrategy::Center);
+            let first = Self::first_tree_row_index(state, visible_count);
+            state.set_selected_index(Some(first), cx);
+            state.scroll_to_item(first, gpui::ScrollStrategy::Center);
         });
 
         if let Some(entry) = tree.read(cx).selected_entry().cloned() {
@@ -88,9 +121,9 @@ impl Sidebar {
             return;
         }
 
-        let last = visible_count.saturating_sub(1);
         let tree = self.active_tree_state().clone();
         tree.update(cx, |state, cx| {
+            let last = Self::last_tree_row_index(state, visible_count);
             state.set_selected_index(Some(last), cx);
             state.scroll_to_item(last, gpui::ScrollStrategy::Center);
         });

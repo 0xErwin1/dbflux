@@ -3538,6 +3538,13 @@ shutdown:
   failed: Shutdown failed
 
 sidebar:
+  header:
+    add: "Add"
+    filter: "Filter"
+  failure:
+    retry: "Retry"
+    edit: "Edit connection"
+    audit: "View in Audit"
   confirm:
     delete_hint: Press x to confirm delete, ESC to cancel
     items:
@@ -3557,7 +3564,7 @@ sidebar:
     cannot_load_schema_foreign_keys: Cannot load schema foreign keys
     cannot_load_schema_routines: Cannot load schema routines
   filter:
-    connections_placeholder: Filter connections and schema...
+    connections_placeholder: Filter connections and schema
     scripts_placeholder: Filter scripts...
     stream_placeholder: Filter stream names...
   menu:
@@ -3626,6 +3633,9 @@ sidebar:
       one: 1 table outside the active profile/database was skipped
       many: "%{count} tables outside the active profile/database were skipped"
   status:
+    connected: "%{count} connected"
+    idle: "%{count} idle"
+    no_connections: "No connections yet"
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
   tabs:
@@ -3742,6 +3752,8 @@ sidebar:
       instance_overview: Instance Overview
       untitled_chart: Untitled chart
     status:
+      connecting_inline: "connecting"
+      retry_inline: "retry"
       loading: Loading…
       profile_connecting: "Connecting to %{name}…"
       database_loading: "%{name} (loading…)"
@@ -3843,6 +3855,15 @@ sso_wizard:
     roles_failed: "Failed to discover roles: %{error}"
     profile_created: Created AWS SSO auth profile
 status_bar:
+  no_connection: "No connection"
+  ready: "Ready"
+  tasks_failed: "%{count} failed"
+  background_tasks:
+    one: "1 background task"
+    many: "%{count} background tasks"
+  approvals:
+    one: "1 approval"
+    many: "%{count} approvals"
   disconnected: disconnected
   read_only:
     profile:
@@ -3856,6 +3877,12 @@ status_bar:
     one: "1 running"
     many: "%{count} running"
 tasks_panel:
+  title: "Background tasks"
+  running: "%{count} running"
+  failed: "%{count} failed"
+  clear_finished: "Clear finished"
+  cancel: "Cancel task"
+  dismiss: "Dismiss"
   empty: No background tasks
   output_truncated: ... output truncated in panel
 toast:
@@ -3864,6 +3891,28 @@ toast:
     show_details: Show details
     hide_details: Hide details
 workspace:
+  rail:
+    connections: "Connections"
+    scripts: "Scripts"
+    approvals: "MCP approvals"
+    audit: "Audit"
+    settings: "Settings"
+  title_bar:
+    command_search: "Search or run a command"
+    approvals: "MCP approvals"
+    collapse_sidebar: "Collapse sidebar"
+    expand_sidebar: "Expand sidebar"
+  empty:
+    title: "No tab open"
+    subtitle: "Open something from the sidebar, or start here."
+    start: "Start"
+    recent: "Recent"
+  recent:
+    just_now: "just now"
+    minutes_ago: "%{count} min ago"
+    hours_ago: "%{count} h ago"
+    yesterday: "yesterday"
+    days_ago: "%{count} days ago"
   background_tasks: Background Tasks
   background_tasks_idle: idle
   empty_documents: No documents open

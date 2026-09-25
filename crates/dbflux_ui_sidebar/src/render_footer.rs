@@ -1,66 +1,106 @@
 use super::*;
-use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
+use dbflux_components::primitives::{Status, StatusIndicator};
+use dbflux_components::tokens::ShellMetrics;
+
+/// What the sidebar footer says about the saved connections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FooterSummary {
+    /// No connection profile exists yet.
+    Empty,
+    Counts {
+        connected: usize,
+        idle: usize,
+    },
+}
+
+impl FooterSummary {
+    pub fn new(connected: usize, total_profiles: usize) -> Self {
+        if total_profiles == 0 {
+            return Self::Empty;
+        }
+
+        Self::Counts {
+            connected,
+            idle: total_profiles.saturating_sub(connected),
+        }
+    }
+}
 
 impl Sidebar {
+    /// Footer (AppByzTable): "◆ 2 connected · 37 idle", the connected count
+    /// in the success color while any connection is open.
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let sidebar = cx.entity().clone();
 
         let state = self.app_state.read(cx);
-        let connected_count = state.connections().len();
-        let total_profiles = state.profiles().len();
-        let idle_count = total_profiles.saturating_sub(connected_count);
+        let summary = FooterSummary::new(state.connections().len(), state.profiles().len());
 
-        let status_text = crate::labels::footer_counts_label(connected_count, idle_count);
-        let status = if connected_count > 0 {
-            Status::Connected
-        } else {
-            Status::Idle
-        };
+        let content = match summary {
+            FooterSummary::Empty => div()
+                .flex()
+                .items_center()
+                .child(
+                    StatusIndicator::new(Status::Idle)
+                        .label(dbflux_i18n::t!("sidebar.status.no_connections")),
+                )
+                .into_any_element(),
+            FooterSummary::Counts { connected, idle } => {
+                let status = if connected > 0 {
+                    Status::Connected
+                } else {
+                    Status::Idle
+                };
 
-        div()
-            .w_full()
-            .h(px(30.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::XS)
-                    .child(StatusIndicator::new(status))
-                    .child(
-                        Text::body(status_text)
-                            .font_size(FontSizes::XS)
-                            .color(theme.muted_foreground),
-                    ),
-            )
-            .child(
-                div().flex().items_center().gap(Spacing::XS).child(
-                    div()
-                        .id("settings-btn")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(22.0))
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary))
-                        .on_click(move |_, _, cx| {
-                            sidebar.update(cx, |_this, cx| {
-                                cx.emit(SidebarEvent::RequestOpenSettings);
-                            });
-                        })
-                        .child(
-                            Icon::new(AppIcon::Settings)
-                                .size(px(14.0))
-                                .color(theme.muted_foreground),
-                        ),
-                ),
-            )
+                    .gap(ShellMetrics::SIDEBAR_FOOTER_GAP)
+                    .child(StatusIndicator::new(status).label(dbflux_i18n::t!(
+                        "sidebar.status.connected",
+                        count = connected
+                    )))
+                    .child("\u{b7}")
+                    .child(dbflux_i18n::t!("sidebar.status.idle", count = idle))
+                    .into_any_element()
+            }
+        };
+
+        div()
+            .id("sidebar-footer")
+            .w_full()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(ShellMetrics::SIDEBAR_FOOTER_HEIGHT)
+            .px(ShellMetrics::SIDEBAR_FOOTER_PADDING_X)
+            .border_t_1()
+            .border_color(theme.border)
+            .text_size(ShellMetrics::SIDEBAR_FOOTER_FONT)
+            .text_color(theme.muted_foreground)
+            .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FooterSummary;
+
+    #[test]
+    fn footer_counts_idle_profiles_and_names_an_empty_tree() {
+        assert_eq!(FooterSummary::new(0, 0), FooterSummary::Empty);
+        assert_eq!(
+            FooterSummary::new(2, 39),
+            FooterSummary::Counts {
+                connected: 2,
+                idle: 37,
+            }
+        );
+        assert_eq!(
+            FooterSummary::new(0, 4),
+            FooterSummary::Counts {
+                connected: 0,
+                idle: 4,
+            }
+        );
     }
 }

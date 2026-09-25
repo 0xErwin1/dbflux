@@ -1,137 +1,122 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
+use crate::connection_failure::ConnectionFailure;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, SyntaxColors};
-use gpui::FontWeight;
+use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, Fields, HeaderMetrics, ShellMetrics, SyntaxColors,
+};
 
-fn sidebar_tab_text(
-    label: impl Into<SharedString>,
-    active: bool,
-    focused: bool,
-    color: Hsla,
-) -> Text {
-    let weight = if active && focused {
-        FontWeight::BOLD
-    } else if active {
-        FontWeight::SEMIBOLD
-    } else {
-        FontWeight::MEDIUM
+/// Section label of the sidebar header for `tab`, tinted while the sidebar
+/// has keyboard focus.
+fn sidebar_header_label(tab: SidebarTab, focused: bool, tint: Hsla) -> Text {
+    let title = match tab {
+        SidebarTab::Connections => dbflux_i18n::t!("sidebar.tabs.connections"),
+        SidebarTab::Scripts => dbflux_i18n::t!("sidebar.tabs.scripts"),
     };
 
-    Text::caption(label)
-        .font_weight(weight)
-        .color(color)
-        .font_size(FontSizes::SM)
+    let label = Text::label(title).font_size(ShellMetrics::SECTION_LABEL_FONT);
+
+    if focused { label.color(tint) } else { label }
 }
 
 impl Sidebar {
-    fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let active_tab = self.active_tab;
-        let sidebar = cx.entity().clone();
-        let sidebar2 = cx.entity().clone();
-        let focused = self.connections_focused;
+    /// Header of the active view (AppByzTable): its section label, then the
+    /// add menu and the filter buttons.
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tint = ChromeColors::tint(cx.theme());
+        let sidebar_for_add = cx.entity().clone();
+        let sidebar_for_filter = cx.entity().clone();
 
-        let tab_text_color = |active: bool| {
-            if active {
-                if focused {
-                    ChromeColors::tint(theme)
-                } else {
-                    theme.foreground
-                }
-            } else {
-                theme.muted_foreground
-            }
-        };
-
-        let tab_border_color = |active: bool| {
-            if active {
-                ChromeColors::tint(theme)
-            } else {
-                gpui::transparent_black()
-            }
-        };
-
-        // Tab strip: uppercase mono caption, active gets a 2px tint
-        // underline, no hover background (per design).
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .px(Spacing::MD)
-            .h(px(40.0))
-            .border_b_1()
-            .border_color(theme.border)
+            .gap(HeaderMetrics::PANEL_GAP)
+            .h(ShellMetrics::SIDEBAR_HEADER_HEIGHT)
+            .pl(HeaderMetrics::PANEL_PADDING_LEFT)
+            .pr(HeaderMetrics::PANEL_PADDING_RIGHT)
+            .child(sidebar_header_label(
+                self.active_tab,
+                self.connections_focused,
+                tint,
+            ))
+            .child(div().flex_1())
+            .child(
+                Button::new("sidebar-add", dbflux_i18n::t!("sidebar.header.add"))
+                    .small()
+                    .icon(AppIcon::Plus)
+                    .icon_size(ShellMetrics::SIDEBAR_FILTER_ICON)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(move |_, _, cx| {
+                        sidebar_for_add.update(cx, |this, cx| {
+                            this.toggle_add_menu(cx);
+                        });
+                    }),
+            )
+            .child(
+                Button::new("sidebar-filter", dbflux_i18n::t!("sidebar.header.filter"))
+                    .small()
+                    .icon(AppIcon::ListFilter)
+                    .icon_size(ShellMetrics::SIDEBAR_FILTER_ICON)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(move |_, window, cx| {
+                        sidebar_for_filter.update(cx, |this, cx| {
+                            this.focus_active_search(window, cx);
+                        });
+                    }),
+            )
+    }
+
+    /// The filter field of the active view: a 30 px chamfered field with a
+    /// search icon, the frameless input and the `/` keycap that focuses it.
+    fn render_filter_field(
+        &self,
+        input: &Entity<InputState>,
+        query_is_empty: bool,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        let mut shape = Chamfer::new(ChamferCut::CONTROL)
+            .fill(theme.popover)
+            .border(theme.border);
+
+        if focused {
+            shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
+        }
+
+        div()
+            .flex_shrink_0()
+            .px(ShellMetrics::SIDEBAR_FILTER_PADDING_X)
+            .pb(ShellMetrics::SIDEBAR_FILTER_PADDING_BOTTOM)
             .child(
                 div()
+                    .relative()
                     .flex()
                     .items_center()
-                    .gap(Spacing::LG)
-                    .h_full()
+                    .gap(Fields::GAP)
+                    .h(Fields::HEIGHT)
+                    .px(Fields::PADDING_X)
+                    .text_size(Fields::TEXT)
+                    .child(shape)
                     .child(
-                        div()
-                            .id("tab-connections")
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .cursor_pointer()
-                            .border_b_2()
-                            .border_color(tab_border_color(active_tab == SidebarTab::Connections))
-                            .on_click(move |_, _, cx| {
-                                sidebar.update(cx, |this, cx| {
-                                    this.set_active_tab(SidebarTab::Connections, cx);
-                                });
-                            })
-                            .child(sidebar_tab_text(
-                                dbflux_i18n::t!("sidebar.tabs.connections"),
-                                active_tab == SidebarTab::Connections,
-                                focused,
-                                tab_text_color(active_tab == SidebarTab::Connections),
-                            )),
+                        Icon::new(AppIcon::Search)
+                            .size(ShellMetrics::SIDEBAR_FILTER_ICON)
+                            .color(theme.muted_foreground),
                     )
                     .child(
                         div()
-                            .id("tab-scripts")
-                            .h_full()
-                            .flex()
-                            .items_center()
-                            .cursor_pointer()
-                            .border_b_2()
-                            .border_color(tab_border_color(active_tab == SidebarTab::Scripts))
-                            .on_click(move |_, _, cx| {
-                                sidebar2.update(cx, |this, cx| {
-                                    this.set_active_tab(SidebarTab::Scripts, cx);
-                                });
-                            })
-                            .child(sidebar_tab_text(
-                                dbflux_i18n::t!("sidebar.tabs.scripts"),
-                                active_tab == SidebarTab::Scripts,
-                                focused,
-                                tab_text_color(active_tab == SidebarTab::Scripts),
-                            )),
-                    ),
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(input).xsmall().appearance(false).cleanable(true)),
+                    )
+                    .when(query_is_empty, |field| field.child(Kbd::new("/"))),
             )
-            .child({
-                let sidebar_for_toggle = cx.entity().clone();
-                let hover_bg = theme.secondary;
-                div()
-                    .id("add-button")
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(move |d| d.bg(hover_bg))
-                    .on_click(move |_, _, cx| {
-                        sidebar_for_toggle.update(cx, |this, cx| {
-                            this.toggle_add_menu(cx);
-                        });
-                    })
-                    .child(Text::caption("+"))
-            })
     }
 
     fn render_action_bars(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -162,6 +147,7 @@ impl Sidebar {
         &self,
         tree_params: TreeRenderParams,
         sidebar_entity: &Entity<Self>,
+        filter_field: AnyElement,
     ) -> impl IntoElement {
         let has_entries = self.visible_entry_count > 0;
         let sidebar_for_root_drop = sidebar_entity.clone();
@@ -175,8 +161,6 @@ impl Sidebar {
             .overflow_hidden()
             .child(
                 div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
                     // Clear row hover when the pointer enters the search bar.
                     // Workaround for GPUI 0.2.2 lacking on_mouse_leave.
                     .on_mouse_move(move |_, _, cx| {
@@ -187,12 +171,7 @@ impl Sidebar {
                             }
                         });
                     })
-                    .child(
-                        Input::new(&self.connections_search_input)
-                            .xsmall()
-                            .cleanable(true)
-                            .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
-                    ),
+                    .child(filter_field),
             )
             .when(has_entries, |el| {
                 el.child(
@@ -244,10 +223,13 @@ impl Sidebar {
             })
     }
 
-    fn render_scripts_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_scripts_content(
+        &mut self,
+        filter_field: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme();
         let syntax_colors = SyntaxColors::for_current(cx);
-        let search_input = self.scripts_search_input.clone();
         let sidebar_entity = cx.entity().clone();
         let sidebar_for_root_drop = sidebar_entity.clone();
         let sidebar_for_clear_drop = sidebar_entity.clone();
@@ -264,6 +246,8 @@ impl Sidebar {
         let tree_params = TreeRenderParams {
             connections: Vec::new(),
             connect_failures: HashMap::new(),
+            failure_details: HashMap::new(),
+            connecting: HashSet::new(),
             code_gen_capabilities: HashMap::new(),
             active_id: None,
             profile_icons: HashMap::new(),
@@ -296,15 +280,7 @@ impl Sidebar {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // Search bar
-            .child(
-                div().px(Spacing::SM).py(Spacing::XS).child(
-                    Input::new(&search_input)
-                        .xsmall()
-                        .cleanable(true)
-                        .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM)),
-                ),
-            )
+            .child(filter_field)
             // Tree or empty state
             .when(has_entries || has_search, |el| {
                 el.child(
@@ -366,6 +342,21 @@ impl Render for Sidebar {
             self.open_child_picker_modal(&item_id, window, cx);
         }
 
+        let (search_input, query_is_empty) = match self.active_tab {
+            SidebarTab::Connections => (
+                self.connections_search_input.clone(),
+                self.connections_search_query.is_empty(),
+            ),
+            SidebarTab::Scripts => (
+                self.scripts_search_input.clone(),
+                self.scripts_search_query.is_empty(),
+            ),
+        };
+        let search_focused = search_input.read(cx).focus_handle(cx).is_focused(window);
+        let filter_field = self
+            .render_filter_field(&search_input, query_is_empty, search_focused, cx)
+            .into_any_element();
+
         let theme = cx.theme();
         let syntax_colors = SyntaxColors::for_current(cx);
         let state = self.app_state.read(cx);
@@ -410,6 +401,23 @@ impl Render for Sidebar {
             })
             .collect();
 
+        let failure_details: HashMap<Uuid, ConnectionFailure> = state
+            .profiles()
+            .iter()
+            .filter_map(|profile| {
+                state
+                    .connect_failure(profile.id)
+                    .map(|error| (profile.id, ConnectionFailure::from_error(error)))
+            })
+            .collect();
+
+        let connecting: HashSet<Uuid> = state
+            .profiles()
+            .iter()
+            .map(|profile| profile.id)
+            .filter(|profile_id| state.is_operation_pending(*profile_id, None))
+            .collect();
+
         let code_gen_capabilities: HashMap<Uuid, CodeGenCapabilities> = state
             .connections()
             .iter()
@@ -426,6 +434,8 @@ impl Render for Sidebar {
         let tree_params = TreeRenderParams {
             connections,
             connect_failures,
+            failure_details,
+            connecting,
             code_gen_capabilities,
             active_id,
             profile_icons,
@@ -456,7 +466,17 @@ impl Render for Sidebar {
         let active_tab = self.active_tab;
 
         let sidebar_for_footer_hover = sidebar_entity.clone();
-        let sidebar_for_tabbar_hover = sidebar_entity.clone();
+        let sidebar_for_header_hover = sidebar_entity.clone();
+        let sidebar_background = theme.sidebar;
+
+        let content = match active_tab {
+            SidebarTab::Connections => self
+                .render_connections_content(tree_params, &sidebar_entity, filter_field)
+                .into_any_element(),
+            SidebarTab::Scripts => self
+                .render_scripts_content(filter_field, cx)
+                .into_any_element(),
+        };
 
         // No right border here — the outer `SidebarDock` already paints
         // `border_r_1`. A second border on this inner container produced the
@@ -466,27 +486,22 @@ impl Render for Sidebar {
             .flex()
             .flex_col()
             .size_full()
-            .bg(theme.sidebar)
+            .bg(sidebar_background)
             .child(
-                // Tab bar: clear row hover when mouse enters this region.
+                // Header: clear row hover when mouse enters this region.
                 div()
                     .on_mouse_move(move |_, _, cx| {
-                        sidebar_for_tabbar_hover.update(cx, |this, cx| {
+                        sidebar_for_header_hover.update(cx, |this, cx| {
                             if this.hovered_item_id.is_some() {
                                 this.hovered_item_id = None;
                                 cx.notify();
                             }
                         });
                     })
-                    .child(self.render_tab_bar(cx)),
+                    .child(self.render_header(cx)),
             )
             .child(self.render_action_bars(cx))
-            .when(active_tab == SidebarTab::Connections, |el| {
-                el.child(self.render_connections_content(tree_params, &sidebar_entity))
-            })
-            .when(active_tab == SidebarTab::Scripts, |el| {
-                el.child(self.render_scripts_content(cx))
-            })
+            .child(content)
             .child(
                 // Footer: clear row hover when mouse enters this region.
                 div()
@@ -506,29 +521,31 @@ impl Render for Sidebar {
 
 #[cfg(test)]
 mod tests {
-    use super::sidebar_tab_text;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use gpui::FontWeight;
+    use super::sidebar_header_label;
+    use crate::SidebarTab;
+    use dbflux_components::primitives::TextVariant;
+    use dbflux_components::tokens::ShellMetrics;
 
     #[test]
-    fn sidebar_tabs_use_interface_family_and_stateful_weight_hierarchy() {
-        let inactive = sidebar_tab_text("CONNECTIONS", false, false, gpui::blue()).inspect();
-        let active = sidebar_tab_text("SCRIPTS", true, false, gpui::red()).inspect();
-        let focused = sidebar_tab_text("SCRIPTS", true, true, gpui::green()).inspect();
+    fn header_label_names_the_active_view_as_a_section_label() {
+        let connections =
+            sidebar_header_label(SidebarTab::Connections, false, gpui::red()).inspect();
+        let scripts = sidebar_header_label(SidebarTab::Scripts, false, gpui::red()).inspect();
 
-        for inspection in [inactive, active, focused] {
-            assert_eq!(inspection.family, AppFonts::INTERFACE);
-            assert!(inspection.fallbacks.is_empty());
-            // Tab labels use SM (13px) — the bigger size matches the
-            // design after the visual review pass; the original XS was
-            // judged too cramped against the rest of the chrome.
-            assert_eq!(inspection.size_override, Some(FontSizes::SM));
-            assert!(inspection.has_custom_color_override);
+        for inspection in [connections, scripts] {
+            assert_eq!(inspection.variant, TextVariant::Label);
+            assert_eq!(
+                inspection.size_override,
+                Some(ShellMetrics::SECTION_LABEL_FONT)
+            );
+            assert!(inspection.uses_role_default_color);
         }
+    }
 
-        assert_eq!(inactive.weight_override, Some(FontWeight::MEDIUM));
-        assert_eq!(active.weight_override, Some(FontWeight::SEMIBOLD));
-        assert_eq!(focused.weight_override, Some(FontWeight::BOLD));
+    #[test]
+    fn header_label_takes_the_tint_while_the_sidebar_has_focus() {
+        let focused = sidebar_header_label(SidebarTab::Connections, true, gpui::red()).inspect();
+
+        assert!(focused.has_custom_color_override);
     }
 }

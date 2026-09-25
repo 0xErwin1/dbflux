@@ -2,6 +2,7 @@
 #![recursion_limit = "2048"]
 
 mod code_generation;
+mod connection_failure;
 mod context_menu;
 mod deletion;
 mod drag_drop;
@@ -23,7 +24,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::ModalFocus;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::ConnectedProfile;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,

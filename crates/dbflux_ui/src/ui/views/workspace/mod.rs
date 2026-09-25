@@ -3,6 +3,7 @@ mod dispatch;
 pub mod inspector;
 pub mod pipeline;
 mod render;
+mod shell;
 
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
@@ -42,8 +43,10 @@ use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
+#[cfg(feature = "mcp")]
+use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
-use crate::ui::views::tasks_panel::TasksPanel;
+use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
@@ -380,6 +383,8 @@ pub struct Workspace {
     focus_target: FocusTarget,
     keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
+    /// Tab stop of the title bar's command search, which opens the palette.
+    command_search_focus: FocusHandle,
 
     #[cfg(feature = "mcp")]
     active_governance_panel: Option<GovernancePanel>,
@@ -672,6 +677,23 @@ impl Workspace {
         cx.subscribe(&status_bar, |this, _, _: &ToggleTasksPanel, cx| {
             this.toggle_tasks_panel(cx);
         })
+        .detach();
+
+        cx.subscribe(&tasks_panel, |this, _, _: &CollapseTasksPanel, cx| {
+            if this.tasks_state.is_expanded() {
+                this.toggle_tasks_panel(cx);
+            }
+        })
+        .detach();
+
+        #[cfg(feature = "mcp")]
+        cx.subscribe_in(
+            &status_bar,
+            window,
+            |this, _, _: &OpenApprovalsRequested, window, cx| {
+                this.open_mcp_approvals(window, cx);
+            },
+        )
         .detach();
 
         cx.subscribe_in(
@@ -1269,25 +1291,6 @@ impl Workspace {
         cx.subscribe(
             &sidebar_dock,
             |this, _, event: &SidebarDockEvent, cx| match event {
-                SidebarDockEvent::OpenSettings => {
-                    this.open_settings(cx);
-                }
-                SidebarDockEvent::OpenConnections => {
-                    this.sidebar.update(cx, |s, cx| {
-                        s.set_active_tab(SidebarTab::Connections, cx);
-                    });
-                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
-                SidebarDockEvent::OpenScripts => {
-                    this.sidebar.update(cx, |s, cx| {
-                        s.set_active_tab(SidebarTab::Scripts, cx);
-                    });
-                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
                 SidebarDockEvent::Collapsed => {
                     this.pending_focus = Some(FocusTarget::Document);
                     cx.notify();
@@ -1556,6 +1559,7 @@ impl Workspace {
             focus_target: FocusTarget::default(),
             keymap: default_keymap(),
             focus_handle,
+            command_search_focus: cx.focus_handle(),
             #[cfg(feature = "mcp")]
             active_governance_panel: None,
             _background_purge_task: None,
@@ -2034,6 +2038,10 @@ impl Workspace {
 
         self.sidebar.update(cx, |sidebar, cx| {
             sidebar.set_connections_focused(target == FocusTarget::Sidebar, cx);
+        });
+
+        self.tasks_panel.update(cx, |panel, cx| {
+            panel.set_focused(target == FocusTarget::BackgroundTasks, cx);
         });
 
         if target == FocusTarget::Sidebar {
@@ -2588,14 +2596,15 @@ mod tab_close_request_tests {
                 workspace.sidebar_dock.update(cx, |dock, cx| {
                     dock.toggle(cx);
                     dock.reveal_transiently(cx);
+                    let resized = dock.current_width() + gpui::px(70.0);
                     dock.begin_resize(gpui::px(270.0), cx);
                     dock.handle_resize_move(gpui::px(340.0), cx);
-                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    assert_eq!(dock.current_width(), resized);
                     dock.finish_resize(cx);
                     dock.dismiss_transient(cx);
                     assert!(dock.is_collapsed());
                     dock.reveal_transiently(cx);
-                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    assert_eq!(dock.current_width(), resized);
                 });
             });
         });

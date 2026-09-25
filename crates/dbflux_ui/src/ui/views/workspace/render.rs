@@ -1,14 +1,13 @@
 use super::*;
 use crate::keymap::ContextId;
-use dbflux_components::composites::{EmptyState, EmptyStateAction, collapsible_bar};
+use dbflux_components::composites::collapsible_bar;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::HeaderMetrics;
-use dbflux_ui_base::keymap::chord_display_parts;
-use dbflux_ui_base::platform;
+use dbflux_components::tokens::{HeaderMetrics, ShellMetrics};
 use gpui_component::IconName;
+use gpui_component::resizable::ResizablePanel;
 
 /// Schedules `run` at the end of the current effect cycle instead of running
 /// it inline (`Context::defer_in`). Commands that open native windows
@@ -49,26 +48,70 @@ impl Workspace {
     }
 }
 
-/// Display labels of the chord the default keymap binds to `command` in the
-/// global context, so the empty-workspace hints show the binding that is
-/// actually registered, with the platform's modifier (Cmd on macOS).
-fn empty_state_shortcut_keys(command: Command) -> Option<Vec<gpui::SharedString>> {
-    default_keymap()
-        .chord_for_command(ContextId::Global, command)
-        .map(chord_display_parts)
-}
+impl Workspace {
+    /// The background tasks dock under the document area: the collapsed bar,
+    /// or, expanded, the tasks panel with its own header.
+    fn render_tasks_dock(&self, cx: &mut Context<Self>) -> ResizablePanel {
+        let tasks_expanded = self.tasks_state.is_expanded();
+        let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
+        let collapsed_height = HeaderMetrics::BAR_HEIGHT;
 
-/// One action of the empty-workspace placeholder: its icon, label and the
-/// keys of its global binding. Returns `None` when `command` has no global
-/// binding, so the placeholder never advertises a shortcut that does nothing.
-fn empty_state_shortcut(
-    command: Command,
-    icon: AppIcon,
-    label: impl Into<gpui::SharedString>,
-) -> Option<EmptyStateAction> {
-    let keys = empty_state_shortcut_keys(command)?;
+        let content = if tasks_expanded {
+            self.tasks_panel.clone().into_any_element()
+        } else {
+            let running_task_count = self.app_state.read(cx).tasks().running_tasks().len();
+            let tasks_status: SharedString = if running_task_count == 0 {
+                dbflux_i18n::t!("workspace.background_tasks_idle").into()
+            } else {
+                crate::ui::labels::tasks_running_label(running_task_count).into()
+            };
+            let workspace = cx.entity().clone();
 
-    Some(EmptyStateAction::new(icon, label, keys))
+            collapsible_bar(
+                "panel-header-Background Tasks",
+                dbflux_i18n::t!("workspace.background_tasks"),
+                Some(tasks_status),
+                true,
+                tasks_focused,
+                Some(IconName::Loader),
+                move |_, _, app| {
+                    workspace.update(app, |workspace, cx| {
+                        workspace.toggle_tasks_panel(cx);
+                    });
+                },
+                cx,
+            )
+            .into_any_element()
+        };
+
+        resizable_panel()
+            .size(if tasks_expanded {
+                ShellMetrics::TASKS_PANEL_HEIGHT
+            } else {
+                collapsed_height
+            })
+            .size_range(if tasks_expanded {
+                px(80.0)..px(2000.0)
+            } else {
+                collapsed_height..collapsed_height
+            })
+            .child(
+                div()
+                    .id("tasks-panel")
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.focus_target != FocusTarget::BackgroundTasks {
+                                this.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                            }
+                        }),
+                    )
+                    .child(content),
+            )
+    }
 }
 
 impl Render for Workspace {
@@ -168,7 +211,6 @@ impl Render for Workspace {
 
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
-        let tasks_panel = self.tasks_panel.clone();
         // Toasts stack at the top right of the document area, never over the
         // sidebar or the status bar. They are deferred so they still paint
         // above modals, and hidden while the shutdown overlay is up.
@@ -178,273 +220,90 @@ impl Render for Workspace {
         let login_modal = self.login_modal.clone();
         let sso_wizard = self.sso_wizard.clone();
 
-        let tab_bar = self.tab_bar.clone();
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
         let inspector_open = self.workspace_inspector.read(cx).is_open();
         let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
         let inspector_entity = self.workspace_inspector.clone();
 
-        let tasks_expanded = self.tasks_state.is_expanded();
-        let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
-
         let theme = cx.theme().clone();
         let bg_color = theme.background;
-        let header_size = HeaderMetrics::BAR_HEIGHT;
-        let running_task_count = self.app_state.read(cx).tasks().running_tasks().len();
-        let tasks_status: SharedString = if running_task_count == 0 {
-            dbflux_i18n::t!("workspace.background_tasks_idle").into()
-        } else {
-            crate::ui::labels::tasks_running_label(running_task_count).into()
-        };
         let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
         let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
-        // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
-        // Include the active connection name as a breadcrumb when connected.
-        let crumbs: Vec<platform::TitleCrumb> = {
-            let connection_name = self
-                .app_state
-                .read(cx)
-                .active_connection()
-                .map(|c| c.profile.name.clone());
+        let title_bar = self.render_title_bar(window, cx).into_any_element();
+        let rail = self.render_rail(cx).into_any_element();
 
-            if let Some(name) = connection_name {
-                vec![platform::TitleCrumb {
-                    icon: Some(crate::ui::icons::AppIcon::Database),
-                    label: name.into(),
-                }]
-            } else {
-                vec![]
-            }
-        };
-        let title_bar_close = self.title_bar_close_handler(cx);
-        let linux_title_bar = platform::render_csd_title_bar_with_crumbs(
-            window,
-            cx,
-            "DBFlux",
-            &crumbs,
-            Some(title_bar_close),
-        );
-
-        let right_pane = if has_tabs {
-            let workspace = cx.entity().clone();
-            let tasks_header = collapsible_bar(
-                "panel-header-Background Tasks",
-                dbflux_i18n::t!("workspace.background_tasks"),
-                Some(tasks_status.clone()),
-                !tasks_expanded,
-                tasks_focused,
-                Some(IconName::Loader),
-                move |_, _, app| {
-                    workspace.update(app, |workspace, cx| {
-                        workspace.toggle_tasks_panel(cx);
-                    });
-                },
-                cx,
-            );
-
-            v_resizable("main-panels")
-                .child(
-                    resizable_panel()
-                        .size(px(500.0))
-                        .size_range(px(200.0)..px(2000.0))
-                        .child(
-                            div()
-                                .id("document-area")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::Document {
-                                            this.set_focus(FocusTarget::Document, window, cx);
-                                        }
-                                    }),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::Document {
-                                            this.set_focus(FocusTarget::Document, window, cx);
-                                        }
-                                    }),
-                                )
-                                .child(tab_bar)
-                                // doc + inspector live in a flex_row under the tab bar.
-                                .child(
-                                    div()
-                                        .id("document-content-row")
-                                        .relative()
-                                        .flex()
-                                        .flex_row()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_hidden()
-                                        .when_some(active_doc_element, |el, doc| {
-                                            el.child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .flex_1()
-                                                    .min_h_0()
-                                                    .overflow_hidden()
-                                                    .child(doc),
-                                            )
-                                        })
-                                        .when(inspector_open, |el| {
-                                            el.child(inspector_entity.clone())
-                                        })
-                                        .children(toast_layer),
-                                ),
-                        ),
-                )
-                .child(
-                    resizable_panel()
-                        .size(if tasks_expanded {
-                            px(150.0)
-                        } else {
-                            header_size
-                        })
-                        .size_range(if tasks_expanded {
-                            px(80.0)..px(2000.0)
-                        } else {
-                            header_size..header_size
-                        })
-                        .child(
-                            div()
-                                .id("tasks-panel")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::BackgroundTasks {
-                                            this.set_focus(
-                                                FocusTarget::BackgroundTasks,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                                )
-                                .child(tasks_header)
-                                .when(tasks_expanded, |el| {
-                                    el.child(div().flex_1().overflow_hidden().child(tasks_panel))
-                                }),
-                        ),
-                )
+        let document_area = if has_tabs {
+            div()
+                .id("document-content-row")
+                .relative()
+                .flex()
+                .flex_row()
+                .size_full()
+                .overflow_hidden()
+                .when_some(active_doc_element, |el, doc| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(doc),
+                    )
+                })
+                .when(inspector_open, |el| el.child(inspector_entity.clone()))
+                .children(toast_layer)
+                .into_any_element()
         } else {
-            // Empty state: welcome message + tasks panel
-            let workspace = cx.entity().clone();
-            let tasks_header_empty = collapsible_bar(
-                "panel-header-Background Tasks",
-                dbflux_i18n::t!("workspace.background_tasks"),
-                Some(tasks_status.clone()),
-                !tasks_expanded,
-                tasks_focused,
-                Some(IconName::Loader),
-                move |_, _, app| {
-                    workspace.update(app, |workspace, cx| {
-                        workspace.toggle_tasks_panel(cx);
-                    });
-                },
-                cx,
-            );
-
-            v_resizable("main-panels")
-                .child(
-                    resizable_panel()
-                        .size(px(500.0))
-                        .size_range(px(200.0)..px(2000.0))
-                        .child(
-                            div()
-                                .id("empty-state")
-                                .relative()
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    EmptyState::new(
-                                        AppIcon::Table,
-                                        dbflux_i18n::t!("workspace.empty_hint"),
-                                    )
-                                    .title(dbflux_i18n::t!("workspace.empty_documents"))
-                                    .card()
-                                    .actions(
-                                        [
-                                            empty_state_shortcut(
-                                                Command::NewQueryTab,
-                                                AppIcon::FileCode,
-                                                dbflux_i18n::t!("workspace.hint.new_query"),
-                                            ),
-                                            empty_state_shortcut(
-                                                Command::ToggleCommandPalette,
-                                                AppIcon::Search,
-                                                dbflux_i18n::t!("workspace.hint.command_palette"),
-                                            ),
-                                            empty_state_shortcut(
-                                                Command::OpenScriptFile,
-                                                AppIcon::SquareTerminal,
-                                                dbflux_i18n::t!("workspace.hint.open"),
-                                            ),
-                                            empty_state_shortcut(
-                                                Command::OpenConnectionManager,
-                                                AppIcon::Plus,
-                                                dbflux_i18n::t!("workspace.hint.new_connection"),
-                                            ),
-                                        ]
-                                        .into_iter()
-                                        .flatten(),
-                                    ),
-                                )
-                                .children(toast_layer),
-                        ),
-                )
-                .child(
-                    resizable_panel()
-                        .size(if tasks_expanded {
-                            px(150.0)
-                        } else {
-                            header_size
-                        })
-                        .size_range(if tasks_expanded {
-                            px(80.0)..px(2000.0)
-                        } else {
-                            header_size..header_size
-                        })
-                        .child(
-                            div()
-                                .id("tasks-panel")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::BackgroundTasks {
-                                            this.set_focus(
-                                                FocusTarget::BackgroundTasks,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                                )
-                                .child(tasks_header_empty)
-                                .when(tasks_expanded, |el| {
-                                    el.child(
-                                        div().flex_1().overflow_hidden().child(tasks_panel.clone()),
-                                    )
-                                }),
-                        ),
-                )
+            self.render_empty_workspace(cx)
+                .children(toast_layer)
+                .into_any_element()
         };
+
+        // One resizable state per tasks-dock mode: the panel group keeps the
+        // sizes it laid out, so reusing one state would reopen the expanded
+        // dock at the collapsed bar's height instead of its default.
+        let panels_id = if self.tasks_state.is_expanded() {
+            "main-panels-tasks-expanded"
+        } else {
+            "main-panels"
+        };
+
+        let right_pane = v_resizable(panels_id)
+            .child(
+                resizable_panel()
+                    .size(px(500.0))
+                    .size_range(px(200.0)..px(2000.0))
+                    .child(
+                        div()
+                            .id("document-area")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .bg(theme.popover)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Document {
+                                        this.set_focus(FocusTarget::Document, window, cx);
+                                    }
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Document {
+                                        this.set_focus(FocusTarget::Document, window, cx);
+                                    }
+                                }),
+                            )
+                            .child(document_area),
+                    ),
+            )
+            .child(self.render_tasks_dock(cx));
 
         let focus_handle = self.focus_handle.clone();
 
@@ -690,13 +549,14 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .size_full()
-                    .when_some(linux_title_bar, |el, title_bar| el.child(title_bar))
+                    .child(title_bar)
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .flex_1()
                             .overflow_hidden()
+                            .child(rail)
                             .child(
                                 div()
                                     .id("sidebar-panel")
@@ -1037,7 +897,7 @@ impl Render for Workspace {
                 let tab_bar_entity = self.tab_bar.clone();
 
                 let menu_x = menu.position_x;
-                let menu_y = px(36.0);
+                let menu_y = ShellMetrics::TITLE_BAR_HEIGHT;
                 let items = TabBar::build_tab_menu_items();
                 let selected = menu.selected_index;
 
@@ -1177,13 +1037,7 @@ mod tests {
 
     use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
-    use dbflux_ui_base::keymap::chord_display_parts;
-
-    use super::{
-        defer_to_end_of_effect_cycle, empty_state_shortcut_keys,
-        palette_command_opens_native_window,
-    };
-    use crate::keymap::{Command, KeyChord, Modifiers};
+    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
 
     #[test]
     fn workspace_render_uses_canonical_panel_header_contract() {
@@ -1212,16 +1066,31 @@ mod tests {
     }
 
     #[test]
-    fn tabbed_and_empty_workspace_paths_both_use_the_workspace_tasks_contract() {
+    fn tabbed_and_empty_workspace_paths_share_one_tasks_dock() {
+        let source = workspace_render_source();
         let invocations = background_tasks_header_invocations();
 
-        assert_eq!(invocations.len(), 2);
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(source.matches("self.render_tasks_dock(cx)").count(), 1);
 
         for invocation in invocations {
             assert!(invocation.contains("collapsible_bar("));
             assert!(invocation.contains("tasks_focused"));
             assert!(invocation.contains("Some(IconName::Loader)"));
         }
+    }
+
+    #[test]
+    fn document_area_draws_no_focus_ring_of_its_own() {
+        let source = workspace_render_source();
+        let start = source
+            .find(".id(\"document-area\")")
+            .expect("workspace render must draw the document area");
+        let area = &source[start..start + 1200];
+
+        assert!(!area.contains("focus_ring"));
+        assert!(!area.contains("ChamferRing"));
+        assert!(!area.contains("border_color"));
     }
 
     #[test]
@@ -1404,8 +1273,8 @@ mod tests {
         while let Some(start) = remaining.find("collapsible_bar(") {
             let tail = &remaining[start..];
             let end = tail
-                .find(",\n                cx,\n            );")
-                .map(|index| index + ",\n                cx,\n            );".len())
+                .find("\n                cx,\n")
+                .map(|index| index + "\n                cx,\n".len())
                 .expect("workspace render should close the collapsible_bar call");
 
             invocations.push(tail[..end].to_string());
@@ -1413,60 +1282,6 @@ mod tests {
         }
 
         invocations
-    }
-
-    #[test]
-    fn empty_state_hints_show_the_registered_global_chords() {
-        let expected = [
-            (
-                Command::NewQueryTab,
-                KeyChord::new("n", Modifiers::primary()),
-            ),
-            (
-                Command::ToggleCommandPalette,
-                KeyChord::new("p", Modifiers::primary_shift()),
-            ),
-            (
-                Command::OpenScriptFile,
-                KeyChord::new("o", Modifiers::primary()),
-            ),
-            (
-                Command::OpenConnectionManager,
-                KeyChord::new("n", Modifiers::primary_shift()),
-            ),
-        ];
-
-        for (command, chord) in expected {
-            assert_eq!(
-                empty_state_shortcut_keys(command),
-                Some(chord_display_parts(&chord)),
-                "empty-state hint for {command:?} must match its global binding"
-            );
-        }
-    }
-
-    #[test]
-    fn empty_state_new_connection_hint_uses_the_platform_modifier() {
-        #[cfg(target_os = "macos")]
-        let expected = ["Shift", "Cmd", "N"];
-        #[cfg(not(target_os = "macos"))]
-        let expected = ["Ctrl", "Shift", "N"];
-
-        let keys = empty_state_shortcut_keys(Command::OpenConnectionManager)
-            .expect("the Connection Manager must have a global binding");
-        let keys: Vec<&str> = keys.iter().map(|key| key.as_ref()).collect();
-
-        assert_eq!(keys, expected);
-    }
-
-    #[test]
-    fn empty_state_hints_do_not_hardcode_modifier_labels() {
-        let source = workspace_render_source();
-
-        assert!(
-            !source.contains("\"Ctrl\"") && !source.contains("\"Cmd\""),
-            "empty-state hints must read their chords from the keymap"
-        );
     }
 }
 

@@ -3536,6 +3536,13 @@ shutdown:
   complete: 关闭完成
   failed: 关闭失败
 sidebar:
+  header:
+    add: "添加"
+    filter: "筛选"
+  failure:
+    retry: "重试"
+    edit: "编辑连接"
+    audit: "在审计中查看"
   confirm:
     delete_hint: 按 x 确认删除，按 ESC 取消
     items:
@@ -3624,6 +3631,9 @@ sidebar:
       one: 跳过了 1 张活动配置 / 数据库之外的表
       many: "跳过了 %{count} 张活动配置 / 数据库之外的表"
   status:
+    connected: "%{count} 个已连接"
+    idle: "%{count} 个空闲"
+    no_connections: "尚无连接"
     connection_summary: "%{connected} 已连接 · %{idle} 空闲"
     profile_fallback_name: 连接
   tabs:
@@ -3740,6 +3750,8 @@ sidebar:
       instance_overview: 实例概览
       untitled_chart: 未命名图表
     status:
+      connecting_inline: "连接中"
+      retry_inline: "重试"
       loading: 加载中…
       profile_connecting: "正在连接 %{name}…"
       database_loading: "%{name}（加载中…）"
@@ -3841,6 +3853,15 @@ sso_wizard:
     roles_failed: "发现角色失败：%{error}"
     profile_created: 已创建 AWS SSO 认证配置文件
 status_bar:
+  no_connection: "无连接"
+  ready: "就绪"
+  tasks_failed: "%{count} 个失败"
+  background_tasks:
+    one: "1 个后台任务"
+    many: "%{count} 个后台任务"
+  approvals:
+    one: "1 个审批"
+    many: "%{count} 个审批"
   disconnected: 已断开
   read_only:
     profile:
@@ -3854,6 +3875,12 @@ status_bar:
     one: "1 个运行中"
     many: "%{count} 个运行中"
 tasks_panel:
+  title: "后台任务"
+  running: "%{count} 个运行中"
+  failed: "%{count} 个失败"
+  clear_finished: "清除已完成"
+  cancel: "取消任务"
+  dismiss: "关闭"
   empty: 无后台任务
   output_truncated: …面板中输出已截断
 toast:
@@ -3862,6 +3889,28 @@ toast:
     show_details: 显示详情
     hide_details: 隐藏详情
 workspace:
+  rail:
+    connections: "连接"
+    scripts: "脚本"
+    approvals: "MCP 审批"
+    audit: "审计"
+    settings: "设置"
+  title_bar:
+    command_search: "搜索或运行命令"
+    approvals: "MCP 审批"
+    collapse_sidebar: "折叠侧边栏"
+    expand_sidebar: "展开侧边栏"
+  empty:
+    title: "没有打开的标签页"
+    subtitle: "从侧边栏打开内容，或从这里开始。"
+    start: "开始"
+    recent: "最近"
+  recent:
+    just_now: "刚刚"
+    minutes_ago: "%{count} 分钟前"
+    hours_ago: "%{count} 小时前"
+    yesterday: "昨天"
+    days_ago: "%{count} 天前"
   background_tasks: 后台任务
   background_tasks_idle: 空闲
   empty_documents: 没有打开的文档

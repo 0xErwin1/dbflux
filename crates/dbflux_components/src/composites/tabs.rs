@@ -19,11 +19,10 @@ use gpui_component::ActiveTheme;
 use crate::primitives::{Chamfer, ChamferCorners, Text};
 use crate::tokens::{ChamferCut, ChromeColors, TabMetrics};
 
-/// The document tab bar: 42 px on the window ground with a line along its
-/// bottom. Add `document_tab`s and the new-tab button as children.
-pub fn document_tab_bar(cx: &App) -> gpui::Div {
-    let theme = cx.theme();
-
+/// The document tab strip: 42 px, laid out inside the title bar, which owns
+/// the ground and the line along the bottom. Add `document_tab`s and the
+/// new-tab button as children.
+pub fn document_tab_bar(_cx: &App) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -31,9 +30,6 @@ pub fn document_tab_bar(cx: &App) -> gpui::Div {
         .h(TabMetrics::DOCUMENT_BAR_HEIGHT)
         .pl(TabMetrics::DOCUMENT_BAR_PADDING_LEFT)
         .gap(TabMetrics::BAR_GAP)
-        .bg(theme.background)
-        .border_b_1()
-        .border_color(theme.border)
 }
 
 /// One document tab. Add the icon, `document_tab_title`, the dirty diamond

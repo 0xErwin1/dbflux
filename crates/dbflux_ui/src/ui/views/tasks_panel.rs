@@ -1,7 +1,9 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::ChromeColors;
+use dbflux_components::controls::Button;
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
+use dbflux_components::tokens::{ChromeColors, ShellMetrics};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -10,11 +12,18 @@ use std::collections::HashSet;
 use std::time::Duration;
 use uuid::Uuid;
 
+/// The expanded panel's header was clicked: collapse the panel.
+pub struct CollapseTasksPanel;
+
 pub struct TasksPanel {
     app_state: Entity<AppStateEntity>,
     expanded_task_ids: HashSet<TaskId>,
+    /// The workspace's keyboard focus is on the tasks panel.
+    focused: bool,
     _timer: Option<Task<()>>,
 }
+
+impl EventEmitter<CollapseTasksPanel> for TasksPanel {}
 
 impl TasksPanel {
     pub fn new(
@@ -34,7 +43,15 @@ impl TasksPanel {
         Self {
             app_state,
             expanded_task_ids: HashSet::new(),
+            focused: false,
             _timer: Some(timer),
+        }
+    }
+
+    pub fn set_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        if self.focused != focused {
+            self.focused = focused;
+            cx.notify();
         }
     }
 
@@ -129,6 +146,25 @@ impl TasksPanel {
         });
     }
 
+    /// Removes every task that is no longer running, failures included.
+    fn clear_finished(&mut self, cx: &mut Context<Self>) {
+        self.app_state.update(cx, |state, cx| {
+            let finished: Vec<TaskId> = state
+                .tasks()
+                .recent_tasks(usize::MAX)
+                .into_iter()
+                .filter(|task| task.status != TaskStatus::Running)
+                .map(|task| task.id)
+                .collect();
+
+            for task_id in finished {
+                state.tasks_mut().remove(task_id);
+            }
+
+            cx.emit(AppStateChanged);
+        });
+    }
+
     fn format_elapsed(secs: f64) -> String {
         if secs < 1.0 {
             format!("{:.0}ms", secs * 1000.0)
@@ -141,154 +177,297 @@ impl TasksPanel {
         }
     }
 
+    /// Whole percent of a task's progress, clamped to 0..=100.
+    fn progress_percent(progress: f32) -> u32 {
+        (progress.clamp(0.0, 1.0) * 100.0).round() as u32
+    }
+
+    fn status_icon(status: &TaskStatus, theme: &gpui_component::Theme) -> (AppIcon, Hsla) {
+        match status {
+            TaskStatus::Running => (AppIcon::Loader, ChromeColors::tint(theme)),
+            TaskStatus::Completed => (AppIcon::CircleCheck, theme.success),
+            TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger),
+            TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground),
+        }
+    }
+
+    fn render_header(
+        &self,
+        running: usize,
+        failed: usize,
+        finished: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = cx.theme();
+        let title_color = if self.focused {
+            ChromeColors::tint(theme)
+        } else {
+            ChromeColors::strong(theme)
+        };
+
+        div()
+            .id("tasks-panel-header")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(ShellMetrics::TASKS_GAP)
+            .h(ShellMetrics::TASKS_HEADER_HEIGHT)
+            .px(ShellMetrics::TASKS_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .cursor_pointer()
+            .on_click(cx.listener(|_this, _, _, cx| {
+                cx.emit(CollapseTasksPanel);
+            }))
+            .child(
+                Icon::new(AppIcon::ChevronDown)
+                    .size(ShellMetrics::TASK_CHEVRON)
+                    .color(theme.muted_foreground),
+            )
+            .child(
+                Icon::new(AppIcon::Loader)
+                    .size(ShellMetrics::TASK_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                Text::body(dbflux_i18n::t!("tasks_panel.title"))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .color(title_color),
+            )
+            .when(running > 0, |header| {
+                header.child(Badge::new(
+                    dbflux_i18n::t!("tasks_panel.running", count = running),
+                    BadgeTone::Accent,
+                ))
+            })
+            .when(failed > 0, |header| {
+                header.child(Badge::new(
+                    dbflux_i18n::t!("tasks_panel.failed", count = failed),
+                    BadgeTone::Danger,
+                ))
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new(
+                    "tasks-clear-finished",
+                    dbflux_i18n::t!("tasks_panel.clear_finished"),
+                )
+                .small()
+                .icon(AppIcon::CircleX)
+                .disabled(finished == 0)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.clear_finished(cx);
+                })),
+            )
+    }
+
     fn render_task_row(&mut self, task: &TaskSnapshot, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let task_id = task.id;
         let task_kind = task.kind;
         let task_profile_id = task.profile_id;
         let is_cancellable = task.is_cancellable;
-        let is_failed = matches!(task.status, TaskStatus::Failed(_));
-        let details_text = task.details.clone().or_else(|| match &task.status {
+        let is_running = task.status == TaskStatus::Running;
+        let failure = match &task.status {
             TaskStatus::Failed(error) => Some(error.clone()),
             _ => None,
-        });
+        };
+        let details_text = task.details.clone();
         let has_details = details_text
             .as_ref()
             .is_some_and(|details| !details.trim().is_empty());
         let is_expanded = self.expanded_task_ids.contains(&task_id);
-
-        let status_icon = match &task.status {
-            TaskStatus::Running => "⋯",
-            TaskStatus::Completed => "✓",
-            TaskStatus::Failed(_) => "✗",
-            TaskStatus::Cancelled => "⊘",
+        let (status_icon, status_color) = Self::status_icon(&task.status, theme);
+        let name_color = if is_running {
+            ChromeColors::strong(theme)
+        } else {
+            theme.foreground
         };
-
-        let status_color = match &task.status {
-            TaskStatus::Running => ChromeColors::tint(theme),
-            TaskStatus::Completed => theme.success,
-            TaskStatus::Failed(_) => theme.danger,
-            TaskStatus::Cancelled => theme.muted_foreground,
-        };
+        let progress = task.progress.filter(|_| is_running);
+        let muted = theme.muted_foreground;
+        let row_divider = theme.table_row_border;
+        let track = theme.secondary;
+        let fill = theme.primary;
+        let danger = theme.danger;
 
         div()
             .w_full()
-            .border_b_1()
-            .border_color(theme.border)
+            .flex()
+            .flex_col()
             .child(
                 div()
+                    .id(SharedString::from(format!("task-row-{task_id}")))
                     .flex()
                     .items_center()
-                    .justify_between()
+                    .gap(ShellMetrics::TASKS_GAP)
                     .w_full()
-                    .px_3()
-                    .py_1()
-                    .hover(|s| s.bg(theme.secondary))
-                    .when(has_details, |el| {
-                        el.cursor_pointer().on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
+                    .h(ShellMetrics::TASK_ROW_HEIGHT)
+                    .px(ShellMetrics::TASKS_PADDING_X)
+                    .border_b_1()
+                    .border_color(row_divider)
+                    .text_size(ShellMetrics::TASK_FONT)
+                    .when(has_details, |row| {
+                        row.cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
                                 this.toggle_task_expanded(task_id, cx);
-                            }),
-                        )
+                            }))
                     })
+                    .child(div().flex_shrink_0().w(ShellMetrics::TASK_CHEVRON).when(
+                        has_details,
+                        |slot| {
+                            slot.child(
+                                Icon::new(if is_expanded {
+                                    AppIcon::ChevronDown
+                                } else {
+                                    AppIcon::ChevronRight
+                                })
+                                .size(ShellMetrics::TASK_CHEVRON)
+                                .color(muted),
+                            )
+                        },
+                    ))
+                    .child(
+                        Icon::new(status_icon)
+                            .size(ShellMetrics::TASK_ICON)
+                            .color(status_color),
+                    )
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .flex_1()
+                            .min_w_0()
                             .overflow_hidden()
-                            .when(has_details, |el| {
-                                el.child(
-                                    Icon::new(if is_expanded {
-                                        AppIcon::ChevronDown
-                                    } else {
-                                        AppIcon::ChevronRight
-                                    })
-                                    .size(px(12.0))
-                                    .muted(),
-                                )
-                            })
-                            .child(Text::caption(status_icon.to_string()).color(status_color))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_ellipsis()
-                                    .child(Text::body(task.description.clone())),
-                            )
-                            .child(Text::caption(format!(
-                                "({})",
-                                Self::format_elapsed(task.elapsed_secs)
-                            ))),
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_color(name_color)
+                            .child(task.description.clone()),
                     )
-                    .when(is_cancellable, |el| {
-                        let danger_bg = theme.danger.opacity(0.1);
-                        let element_id = format!("cancel-task-{}", task_id);
-                        el.child(
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_family(AppFonts::MONO)
+                            .text_size(ShellMetrics::TASK_META_FONT)
+                            .text_color(muted)
+                            .child(Self::format_elapsed(task.elapsed_secs)),
+                    )
+                    .child(div().flex_1())
+                    .when_some(progress, |row, progress| {
+                        row.child(
                             div()
-                                .id(SharedString::from(element_id.clone()))
-                                .debug_selector(move || element_id)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size_5()
-                                .rounded(px(2.0))
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(danger_bg))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.cancel_task(task_id, task_kind, task_profile_id, cx);
-                                }))
-                                .child(Icon::new(AppIcon::Power).size(px(12.0)).danger()),
+                                .flex_shrink_0()
+                                .w(ShellMetrics::TASK_PROGRESS_WIDTH)
+                                .h(ShellMetrics::TASK_PROGRESS_HEIGHT)
+                                .bg(track)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(progress.clamp(0.0, 1.0)))
+                                        .bg(fill),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .font_family(AppFonts::MONO)
+                                .text_size(ShellMetrics::TASK_META_FONT)
+                                .text_color(muted)
+                                .child(format!("{}%", Self::progress_percent(progress))),
                         )
                     })
-                    .when(is_failed, |el| {
-                        let hover_bg = theme.secondary;
+                    .when(is_cancellable, |row| {
+                        let element_id = format!("cancel-task-{}", task_id);
+                        row.child(
+                            div().debug_selector(move || element_id).child(
+                                Button::new(
+                                    SharedString::from(format!("cancel-task-button-{task_id}")),
+                                    dbflux_i18n::t!("tasks_panel.cancel"),
+                                )
+                                .small()
+                                .icon(AppIcon::X)
+                                .icon_size(ShellMetrics::TASK_CHEVRON)
+                                .icon_only()
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.cancel_task(task_id, task_kind, task_profile_id, cx);
+                                    },
+                                )),
+                            ),
+                        )
+                    })
+                    .when(failure.is_some(), |row| {
                         let element_id = format!("dismiss-task-{}", task_id);
-                        el.child(
-                            div()
-                                .id(SharedString::from(element_id.clone()))
-                                .debug_selector(move || element_id)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size_5()
-                                .rounded(px(2.0))
-                                .cursor_pointer()
-                                .hover(move |s| s.bg(hover_bg))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation();
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.dismiss_task(task_id, cx);
-                                }))
-                                .child(Icon::new(AppIcon::X).size(px(12.0)).muted()),
+                        row.child(
+                            div().debug_selector(move || element_id).child(
+                                Button::new(
+                                    SharedString::from(format!("dismiss-task-button-{task_id}")),
+                                    dbflux_i18n::t!("tasks_panel.dismiss"),
+                                )
+                                .small()
+                                .ghost()
+                                .icon(AppIcon::X)
+                                .icon_size(ShellMetrics::TASK_CHEVRON)
+                                .icon_only()
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.dismiss_task(task_id, cx);
+                                    },
+                                )),
+                            ),
                         )
                     }),
             )
+            .when_some(failure, |el, error| {
+                el.child(
+                    div()
+                        .pt(ShellMetrics::TASK_ERROR_PADDING_TOP)
+                        .pb(ShellMetrics::TASK_ERROR_PADDING_BOTTOM)
+                        .pl(ShellMetrics::TASK_ERROR_INDENT)
+                        .pr(ShellMetrics::TASKS_PADDING_X)
+                        .bg(danger.opacity(ShellMetrics::TASK_ERROR_ALPHA))
+                        .font_family(AppFonts::MONO)
+                        .text_size(ShellMetrics::TASK_ERROR_FONT)
+                        .text_color(danger)
+                        .children(
+                            Self::truncated_lines(&error)
+                                .into_iter()
+                                .map(|line| div().child(line)),
+                        ),
+                )
+            })
             .when(has_details && is_expanded, |el| {
-                let mut lines: Vec<String> = details_text
-                    .unwrap_or_default()
-                    .lines()
-                    .map(|line| line.to_string())
-                    .collect();
-
-                if lines.len() > 40 {
-                    lines.truncate(40);
-                    lines.push(dbflux_i18n::t!("tasks_panel.output_truncated"));
-                }
+                let details = details_text.unwrap_or_default();
 
                 el.child(
                     div()
-                        .px_4()
-                        .pb_2()
+                        .py(ShellMetrics::TASK_ERROR_PADDING_TOP)
+                        .pl(ShellMetrics::TASK_ERROR_INDENT)
+                        .pr(ShellMetrics::TASKS_PADDING_X)
                         .flex()
                         .flex_col()
-                        .gap_1()
-                        .bg(theme.secondary)
-                        .children(lines.into_iter().map(Text::caption)),
+                        .bg(track)
+                        .font_family(AppFonts::MONO)
+                        .text_size(ShellMetrics::TASK_ERROR_FONT)
+                        .text_color(muted)
+                        .children(
+                            Self::truncated_lines(&details)
+                                .into_iter()
+                                .map(|line| div().child(line)),
+                        ),
                 )
             })
+    }
+
+    /// The first 40 lines of a task's output, with a marker when more were cut.
+    fn truncated_lines(text: &str) -> Vec<String> {
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+
+        if lines.len() > 40 {
+            lines.truncate(40);
+            lines.push(dbflux_i18n::t!("tasks_panel.output_truncated"));
+        }
+
+        lines
     }
 }
 
@@ -323,6 +502,13 @@ impl Render for TasksPanel {
         let running_tasks = state.tasks().running_tasks();
         let finished_tasks = visible_finished_tasks(state.tasks().recent_tasks(usize::MAX));
 
+        let running_count = running_tasks.len();
+        let failed_count = finished_tasks
+            .iter()
+            .filter(|task| matches!(task.status, TaskStatus::Failed(_)))
+            .count();
+        let finished_count = finished_tasks.len();
+
         let all_tasks: Vec<TaskSnapshot> =
             running_tasks.into_iter().chain(finished_tasks).collect();
         let visible_task_ids: HashSet<TaskId> = all_tasks.iter().map(|task| task.id).collect();
@@ -334,6 +520,7 @@ impl Render for TasksPanel {
             task_rows.push(self.render_task_row(task, cx));
         }
 
+        let header = self.render_header(running_count, failed_count, finished_count, cx);
         let theme = cx.theme();
 
         div()
@@ -341,17 +528,29 @@ impl Render for TasksPanel {
             .flex_col()
             .size_full()
             .bg(theme.background)
-            .when(all_tasks.is_empty(), |el: Div| {
-                el.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .py_4()
-                        .child(Text::caption(dbflux_i18n::t!("tasks_panel.empty"))),
-                )
-            })
-            .children(task_rows)
+            .border_t_1()
+            .border_color(theme.input)
+            .child(header)
+            .child(
+                div()
+                    .id("tasks-panel-rows")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(all_tasks.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .py(ShellMetrics::TASKS_PADDING_X)
+                                .child(Text::caption(dbflux_i18n::t!("tasks_panel.empty"))),
+                        )
+                    })
+                    .children(task_rows),
+            )
     }
 }
 

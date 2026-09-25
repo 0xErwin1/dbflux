@@ -322,6 +322,7 @@ crates/
             actions.rs      # 工作区级动作处理函数
             dispatch.rs     # 命令分发逻辑
             render.rs       # 工作区渲染
+            shell.rs        # 标题栏、活动栏、空工作区
           status_bar.rs     # 状态栏渲染
           tasks_panel.rs    # 后台任务面板
         dock/

@@ -3537,6 +3537,13 @@ shutdown:
   failed: 종료 실패
 
 sidebar:
+  header:
+    add: "추가"
+    filter: "필터"
+  failure:
+    retry: "다시 시도"
+    edit: "연결 편집"
+    audit: "감사에서 보기"
   confirm:
     delete_hint: 삭제를 확정하려면 x를 누르고, 취소하려면 ESC를 누르세요
     items:
@@ -3625,6 +3632,9 @@ sidebar:
       one: 활성 프로필/데이터베이스 외부의 1개 테이블을 건너뛰었습니다
       many: "활성 프로필/데이터베이스 외부의 %{count}개 테이블을 건너뛰었습니다"
   status:
+    connected: "%{count}개 연결됨"
+    idle: "%{count}개 유휴"
+    no_connections: "아직 연결이 없습니다"
     connection_summary: "%{connected} 연결됨 · %{idle} 유휴"
     profile_fallback_name: 연결
   tabs:
@@ -3741,6 +3751,8 @@ sidebar:
       instance_overview: 인스턴스 개요
       untitled_chart: 제목 없는 차트
     status:
+      connecting_inline: "연결 중"
+      retry_inline: "다시 시도"
       loading: 불러오는 중…
       profile_connecting: "%{name}에 연결하는 중…"
       database_loading: "%{name} (불러오는 중…)"
@@ -3842,6 +3854,15 @@ sso_wizard:
     roles_failed: "역할을 검색하지 못했습니다: %{error}"
     profile_created: AWS SSO 인증 프로필을 만들었습니다.
 status_bar:
+  no_connection: "연결 없음"
+  ready: "준비됨"
+  tasks_failed: "%{count}개 실패"
+  background_tasks:
+    one: "백그라운드 작업 1개"
+    many: "백그라운드 작업 %{count}개"
+  approvals:
+    one: "승인 1건"
+    many: "승인 %{count}건"
   disconnected: 연결 끊김
   read_only:
     profile:
@@ -3855,6 +3876,12 @@ status_bar:
     one: "1개 실행 중"
     many: "%{count}개 실행 중"
 tasks_panel:
+  title: "백그라운드 작업"
+  running: "%{count}개 실행 중"
+  failed: "%{count}개 실패"
+  clear_finished: "완료된 작업 지우기"
+  cancel: "작업 취소"
+  dismiss: "닫기"
   empty: 백그라운드 작업이 없습니다.
   output_truncated: ... 패널에서 출력이 잘렸습니다
 toast:
@@ -3863,6 +3890,28 @@ toast:
     show_details: 세부 정보 표시
     hide_details: 세부 정보 숨기기
 workspace:
+  rail:
+    connections: "연결"
+    scripts: "스크립트"
+    approvals: "MCP 승인"
+    audit: "감사"
+    settings: "설정"
+  title_bar:
+    command_search: "명령 검색 또는 실행"
+    approvals: "MCP 승인"
+    collapse_sidebar: "사이드바 접기"
+    expand_sidebar: "사이드바 펼치기"
+  empty:
+    title: "열린 탭 없음"
+    subtitle: "사이드바에서 항목을 열거나 여기서 시작하세요."
+    start: "시작"
+    recent: "최근"
+  recent:
+    just_now: "방금"
+    minutes_ago: "%{count}분 전"
+    hours_ago: "%{count}시간 전"
+    yesterday: "어제"
+    days_ago: "%{count}일 전"
   background_tasks: 백그라운드 작업
   background_tasks_idle: 유휴
   empty_documents: 열린 문서가 없습니다.

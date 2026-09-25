@@ -84,6 +84,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::ChartNetwork,
     AppIcon::BrainCircuit,
     AppIcon::Bot,
+    AppIcon::Bell,
     AppIcon::BrandPostgres,
     AppIcon::BrandMysql,
     AppIcon::BrandMariadb,
@@ -272,6 +273,7 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
         }
         AppIcon::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
+        AppIcon::Bell => include_bytes!("../../../../../resources/icons/ui/bell.svg"),
     }
 }
 

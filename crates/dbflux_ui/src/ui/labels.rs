@@ -15,6 +15,24 @@ pub(crate) fn tasks_running_label(count: usize) -> String {
     }
 }
 
+/// "N background tasks", the idle label of the status bar's tasks segment.
+pub(crate) fn background_tasks_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("status_bar.background_tasks.one")
+    } else {
+        dbflux_i18n::t!("status_bar.background_tasks.many", count = count)
+    }
+}
+
+/// "N approvals", the status bar's pending MCP approvals segment.
+pub(crate) fn approvals_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("status_bar.approvals.one")
+    } else {
+        dbflux_i18n::t!("status_bar.approvals.many", count = count)
+    }
+}
+
 /// Formats the shutdown overlay message for the given phase.
 ///
 /// `NotStarted` has no visible message — the overlay only renders while

@@ -31,16 +31,6 @@ pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -
     }
 }
 
-/// Translated footer summary of connected vs. idle connections, e.g.
-/// `"2 connected · 5 idle"`.
-pub(crate) fn footer_counts_label(connected: usize, idle: usize) -> String {
-    dbflux_i18n::t!(
-        "sidebar.status.connection_summary",
-        connected = connected,
-        idle = idle
-    )
-}
-
 /// Translated page indicator for the collection child picker, e.g.
 /// `"Page 1/3 (1-50)"`. `page` and `pages` are 1-based, `from`/`to` are the
 /// 1-based inclusive row range shown on the current page.
@@ -816,20 +806,6 @@ mod tests {
     fn container_folder_label_uses_the_given_count() {
         let label = super::container_folder_label(DatabaseCategory::Document, 7);
         assert_eq!(label, "Collections (7)");
-    }
-
-    #[test]
-    fn footer_counts_label_reports_connected_and_idle_counts() {
-        let label = super::footer_counts_label(2, 5);
-        assert!(label.contains("2 connected"));
-        assert!(label.contains("5 idle"));
-    }
-
-    #[test]
-    fn footer_counts_label_reports_zero_counts() {
-        let label = super::footer_counts_label(0, 0);
-        assert!(label.contains("0 connected"));
-        assert!(label.contains("0 idle"));
     }
 
     #[test]

@@ -322,6 +322,7 @@ crates/
             actions.rs      # Workspace-level action handlers
             dispatch.rs     # Command dispatch logic
             render.rs       # Workspace rendering
+            shell.rs        # Title bar, activity rail, empty workspace
           status_bar.rs     # Status bar rendering
           tasks_panel.rs    # Background tasks panel
         dock/

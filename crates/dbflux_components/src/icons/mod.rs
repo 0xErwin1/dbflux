@@ -77,6 +77,7 @@ pub enum AppIcon {
     ListFilter,
     ArrowUpDown,
     Bot,
+    Bell,
     BrainCircuit,
 
     // Connection / Network
@@ -256,6 +257,7 @@ impl AppIcon {
             Self::DbFlux => "icons/dbflux.svg",
             Self::BrainCircuit => "icons/ui/brain-circuit.svg",
             Self::Bot => "icons/ui/bot.svg",
+            Self::Bell => "icons/ui/bell.svg",
         }
     }
 

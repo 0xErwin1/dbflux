@@ -1,3 +1,4 @@
+mod activity_rail;
 mod breadcrumb;
 mod control_shell;
 mod empty_state;
@@ -8,10 +9,14 @@ mod master_detail_list;
 mod menu_item;
 mod menu_popup;
 mod refresh_split_button;
+mod shell_bar;
 mod split_button;
 mod tabs;
 mod wizard_rail;
 
+pub use activity_rail::{
+    ActivityRail, RailButtonColors, RailEntry, RailPlacement, rail_button_colors,
+};
 pub use breadcrumb::{Breadcrumb, BreadcrumbSegment};
 pub use control_shell::control_shell;
 pub use empty_state::{EmptyState, EmptyStateAction};
@@ -34,6 +39,7 @@ pub use menu_item::{
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
 pub use refresh_split_button::{refresh_policy_label, refresh_split_button};
+pub use shell_bar::{CommandSearch, NotificationBell};
 pub use split_button::SplitButton;
 pub use tabs::{
     document_tab, document_tab_bar, document_tab_title, inline_tab, inline_tab_bar, result_tab,

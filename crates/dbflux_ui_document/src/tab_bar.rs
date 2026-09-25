@@ -223,21 +223,20 @@ impl Render for TabBar {
 
         let new_tab_btn = self.render_new_tab_button(cx).into_any_element();
 
-        document_tab_bar(cx)
-            .id("tab-bar")
-            .w_full()
-            .child(
-                div()
-                    .id("document-tab-list")
-                    .role(Role::TabList)
-                    .flex()
-                    .items_stretch()
-                    .overflow_x_hidden()
-                    .gap(TabMetrics::BAR_GAP)
-                    .children(tabs)
-                    .child(new_tab_btn),
-            )
-            .child(div().flex_1())
+        // The strip sizes to its tabs so the title bar that hosts it keeps
+        // the space after the last tab for moving the window.
+        document_tab_bar(cx).id("tab-bar").min_w_0().child(
+            div()
+                .id("document-tab-list")
+                .role(Role::TabList)
+                .flex()
+                .min_w_0()
+                .items_stretch()
+                .overflow_x_hidden()
+                .gap(TabMetrics::BAR_GAP)
+                .children(tabs)
+                .child(new_tab_btn),
+        )
     }
 }
 

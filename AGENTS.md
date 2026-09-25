@@ -104,7 +104,7 @@ cargo run -p dbflux --features ui-automation
 **Working loop.**
 
 1. Find the target with `get_ui_tree` or `find_elements`. Elements are addressed
-   by their GPUI element id (`.id("tab-scripts")` becomes `tab-scripts`).
+   by their GPUI element id (`.id("rail-scripts")` becomes `rail-scripts`).
 2. Act with `click_element`, `type_text`, `set_text` or `keyboard` (GPUI
    keystroke syntax, for example `ctrl-shift-p`).
 3. Wait for the result with `wait_for_element` or `wait_for_state` instead of

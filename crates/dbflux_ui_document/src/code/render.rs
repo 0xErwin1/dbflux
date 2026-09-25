@@ -4,16 +4,10 @@ use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_
 use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
-use dbflux_components::primitives::{
-    Badge, BadgeTone, BannerBlock, BannerVariant, FocusShape, Icon, Text, focus_ring,
-};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
+use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text};
+use dbflux_components::tokens::{ChamferCut, Fields};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
-
-fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {
-    focus_mode == pane
-}
 
 impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -265,121 +259,114 @@ impl CodeDocument {
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Editor);
         let bg = cx.theme().background;
-        let accent = ChromeColors::tint(cx.theme());
 
-        focus_ring(
-            is_focused,
-            FocusShape::Rect,
-            Some(accent.opacity(0.3)),
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .bg(bg)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if this.vim.search_open
-                            && this
-                                .vim_search_input
-                                .read(cx)
-                                .focus_handle(cx)
-                                .is_focused(window)
-                        {
-                            return;
-                        }
-                        this.enter_editor_mode(cx);
-                        this.editor
-                            .input_state
-                            .update(cx, |state, cx| state.focus(window, cx));
-                        cx.emit(DocumentEvent::RequestFocus);
-                    }),
-                )
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::Escape, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.cancel_vim_search(window, cx)
-                            || this.handle_vim_escape_action(window, cx)
-                        {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::IndentInline, _window, cx| {
-                        if this.vim_swallows_indent_action(cx) {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::OutdentInline, _window, cx| {
-                        if this.vim_swallows_indent_action(cx) {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(
-                    cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
-                            cx.stop_propagation();
-                        }
-                    }),
-                )
-                .capture_action(
-                    cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
-                            cx.stop_propagation();
-                        }
-                    }),
-                )
-                .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    if this.handle_vim_key_down(event, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    if event.keystroke.key != "escape"
-                        || event.keystroke.modifiers.alt
-                        || event.keystroke.modifiers.control
-                        || event.keystroke.modifiers.shift
-                        || event.keystroke.modifiers.platform
-                        || event.keystroke.modifiers.function
+        // Focus inside the editor shows through its caret; the pane draws no
+        // ring of its own.
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .bg(bg)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if this.vim.search_open
+                        && this
+                            .vim_search_input
+                            .read(cx)
+                            .focus_handle(cx)
+                            .is_focused(window)
                     {
                         return;
                     }
-                    this.schedule_editor_refocus(window, cx);
-                }))
-                .child(
-                    div().flex_1().min_h_0().overflow_hidden().child(
-                        gpui_component::input::Editor::new(&self.editor.input_state)
-                            .appearance(false)
-                            .readonly(self.editor_input_locked())
-                            .w_full()
-                            .h_full(),
-                    ),
-                )
-                .when(self.vim.search_open, |el| {
-                    el.child(
-                        div()
-                            .id("vim-search-prompt")
-                            .flex()
-                            .items_center()
-                            .child("/")
-                            .child(Input::new(&self.vim_search_input).id("vim-search-input")),
-                    )
-                })
-                .when_some(self.vim_mode(), |el, mode| {
-                    el.child(self.render_vim_mode_indicator(mode, cx))
+                    this.enter_editor_mode(cx);
+                    this.editor
+                        .input_state
+                        .update(cx, |state, cx| state.focus(window, cx));
+                    cx.emit(DocumentEvent::RequestFocus);
                 }),
-            cx,
-        )
-        .size_full()
+            )
+            .capture_action(cx.listener(
+                |this, _: &gpui_component::input::Escape, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.cancel_vim_search(window, cx)
+                        || this.handle_vim_escape_action(window, cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_component::input::IndentInline, _window, cx| {
+                    if this.vim_swallows_indent_action(cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_component::input::OutdentInline, _window, cx| {
+                    if this.vim_swallows_indent_action(cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.handle_vim_key_down(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key != "escape"
+                    || event.keystroke.modifiers.alt
+                    || event.keystroke.modifiers.control
+                    || event.keystroke.modifiers.shift
+                    || event.keystroke.modifiers.platform
+                    || event.keystroke.modifiers.function
+                {
+                    return;
+                }
+                this.schedule_editor_refocus(window, cx);
+            }))
+            .child(
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    gpui_component::input::Editor::new(&self.editor.input_state)
+                        .appearance(false)
+                        .readonly(self.editor_input_locked())
+                        .w_full()
+                        .h_full(),
+                ),
+            )
+            .when(self.vim.search_open, |el| {
+                el.child(
+                    div()
+                        .id("vim-search-prompt")
+                        .flex()
+                        .items_center()
+                        .child("/")
+                        .child(Input::new(&self.vim_search_input).id("vim-search-input")),
+                )
+            })
+            .when_some(self.vim_mode(), |el, mode| {
+                el.child(self.render_vim_mode_indicator(mode, cx))
+            })
     }
 
     fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
@@ -407,9 +394,7 @@ impl CodeDocument {
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Results);
         let bg = cx.theme().background;
-        let accent = ChromeColors::tint(cx.theme());
         let is_executing = self.state == DocumentState::Executing;
 
         let error = self
@@ -424,39 +409,33 @@ impl CodeDocument {
         let has_panel = active_panel.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.result_tabs.is_empty();
 
-        focus_ring(
-            is_focused,
-            FocusShape::Rect,
-            Some(accent.opacity(0.3)),
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .bg(bg)
-                .when(has_tabs, |el| el.child(self.render_results_header(cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-                        .when(has_live_output, |el| el.child(self.render_live_output(cx)))
-                        .when(!has_live_output, |el| {
-                            el.when_some(active_panel, |el, panel| el.child(panel))
-                        })
-                        .when(
-                            !has_live_output && !has_panel && !has_error && is_executing,
-                            |el| el.child(self.render_loading_results(cx)),
-                        )
-                        .when(
-                            !has_live_output && !has_panel && !has_error && !is_executing,
-                            |el| el.child(self.render_empty_results(cx)),
-                        ),
-                ),
-            cx,
-        )
-        .size_full()
+        // The results show focus through their own grid cursor and tabs.
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .bg(bg)
+            .when(has_tabs, |el| el.child(self.render_results_header(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
+                    .when(has_live_output, |el| el.child(self.render_live_output(cx)))
+                    .when(!has_live_output, |el| {
+                        el.when_some(active_panel, |el, panel| el.child(panel))
+                    })
+                    .when(
+                        !has_live_output && !has_panel && !has_error && is_executing,
+                        |el| el.child(self.render_loading_results(cx)),
+                    )
+                    .when(
+                        !has_live_output && !has_panel && !has_error && !is_executing,
+                        |el| el.child(self.render_empty_results(cx)),
+                    ),
+            )
     }
 
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1036,30 +1015,25 @@ impl Render for CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::code_pane_is_focused;
-    use crate::code::SqlQueryFocus;
-
+    /// The editor and results panes draw no focus ring around themselves:
+    /// focus inside a document shows through its own caret, grid cursor and
+    /// controls.
     #[test]
-    fn editor_focus_shell_tracks_editor_mode_only() {
-        assert!(code_pane_is_focused(
-            SqlQueryFocus::Editor,
-            SqlQueryFocus::Editor,
-        ));
-        assert!(!code_pane_is_focused(
-            SqlQueryFocus::Results,
-            SqlQueryFocus::Editor,
-        ));
-    }
+    fn code_panes_draw_no_ring_around_the_document() {
+        let source = include_str!("render.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render.rs has production code before its tests");
 
-    #[test]
-    fn results_focus_shell_tracks_results_mode_only() {
-        assert!(code_pane_is_focused(
-            SqlQueryFocus::Results,
-            SqlQueryFocus::Results,
-        ));
-        assert!(!code_pane_is_focused(
-            SqlQueryFocus::ContextBar,
-            SqlQueryFocus::Results,
-        ));
+        for pane in ["fn render_editor(", "fn render_results("] {
+            let start = production.find(pane).expect("pane renderer");
+            let body = &production[start..start + 600];
+
+            assert!(
+                !body.contains("focus_ring("),
+                "{pane} wraps itself in a focus ring"
+            );
+        }
     }
 }

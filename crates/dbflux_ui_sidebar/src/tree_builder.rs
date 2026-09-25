@@ -612,12 +612,36 @@ impl Sidebar {
                             bucket_cache,
                         );
                         items.push(profile_item);
+                        items.extend(Self::build_connect_failure_rows(profile_id, state));
                     }
                 }
             }
         }
 
         items
+    }
+
+    /// The entries that carry the failed-connection block under a profile:
+    /// present while the last connect attempt failed and no new attempt is
+    /// running. Disabled, so the tree neither selects nor expands them.
+    fn build_connect_failure_rows(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let failed = state.connect_failure(profile_id).is_some()
+            && !state.connections().contains_key(&profile_id)
+            && !state.is_operation_pending(profile_id, None);
+
+        if !failed {
+            return Vec::new();
+        }
+
+        (0..crate::connection_failure::FAILURE_ROW_SLICES)
+            .map(|slice| {
+                TreeItem::new(
+                    crate::connection_failure::failure_row_id(profile_id, slice),
+                    "",
+                )
+                .disabled(true)
+            })
+            .collect()
     }
 
     fn build_profile_item_with_errors(
@@ -631,17 +655,9 @@ impl Sidebar {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
         let is_active = state.active_connection_id() == Some(profile_id);
-        let is_connecting = state.is_operation_pending(profile_id, None);
-
-        let profile_label = if is_connecting {
-            crate::labels::profile_connecting_label(&profile.name)
-        } else {
-            profile.name.clone()
-        };
-
         let mut profile_item = TreeItem::new(
             SchemaNodeId::Profile { profile_id }.to_string(),
-            profile_label,
+            profile.name.clone(),
         );
 
         if is_connected

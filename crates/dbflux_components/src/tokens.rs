@@ -908,6 +908,162 @@ impl NavigationMetrics {
     pub const EMPTY_ACTION_ICON: Pixels = px(15.0);
 }
 
+/// Geometry of the application shell: title bar, activity rail, sidebar
+/// frame, status bar and the empty workspace (AppByzTable, P1Empty).
+///
+/// Rows that draw a line on one edge are sized as the board's row plus that
+/// line, because the board draws the line outside the row's height.
+pub struct ShellMetrics;
+
+impl ShellMetrics {
+    /// Title bar: a 42 px row plus its bottom line.
+    pub const TITLE_BAR_HEIGHT: Pixels = px(43.0);
+    /// Title bar left block: 10 px left and 8 px right padding, 8 px gap.
+    pub const TITLE_BLOCK_PADDING_LEFT: Pixels = px(10.0);
+    pub const TITLE_BLOCK_PADDING_RIGHT: Pixels = px(8.0);
+    pub const TITLE_BLOCK_GAP: Pixels = px(8.0);
+    /// Sidebar collapse chevron in the title bar: 16 px icon, 6 px padding
+    /// on each side.
+    pub const COLLAPSE_ICON: Pixels = px(16.0);
+    pub const COLLAPSE_PADDING_X: Pixels = px(6.0);
+
+    /// Command search field: 28 px tall, cut 6, 10 px padding, 8 px gap,
+    /// 14 px search icon, 12.5 px text.
+    pub const COMMAND_SEARCH_HEIGHT: Pixels = px(28.0);
+    pub const COMMAND_SEARCH_PADDING_X: Pixels = px(10.0);
+    pub const COMMAND_SEARCH_GAP: Pixels = px(8.0);
+    pub const COMMAND_SEARCH_ICON: Pixels = px(14.0);
+    pub const COMMAND_SEARCH_FONT: Pixels = px(12.5);
+
+    /// Notification bell: 17 px icon, 8 px padding, 12 px before and 8 px
+    /// after it.
+    pub const BELL_ICON: Pixels = px(17.0);
+    pub const BELL_PADDING_X: Pixels = px(8.0);
+    pub const BELL_MARGIN_LEFT: Pixels = px(12.0);
+    pub const BELL_MARGIN_RIGHT: Pixels = px(8.0);
+    /// Count badge on the bell: 15 px tall, at least 16 px wide, 4 px
+    /// padding, 10 px bold text, 7 px from the top of the bar.
+    pub const BELL_BADGE_HEIGHT: Pixels = px(15.0);
+    pub const BELL_BADGE_MIN_WIDTH: Pixels = px(16.0);
+    pub const BELL_BADGE_PADDING_X: Pixels = px(4.0);
+    pub const BELL_BADGE_FONT: Pixels = px(10.0);
+    pub const BELL_BADGE_TOP: Pixels = px(7.0);
+
+    /// Activity rail: 52 px wide including its right line.
+    pub const RAIL_WIDTH: Pixels = px(52.0);
+    /// Rail buttons: 38 px square, cut 6, 19 px icon, 6 px apart, 10 px
+    /// from the top and bottom of the rail.
+    pub const RAIL_BUTTON: Pixels = px(38.0);
+    pub const RAIL_ICON: Pixels = px(19.0);
+    pub const RAIL_GAP: Pixels = px(6.0);
+    pub const RAIL_PADDING_Y: Pixels = px(10.0);
+    /// Pending diamond on a rail button: 7 px, 6 px from the top and 8 px
+    /// from the right edge of the button.
+    pub const RAIL_INDICATOR: Pixels = px(7.0);
+    pub const RAIL_INDICATOR_TOP: Pixels = px(6.0);
+    pub const RAIL_INDICATOR_RIGHT: Pixels = px(8.0);
+    /// Wash of the active rail button, over the tint.
+    pub const RAIL_ACTIVE_ALPHA: f32 = 0.14;
+
+    /// Sidebar: 290 px wide by default, including its right line.
+    pub const SIDEBAR_WIDTH: Pixels = px(290.0);
+    /// Sidebar header: 40 px, 16 px left and 12 px right padding, 8 px gap.
+    pub const SIDEBAR_HEADER_HEIGHT: Pixels = px(40.0);
+    /// Section label of the sidebar header and the empty workspace cards. (10 px)
+    pub const SECTION_LABEL_FONT: Pixels = px(10.0);
+    /// Sidebar filter: 12 px side and 10 px bottom padding around a 30 px
+    /// field; 14 px search icon.
+    pub const SIDEBAR_FILTER_PADDING_X: Pixels = px(12.0);
+    pub const SIDEBAR_FILTER_PADDING_BOTTOM: Pixels = px(10.0);
+    pub const SIDEBAR_FILTER_ICON: Pixels = px(14.0);
+    /// Sidebar footer: a 38 px row plus its top line, 14 px padding, 10 px gap.
+    pub const SIDEBAR_FOOTER_HEIGHT: Pixels = px(39.0);
+    pub const SIDEBAR_FOOTER_PADDING_X: Pixels = px(14.0);
+    pub const SIDEBAR_FOOTER_GAP: Pixels = px(10.0);
+    pub const SIDEBAR_FOOTER_FONT: Pixels = px(12.0);
+
+    /// Status bar: a 30 px row plus its top line, 12 px text.
+    pub const STATUS_BAR_HEIGHT: Pixels = px(31.0);
+    pub const STATUS_FONT: Pixels = px(12.0);
+    /// Status bar segment: 12 px padding, 7 px gap, 13 px icon.
+    pub const STATUS_SEGMENT_PADDING_X: Pixels = px(12.0);
+    pub const STATUS_SEGMENT_GAP: Pixels = px(7.0);
+    pub const STATUS_ICON: Pixels = px(13.0);
+    /// Connection chip: 20 px tall, cut 4, 10 px padding, 6 px margin.
+    pub const STATUS_CHIP_HEIGHT: Pixels = px(20.0);
+    pub const STATUS_CHIP_PADDING_X: Pixels = px(10.0);
+    pub const STATUS_CHIP_MARGIN_X: Pixels = px(6.0);
+    /// Wash of the connection chip, over the success color.
+    pub const STATUS_CHIP_ALPHA: f32 = 0.12;
+
+    /// Expanded tasks panel: 190 px tall, 34 px header, 30 px rows, 14 px
+    /// padding, 10 px gap.
+    pub const TASKS_PANEL_HEIGHT: Pixels = px(190.0);
+    pub const TASKS_HEADER_HEIGHT: Pixels = px(34.0);
+    pub const TASK_ROW_HEIGHT: Pixels = px(30.0);
+    pub const TASKS_PADDING_X: Pixels = px(14.0);
+    pub const TASKS_GAP: Pixels = px(10.0);
+    /// Task rows: 12.5 px text, 11 px mono metadata, 11 px chevron, 14 px
+    /// status icon.
+    pub const TASK_FONT: Pixels = px(12.5);
+    pub const TASK_META_FONT: Pixels = px(11.0);
+    pub const TASK_CHEVRON: Pixels = px(11.0);
+    pub const TASK_ICON: Pixels = px(14.0);
+    /// Progress track: 160 by 4 px.
+    pub const TASK_PROGRESS_WIDTH: Pixels = px(160.0);
+    pub const TASK_PROGRESS_HEIGHT: Pixels = px(4.0);
+    /// Error line under a failed task: 6 px top, 8 px bottom padding, text
+    /// aligned with the task name (58 px), 11.5 px mono, on a 6% danger wash.
+    pub const TASK_ERROR_PADDING_TOP: Pixels = px(6.0);
+    pub const TASK_ERROR_PADDING_BOTTOM: Pixels = px(8.0);
+    pub const TASK_ERROR_INDENT: Pixels = px(58.0);
+    pub const TASK_ERROR_FONT: Pixels = px(11.5);
+    pub const TASK_ERROR_ALPHA: f32 = 0.06;
+
+    /// Empty workspace: 620 px column, 26 px between blocks, 16 px between
+    /// the glyph and the title and between the cards.
+    pub const EMPTY_WIDTH: Pixels = px(620.0);
+    pub const EMPTY_GAP: Pixels = px(26.0);
+    pub const EMPTY_HEAD_GAP: Pixels = px(16.0);
+    pub const EMPTY_GLYPH: Pixels = px(44.0);
+    /// Title: 22 px Archivo Expanded Black.
+    pub const EMPTY_TITLE_FONT: Pixels = px(22.0);
+    pub const EMPTY_TITLE_GAP: Pixels = px(4.0);
+    /// Card label: 12 px top, 14 px side and 8 px bottom padding.
+    pub const CARD_LABEL_PADDING_TOP: Pixels = px(12.0);
+    pub const CARD_PADDING_X: Pixels = px(14.0);
+    pub const CARD_LABEL_PADDING_BOTTOM: Pixels = px(8.0);
+    /// Start rows: 36 px, 12 px gap, 16 px icon. Recent rows: 34 px, 10 px
+    /// gap, 15 px icon, 11.5 px metadata.
+    pub const START_ROW_HEIGHT: Pixels = px(36.0);
+    pub const START_ROW_GAP: Pixels = px(12.0);
+    pub const START_ROW_ICON: Pixels = px(16.0);
+    pub const RECENT_ROW_HEIGHT: Pixels = px(34.0);
+    pub const RECENT_ROW_GAP: Pixels = px(10.0);
+    pub const RECENT_ROW_ICON: Pixels = px(15.0);
+    pub const RECENT_META_FONT: Pixels = px(11.5);
+
+    /// Failed connection block under its tree row: 34 px from the sidebar's
+    /// left edge at the first level, 10 px from its right edge, 2 px above
+    /// and 6 px below, 10 by 12 px padding, a 2 px danger edge on an 8%
+    /// danger wash, 11.5 px mono text on a 1.5 line height, 8 px above the
+    /// action buttons, which are 6 px apart.
+    pub const FAILURE_MARGIN_RIGHT: Pixels = px(10.0);
+    pub const FAILURE_MARGIN_TOP: Pixels = px(2.0);
+    pub const FAILURE_PADDING_Y: Pixels = px(10.0);
+    pub const FAILURE_PADDING_X: Pixels = px(12.0);
+    pub const FAILURE_EDGE: Pixels = px(2.0);
+    pub const FAILURE_ALPHA: f32 = 0.08;
+    pub const FAILURE_FONT: Pixels = px(11.5);
+    pub const FAILURE_LINE_HEIGHT: Pixels = px(17.25);
+    pub const FAILURE_ACTIONS_GAP_TOP: Pixels = px(8.0);
+    pub const FAILURE_ACTION_GAP: Pixels = px(6.0);
+    pub const FAILURE_ACTION_ICON: Pixels = px(13.0);
+    /// Inline status of a tree row ("retry", "connecting"): 11 px, 5 px gap.
+    pub const ROW_STATUS_FONT: Pixels = px(11.0);
+    pub const ROW_STATUS_GAP: Pixels = px(5.0);
+}
+
 /// Shared animation timing constants.
 pub struct Anim;
 

@@ -2,7 +2,6 @@ use super::*;
 use dbflux_components::composites::{ListRow, MenuItem, menu_frame, menu_row};
 use dbflux_components::primitives::Icon;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Heights;
 
 /// Minimum width of the sidebar's add menu.
 const ADD_MENU_MIN_WIDTH: Pixels = px(200.0);
@@ -89,7 +88,7 @@ impl Sidebar {
             .child(
                 menu_frame(cx)
                     .absolute()
-                    .top(Heights::TOOLBAR)
+                    .top(dbflux_components::tokens::ShellMetrics::SIDEBAR_HEADER_HEIGHT)
                     .right(Spacing::XS)
                     .min_w(ADD_MENU_MIN_WIDTH)
                     .children(items),
