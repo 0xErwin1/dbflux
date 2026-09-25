@@ -1,7 +1,7 @@
 use super::render_tree::{TreeRenderParams, render_tree_item};
 use super::*;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::SyntaxColors;
+use dbflux_components::tokens::{ChromeColors, SyntaxColors};
 use dbflux_components::typography::{Body, MonoCaption};
 use gpui::FontWeight;
 
@@ -36,7 +36,7 @@ impl Sidebar {
         let tab_text_color = |active: bool| {
             if active {
                 if focused {
-                    theme.primary
+                    ChromeColors::tint(theme)
                 } else {
                     theme.foreground
                 }
@@ -47,13 +47,13 @@ impl Sidebar {
 
         let tab_border_color = |active: bool| {
             if active {
-                theme.primary
+                ChromeColors::tint(theme)
             } else {
                 gpui::transparent_black()
             }
         };
 
-        // Tab strip: uppercase mono caption, active gets a 2px primary
+        // Tab strip: uppercase mono caption, active gets a 2px tint
         // underline, no hover background (per design).
         div()
             .flex()

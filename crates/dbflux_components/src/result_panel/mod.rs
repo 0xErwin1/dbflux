@@ -29,7 +29,7 @@
 //! the event is emitted for any remaining listeners.
 
 use crate::result_view::ResultViewMode;
-use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -362,7 +362,7 @@ impl ResultPanel {
                     .cursor_pointer()
                     .border_b_2()
                     .border_color(if is_active {
-                        theme.accent
+                        ChromeColors::tint(&theme)
                     } else {
                         gpui::transparent_black()
                     })

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::primitives::Text;
-use crate::tokens::{FontSizes, RowColors};
+use crate::tokens::{ChromeColors, FontSizes, RowColors};
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -830,7 +830,7 @@ impl DataTable {
                             // before its own characters get truncated.
                             .child(div().flex_shrink_0().whitespace_nowrap().child(
                                 Text::label_sm(col_spec.title.clone()).color(if is_sorted {
-                                    theme.primary
+                                    ChromeColors::tint(theme)
                                 } else {
                                     theme.foreground
                                 }),
@@ -860,7 +860,7 @@ impl DataTable {
                     .child(div().child(if is_sorted {
                         Text::body(sort_indicator)
                             .font_size(FontSizes::SM)
-                            .color(theme.primary)
+                            .color(ChromeColors::tint(theme))
                     } else {
                         Text::body(sort_indicator)
                             .font_size(FontSizes::SM)
@@ -878,7 +878,7 @@ impl DataTable {
                             .bottom_0()
                             .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
                             .cursor_col_resize()
-                            .hover(|s| s.bg(theme.primary.opacity(0.3)))
+                            .hover(|s| s.bg(ChromeColors::tint(theme).opacity(0.3)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 move |event: &MouseDownEvent, _window, cx| {

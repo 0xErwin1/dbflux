@@ -11,7 +11,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputEve
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
-use dbflux_components::tokens::{Heights, Radii};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii};
 use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -265,7 +265,7 @@ impl ProxiesSection {
         label: &str,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         field: ProxyFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -279,7 +279,7 @@ impl ProxiesSection {
             .child(
                 focus_frame(
                     is_focused,
-                    Some(primary),
+                    Some(tint),
                     layout::compact_input_shell(
                         Input::new(input).small().when(is_secret, |input| {
                             input.content_type(InputContentType::Password)
@@ -307,7 +307,7 @@ impl ProxiesSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let border = theme.border;
         let current_kind = self.proxy_kind;
 
@@ -352,7 +352,7 @@ impl ProxiesSection {
                         .cursor_pointer()
                         .border_1()
                         .border_color(if is_focused {
-                            primary
+                            tint
                         } else {
                             transparent_black()
                         })
@@ -366,7 +366,7 @@ impl ProxiesSection {
                         }))
                         .child(Self::render_radio_button(
                             current_kind == kind,
-                            primary,
+                            tint,
                             border,
                         ))
                         .child(div().text_sm().child(label))
@@ -381,7 +381,7 @@ impl ProxiesSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let border = theme.border;
         let current_auth = self.proxy_auth_selection;
 
@@ -411,7 +411,7 @@ impl ProxiesSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_none_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -422,7 +422,7 @@ impl ProxiesSection {
                             }))
                             .child(Self::render_radio_button(
                                 current_auth == ProxyAuthSelection::None,
-                                primary,
+                                tint,
                                 border,
                             ))
                             .child(
@@ -443,7 +443,7 @@ impl ProxiesSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_basic_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -454,7 +454,7 @@ impl ProxiesSection {
                             }))
                             .child(Self::render_radio_button(
                                 current_auth == ProxyAuthSelection::Basic,
-                                primary,
+                                tint,
                                 border,
                             ))
                             .child(
@@ -474,7 +474,7 @@ impl ProxiesSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
 
         let is_save_secret_focused = is_form_focused && current_field == ProxyFormField::SaveSecret;
         let is_password_focused = is_form_focused && current_field == ProxyFormField::Password;
@@ -492,7 +492,7 @@ impl ProxiesSection {
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_save_secret_focused {
-                        primary
+                        tint
                     } else {
                         transparent_black()
                     })
@@ -526,7 +526,7 @@ impl ProxiesSection {
                 &dbflux_i18n::t!("settings.proxies.field.username"),
                 &self.input_proxy_username,
                 is_form_focused && current_field == ProxyFormField::Username,
-                primary,
+                tint,
                 ProxyFormField::Username,
                 cx,
             ))
@@ -545,7 +545,7 @@ impl ProxiesSection {
                                 &dbflux_i18n::t!("settings.proxies.field.password"),
                                 &self.input_proxy_password,
                                 is_password_focused,
-                                primary,
+                                tint,
                                 ProxyFormField::Password,
                                 cx,
                             )))
@@ -585,7 +585,7 @@ impl ProxiesSection {
                             .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_new_button_focused {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -649,7 +649,7 @@ impl ProxiesSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -711,7 +711,7 @@ impl ProxiesSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
         let _muted_foreground = theme.muted_foreground;
 
         let is_form_focused = self.proxy_focus == ProxyFocus::Form;
@@ -730,7 +730,7 @@ impl ProxiesSection {
                     &dbflux_i18n::t!("settings.proxies.field.name"),
                     &self.input_proxy_name,
                     is_form_focused && field == ProxyFormField::Name,
-                    primary,
+                    tint,
                     ProxyFormField::Name,
                     cx,
                 ))
@@ -743,7 +743,7 @@ impl ProxiesSection {
                             &dbflux_i18n::t!("settings.proxies.field.host"),
                             &self.input_proxy_host,
                             is_form_focused && field == ProxyFormField::Host,
-                            primary,
+                            tint,
                             ProxyFormField::Host,
                             cx,
                         )))
@@ -751,7 +751,7 @@ impl ProxiesSection {
                             &dbflux_i18n::t!("settings.proxies.field.port"),
                             &self.input_proxy_port,
                             is_form_focused && field == ProxyFormField::Port,
-                            primary,
+                            tint,
                             ProxyFormField::Port,
                             cx,
                         ))),
@@ -777,7 +777,7 @@ impl ProxiesSection {
                             &dbflux_i18n::t!("settings.proxies.field.no_proxy"),
                             &self.input_proxy_no_proxy,
                             is_form_focused && field == ProxyFormField::NoProxy,
-                            primary,
+                            tint,
                             ProxyFormField::NoProxy,
                             cx,
                         ))
@@ -799,7 +799,7 @@ impl ProxiesSection {
                         .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_enabled_focused {
-                            primary
+                            tint
                         } else {
                             transparent_black()
                         })
@@ -826,7 +826,7 @@ impl ProxiesSection {
     ) -> AnyElement {
         let is_form_focused = self.proxy_focus == ProxyFocus::Form;
         let field = self.proxy_form_field;
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
 
         div()
             .flex()
@@ -837,7 +837,7 @@ impl ProxiesSection {
 
                 root.child(layout::footer_action_frame(
                     is_form_focused && field == ProxyFormField::ExportButton,
-                    primary,
+                    tint,
                     Button::new(
                         "export-proxy",
                         dbflux_i18n::t!("settings.proxies.action.export"),
@@ -851,7 +851,7 @@ impl ProxiesSection {
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && field == ProxyFormField::DeleteButton,
-                    primary,
+                    tint,
                     Button::new(
                         "delete-proxy",
                         dbflux_i18n::t!("settings.proxies.action.delete"),
@@ -866,7 +866,7 @@ impl ProxiesSection {
             })
             .child(layout::footer_action_frame(
                 is_form_focused && field == ProxyFormField::SaveButton,
-                primary,
+                tint,
                 Button::new(
                     "save-proxy",
                     if editing_id.is_some() {
@@ -885,17 +885,17 @@ impl ProxiesSection {
             .into_any_element()
     }
 
-    fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
+    fn render_radio_button(selected: bool, tint: Hsla, border: Hsla) -> Div {
         div()
             .size_4()
             .rounded_full()
             .border_1()
-            .border_color(if selected { primary } else { border })
+            .border_color(if selected { tint } else { border })
             .flex()
             .items_center()
             .justify_center()
             .child(div().size_2().rounded_full().bg(if selected {
-                primary
+                tint
             } else {
                 transparent_black()
             }))

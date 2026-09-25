@@ -15,7 +15,7 @@ use gpui_component::ActiveTheme;
 
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::Spacing;
+use crate::tokens::{ChromeColors, Spacing};
 
 /// Modal width every data wizard opens at.
 pub const WIZARD_MODAL_WIDTH: Pixels = px(1000.0);
@@ -36,7 +36,7 @@ pub struct RailItem {
 }
 
 /// The rail's marker/label colors, resolved once per render from the theme.
-/// `current` and `done` use the theme's bright action/success colors (not the
+/// `current` and `done` use the text-accent tint and the success color (not the
 /// dark `accent`, which is a low-contrast highlight background on dark
 /// themes), so the current phase reads as the most prominent entry.
 #[derive(Clone, Copy)]
@@ -58,7 +58,7 @@ where
 {
     let theme = cx.theme();
     let colors = RailColors {
-        current: theme.primary,
+        current: ChromeColors::tint(theme),
         done: theme.success,
         muted: theme.muted_foreground,
         hover_bg: theme.secondary,

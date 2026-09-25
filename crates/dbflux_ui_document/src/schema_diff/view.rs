@@ -16,7 +16,7 @@ use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
 };
 use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
     QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange,
@@ -2136,7 +2136,11 @@ impl SchemaDiffDocument {
             .cursor_pointer()
             .when(active, |d| d.bg(primary).text_color(primary_foreground))
             .when(!active, |d| d.bg(secondary).hover(move |h| h.bg(muted)))
-            .child(Text::caption(label))
+            .child(if active {
+                Text::caption(label).color(primary_foreground)
+            } else {
+                Text::caption(label)
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx)))
     }
 
@@ -2150,9 +2154,9 @@ impl SchemaDiffDocument {
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
-        let (primary, muted) = {
+        let (tint, muted) = {
             let theme = cx.theme();
-            (theme.primary, theme.muted)
+            (ChromeColors::tint(theme), theme.muted)
         };
         div()
             .id(id)
@@ -2160,7 +2164,7 @@ impl SchemaDiffDocument {
             .py(Spacing::XS)
             .rounded(Radii::SM)
             .cursor_pointer()
-            .when(selected, |d| d.bg(primary.opacity(0.15)))
+            .when(selected, |d| d.bg(tint.opacity(0.15)))
             .hover(move |h| h.bg(muted))
             .child(Text::body(label))
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
@@ -2272,9 +2276,9 @@ impl SchemaDiffDocument {
     }
 
     fn render_snapshot_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (primary, muted) = {
+        let (tint, muted) = {
             let theme = cx.theme();
-            (theme.primary, theme.muted)
+            (ChromeColors::tint(theme), theme.muted)
         };
 
         if self.snapshots.is_empty()
@@ -2313,7 +2317,7 @@ impl SchemaDiffDocument {
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(primary.opacity(0.15)))
+                    .when(selected, |d| d.bg(tint.opacity(0.15)))
                     .hover(move |h| h.bg(muted))
                     .child(Text::body(label))
                     .on_click(

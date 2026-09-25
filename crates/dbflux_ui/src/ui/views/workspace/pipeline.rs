@@ -4,7 +4,7 @@ use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 
 use dbflux_core::{PipelineState, StateWatcher};
 
@@ -157,7 +157,7 @@ impl Render for PipelineProgress {
                         gpui::svg()
                             .path(AppIcon::Loader.path())
                             .size(px(14.0))
-                            .text_color(theme.primary),
+                            .text_color(ChromeColors::tint(theme)),
                     )
                     .child(Text::label(format!("Connecting: {}", self.profile_name))),
             )

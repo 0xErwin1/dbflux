@@ -12,7 +12,7 @@ use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::primitives::{Label, focus_frame};
-use dbflux_components::tokens::Widths;
+use dbflux_components::tokens::{ChromeColors, Widths};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
@@ -868,14 +868,14 @@ impl McpSection {
                     .child(self.render_mcp_input_field(
                         &self.input_client_id,
                         McpFormField::ClientId,
-                        theme.primary,
+                        ChromeColors::tint(&theme),
                         cx,
                     ))
                     .child(Label::new(dbflux_i18n::t!("settings.mcp.field.name")))
                     .child(self.render_mcp_input_field(
                         &self.input_client_name,
                         McpFormField::ClientName,
-                        theme.primary,
+                        ChromeColors::tint(&theme),
                         cx,
                     ))
                     .child(Label::new(dbflux_i18n::t!(
@@ -884,13 +884,13 @@ impl McpSection {
                     .child(self.render_mcp_input_field(
                         &self.input_client_issuer,
                         McpFormField::ClientIssuer,
-                        theme.primary,
+                        ChromeColors::tint(&theme),
                         cx,
                     ))
                     .child(focus_frame(
                         self.mcp_focus == McpFocus::Form
                             && self.mcp_form_field == McpFormField::ClientActive,
-                        Some(theme.primary),
+                        Some(ChromeColors::tint(&theme)),
                         div()
                             .flex()
                             .items_center()
@@ -940,12 +940,12 @@ impl McpSection {
         &self,
         input: &Entity<InputState>,
         field: McpFormField,
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_focused = self.mcp_focus == McpFocus::Form && self.mcp_form_field == field;
 
-        focus_frame(is_focused, Some(primary), Input::new(input).small(), cx).on_mouse_down(
+        focus_frame(is_focused, Some(tint), Input::new(input).small(), cx).on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
                 this.switching_input = true;
@@ -1035,7 +1035,7 @@ impl McpSection {
                     .child(self.render_mcp_input_field(
                         &self.input_role_id,
                         McpFormField::RoleId,
-                        theme.primary,
+                        ChromeColors::tint(&theme),
                         cx,
                     ))
                     .child(Label::new(dbflux_i18n::t!("settings.mcp.field.policies")))
@@ -1045,7 +1045,7 @@ impl McpSection {
                     )
                     .child(focus_frame(
                         role_policies_focused,
-                        Some(theme.primary),
+                        Some(ChromeColors::tint(&theme)),
                         self.role_policies_multiselect.clone(),
                         cx,
                     )),
@@ -1164,7 +1164,7 @@ impl McpSection {
                     .child(self.render_mcp_input_field(
                         &self.input_policy_id,
                         McpFormField::PolicyId,
-                        theme.primary,
+                        ChromeColors::tint(&theme),
                         cx,
                     ))
                     .child(Label::new(dbflux_i18n::t!(
@@ -1180,7 +1180,7 @@ impl McpSection {
 
                                 focus_frame(
                                     is_focused,
-                                    Some(theme.primary),
+                                    Some(ChromeColors::tint(&theme)),
                                     div()
                                         .flex()
                                         .items_start()
@@ -1243,7 +1243,7 @@ impl McpSection {
 
                                     focus_frame(
                                         is_focused,
-                                        Some(theme.primary),
+                                        Some(ChromeColors::tint(&theme)),
                                         div()
                                             .flex()
                                             .items_start()
@@ -1320,7 +1320,7 @@ impl McpSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let save_label = if self.selected_client(cx).is_some() {
@@ -1349,7 +1349,7 @@ impl McpSection {
             )
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::ClientToggleActive,
-                primary,
+                tint,
                 Button::new("mcp-client-toggle-active", active_label)
                     .small()
                     .ghost()
@@ -1361,7 +1361,7 @@ impl McpSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::DeleteButton,
-                primary,
+                tint,
                 Button::new(
                     "mcp-client-delete",
                     dbflux_i18n::t!("settings.mcp.action.delete"),
@@ -1376,7 +1376,7 @@ impl McpSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::SaveButton,
-                primary,
+                tint,
                 Button::new("mcp-client-save", save_label)
                     .small()
                     .primary()
@@ -1393,7 +1393,7 @@ impl McpSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let role_is_builtin = self
@@ -1420,7 +1420,7 @@ impl McpSection {
             })
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::DeleteButton,
-                primary,
+                tint,
                 Button::new(
                     "mcp-role-delete",
                     dbflux_i18n::t!("settings.mcp.action.delete"),
@@ -1435,7 +1435,7 @@ impl McpSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::SaveButton,
-                primary,
+                tint,
                 Button::new("mcp-role-save", save_label)
                     .small()
                     .primary()
@@ -1453,7 +1453,7 @@ impl McpSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let policy_is_builtin = self
@@ -1482,7 +1482,7 @@ impl McpSection {
             })
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::DeleteButton,
-                primary,
+                tint,
                 Button::new(
                     "mcp-policy-delete",
                     dbflux_i18n::t!("settings.mcp.action.delete"),
@@ -1497,7 +1497,7 @@ impl McpSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && field == McpFormField::SaveButton,
-                primary,
+                tint,
                 Button::new("mcp-policy-save", save_label)
                     .small()
                     .primary()

@@ -323,7 +323,7 @@ impl Render for StatusBar {
                                         "({})",
                                         Self::format_elapsed(task.elapsed_secs)
                                     ))
-                                    .color(cx.theme().primary),
+                                    .color(ChromeColors::tint(cx.theme())),
                                 ),
                         )
                     })

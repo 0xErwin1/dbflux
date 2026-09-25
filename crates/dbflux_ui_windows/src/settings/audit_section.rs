@@ -8,7 +8,7 @@ use dbflux_components::controls::{
     Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent, InputState,
 };
 use dbflux_components::primitives::{StatusDot, StatusDotVariant, Text};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{ChromeColors, Radii};
 use dbflux_components::typography::{FieldLabel, SubSectionLabel};
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
@@ -571,7 +571,7 @@ impl Render for AuditSection {
 impl AuditSection {
     pub(super) fn render_audit_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
@@ -679,7 +679,7 @@ impl AuditSection {
                         &dbflux_i18n::t!("settings.audit.field.retention_days"),
                         &self.input_retention_days,
                         is_at(AuditFormRow::RetentionDays),
-                        primary,
+                        tint,
                         AuditFormRow::RetentionDays,
                         cx,
                     ))
@@ -687,7 +687,7 @@ impl AuditSection {
                         &dbflux_i18n::t!("settings.audit.field.max_detail_bytes"),
                         &self.input_max_detail_bytes,
                         is_at(AuditFormRow::MaxDetailBytes),
-                        primary,
+                        tint,
                         AuditFormRow::MaxDetailBytes,
                         cx,
                     ))
@@ -709,7 +709,7 @@ impl AuditSection {
                         &dbflux_i18n::t!("settings.audit.field.purge_interval_minutes"),
                         &self.input_background_purge_interval,
                         is_at(AuditFormRow::BackgroundPurgeInterval),
-                        primary,
+                        tint,
                         AuditFormRow::BackgroundPurgeInterval,
                         cx,
                     ))
@@ -722,7 +722,7 @@ impl AuditSection {
                         &dbflux_i18n::t!("settings.audit.field.min_log_level"),
                         &self.dropdown_log_level,
                         is_at(AuditFormRow::LogCaptureMinLevel),
-                        primary,
+                        tint,
                         AuditFormRow::LogCaptureMinLevel,
                         cx,
                     )),
@@ -740,7 +740,7 @@ impl AuditSection {
             .gap_3()
             .child(layout::footer_action_frame(
                 is_save_focused,
-                cx.theme().primary,
+                ChromeColors::tint(cx.theme()),
                 dbflux_components::controls::Button::new(
                     "save-audit",
                     dbflux_i18n::t!("settings.audit.action.save"),
@@ -797,7 +797,7 @@ impl AuditSection {
         label: &str,
         dropdown: &Entity<Dropdown>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: AuditFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -810,7 +810,7 @@ impl AuditSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 gpui::transparent_black()
             })
@@ -876,7 +876,7 @@ impl AuditSection {
         setter: fn(&mut Self, bool),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let label = label.into();
 
         div()
@@ -888,7 +888,7 @@ impl AuditSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 gpui::transparent_black()
             })
@@ -922,11 +922,11 @@ impl AuditSection {
         label: &str,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: AuditFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        self.render_audit_input_field_impl(label, input, is_focused, primary, row, cx, false)
+        self.render_audit_input_field_impl(label, input, is_focused, tint, row, cx, false)
     }
 
     fn render_audit_unsupported_checkbox(
@@ -938,7 +938,7 @@ impl AuditSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let label = label.into();
         // Row is non-interactive: no cursor movement on activation,
         // checkbox cannot be toggled. Only visual focus state is shown.
@@ -951,7 +951,7 @@ impl AuditSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 gpui::transparent_black()
             })
@@ -977,7 +977,7 @@ impl AuditSection {
         label: &str,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: AuditFormRow,
         cx: &mut Context<Self>,
         unsupported: bool,
@@ -1008,7 +1008,7 @@ impl AuditSection {
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
-                        primary
+                        tint
                     } else {
                         gpui::transparent_black()
                     })

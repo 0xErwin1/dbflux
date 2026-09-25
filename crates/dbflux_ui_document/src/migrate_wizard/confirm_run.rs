@@ -22,7 +22,7 @@ use dbflux_components::composites::{render_wizard_progress_bar, wizard_progress_
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::Spacing;
+use dbflux_components::tokens::{ChromeColors, Spacing};
 use dbflux_core::{
     CancelToken, Connection, OrderResult, TableRef, TaskId, TaskKind, TaskStatus, TaskTarget,
 };
@@ -837,7 +837,7 @@ impl ConfirmRunPhase {
     fn render_running(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let color_done = theme.success;
-        let color_current = theme.primary;
+        let color_current = ChromeColors::tint(theme);
         let color_foreground = theme.foreground;
         let color_pending = theme.muted_foreground;
 

@@ -19,7 +19,7 @@ use super::{ObjectAction, ObjectBrowserDocument};
 use crate::labels::object_browser_versions_count_label;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
 use dbflux_core::{Encoding, ObjectVersionSummary};
 use gpui::prelude::*;
 use gpui::*;
@@ -179,7 +179,7 @@ impl ObjectBrowserDocument {
                     .border_l_1()
                     .border_color(theme.border)
                     .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(resizing, |el| el.bg(theme.primary))
+                    .when(resizing, |el| el.bg(ChromeColors::tint(theme)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {

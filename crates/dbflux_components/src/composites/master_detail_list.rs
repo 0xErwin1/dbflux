@@ -10,7 +10,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
 use crate::primitives::{Icon, Text, focus_frame};
-use crate::tokens::{Radii, Spacing, Widths};
+use crate::tokens::{ChromeColors, Radii, Spacing, Widths};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BadgeTone {
@@ -87,7 +87,7 @@ pub fn master_detail_row_kind(selected: bool, focused: bool) -> RowKind {
 }
 
 struct RowColors {
-    primary: Hsla,
+    tint: Hsla,
     secondary: Hsla,
     list_even: Hsla,
     muted_foreground: Hsla,
@@ -161,7 +161,7 @@ where
     let kind = master_detail_row_kind(item.selected, item.focused);
 
     let ring_color = match kind {
-        RowKind::Selected | RowKind::Focused => Some(colors.primary),
+        RowKind::Selected | RowKind::Focused => Some(colors.tint),
         RowKind::Plain => None,
     };
 
@@ -215,11 +215,11 @@ where
 {
     let theme = cx.theme();
     let colors = RowColors {
-        primary: theme.primary,
+        tint: ChromeColors::tint(theme),
         secondary: theme.secondary,
         list_even: theme.list_even,
         muted_foreground: theme.muted_foreground,
-        accent: theme.accent,
+        accent: ChromeColors::tint(theme),
         success: theme.success,
         danger: theme.danger,
         border: theme.border,

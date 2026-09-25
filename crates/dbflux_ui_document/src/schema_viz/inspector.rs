@@ -6,7 +6,7 @@
 //! `WorkspaceInspector`.
 
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Radii, Spacing};
 use dbflux_schema_viz::graph::{FkEdge, IndexSummary, TableNode};
 use gpui::prelude::*;
 use gpui::{
@@ -162,6 +162,7 @@ fn render_column_row(
 ) -> impl IntoElement {
     let is_nn = !col.nullable && !col.is_pk;
     let pk_color = theme.primary;
+    let fk_color = ChromeColors::tint(theme);
     let muted = theme.muted_foreground;
 
     div()
@@ -184,7 +185,7 @@ fn render_column_row(
                 .child(col.name.clone()),
         )
         .when(col.is_pk, |d| d.child(badge("PK", true, pk_color, theme)))
-        .when(col.is_fk, |d| d.child(badge("FK", false, pk_color, theme)))
+        .when(col.is_fk, |d| d.child(badge("FK", false, fk_color, theme)))
         .when(is_nn, |d| {
             d.child(badge("NN", true, muted.opacity(0.5), theme))
         })
@@ -220,7 +221,7 @@ fn render_index_row(idx: &IndexSummary, theme: &gpui_component::theme::Theme) ->
                 .child(label),
         )
         .when(idx.unique, |d| {
-            d.child(badge("UNIQUE", false, theme.primary, theme))
+            d.child(badge("UNIQUE", false, ChromeColors::tint(theme), theme))
         })
 }
 

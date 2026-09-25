@@ -15,7 +15,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputState, ReadOnlyEditor
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
 use gpui::*;
@@ -637,7 +637,7 @@ impl AuditDocument {
         let row_bg = if is_selected {
             theme.list_active
         } else if is_expanded {
-            theme.primary.opacity(0.08)
+            ChromeColors::tint(&theme).opacity(0.08)
         } else {
             gpui::transparent_black()
         };
@@ -657,7 +657,9 @@ impl AuditDocument {
                     .cursor_pointer()
                     .bg(row_bg)
                     // Selected rows get a left-border accent to match other list views.
-                    .when(is_selected, |d| d.border_l_2().border_color(theme.accent))
+                    .when(is_selected, |d| {
+                        d.border_l_2().border_color(ChromeColors::tint(&theme))
+                    })
                     .hover(|style| style.bg(theme.list_hover))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -694,7 +696,7 @@ impl AuditDocument {
                                     .px_1p5()
                                     .py_px()
                                     .rounded(px(3.0))
-                                    .bg(theme.primary.opacity(0.15))
+                                    .bg(ChromeColors::tint(&theme).opacity(0.15))
                                     .max_w(px(240.0))
                                     .child(
                                         div()

@@ -394,9 +394,9 @@ impl StatusDotPalette {
         theme.muted_foreground
     }
 
-    /// Busy dot: theme `primary`. Consumer drives the pulse animation.
+    /// Busy dot: the text-accent tint. Consumer drives the pulse animation.
     pub fn busy(theme: &gpui_component::Theme) -> Hsla {
-        theme.primary
+        ChromeColors::tint(theme)
     }
 
     /// Success dot: theme `success`.

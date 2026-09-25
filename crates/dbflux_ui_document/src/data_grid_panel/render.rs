@@ -20,7 +20,7 @@ use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
@@ -2397,7 +2397,7 @@ impl DataGridPanel {
                             .size(px(20.0))
                             .color(gpui::Hsla {
                                 a: 0.8,
-                                ..cx.theme().primary
+                                ..ChromeColors::tint(cx.theme())
                             }),
                     )
                     .child(
@@ -2471,6 +2471,7 @@ impl DataGridPanel {
                             dbflux_i18n::t!("document.data.chart_dock.degraded.pick_time_column")
                         };
                         let primary = cx.theme().primary;
+                        let primary_foreground = cx.theme().primary_foreground;
                         d.child(
                             div()
                                 .id("cd-pick-column")
@@ -2480,7 +2481,7 @@ impl DataGridPanel {
                                 .text_size(FontSizes::SM)
                                 .cursor_pointer()
                                 .bg(primary.opacity(0.9))
-                                .text_color(gpui::black())
+                                .text_color(primary_foreground)
                                 .hover(move |d| d.bg(primary))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -2520,6 +2521,8 @@ impl DataGridPanel {
     /// Extracted from the old inline degraded view so the card action button can toggle it.
     fn render_chart_picker_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let primary = cx.theme().primary;
+        let primary_foreground = cx.theme().primary_foreground;
+        let tint = ChromeColors::tint(cx.theme());
         let chart_colors = ChartColors::for_current(cx);
 
         let y_candidates: Vec<(usize, String)> = self
@@ -2606,7 +2609,7 @@ impl DataGridPanel {
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
                                     .text_size(FontSizes::SM)
-                                    .when(is_selected, |d| d.bg(gpui::Hsla { a: 0.2, ..primary }))
+                                    .when(is_selected, |d| d.bg(gpui::Hsla { a: 0.2, ..tint }))
                                     .when(!is_selected, |d| {
                                         d.hover(|d| d.bg(chart_colors.hover_bg))
                                     })
@@ -2699,7 +2702,7 @@ impl DataGridPanel {
             .when(any_y_checked, |d| {
                 d.cursor_pointer()
                     .bg(primary.opacity(0.9))
-                    .text_color(gpui::black())
+                    .text_color(primary_foreground)
                     .hover(move |d| d.bg(primary))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2936,7 +2939,7 @@ impl DataGridPanel {
                                 .when(is_selected, |d| {
                                     d.bg(gpui::Hsla {
                                         a: 0.18,
-                                        ..cx.theme().primary
+                                        ..ChromeColors::tint(cx.theme())
                                     })
                                     .text_color(theme.foreground)
                                 })
@@ -3201,10 +3204,10 @@ impl DataGridPanel {
 
         // Value color per stat:
         //   min, max, avg  → theme.cyan    (#6FD3D8 on Dark, #0F7C82 on Light)
-        //   p99            → theme.primary (byzantine #702963 on both)
+        //   p99            → tint (#D48CC8 on Dark, #702963 on Light)
         //   others         → theme.foreground
         let cyan_color = theme.cyan;
-        let primary_color = theme.primary;
+        let tint_color = ChromeColors::tint(theme);
         let cyan_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
@@ -3212,10 +3215,10 @@ impl DataGridPanel {
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
-        let primary_val = |v: f64| -> gpui::AnyElement {
+        let tint_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
-                .text_color(primary_color)
+                .text_color(tint_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
@@ -3282,11 +3285,7 @@ impl DataGridPanel {
                     .child(Self::dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
                     .child(Self::dock_kv_row("p50", fg_val(stats.p50), &chart_colors))
                     .child(Self::dock_kv_row("p95", fg_val(stats.p95), &chart_colors))
-                    .child(Self::dock_kv_row(
-                        "p99",
-                        primary_val(stats.p99),
-                        &chart_colors,
-                    ))
+                    .child(Self::dock_kv_row("p99", tint_val(stats.p99), &chart_colors))
                     .child(Self::dock_kv_row("last", fg_val(stats.last), &chart_colors)),
                 theme,
             ))

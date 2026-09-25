@@ -12,7 +12,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputSta
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
-use dbflux_components::tokens::{Heights, Radii};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii};
 use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
 use dbflux_core::SshTunnelProfile;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -363,7 +363,7 @@ impl SshTunnelsSection {
         label: &str,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         field: SshFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -377,7 +377,7 @@ impl SshTunnelsSection {
             .child(
                 focus_frame(
                     is_focused,
-                    Some(primary),
+                    Some(tint),
                     layout::compact_input_shell(
                         Input::new(input).small().when(is_secret, |input| {
                             input.content_type(InputContentType::Password)
@@ -405,7 +405,7 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
         let border = theme.border;
         let current_auth = self.ssh_auth_method;
 
@@ -434,7 +434,7 @@ impl SshTunnelsSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_private_key_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -445,7 +445,7 @@ impl SshTunnelsSection {
                             }))
                             .child(ssh_shared::render_radio_button(
                                 current_auth == SshAuthSelection::PrivateKey,
-                                primary,
+                                tint,
                                 border,
                             ))
                             .child(div().text_sm().child(dbflux_i18n::t!("ssh.private_key"))),
@@ -462,7 +462,7 @@ impl SshTunnelsSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_password_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -473,7 +473,7 @@ impl SshTunnelsSection {
                             }))
                             .child(ssh_shared::render_radio_button(
                                 current_auth == SshAuthSelection::Password,
-                                primary,
+                                tint,
                                 border,
                             ))
                             .child(div().text_sm().child(dbflux_i18n::t!("ssh.password"))),
@@ -485,7 +485,7 @@ impl SshTunnelsSection {
         &self,
         is_form_focused: bool,
         current_field: SshFormField,
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_save_secret_focused = is_form_focused && current_field == SshFormField::SaveSecret;
@@ -501,7 +501,7 @@ impl SshTunnelsSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_save_secret_focused {
-                primary
+                tint
             } else {
                 transparent_black()
             })
@@ -525,7 +525,7 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
         let _muted_foreground = theme.muted_foreground;
 
         let password_toggle =
@@ -537,7 +537,7 @@ impl SshTunnelsSection {
 
         let save_checkbox = if keyring_available {
             Some(
-                self.render_save_secret_checkbox(is_form_focused, current_field, primary, cx)
+                self.render_save_secret_checkbox(is_form_focused, current_field, tint, cx)
                     .into_any_element(),
             )
         } else {
@@ -557,7 +557,7 @@ impl SshTunnelsSection {
                         &dbflux_i18n::t!("ssh.private_key_path"),
                         &self.input_ssh_key_path,
                         is_form_focused && current_field == SshFormField::KeyPath,
-                        primary,
+                        tint,
                         SshFormField::KeyPath,
                         cx,
                     )))
@@ -569,7 +569,7 @@ impl SshTunnelsSection {
                             .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_browse_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -602,7 +602,7 @@ impl SshTunnelsSection {
                                 &dbflux_i18n::t!("ssh.key_passphrase"),
                                 &self.input_ssh_key_passphrase,
                                 is_form_focused && current_field == SshFormField::Passphrase,
-                                primary,
+                                tint,
                                 SshFormField::Passphrase,
                                 cx,
                             )))
@@ -624,7 +624,7 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
 
         let password_toggle =
             Self::render_password_toggle(self.show_ssh_password, "toggle-ssh-password", &theme)
@@ -635,7 +635,7 @@ impl SshTunnelsSection {
 
         let save_checkbox = if keyring_available {
             Some(
-                self.render_save_secret_checkbox(is_form_focused, current_field, primary, cx)
+                self.render_save_secret_checkbox(is_form_focused, current_field, tint, cx)
                     .into_any_element(),
             )
         } else {
@@ -656,7 +656,7 @@ impl SshTunnelsSection {
                         &dbflux_i18n::t!("ssh.ssh_password"),
                         &self.input_ssh_password,
                         is_form_focused && current_field == SshFormField::Password,
-                        primary,
+                        tint,
                         SshFormField::Password,
                         cx,
                     )))
@@ -695,7 +695,7 @@ impl SshTunnelsSection {
                             .rounded(Radii::SM)
                             .border_1()
                             .border_color(if is_new_button_focused {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -768,7 +768,7 @@ impl SshTunnelsSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -842,7 +842,7 @@ impl SshTunnelsSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
 
         let is_form_focused = self.ssh_focus == SshFocus::Form;
         let field = self.ssh_form_field;
@@ -860,7 +860,7 @@ impl SshTunnelsSection {
                     &dbflux_i18n::t!("settings.ssh_tunnels.field.name"),
                     &self.input_tunnel_name,
                     is_form_focused && field == SshFormField::Name,
-                    primary,
+                    tint,
                     SshFormField::Name,
                     cx,
                 ))
@@ -872,7 +872,7 @@ impl SshTunnelsSection {
                             &dbflux_i18n::t!("ssh.host"),
                             &self.input_ssh_host,
                             is_form_focused && field == SshFormField::Host,
-                            primary,
+                            tint,
                             SshFormField::Host,
                             cx,
                         )))
@@ -880,7 +880,7 @@ impl SshTunnelsSection {
                             &dbflux_i18n::t!("ssh.port"),
                             &self.input_ssh_port,
                             is_form_focused && field == SshFormField::Port,
-                            primary,
+                            tint,
                             SshFormField::Port,
                             cx,
                         ))),
@@ -889,7 +889,7 @@ impl SshTunnelsSection {
                     &dbflux_i18n::t!("ssh.username"),
                     &self.input_ssh_user,
                     is_form_focused && field == SshFormField::User,
-                    primary,
+                    tint,
                     SshFormField::User,
                     cx,
                 ))
@@ -915,7 +915,7 @@ impl SshTunnelsSection {
     ) -> AnyElement {
         let is_form_focused = self.ssh_focus == SshFocus::Form;
         let field = self.ssh_form_field;
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
 
         div()
             .flex()
@@ -926,7 +926,7 @@ impl SshTunnelsSection {
 
                 root.child(layout::footer_action_frame(
                     is_form_focused && field == SshFormField::ExportButton,
-                    primary,
+                    tint,
                     Button::new(
                         "export-ssh-tunnel",
                         dbflux_i18n::t!("settings.ssh_tunnels.action.export"),
@@ -940,7 +940,7 @@ impl SshTunnelsSection {
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && field == SshFormField::DeleteButton,
-                    primary,
+                    tint,
                     Button::new(
                         "delete-ssh-tunnel",
                         dbflux_i18n::t!("settings.ssh_tunnels.action.delete"),
@@ -955,7 +955,7 @@ impl SshTunnelsSection {
             })
             .child(layout::footer_action_frame(
                 is_form_focused && field == SshFormField::TestButton,
-                primary,
+                tint,
                 Button::new("test-ssh-tunnel", dbflux_i18n::t!("ssh.test"))
                     .small()
                     .ghost()
@@ -967,7 +967,7 @@ impl SshTunnelsSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && field == SshFormField::SaveButton,
-                primary,
+                tint,
                 Button::new(
                     "save-ssh-tunnel",
                     if editing_id.is_some() {

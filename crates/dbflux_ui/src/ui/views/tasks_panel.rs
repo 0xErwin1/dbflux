@@ -1,6 +1,7 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::ChromeColors;
 use dbflux_core::{TaskId, TaskKind, TaskSnapshot, TaskStatus};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -164,7 +165,7 @@ impl TasksPanel {
         };
 
         let status_color = match &task.status {
-            TaskStatus::Running => theme.accent,
+            TaskStatus::Running => ChromeColors::tint(theme),
             TaskStatus::Completed => theme.success,
             TaskStatus::Failed(_) => theme.danger,
             TaskStatus::Cancelled => theme.muted_foreground,

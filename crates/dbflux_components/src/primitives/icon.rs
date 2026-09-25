@@ -3,7 +3,7 @@ use gpui::{App, Hsla, Pixels, Transformation, Window, svg};
 use gpui_component::{ActiveTheme, IconNamed};
 
 use crate::icon::IconSource;
-use crate::tokens::Heights;
+use crate::tokens::{ChromeColors, Heights};
 
 #[derive(Clone, Copy)]
 enum IconTone {
@@ -57,6 +57,7 @@ impl Icon {
         self
     }
 
+    /// Accent icon: the palette tint (`ChromeColors::tint`), not the byzantine fill.
     pub fn primary(mut self) -> Self {
         self.tone = Some(IconTone::Primary);
         self
@@ -99,7 +100,7 @@ impl RenderOnce for Icon {
         let color = match self.tone.unwrap_or(IconTone::Muted) {
             IconTone::Explicit(color) => color,
             IconTone::Muted => theme.muted_foreground,
-            IconTone::Primary => theme.primary,
+            IconTone::Primary => ChromeColors::tint(theme),
             IconTone::Warning => theme.warning,
             IconTone::Danger => theme.danger,
         };

@@ -20,7 +20,7 @@ use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::DimensionFilter;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, KeyDownEvent, SharedString, Window, div, px};
@@ -493,7 +493,7 @@ where
         theme.popover
     };
     let dot_color = if is_selected {
-        theme.primary
+        ChromeColors::tint(theme)
     } else {
         theme.border
     };

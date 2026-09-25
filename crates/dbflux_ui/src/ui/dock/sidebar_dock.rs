@@ -1,6 +1,6 @@
 use crate::ui::icons::AppIcon;
 use dbflux_components::primitives::Icon;
-use dbflux_components::tokens::{Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Radii, Spacing};
 use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -433,7 +433,7 @@ impl SidebarDock {
             .w(GRIP_WIDTH)
             .cursor_col_resize()
             .hover(|el| el.bg(cx.theme().accent.opacity(0.3)))
-            .when(self.is_resizing, |el| el.bg(cx.theme().primary))
+            .when(self.is_resizing, |el| el.bg(ChromeColors::tint(cx.theme())))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {

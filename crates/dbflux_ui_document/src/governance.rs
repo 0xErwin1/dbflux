@@ -1,6 +1,6 @@
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{ChromeColors, Radii};
 use dbflux_components::typography::{MonoCaption, MonoLabel};
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
@@ -212,7 +212,7 @@ impl Render for McpApprovalsView {
                                     .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if is_selected {
-                                        theme.primary
+                                        ChromeColors::tint(theme)
                                     } else {
                                         transparent_black()
                                     })

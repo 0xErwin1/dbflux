@@ -22,7 +22,7 @@ use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
 };
 use crate::semantic::ChartColors;
-use crate::tokens::FontSizes;
+use crate::tokens::{ChromeColors, FontSizes};
 use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -1828,7 +1828,7 @@ fn paint_hover_overlay(
     let theme = cx.theme();
     let crosshair_color = Hsla {
         a: 0.7,
-        ..theme.primary
+        ..ChromeColors::tint(theme)
     };
     paint_dashed_vline(
         window,

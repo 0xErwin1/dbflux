@@ -3,7 +3,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::primitives::Icon;
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
-use dbflux_components::tokens::{Heights, Radii};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii};
 use dbflux_components::typography::{Body, FieldLabel, SidebarGroupLabel};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
@@ -151,12 +151,12 @@ impl SettingsCoordinator {
         let show_active = is_active && !sidebar_focused;
 
         let icon_color = if is_active {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.muted_foreground
         };
         let text_color = if is_active {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.foreground
         };
@@ -192,14 +192,14 @@ impl SettingsCoordinator {
             .cursor_pointer()
             .border_1()
             .border_color(if is_cursor {
-                theme.primary
+                ChromeColors::tint(theme)
             } else {
                 transparent_black()
             })
             .when(show_active, |div| {
                 div.bg(SemBannerColors::for_current(cx).warning_bg)
                     .border_l_2()
-                    .border_color(theme.primary)
+                    .border_color(ChromeColors::tint(theme))
             })
             .when(!is_active, |div| {
                 div.hover(|hover| hover.bg(theme.secondary))
@@ -326,7 +326,9 @@ impl SettingsCoordinator {
             .w(SETTINGS_SIDEBAR_GRIP_WIDTH)
             .cursor_col_resize()
             .hover(|el| el.bg(cx.theme().accent.opacity(0.25)))
-            .when(self.sidebar_is_resizing, |el| el.bg(cx.theme().primary))
+            .when(self.sidebar_is_resizing, |el| {
+                el.bg(ChromeColors::tint(cx.theme()))
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
@@ -390,7 +392,7 @@ impl SettingsCoordinator {
                     .gap_3()
                     .child(layout::footer_action_frame(
                         false,
-                        cx.theme().primary,
+                        ChromeColors::tint(cx.theme()),
                         Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
                             .small()
                             .ghost()

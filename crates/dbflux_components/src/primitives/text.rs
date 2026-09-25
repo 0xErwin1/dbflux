@@ -3,7 +3,7 @@ use gpui::{App, FontFallbacks, FontWeight, Hsla, SharedString, Window, div, font
 use gpui_component::ActiveTheme;
 
 use crate::density;
-use crate::tokens::FontSizes;
+use crate::tokens::{ChromeColors, FontSizes};
 use crate::typography::AppFonts;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -36,7 +36,7 @@ impl TextColorOverride {
             Self::Danger => theme.danger,
             Self::Warning => theme.warning,
             Self::Success => theme.success,
-            Self::Primary => theme.primary,
+            Self::Primary => ChromeColors::tint(theme),
             Self::Link => theme.link,
             Self::MutedForeground => theme.muted_foreground,
         }
@@ -239,6 +239,7 @@ impl Text {
         self
     }
 
+    /// Accent text: the palette tint (`ChromeColors::tint`), not the byzantine fill.
     pub fn primary(mut self) -> Self {
         self.color_override = Some(TextColorOverride::Primary);
         self

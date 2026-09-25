@@ -7,6 +7,7 @@ use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{
     Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame,
 };
+use dbflux_components::tokens::ChromeColors;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
 
@@ -252,7 +253,7 @@ impl CodeDocument {
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Editor);
         let bg = cx.theme().background;
-        let accent = cx.theme().accent;
+        let accent = ChromeColors::tint(cx.theme());
 
         focus_frame(
             is_focused,
@@ -393,7 +394,7 @@ impl CodeDocument {
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Results);
         let bg = cx.theme().background;
-        let accent = cx.theme().accent;
+        let accent = ChromeColors::tint(cx.theme());
         let is_executing = self.state == DocumentState::Executing;
 
         let error = self

@@ -173,6 +173,7 @@ impl RenderOnce for ToolbarButton {
         let ring = theme.ring;
         let input = theme.input;
         let primary = theme.primary;
+        let primary_foreground = theme.primary_foreground;
         let danger = theme.danger;
         let transparent = gpui::transparent_black();
 
@@ -199,7 +200,7 @@ impl RenderOnce for ToolbarButton {
                 if disabled {
                     muted
                 } else {
-                    background
+                    primary_foreground
                 }
             }
             ToolbarButtonVariant::Danger => background,

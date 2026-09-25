@@ -2,7 +2,7 @@ use gpui::prelude::*;
 use gpui::{App, ClickEvent, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Spacing};
 
 /// A custom tab trigger item (not wrapping gpui_component) with three
 /// visual states: Active, Inactive, and Hover.
@@ -58,7 +58,7 @@ impl RenderOnce for TabTrigger {
                 .text_color(theme.foreground)
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .border_b_2()
-                .border_color(theme.accent);
+                .border_color(ChromeColors::tint(theme));
         } else {
             el = el
                 .bg(gpui::transparent_black())

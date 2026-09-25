@@ -3,7 +3,7 @@ use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Label, Status, StatusIndicator, Text};
-use dbflux_components::tokens::{Radii, Widths};
+use dbflux_components::tokens::{ChromeColors, Radii, Widths};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1049,7 +1049,7 @@ impl ConnectionManagerWindow {
         });
 
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let border = theme.border;
 
         div()
@@ -1072,7 +1072,7 @@ impl ConnectionManagerWindow {
                     .on_click(click_key)
                     .child(ssh_shared::render_radio_button(
                         current == SshAuthSelection::PrivateKey,
-                        primary,
+                        tint,
                         border,
                     ))
                     .child(div().text_sm().child(dbflux_i18n::t!("ssh.private_key"))),
@@ -1094,7 +1094,7 @@ impl ConnectionManagerWindow {
                     .on_click(click_pw)
                     .child(ssh_shared::render_radio_button(
                         current == SshAuthSelection::Password,
-                        primary,
+                        tint,
                         border,
                     ))
                     .child(div().text_sm().child(dbflux_i18n::t!("ssh.password"))),

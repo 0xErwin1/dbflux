@@ -7,7 +7,7 @@ use dbflux_components::primitives::{
     FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem, Text,
 };
 #[cfg(feature = "mcp")]
-use dbflux_components::tokens::Spacing;
+use dbflux_components::tokens::{ChromeColors, Spacing};
 use dbflux_components::tokens::{Radii, Widths};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
@@ -95,7 +95,7 @@ impl ConnectionManagerWindow {
             .cursor_pointer()
             .border_b_2()
             .border_color(if is_active {
-                theme.primary
+                ChromeColors::tint(theme)
             } else {
                 gpui::transparent_black()
             })

@@ -21,7 +21,7 @@
 
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, LoadingState, Text};
-use dbflux_components::tokens::Spacing;
+use dbflux_components::tokens::{ChromeColors, Spacing};
 use dbflux_core::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -129,7 +129,7 @@ fn render_row_entry(
                     d.child(
                         Text::caption(pk_badge.to_string())
                             .font_size(dbflux_components::tokens::FontSizes::XS)
-                            .color(theme.accent),
+                            .color(ChromeColors::tint(theme)),
                     )
                 })
                 .when(cell.is_foreign_key, |d| {

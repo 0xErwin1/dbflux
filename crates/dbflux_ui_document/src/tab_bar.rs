@@ -317,7 +317,7 @@ impl TabBar {
             .gap(Spacing::SM)
             .cursor_pointer()
             .when(is_active, |el| {
-                let stripe_color = cx.theme().primary;
+                let stripe_color = ChromeColors::tint(cx.theme());
                 el.bg(cx.theme().tab_bar)
                     .child(
                         // Active-tab indicator: 1 px stripe at the bottom edge.
@@ -342,7 +342,7 @@ impl TabBar {
             })
             .when(!is_active, |el| el.hover(|el| el.bg(cx.theme().secondary)))
             .when(is_drop_target, |el| {
-                el.border_l_2().border_color(cx.theme().accent)
+                el.border_l_2().border_color(ChromeColors::tint(cx.theme()))
             })
             // Click to activate
             .on_click({
@@ -424,7 +424,7 @@ impl TabBar {
         is_executing: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let accent = cx.theme().accent;
+        let accent = ChromeColors::tint(cx.theme());
         let secondary = cx.theme().secondary;
         let muted_fg = cx.theme().muted_foreground;
 

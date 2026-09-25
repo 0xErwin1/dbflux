@@ -1,7 +1,7 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -539,7 +539,7 @@ fn render_tree_row(
 
     let selection_color = theme.selection;
     let secondary_color = theme.secondary;
-    let primary_color = theme.primary;
+    let key_color = ChromeColors::tint(&theme);
     let muted_color = theme.muted_foreground;
     let warning_color = theme.warning;
 
@@ -618,7 +618,7 @@ fn render_tree_row(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(Text::label_sm(node.key.to_string()).color(primary_color))
+                .child(Text::label_sm(node.key.to_string()).color(key_color))
                 .child(
                     Text::caption(":")
                         .font_size(FontSizes::XS)
@@ -693,7 +693,7 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
                 hsla(150.0 / 360.0, 0.5, 0.5, 1.0) // guardrail-allow: JSON type color
             }
             dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0), // guardrail-allow: JSON type color
-            dbflux_core::Value::ObjectId(_) => theme.primary,
+            dbflux_core::Value::ObjectId(_) => ChromeColors::tint(theme),
             dbflux_core::Value::DateTime(_)
             | dbflux_core::Value::Date(_)
             | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0), // guardrail-allow: JSON type color

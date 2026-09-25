@@ -33,7 +33,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_ui_base::toast::flush_pending_toast;
 use gpui::prelude::*;
 use gpui::*;
@@ -763,7 +763,7 @@ impl ChartDocument {
             .unwrap_or(0);
 
         let cyan_color = theme.cyan;
-        let primary_color = theme.primary;
+        let tint_color = ChromeColors::tint(theme);
 
         let cyan_val = |v: f64| -> AnyElement {
             div()
@@ -772,10 +772,10 @@ impl ChartDocument {
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
-        let primary_val = |v: f64| -> AnyElement {
+        let tint_val = |v: f64| -> AnyElement {
             div()
                 .text_size(px(11.0))
-                .text_color(primary_color)
+                .text_color(tint_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
@@ -842,7 +842,7 @@ impl ChartDocument {
                     .child(dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
                     .child(dock_kv_row("p50", fg_val(stats.p50), &chart_colors))
                     .child(dock_kv_row("p95", fg_val(stats.p95), &chart_colors))
-                    .child(dock_kv_row("p99", primary_val(stats.p99), &chart_colors))
+                    .child(dock_kv_row("p99", tint_val(stats.p99), &chart_colors))
                     .child(dock_kv_row("last", fg_val(stats.last), &chart_colors)),
                 theme,
             ))

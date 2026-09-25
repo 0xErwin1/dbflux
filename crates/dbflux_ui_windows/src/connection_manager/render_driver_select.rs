@@ -1,7 +1,7 @@
 use dbflux_components::controls::{Button, GpuiInput, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, IconButton, KbdBadge, Text};
-use dbflux_components::tokens::FontSizes;
+use dbflux_components::tokens::{ChromeColors, FontSizes};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DatabaseCategory;
 use gpui::prelude::*;
@@ -185,7 +185,7 @@ impl ConnectionManagerWindow {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let border_color = if is_focused {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.border
         };
@@ -205,7 +205,7 @@ impl ConnectionManagerWindow {
             .border_color(border_color)
             .bg(theme.secondary)
             .cursor_pointer()
-            .hover(|s| s.border_color(theme.primary.opacity(0.6)))
+            .hover(|s| s.border_color(ChromeColors::tint(theme).opacity(0.6)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_driver(&driver_id_click, window, cx);
             }))

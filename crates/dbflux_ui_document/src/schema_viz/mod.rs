@@ -33,7 +33,7 @@ use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Spinner;
-use dbflux_components::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
@@ -1981,7 +1981,9 @@ impl SchemaVizDocument {
             .rounded_sm()
             .cursor_pointer()
             .text_color(theme.foreground)
-            .when(is_selected, |d| d.bg(theme.primary.opacity(0.1)))
+            .when(is_selected, |d| {
+                d.bg(ChromeColors::tint(theme).opacity(0.1))
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -1996,7 +1998,7 @@ impl SchemaVizDocument {
                     svg()
                         .path(AppIcon::CircleCheck.path())
                         .size_3()
-                        .text_color(theme.primary),
+                        .text_color(ChromeColors::tint(theme)),
                 )
             })
     }
@@ -2862,7 +2864,7 @@ impl SchemaVizDocument {
                                     .rounded_sm()
                                     .cursor_pointer()
                                     .when(self.layout_menu_open, |d| {
-                                        d.bg(theme.primary.opacity(0.15))
+                                        d.bg(ChromeColors::tint(&theme).opacity(0.15))
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -2904,7 +2906,7 @@ impl SchemaVizDocument {
                                     .rounded_sm()
                                     .cursor_pointer()
                                     .when(self.export_menu_open, |d| {
-                                        d.bg(theme.primary.opacity(0.15))
+                                        d.bg(ChromeColors::tint(&theme).opacity(0.15))
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -3075,7 +3077,7 @@ impl SchemaVizDocument {
             div()
                 .px(Spacing::MD)
                 .py(Spacing::XS)
-                .bg(theme.primary.opacity(0.08))
+                .bg(ChromeColors::tint(&theme).opacity(0.08))
                 .border_b_1()
                 .border_color(theme.border)
                 .text_size(FontSizes::XS)
@@ -3180,7 +3182,7 @@ impl SchemaVizDocument {
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
 
         let border_color = if is_selected {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.border
         };
@@ -3246,7 +3248,7 @@ impl SchemaVizDocument {
             .iter()
             .map(|col| {
                 let pk_color = theme.primary;
-                let fk_color = theme.primary;
+                let fk_color = ChromeColors::tint(theme);
                 let nn_color = muted_fg.opacity(0.5);
 
                 let is_nn = !col.nullable && !col.is_pk;
@@ -3330,7 +3332,7 @@ impl SchemaVizDocument {
                                 svg()
                                     .path(AppIcon::KeyRound.path())
                                     .size_3()
-                                    .text_color(theme.primary),
+                                    .text_color(ChromeColors::tint(theme)),
                             )
                         })
                 })
@@ -3463,8 +3465,8 @@ impl SchemaVizDocument {
         layout: &LayoutResult,
         theme: &gpui_component::theme::Theme,
     ) -> Vec<Div> {
-        let edge_color = theme.primary;
-        let edge_color_dim = theme.primary.opacity(0.5);
+        let edge_color = ChromeColors::tint(theme);
+        let edge_color_dim = ChromeColors::tint(theme).opacity(0.5);
 
         let Some(graph) = &self.graph else {
             return Vec::new();

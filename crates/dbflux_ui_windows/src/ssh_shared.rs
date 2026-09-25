@@ -66,13 +66,13 @@ pub fn get_ssh_secret(
     }
 }
 
-pub fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> impl IntoElement {
+pub fn render_radio_button(selected: bool, tint: Hsla, border: Hsla) -> impl IntoElement {
     gpui::div()
         .w(Heights::ICON_SM)
         .h(Heights::ICON_SM)
         .rounded_full()
         .border_2()
-        .border_color(if selected { primary } else { border })
+        .border_color(if selected { tint } else { border })
         .when(selected, |d| {
             d.child(
                 gpui::div()
@@ -82,7 +82,7 @@ pub fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> impl 
                     .w(Spacing::XXS)
                     .h(Spacing::XXS)
                     .rounded_full()
-                    .bg(primary),
+                    .bg(tint),
             )
         })
 }

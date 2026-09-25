@@ -34,7 +34,7 @@ use dbflux_components::components::tree_nav::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::{TableRef, transfer_compatible};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use dbflux_ui_base::object_tree::{
@@ -1167,7 +1167,7 @@ impl SourceTargetPhase {
             theme.foreground
         };
         let icon_color = if is_target_selected || is_checked {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.muted_foreground
         };
@@ -1187,9 +1187,11 @@ impl SourceTargetPhase {
             .child(Text::body(row.label.to_string()).color(text_color));
 
         if is_target_selected {
-            content = content
-                .child(div().flex_1())
-                .child(Icon::new(AppIcon::Check).small().color(theme.primary));
+            content = content.child(div().flex_1()).child(
+                Icon::new(AppIcon::Check)
+                    .small()
+                    .color(ChromeColors::tint(theme)),
+            );
         }
 
         div()

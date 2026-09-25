@@ -110,12 +110,12 @@ pub(super) fn sticky_form_shell(
     }
 }
 
-pub(super) fn footer_action_frame(is_focused: bool, primary: Hsla, child: impl IntoElement) -> Div {
+pub(super) fn footer_action_frame(is_focused: bool, tint: Hsla, child: impl IntoElement) -> Div {
     div()
         .min_w(px(108.0))
         .border_1()
         .border_color(if is_focused {
-            primary
+            tint
         } else {
             transparent_black()
         })

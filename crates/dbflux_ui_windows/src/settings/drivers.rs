@@ -10,7 +10,7 @@ use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
-use dbflux_components::tokens::{Heights, Radii, Widths};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii, Widths};
 use dbflux_components::typography::{
     Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
 };
@@ -772,7 +772,7 @@ impl DriversSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if focused {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 gpui::transparent_black()
                             })
@@ -910,7 +910,7 @@ impl DriversSection {
             .gap_3()
             .child(layout::footer_action_frame(
                 editor_focused && self.drv_editor_field == DriverEditorField::Save,
-                cx.theme().primary,
+                ChromeColors::tint(cx.theme()),
                 Button::new(
                     "save-driver-settings",
                     dbflux_i18n::t!("settings.drivers.action.save"),
@@ -1022,7 +1022,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::OverrideRefreshPolicy
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1072,7 +1072,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::RefreshPolicy
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1114,7 +1114,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::OverrideRefreshInterval
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1164,7 +1164,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::RefreshInterval
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1214,7 +1214,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::ConfirmDangerous
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1255,7 +1255,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::RequiresWhere
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },
@@ -1296,7 +1296,7 @@ impl DriversSection {
                                             && self.drv_editor_field
                                                 == DriverEditorField::RequiresPreview
                                         {
-                                            theme.primary
+                                            ChromeColors::tint(theme)
                                         } else {
                                             gpui::transparent_black()
                                         },

@@ -23,7 +23,7 @@
 //! Cancel: it calls `close()` and returns `true`.
 
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -269,7 +269,7 @@ impl Render for WorkspaceInspector {
                     .flex_shrink_0()
                     .cursor_col_resize()
                     .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(is_resizing, |el| el.bg(theme.primary))
+                    .when(is_resizing, |el| el.bg(ChromeColors::tint(&theme)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {

@@ -6,7 +6,7 @@ use gpui_component::IconName;
 use crate::density;
 use crate::icon::IconSource;
 use crate::primitives::{Icon, SurfaceRole};
-use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Spacing};
 use crate::typography::{MonoCaption, MonoTextInspection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ fn panel_header_contract(variant: PanelHeaderVariant) -> PanelHeaderContract {
 fn title_color(selection: PanelHeaderTitleColor, theme: &gpui_component::Theme) -> Hsla {
     match selection {
         PanelHeaderTitleColor::Foreground => theme.foreground,
-        PanelHeaderTitleColor::Primary => theme.primary,
+        PanelHeaderTitleColor::Primary => ChromeColors::tint(theme),
     }
 }
 

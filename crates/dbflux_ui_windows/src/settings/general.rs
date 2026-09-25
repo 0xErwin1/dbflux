@@ -2,7 +2,7 @@ use dbflux_app::keymap::{KeyChord, Modifiers};
 use dbflux_components::controls::Button as FluxButton;
 use dbflux_components::controls::Dropdown;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::tokens::Radii;
+use dbflux_components::tokens::{ChromeColors, Radii};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
@@ -582,7 +582,7 @@ impl GeneralSection {
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(theme);
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
@@ -611,7 +611,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.theme.label"),
                     &self.dropdown_theme,
                     is_at(GeneralFormRow::Theme),
-                    primary,
+                    tint,
                     GeneralFormRow::Theme,
                     cx,
                 ))
@@ -619,7 +619,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.style.label"),
                     &self.dropdown_style,
                     is_at(GeneralFormRow::Style),
-                    primary,
+                    tint,
                     GeneralFormRow::Style,
                     cx,
                 ))
@@ -627,7 +627,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.language.label"),
                     &self.dropdown_language,
                     is_at(GeneralFormRow::Language),
-                    primary,
+                    tint,
                     GeneralFormRow::Language,
                     cx,
                 ))
@@ -678,7 +678,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.default_focus.label"),
                     &self.dropdown_default_focus,
                     is_at(GeneralFormRow::DefaultFocus),
-                    primary,
+                    tint,
                     GeneralFormRow::DefaultFocus,
                     cx,
                 ))
@@ -686,7 +686,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.max_history.label"),
                     &self.input_max_history,
                     is_at(GeneralFormRow::MaxHistory),
-                    primary,
+                    tint,
                     GeneralFormRow::MaxHistory,
                     cx,
                 ))
@@ -694,7 +694,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.auto_save_interval.label"),
                     &self.input_auto_save,
                     is_at(GeneralFormRow::AutoSaveInterval),
-                    primary,
+                    tint,
                     GeneralFormRow::AutoSaveInterval,
                     cx,
                 ))
@@ -707,7 +707,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.refresh_policy.label"),
                     &self.dropdown_refresh_policy,
                     is_at(GeneralFormRow::DefaultRefreshPolicy),
-                    primary,
+                    tint,
                     GeneralFormRow::DefaultRefreshPolicy,
                     cx,
                 ))
@@ -715,7 +715,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.refresh_interval.label"),
                     &self.input_refresh_interval,
                     is_at(GeneralFormRow::DefaultRefreshInterval),
-                    primary,
+                    tint,
                     GeneralFormRow::DefaultRefreshInterval,
                     cx,
                 ))
@@ -723,7 +723,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.max_background_tasks.label"),
                     &self.input_max_bg_tasks,
                     is_at(GeneralFormRow::MaxBackgroundTasks),
-                    primary,
+                    tint,
                     GeneralFormRow::MaxBackgroundTasks,
                     cx,
                 ))
@@ -781,7 +781,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.editor_row_limit.label"),
                     &self.input_editor_row_limit,
                     is_at(GeneralFormRow::EditorRowLimit),
-                    primary,
+                    tint,
                     GeneralFormRow::EditorRowLimit,
                     cx,
                 ))
@@ -794,7 +794,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.object_preview_limit.label"),
                     &self.input_object_preview_limit,
                     is_at(GeneralFormRow::ObjectPreviewLimit),
-                    primary,
+                    tint,
                     GeneralFormRow::ObjectPreviewLimit,
                     cx,
                 ))
@@ -815,7 +815,7 @@ impl GeneralSection {
                     dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
                     &self.input_key_value_size_limit,
                     is_at(GeneralFormRow::KeyValueSizeLimit),
-                    primary,
+                    tint,
                     GeneralFormRow::KeyValueSizeLimit,
                     cx,
                 ))
@@ -864,7 +864,7 @@ impl GeneralSection {
             .gap_3()
             .child(layout::footer_action_frame(
                 is_save_focused,
-                cx.theme().primary,
+                ChromeColors::tint(cx.theme()),
                 FluxButton::new(
                     "save-general",
                     dbflux_i18n::t!("settings.general.save.button"),
@@ -910,7 +910,7 @@ impl GeneralSection {
         setter: fn(&mut Self, bool, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let label = label.into();
 
         div()
@@ -922,7 +922,7 @@ impl GeneralSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 gpui::transparent_black()
             })
@@ -957,7 +957,7 @@ impl GeneralSection {
         label: impl Into<SharedString>,
         dropdown: &Entity<Dropdown>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -970,7 +970,7 @@ impl GeneralSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 gpui::transparent_black()
             })
@@ -1005,7 +1005,7 @@ impl GeneralSection {
         label: impl Into<SharedString>,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1023,7 +1023,7 @@ impl GeneralSection {
                         .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_focused {
-                            primary
+                            tint
                         } else {
                             gpui::transparent_black()
                         })

@@ -1,7 +1,7 @@
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
-use dbflux_components::tokens::{Heights, Radii};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, PanelTitle};
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -848,7 +848,7 @@ impl ServicesSection {
                         .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_new_button_focused {
-                            theme.primary
+                            ChromeColors::tint(theme)
                         } else {
                             transparent_black()
                         })
@@ -904,7 +904,7 @@ impl ServicesSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused && !is_selected {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -971,7 +971,7 @@ impl ServicesSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
+        let tint = ChromeColors::tint(&theme);
         let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
         let cursor = self.svc_form_cursor;
         let rows = self.svc_form_rows();
@@ -992,7 +992,7 @@ impl ServicesSection {
                     dbflux_i18n::t!("settings.rpc_services.field.socket_id"),
                     &self.input_socket_id,
                     is_row_focused(ServiceFormRow::SocketId),
-                    primary,
+                    tint,
                     ServiceFormRow::SocketId,
                     cx,
                 ))
@@ -1000,7 +1000,7 @@ impl ServicesSection {
                     dbflux_i18n::t!("settings.rpc_services.field.command"),
                     &self.input_svc_command,
                     is_row_focused(ServiceFormRow::Command),
-                    primary,
+                    tint,
                     ServiceFormRow::Command,
                     cx,
                 ))
@@ -1008,18 +1008,18 @@ impl ServicesSection {
                     dbflux_i18n::t!("settings.rpc_services.field.startup_timeout"),
                     &self.input_svc_timeout,
                     is_row_focused(ServiceFormRow::Timeout),
-                    primary,
+                    tint,
                     ServiceFormRow::Timeout,
                     cx,
                 ))
-                .child(self.render_svc_kind_selector(is_form_focused, cursor, &rows, primary, cx))
+                .child(self.render_svc_kind_selector(is_form_focused, cursor, &rows, tint, cx))
                 .child(self.render_svc_enabled_checkbox(
                     is_row_focused(ServiceFormRow::Enabled),
-                    primary,
+                    tint,
                     cx,
                 ))
-                .child(self.render_svc_args_section(is_form_focused, cursor, &rows, primary, cx))
-                .child(self.render_svc_env_section(is_form_focused, cursor, &rows, primary, cx)),
+                .child(self.render_svc_args_section(is_form_focused, cursor, &rows, tint, cx))
+                .child(self.render_svc_env_section(is_form_focused, cursor, &rows, tint, cx)),
             None,
             &theme,
         )
@@ -1041,7 +1041,7 @@ impl ServicesSection {
             .when(self.editing_svc_idx.is_some(), |container| {
                 container.child(layout::footer_action_frame(
                     is_row_focused(ServiceFormRow::DeleteButton),
-                    theme.primary,
+                    ChromeColors::tint(theme),
                     Button::new("delete-service")
                         .label(dbflux_i18n::t!("settings.rpc_services.action.delete"))
                         .small()
@@ -1056,7 +1056,7 @@ impl ServicesSection {
             })
             .child(layout::footer_action_frame(
                 is_row_focused(ServiceFormRow::SaveButton),
-                theme.primary,
+                ChromeColors::tint(theme),
                 Button::new("save-service")
                     .label(if self.editing_svc_idx.is_some() {
                         dbflux_i18n::t!("settings.rpc_services.action.update")
@@ -1078,7 +1078,7 @@ impl ServicesSection {
         label: String,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         row: ServiceFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1092,7 +1092,7 @@ impl ServicesSection {
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(if is_focused {
-                        primary
+                        tint
                     } else {
                         transparent_black()
                     })
@@ -1116,7 +1116,7 @@ impl ServicesSection {
     fn render_svc_enabled_checkbox(
         &self,
         is_focused: bool,
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let enable_label = dbflux_i18n::t!("settings.rpc_services.field.enable");
@@ -1130,7 +1130,7 @@ impl ServicesSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(if is_focused {
-                primary
+                tint
             } else {
                 transparent_black()
             })
@@ -1146,17 +1146,17 @@ impl ServicesSection {
             .child(Body::new(enable_label))
     }
 
-    fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
+    fn render_radio_button(selected: bool, tint: Hsla, border: Hsla) -> Div {
         div()
             .size_4()
             .rounded_full()
             .border_1()
-            .border_color(if selected { primary } else { border })
+            .border_color(if selected { tint } else { border })
             .flex()
             .items_center()
             .justify_center()
             .child(div().size_2().rounded_full().bg(if selected {
-                primary
+                tint
             } else {
                 transparent_black()
             }))
@@ -1167,7 +1167,7 @@ impl ServicesSection {
         is_form_focused: bool,
         cursor: usize,
         rows: &[ServiceFormRow],
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -1212,7 +1212,7 @@ impl ServicesSection {
                         .cursor_pointer()
                         .border_1()
                         .border_color(if is_focused {
-                            primary
+                            tint
                         } else {
                             transparent_black()
                         })
@@ -1232,7 +1232,7 @@ impl ServicesSection {
                         }))
                         .child(Self::render_radio_button(
                             self.svc_kind == kind,
-                            primary,
+                            tint,
                             border,
                         ))
                         .child(div().text_sm().child(label))
@@ -1245,7 +1245,7 @@ impl ServicesSection {
         is_form_focused: bool,
         cursor: usize,
         rows: &[ServiceFormRow],
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -1276,7 +1276,7 @@ impl ServicesSection {
                             .rounded(Radii::SM)
                             .border_1()
                             .border_color(if input_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -1302,7 +1302,7 @@ impl ServicesSection {
                             .rounded(Radii::SM)
                             .border_1()
                             .border_color(if remove_focused {
-                                primary
+                                tint
                             } else {
                                 transparent_black()
                             })
@@ -1323,7 +1323,7 @@ impl ServicesSection {
                         .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
-                            primary
+                            tint
                         } else {
                             transparent_black()
                         })
@@ -1360,7 +1360,7 @@ impl ServicesSection {
         is_form_focused: bool,
         cursor: usize,
         rows: &[ServiceFormRow],
-        primary: Hsla,
+        tint: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -1397,7 +1397,7 @@ impl ServicesSection {
                                     .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if key_focused {
-                                        primary
+                                        tint
                                     } else {
                                         transparent_black()
                                     })
@@ -1425,7 +1425,7 @@ impl ServicesSection {
                                     .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if value_focused {
-                                        primary
+                                        tint
                                     } else {
                                         transparent_black()
                                     })
@@ -1451,7 +1451,7 @@ impl ServicesSection {
                                     .rounded(Radii::SM)
                                     .border_1()
                                     .border_color(if remove_focused {
-                                        primary
+                                        tint
                                     } else {
                                         transparent_black()
                                     })
@@ -1473,7 +1473,7 @@ impl ServicesSection {
                         .rounded(Radii::SM)
                         .border_1()
                         .border_color(if is_add_focused {
-                            primary
+                            tint
                         } else {
                             transparent_black()
                         })

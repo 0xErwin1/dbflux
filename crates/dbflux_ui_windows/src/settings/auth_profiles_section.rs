@@ -12,7 +12,7 @@ use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChang
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
@@ -2036,7 +2036,7 @@ impl AuthProfilesSection {
         inherited_value: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
         let theme = cx.theme();
 
         let row = if disabled {
@@ -2067,7 +2067,7 @@ impl AuthProfilesSection {
         } else {
             focus_frame(
                 is_focused,
-                Some(primary),
+                Some(tint),
                 layout::compact_input_shell(Input::new(input).small().secret(is_secret)),
                 cx,
             )
@@ -2212,7 +2212,7 @@ impl AuthProfilesSection {
                             .cursor_pointer()
                             .border_1()
                             .border_color(if is_focused {
-                                theme.primary
+                                ChromeColors::tint(theme)
                             } else {
                                 transparent_black()
                             })
@@ -2684,7 +2684,7 @@ impl AuthProfilesSection {
         // deleted from DBFlux (the file section is the source of truth).
         let is_reflected = self.edit_snapshot.is_some();
         let is_form_focused = self.auth_focus == AuthFocus::Form && self.content_focused;
-        let primary = cx.theme().primary;
+        let tint = ChromeColors::tint(cx.theme());
 
         div()
             .flex()
@@ -2693,7 +2693,7 @@ impl AuthProfilesSection {
             .when(is_editing && !is_reflected, |root| {
                 root.child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::ExportButton,
-                    primary,
+                    tint,
                     Button::new(
                         "export-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.export"),
@@ -2707,7 +2707,7 @@ impl AuthProfilesSection {
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
-                    primary,
+                    tint,
                     Button::new(
                         "delete-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.delete"),
@@ -2722,7 +2722,7 @@ impl AuthProfilesSection {
             })
             .child(layout::footer_action_frame(
                 false,
-                primary,
+                tint,
                 Button::new(
                     "cancel-auth-profile",
                     dbflux_i18n::t!("settings.auth_profiles.cancel"),
@@ -2740,7 +2740,7 @@ impl AuthProfilesSection {
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && self.auth_form_field == AuthFormField::SaveButton,
-                primary,
+                tint,
                 Button::new(
                     "save-auth-profile",
                     if is_reflected {

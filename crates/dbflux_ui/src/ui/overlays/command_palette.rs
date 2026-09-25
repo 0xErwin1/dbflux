@@ -5,7 +5,7 @@ use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::helpers::text_color_for_selected;
 use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Radii, Spacing};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
 use dbflux_core::{CollectionRef, TableRef};
 use fuzzy_matcher::FuzzyMatcher;
@@ -433,10 +433,10 @@ fn palette_item_name(
     theme: &gpui_component::theme::Theme,
 ) -> AnyElement {
     // Selected rows use the banner-style amber background, so the row name
-    // mirrors `theme.primary` for visual emphasis. Inactive rows keep the
+    // uses the text-accent tint for emphasis. Inactive rows keep the
     // regular foreground.
     let color = if is_selected {
-        theme.primary
+        ChromeColors::tint(theme)
     } else {
         theme.foreground
     };
@@ -455,7 +455,7 @@ fn palette_category_text(
     theme: &gpui_component::theme::Theme,
 ) -> MonoCaption {
     MonoCaption::new(label).color(if is_selected {
-        theme.primary.opacity(0.75)
+        ChromeColors::tint(theme).opacity(0.75)
     } else {
         theme.muted_foreground
     })
@@ -467,7 +467,7 @@ fn palette_qualifier_text(
     theme: &gpui_component::theme::Theme,
 ) -> MonoCaption {
     MonoCaption::new(label).color(if is_selected {
-        theme.primary.opacity(0.65)
+        ChromeColors::tint(theme).opacity(0.65)
     } else {
         theme.muted_foreground
     })
@@ -883,7 +883,7 @@ impl CommandPalette {
             .cursor_pointer()
             .border_l_2()
             .when(is_selected, |d| {
-                d.bg(warning_bg).border_color(theme.primary)
+                d.bg(warning_bg).border_color(ChromeColors::tint(theme))
             })
             .when(!is_selected, |d| {
                 d.border_color(gpui::transparent_black())

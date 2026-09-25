@@ -1,6 +1,7 @@
 use super::*;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
+use dbflux_components::tokens::ChromeColors;
 use dbflux_components::typography::MonoLabel;
 use gpui::FontWeight;
 
@@ -287,7 +288,7 @@ pub(super) fn render_tree_item(
     let pending_delete_bg: Hsla = theme.danger.opacity(0.15);
 
     let current_drop_target = params.drop_target.as_ref();
-    let drop_indicator_color = theme.accent;
+    let drop_indicator_color = ChromeColors::tint(theme);
 
     let mut list_item = ListItem::new(ix)
         .selected(selected)
@@ -794,9 +795,9 @@ pub(super) fn render_tree_item(
                     };
 
                     let el = if is_scripts_drop_before {
-                        el.border_t_2().border_color(theme.accent)
+                        el.border_t_2().border_color(ChromeColors::tint(theme))
                     } else if is_scripts_drop_after {
-                        el.border_b_2().border_color(theme.accent)
+                        el.border_b_2().border_color(ChromeColors::tint(theme))
                     } else {
                         el
                     };
