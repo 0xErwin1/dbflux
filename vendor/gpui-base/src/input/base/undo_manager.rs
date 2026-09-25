@@ -107,6 +107,20 @@ impl UndoManager {
         self.active_group == Some(id)
     }
 
+    pub(super) fn snapshot_group_selections_after(
+        &mut self,
+        id: u64,
+        selections: Vec<CursorSelection>,
+    ) {
+        if self.active_group == Some(id) {
+            if let Some(last) = self.undo_transactions.last_mut() {
+                if last.group_id == Some(id) {
+                    last.selections_after = Some(selections);
+                }
+            }
+        }
+    }
+
     pub(super) fn end_edit_group(&mut self, id: u64) -> bool {
         if self.active_group != Some(id) {
             return false;

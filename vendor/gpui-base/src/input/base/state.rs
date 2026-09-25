@@ -916,6 +916,11 @@ impl<M: InputModeKind> InputBaseState<M> {
         (0, 0, None)
     }
 
+    /// Whether a native composition currently has marked text.
+    pub fn has_active_composition(&self) -> bool {
+        self.ime_marked_range.is_some()
+    }
+
     /// Start an editor-owned undo group. Returns false if another group or a
     /// native composition is still active. The caller owns ending it on blur.
     pub fn begin_edit_group(&mut self, id: u64) -> bool {
@@ -938,6 +943,10 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn end_edit_group(&mut self, id: u64) -> bool {
         if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
             return false;
+        }
+        if self.undo_manager.owns_edit_group(id) {
+            self.undo_manager
+                .snapshot_group_selections_after(id, self.selections.iter().copied().collect());
         }
         let closed = self.undo_manager.end_edit_group(id);
         if closed {
@@ -3928,10 +3937,13 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             .map(|range| self.range_to_utf16(&range.into()))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.ime_marked_range = None;
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let had_marked_text = self.ime_marked_range.take().is_some();
         self.undo_manager.commit_transaction();
         self.finish_pending_edit_group();
+        if had_marked_text {
+            cx.emit(InputEvent::Change);
+        }
     }
 
     /// Replace text in range.
@@ -6708,6 +6720,79 @@ mod tests {
     }
 
     #[gpui::test]
+    fn unmark_emits_change_only_for_active_preedit(cx: &mut TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        let changes = Rc::new(Cell::new(0));
+        let observed = changes.clone();
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&input, move |_, event: &InputEvent, _| {
+                if matches!(event, InputEvent::Change) {
+                    observed.set(observed.get() + 1);
+                }
+            })
+        });
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_and_mark_text_in_range(None, "X", None, window, cx);
+            });
+        });
+        assert_eq!(changes.get(), 0);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.unmark_text(window, cx));
+        });
+        assert_eq!(changes.get(), 1);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.unmark_text(window, cx));
+        });
+        assert_eq!(changes.get(), 1);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_and_mark_text_in_range(None, "Y", None, window, cx);
+                state.replace_text_in_range(None, "Z", window, cx);
+            });
+        });
+        assert_eq!(changes.get(), 2);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.unmark_text(window, cx));
+        });
+        assert_eq!(changes.get(), 2);
+    }
+
+    #[gpui::test]
+    fn active_composition_tracks_native_mark_lifecycle(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                assert!(!state.has_active_composition());
+                state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                assert!(state.has_active_composition());
+                state.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+                assert!(state.has_active_composition());
+                state.replace_text_in_range(None, "你", window, cx);
+                assert!(!state.has_active_composition());
+                state.replace_and_mark_text_in_range(None, "x", None, window, cx);
+                assert!(state.has_active_composition());
+                state.unmark_text(window, cx);
+                assert!(!state.has_active_composition());
+                state.replace_and_mark_text_in_range(None, "y", None, window, cx);
+                assert!(state.has_active_composition());
+                state.undo(&Undo, window, cx);
+                assert!(!state.has_active_composition());
+                state.replace_and_mark_text_in_range(None, "z", None, window, cx);
+                assert!(state.has_active_composition());
+                state.set_readonly(true, cx);
+                assert!(!state.has_active_composition());
+            });
+        });
+    }
+
+    #[gpui::test]
     fn edit_group_readonly_finalizes_displayed_preedit(cx: &mut TestAppContext) {
         let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
@@ -6829,6 +6914,33 @@ mod tests {
                 state.redo(&Redo, window, cx);
                 assert_eq!(state.value(), "abxf");
                 assert_eq!(state.selected_range(), 3..3);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn edit_group_redo_restores_selection_set_before_closure(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abcdef"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                state.set_cursor_to(1);
+                assert!(state.begin_edit_group(1));
+                state.replace_text_in_range(None, "x", window, cx);
+                state.set_cursor_to(1);
+                assert!(state.end_edit_group(1));
+                assert_eq!(state.value(), "axbcdef");
+
+                state.set_cursor_to(4);
+                assert!(state.begin_edit_group(2));
+                assert!(state.end_edit_group(2));
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abcdef");
+                assert_eq!(state.selected_range(), 1..1);
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "axbcdef");
+                assert_eq!(state.selected_range(), 1..1);
             });
         });
     }
