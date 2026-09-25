@@ -644,7 +644,7 @@ query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
 formularios y la paleta de comandos siguen escribiendo como siempre.
 
 Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
-debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
+debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `REEMPLAZAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
 propio modo al cambiar de tab o al mover el focus y volver. La franja también
 muestra la secuencia de teclas incompleta, como `2`, `2d3` o `4g`. Se borra al
 completarse o interrumpirse el comando, al salir el foco del editor y con
@@ -666,6 +666,8 @@ de estado del espacio de trabajo.
 | Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
+| Normal | `r{car}` / `Nr{car}` | Reemplazar el carácter bajo el cursor, o los N siguientes de la línea, por `{car}`; el cursor queda en el primer carácter reemplazado |
+| Normal | `R` | Entrar en modo Reemplazar |
 | Normal | `dd` / `yy` / `cc` | Borrar / copiar / cambiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
 | Normal | `c` + `h` / `l` / `j` / `k`, `w` / `W` / `e` / `E` / `b` / `B`, `gg` / `G` | Cambiar caracteres con movimientos horizontales o de palabra, o líneas completas con movimientos verticales o absolutos |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
@@ -675,10 +677,13 @@ de estado del espacio de trabajo.
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
 | Visual / Visual Línea | `v` / `V` | Salir del modo Visual activo / alternar entre selección de caracteres y líneas |
-| Visual / Visual Línea | `c` | Cambiar los caracteres seleccionados inclusive o las líneas lógicas y entrar en modo Insertar |
+| Visual / Visual Línea / Visual Bloque | `c` | Cambiar los caracteres seleccionados inclusive, las líneas lógicas o las columnas del bloque y entrar en modo Insertar |
 | Visual / Visual Línea / Visual Bloque | `d` / `x` / `y` | Borrar la selección (`d` / `x`) o copiarla al portapapeles del sistema (`y`) |
 | Visual / Visual Línea / Visual Bloque | `Escape` | Borrar la selección y volver al modo Normal |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+| Reemplazar | Caracteres escritos | Sobrescribir el carácter bajo el cursor; al final de una línea se agregan |
+| Reemplazar | `Backspace` | Restaurar el carácter que sobrescribió esta sesión de Reemplazar; si no hay ninguno, moverse a la izquierda |
+| Reemplazar | `Escape` | Volver al modo Normal |
 
 Puedes anteponer un contador a un movimiento, a `x` / `u` o a `dd` / `yy` (por
 ejemplo, `3w`, `2x`, `2u`, `3dd`, `2yy`). También se acepta entre las letras
@@ -692,7 +697,7 @@ contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
 selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
-se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema. Visual Bloque `c` sigue sin admitirse.
+se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
 texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
@@ -748,18 +753,22 @@ modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
 siguiente vuelve al modo Normal.
 
-En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` y `cc` solo existen en modo Normal. Visual Bloque `c` sigue sin admitirse.
+En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` y `cc` solo existen en modo Normal. Visual Bloque `c` borra las columnas del bloque en cada fila que alcanza su columna izquierda, omite las filas más cortas y entra en modo Insertar en la primera de esas filas. Al salir de Insertar con `Escape`, el texto escrito allí se inserta en la misma columna de las demás filas. No se copia nada si el texto contiene un salto de línea, si no se escribió nada o si el foco sale antes del editor. Las columnas del bloque cuentan escalares Unicode, como en la selección de bloque. El borrado, el texto escrito y las copias forman un solo paso de deshacer.
 
-**Cambiar y deshacer.** En modo Normal, `c` admite `h` / `l` por caracteres, `j` / `k` por líneas, `w` / `W` / `e` / `E` / `b` / `B` por palabras y `gg` / `G` por líneas, además de `cc`. `cw` cambia hasta el siguiente límite de `w`. Los contadores anterior e interior se multiplican (`2c3w` abarca seis movimientos `w`); los destinos absolutos son filas desde 1 limitadas al archivo (`2c3G` apunta a la fila 6), mientras que `cG` sin contador apunta a la última. Los cambios por líneas conservan el separador anterior a la fila siguiente; `cc` con contador incluye los terminadores LF o CRLF existentes de las líneas afectadas. El cambio borra mediante edición nativa y entra en modo Insertar para escribir el reemplazo. En sesiones normales, borrado y reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambia el texto ni entra en modo Insertar. Visual Bloque `c` y `r` / `R` siguen sin admitirse.
+**Cambiar y deshacer.** En modo Normal, `c` admite `h` / `l` por caracteres, `j` / `k` por líneas, `w` / `W` / `e` / `E` / `b` / `B` por palabras y `gg` / `G` por líneas, además de `cc`. `cw` cambia hasta el siguiente límite de `w`. Los contadores anterior e interior se multiplican (`2c3w` abarca seis movimientos `w`); los destinos absolutos son filas desde 1 limitadas al archivo (`2c3G` apunta a la fila 6), mientras que `cG` sin contador apunta a la última. Los cambios por líneas conservan el separador anterior a la fila siguiente; `cc` con contador incluye los terminadores LF o CRLF existentes de las líneas afectadas. El cambio borra mediante edición nativa y entra en modo Insertar para escribir el reemplazo. En sesiones normales, borrado y reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambia el texto ni entra en modo Insertar.
 
 Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edición nativa y entra en modo Insertar para reemplazarla. En una sesión ordinaria, un solo paso de deshacer restaura el texto original y el ancla colapsada; los bytes de la selección usada para ejecutar una query no cambian. En editores de solo lectura, `c` conserva la selección sin entrar en modo Insertar. Con una selección vacía de caracteres o líneas, `c` entra en modo Insertar sin borrar texto. El cambio por líneas contempla una última línea lógica vacía tras LF o CRLF.
 
+**Reemplazar.** `r{car}` reemplaza el carácter bajo el cursor y deja el cursor sobre él. Con contador, `3rx` reemplaza los tres caracteres siguientes de la línea por `x`; si quedan menos antes del final de la línea, no cambia nada. Nunca reemplaza un salto de línea y en una línea vacía no hace nada. `r` seguido de `Enter` reemplaza los caracteres por un solo salto de línea que conserva la indentación de la línea; `r` seguido de `Tab` escribe tabulaciones. `Escape`, `Backspace`, `Delete`, las flechas o salir del editor cancelan `r` sin editar; un atajo con `Ctrl`, `Alt` o `Cmd` lo cancela y luego se ejecuta como siempre. `r` acepta un carácter compuesto con un método de entrada (IME). El reemplazo es un solo paso de deshacer.
+
+`R` entra en modo Reemplazar. Cada carácter escrito sobrescribe el carácter bajo el cursor; al final de una línea se agrega en lugar de reemplazar el salto de línea. `Backspace` restaura en orden inverso los caracteres sobrescritos en esta sesión de Reemplazar y, si no queda ninguno, solo mueve el cursor a la izquierda. `Enter` inserta un salto de línea y `Tab` indenta, como en modo Insertar. `Escape` vuelve al modo Normal y retrocede el cursor un carácter. Toda la sesión de Reemplazar es un solo paso de deshacer. Se ignora un contador antes de `R`.
+
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
-**Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
+**Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
-movimientos, `yy` y `y` con movimiento; `x`, `dd`, `cc`, `c` / `d` con movimiento y `u`
+movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
@@ -773,7 +782,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten Visual Bloque `c`, `r` / `R`, otras marcas, objetos de texto, registros,
+  No se admiten otras marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
