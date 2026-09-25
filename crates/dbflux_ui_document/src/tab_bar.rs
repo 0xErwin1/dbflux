@@ -6,8 +6,7 @@ use super::types::{DocumentId, DocumentMetaSnapshot, DocumentState};
 use dbflux_components::composites::MenuItem;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
 use dbflux_components::typography::MonoMeta;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -387,10 +386,10 @@ impl TabBar {
                 is_active,
                 cx.theme(),
             )))
-            // Dirty indicator: amber dot when the document has unsaved changes.
-            // Shows the change summary in a tooltip on hover.
+            // Dirty indicator: a tint diamond when the document has unsaved
+            // changes. Shows the change summary in a tooltip on hover.
             .when(is_dirty, |el| {
-                let dot_color = SemBannerColors::for_current(cx).warning_bg;
+                let marker_color = ChromeColors::tint(cx.theme());
                 let tooltip_text: SharedString = change_summary
                     .unwrap_or_else(|| dbflux_i18n::t!("document.tabs.unsaved_changes"))
                     .into();
@@ -400,9 +399,16 @@ impl TabBar {
                         .id(ElementId::Name(format!("dirty-dot-{}", id.0).into()))
                         .w(Spacing::XXS)
                         .h(Spacing::XXS)
-                        .rounded_full()
-                        .bg(dot_color)
                         .flex_shrink_0()
+                        .child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    paint_diamond(bounds, marker_color, window);
+                                },
+                            )
+                            .size_full(),
+                        )
                         .tooltip(move |window, cx| {
                             Tooltip::new(tooltip_text.clone()).build(window, cx)
                         }),
@@ -483,6 +489,23 @@ pub enum TabBarEvent {
     CloseAllTabs,
     CloseTabsToLeft(DocumentId),
     CloseTabsToRight(DocumentId),
+}
+
+/// Fill a diamond inscribed in `bounds` (its corners touch the edge midpoints).
+fn paint_diamond(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+    let center = bounds.center();
+
+    let mut builder = PathBuilder::fill();
+    builder.move_to(point(center.x, bounds.top()));
+    builder.line_to(point(bounds.right(), center.y));
+    builder.line_to(point(center.x, bounds.bottom()));
+    builder.line_to(point(bounds.left(), center.y));
+    builder.close();
+
+    match builder.build() {
+        Ok(path) => window.paint_path(path, color),
+        Err(error) => log::warn!("Failed to build tab dirty marker path: {error}"),
+    }
 }
 
 #[cfg(test)]

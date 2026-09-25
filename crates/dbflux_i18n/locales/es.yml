@@ -2748,9 +2748,9 @@ settings:
       group: Almacenamiento
     theme:
       option:
-        ayu_dark: "Ayu Oscuro"
-        ayu_mirage: "Ayu Mirage"
-        ayu_light: "Ayu Claro"
+        follow_system: "Seguir al sistema"
+        dark: "Oscuro"
+        light: "Claro"
       label: Tema
     style:
       label: Estilo

@@ -2748,9 +2748,9 @@ settings:
       group: 저장소
     theme:
       option:
-        ayu_dark: "Ayu 다크"
-        ayu_mirage: "Ayu Mirage"
-        ayu_light: "Ayu 라이트"
+        follow_system: "시스템 설정 따르기"
+        dark: "다크"
+        light: "라이트"
       label: 테마
     style:
       label: 스타일

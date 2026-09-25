@@ -245,6 +245,7 @@ impl Sidebar {
 
     fn render_scripts_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let syntax_colors = SyntaxColors::for_current(cx);
         let search_input = self.scripts_search_input.clone();
         let sidebar_entity = cx.entity().clone();
         let sidebar_for_root_drop = sidebar_entity.clone();
@@ -277,13 +278,13 @@ impl Sidebar {
             gutter_metadata: self.scripts_gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
             hovered_item_id: self.hovered_item_id.clone(),
-            color_teal: SyntaxColors::table(),
-            color_yellow: SyntaxColors::view(),
-            color_blue: SyntaxColors::column(),
-            color_purple: SyntaxColors::type_item(),
-            color_gray: SyntaxColors::folder_dim(),
-            color_orange: SyntaxColors::database(),
-            color_schema: SyntaxColors::schema(),
+            color_teal: syntax_colors.table(),
+            color_yellow: syntax_colors.view(),
+            color_blue: syntax_colors.column(),
+            color_purple: syntax_colors.type_item(),
+            color_gray: syntax_colors.folder_dim(),
+            color_orange: syntax_colors.database(),
+            color_schema: syntax_colors.schema(),
             color_green: theme.success,
         };
 
@@ -357,6 +358,7 @@ impl Render for Sidebar {
         }
 
         let theme = cx.theme();
+        let syntax_colors = SyntaxColors::for_current(cx);
         let state = self.app_state.read(cx);
         let active_id = state.active_connection_id();
         let connections = state.connections().keys().copied().collect::<Vec<_>>();
@@ -416,13 +418,13 @@ impl Render for Sidebar {
             gutter_metadata: self.gutter_metadata.clone(),
             line_color: tree_nav::tree_line_color(theme),
             hovered_item_id: self.hovered_item_id.clone(),
-            color_teal: SyntaxColors::table(),
-            color_yellow: SyntaxColors::view(),
-            color_blue: SyntaxColors::column(),
-            color_purple: SyntaxColors::type_item(),
-            color_gray: SyntaxColors::folder_dim(),
-            color_orange: SyntaxColors::database(),
-            color_schema: SyntaxColors::schema(),
+            color_teal: syntax_colors.table(),
+            color_yellow: syntax_colors.view(),
+            color_blue: syntax_colors.column(),
+            color_purple: syntax_colors.type_item(),
+            color_gray: syntax_colors.folder_dim(),
+            color_orange: syntax_colors.database(),
+            color_schema: syntax_colors.schema(),
             color_green: theme.success,
         };
 

@@ -70,6 +70,12 @@ fn read_theme_source() -> String {
     fs::read_to_string(THEME_SOURCE).expect("theme source should be readable")
 }
 
+fn rgb_to_hsla_alpha(hex: u32, alpha: f32) -> gpui::Hsla {
+    let mut color = rgb_to_hsla(hex);
+    color.a = alpha;
+    color
+}
+
 #[gpui::test]
 fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_tokens(
     cx: &mut TestAppContext,
@@ -80,9 +86,8 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         let theme = Theme::global_mut(cx);
 
         assert_centralized_fonts(theme);
-        assert_eq!(theme.border, rgb_to_hsla(0x1F2430));
-        // raised color updated to 0x151E2B (was 0x141B24)
-        assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
+        assert_eq!(theme.border, rgb_to_hsla(0x232128));
+        assert_eq!(theme.popover, rgb_to_hsla(0x100F13));
     });
 
     cx.update(|cx| {
@@ -98,25 +103,33 @@ fn theme_init_and_apply_theme_keep_centralized_fonts_without_changing_base_token
         let theme = Theme::global_mut(cx);
 
         assert_centralized_fonts(theme);
-        assert_eq!(theme.foreground, rgb_to_hsla(0x5C6166));
-        assert_eq!(theme.border, rgb_to_hsla(0xD9DEE8));
-        assert_eq!(theme.primary_foreground, rgb_to_hsla(0x0A0E14));
-        // danger_fg changed to 0xFFFFFF (all themes)
+        assert_eq!(theme.background, rgb_to_hsla(0xF6F4F7));
+        assert_eq!(theme.foreground, rgb_to_hsla(0x3B3740));
+        assert_eq!(theme.border, rgb_to_hsla(0xE3DEE6));
+        assert_eq!(theme.primary, rgb_to_hsla(0x702963));
+        assert_eq!(theme.primary_foreground, rgb_to_hsla(0xFFFFFF));
         assert_eq!(theme.danger_foreground, rgb_to_hsla(0xFFFFFF));
-        assert_eq!(theme.success_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.warning_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.info_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.sidebar_primary_foreground, rgb_to_hsla(0x0A0E14));
-        assert_eq!(theme.popover, rgb_to_hsla(0xF7F8FA));
+        assert_eq!(theme.success_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.warning_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.info_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.sidebar_primary_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.popover, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.secondary, rgb_to_hsla(0xEEEAF0));
+        assert_eq!(theme.secondary_hover, rgb_to_hsla(0xE3DEE6));
+        assert_eq!(theme.secondary_active, rgb_to_hsla(0xCBC4D1));
+        assert_eq!(theme.primary_hover, rgb_to_hsla(0x7F3171));
+        assert_eq!(theme.primary_active, rgb_to_hsla(0x4A1B41));
+        assert_eq!(theme.input, rgb_to_hsla(0xCBC4D1));
+        assert_eq!(theme.ring, rgb_to_hsla(0x702963));
     });
 }
 
 #[gpui::test]
-fn mirage_theme_uses_dark_mode_palette_while_preserving_centralized_fonts(cx: &mut TestAppContext) {
+fn dark_theme_maps_palette_roles_and_editor_chrome(cx: &mut TestAppContext) {
     cx.update(theme::init);
     cx.update(|cx| {
         theme::apply_theme(
-            ThemeSetting::Mirage,
+            ThemeSetting::Dark,
             AppStyle::Default,
             Option::<&mut Window>::None,
             cx,
@@ -127,68 +140,72 @@ fn mirage_theme_uses_dark_mode_palette_while_preserving_centralized_fonts(cx: &m
         let theme = Theme::global_mut(cx);
 
         assert_centralized_fonts(theme);
-        assert_eq!(theme.background, rgb_to_hsla(0x1F2430));
-        assert_eq!(theme.foreground, rgb_to_hsla(0xCBCCC6));
-        assert_eq!(theme.primary, rgb_to_hsla(0xFFCC66));
-        assert_eq!(theme.primary_foreground, rgb_to_hsla(0x1F2430));
-        assert_eq!(theme.popover, rgb_to_hsla(0x242936));
-        assert_eq!(theme.title_bar_border, rgb_to_hsla(0x3A4052));
-        assert_eq!(theme.window_border, rgb_to_hsla(0x3A4052));
+        assert_eq!(theme.background, rgb_to_hsla(0x09090B));
+        assert_eq!(theme.foreground, rgb_to_hsla(0xC6C3CC));
+        assert_eq!(theme.muted_foreground, rgb_to_hsla(0x8E8996));
+        assert_eq!(theme.primary, rgb_to_hsla(0x702963));
+        assert_eq!(theme.primary_hover, rgb_to_hsla(0x7F3171));
+        assert_eq!(theme.primary_active, rgb_to_hsla(0x4A1B41));
+        assert_eq!(theme.primary_foreground, rgb_to_hsla(0xFFFFFF));
+        assert_eq!(theme.ring, rgb_to_hsla(0xD48CC8));
+        assert_eq!(theme.caret, rgb_to_hsla(0xD48CC8));
+        assert_eq!(theme.selection, rgb_to_hsla_alpha(0xD48CC8, 0.25));
+        assert_eq!(theme.popover, rgb_to_hsla(0x100F13));
+        assert_eq!(theme.secondary, rgb_to_hsla(0x1A181E));
+        assert_eq!(theme.secondary_hover, rgb_to_hsla(0x232128));
+        assert_eq!(theme.secondary_active, rgb_to_hsla(0x37333D));
+        assert_eq!(theme.input, rgb_to_hsla(0x37333D));
+        assert_eq!(theme.danger, rgb_to_hsla(0xFF6B5E));
+        assert_eq!(theme.danger_foreground, rgb_to_hsla(0x09090B));
+        assert_eq!(theme.table_row_border, rgb_to_hsla(0x18161B));
+        assert_eq!(theme.list_active, rgb_to_hsla_alpha(0xD48CC8, 0.12));
+        assert_eq!(theme.table_active, rgb_to_hsla_alpha(0xD48CC8, 0.07));
+        assert_eq!(theme.title_bar_border, rgb_to_hsla(0x232128));
+        assert_eq!(theme.window_border, rgb_to_hsla(0x232128));
         assert_eq!(
             theme.highlight_theme.style.editor_background,
-            Some(rgb_to_hsla(0x1F2430))
+            Some(rgb_to_hsla(0x09090B))
         );
         assert_eq!(
             theme.highlight_theme.style.editor_active_line,
-            Some(rgb_to_hsla(0x242936))
+            Some(rgb_to_hsla_alpha(0xFFFFFF, 0.04))
         );
         assert_eq!(
             theme.highlight_theme.style.editor_line_number,
-            Some(rgb_to_hsla(0x707A8C))
+            Some(rgb_to_hsla(0x8E8996))
         );
         assert_eq!(
             theme.highlight_theme.style.editor_active_line_number,
-            Some(rgb_to_hsla(0xCBCCC6))
+            Some(rgb_to_hsla(0xF7F4F7))
         );
     });
 }
 
 #[gpui::test]
-fn ayu_dark_chrome_fixes_applied(cx: &mut TestAppContext) {
+fn ghost_border_resolves_to_the_palette_line_in_both_variants(cx: &mut TestAppContext) {
     cx.update(theme::init);
 
-    cx.update(|cx| {
-        let theme = Theme::global_mut(cx);
+    for (setting, line) in [
+        (ThemeSetting::Dark, 0x232128),
+        (ThemeSetting::Light, 0xE3DEE6),
+    ] {
+        cx.update(|cx| {
+            theme::apply_theme(setting, AppStyle::Default, Option::<&mut Window>::None, cx)
+        });
 
-        // input alpha 0.10 → 0.14
-        assert!(
-            (theme.input.a - 0.14).abs() < 0.001,
-            "input alpha should be 0.14"
-        );
-        // raised color 0x141B24 → 0x151E2B (popover and secondary track raised)
-        assert_eq!(theme.popover, rgb_to_hsla(0x151E2B));
-        // danger_fg white in all themes
-        assert_eq!(theme.danger_foreground, rgb_to_hsla(0xFFFFFF));
-    });
-}
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
 
-#[test]
-fn ghost_border_contract_moves_out_of_theme_module() {
-    let mut expected = rgb_to_hsla(0x524436);
-    expected.a = 0.15;
-
-    assert_eq!(
-        dbflux_components::tokens::ChromeColors::ghost_border(),
-        expected
-    );
-}
-
-#[test]
-fn theme_ghost_border_forward_matches_component_token() {
-    assert_eq!(
-        theme::ghost_border_color(),
-        dbflux_components::tokens::ChromeColors::ghost_border()
-    );
+            assert_eq!(
+                dbflux_components::tokens::ChromeColors::ghost_border(theme),
+                rgb_to_hsla(line)
+            );
+            assert_eq!(
+                theme::ghost_border_color(theme),
+                dbflux_components::tokens::ChromeColors::ghost_border(theme)
+            );
+        });
+    }
 }
 
 #[test]
@@ -197,8 +214,9 @@ fn theme_module_keeps_palette_and_font_mapping_but_not_shared_chrome_helpers() {
 
     assert!(source.contains("pub use crate::typography::AppFonts;"));
     assert!(source.contains("load_bundled_fonts(cx);"));
-    assert!(source.contains("ThemeSetting::Mirage"));
-    assert!(source.contains("apply_ayu_mirage(style, cx);"));
-    assert!(source.contains("theme.popover = raised;"));
+    assert!(source.contains("ThemeSetting::System"));
+    assert!(source.contains("apply_palette(&palette, style, cx);"));
+    assert!(source.contains("theme.popover = palette.panel;"));
+    assert!(!source.contains("apply_ayu_"));
     assert!(!source.contains("pub fn surface_highest_color()"));
 }

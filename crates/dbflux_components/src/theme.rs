@@ -1,17 +1,18 @@
+use crate::semantic::ThemeSettingGlobal;
+use crate::tokens::SyntaxColors;
 pub use crate::typography::AppFonts;
 use crate::typography::load_bundled_fonts;
 use dbflux_core::{AppStyle, ThemeSetting};
-use gpui::{App, Hsla, SharedString, Window, hsla, px};
+use gpui::{App, Hsla, SharedString, Window, WindowAppearance, hsla, px};
 use gpui_component::{
-    highlighter::HighlightTheme,
+    highlighter::{HighlightTheme, ThemeStyle},
     theme::{Theme, ThemeMode, ThemeTokens},
 };
 use std::{rc::Rc, sync::Arc};
 
-/// Ghost border: `#524436` at 15% opacity. Felt-not-seen structural separator.
-/// Use instead of solid `theme.border` when separating major UI regions.
-pub fn ghost_border_color() -> Hsla {
-    crate::tokens::ChromeColors::ghost_border()
+/// Structural separator between major UI regions; resolves to the palette line.
+pub fn ghost_border_color(theme: &Theme) -> Hsla {
+    crate::tokens::ChromeColors::ghost_border(theme)
 }
 
 pub fn init(cx: &mut App) {
@@ -33,49 +34,69 @@ pub fn init_with_settings(setting: ThemeSetting, style: AppStyle, cx: &mut App) 
     apply_theme(setting, style, None, cx);
 }
 
+/// Apply the Bolt Byzantium palette for `setting`.
+///
+/// `ThemeSetting::System` resolves through the OS appearance (the window's when
+/// one is given, which is more reliable on Linux). The resolved Dark or Light
+/// variant is published through `ThemeSettingGlobal` so semantic color
+/// accessors follow the palette that is actually on screen.
 pub fn apply_theme(
     setting: ThemeSetting,
     style: AppStyle,
     window: Option<&mut Window>,
     cx: &mut App,
 ) {
-    match setting {
-        ThemeSetting::Dark => {
-            Theme::change(ThemeMode::Dark, window, cx);
-            apply_ayu_dark(style, cx);
+    let resolved = match setting {
+        ThemeSetting::System => {
+            let appearance = window
+                .as_ref()
+                .map(|window| window.appearance())
+                .unwrap_or_else(|| cx.window_appearance());
+            variant_for_appearance(appearance)
         }
-        ThemeSetting::Mirage => {
-            Theme::change(ThemeMode::Dark, window, cx);
-            apply_ayu_mirage(style, cx);
-        }
-        ThemeSetting::Light => {
-            Theme::change(ThemeMode::Light, window, cx);
-            apply_ayu_light(style, cx);
-        }
-    }
+        ThemeSetting::Dark | ThemeSetting::Light => setting,
+    };
 
-    // The palettes above mutate legacy color fields directly, which bypasses
-    // the resolution `Theme::change` performed; refresh every resolved token
+    let palette = match resolved {
+        ThemeSetting::Light => Palette::light(),
+        ThemeSetting::Dark | ThemeSetting::System => Palette::dark(),
+    };
+
+    Theme::change(palette.mode, window, cx);
+    apply_palette(&palette, style, cx);
+
+    // The palette mutates legacy color fields directly, which bypasses the
+    // resolution `Theme::change` performed; refresh every resolved token
     // surface before handing the theme to the widgets.
     let theme = Theme::global_mut(cx);
     sync_component_tokens(theme);
     Theme::sync_base(cx);
+
+    ThemeSettingGlobal::set(cx, resolved);
 }
 
-/// Re-derive the component-level tokens from the semantic colors the Ayu
-/// palettes assign.
+/// Map an OS appearance to the palette variant that matches it.
+pub fn variant_for_appearance(appearance: WindowAppearance) -> ThemeSetting {
+    match appearance {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeSetting::Dark,
+        WindowAppearance::Light | WindowAppearance::VibrantLight => ThemeSetting::Light,
+    }
+}
+
+/// Re-derive the component-level tokens from the semantic colors the palette
+/// assigns.
 ///
 /// `Theme::change` resolves `Theme.tokens` and the legacy `button_*` fields
 /// from gpui-component's built-in default theme. Mutating the legacy color
-/// fields afterwards (as `apply_ayu_*` does) bypasses that resolution, so
+/// fields afterwards (as `apply_palette` does) bypasses that resolution, so
 /// widgets reading `tokens.button_primary` (primary buttons) or
 /// `tokens.primary` (checked checkboxes) would keep the default palette's
-/// background — white in dark mode — instead of the Ayu accent.
+/// background — white in dark mode — instead of the palette accent.
 ///
 /// Preserve the gpui-component 0.5 button appearance: default buttons use
 /// secondary colors, and semantic variants use solid fills and their matching
 /// foregrounds. These intentionally differ from 0.6's neutral and tinted-button
-/// fallbacks. Rebuild the token snapshot after resolving the Ayu colors.
+/// fallbacks. Rebuild the token snapshot after resolving the palette colors.
 fn sync_component_tokens(theme: &mut Theme) {
     theme.button = theme.secondary;
     theme.button_hover = theme.secondary_hover;
@@ -218,538 +239,365 @@ fn apply_editor_chrome(
     });
 }
 
-fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
-    let theme = Theme::global_mut(cx);
+/// Recolor the code editor's tree-sitter captures with the palette's syntax
+/// roles. Captures without a role mapping keep the gpui-component default.
+fn apply_syntax_colors(theme: &mut Theme, colors: &SyntaxColors) {
+    let mut highlight_theme = (*theme.highlight_theme).clone();
+    let syntax = &mut highlight_theme.style.syntax;
 
-    // Ayu Dark base colors
-    let background = rgb_to_hsla(0x0A0E14);
-    let panel = rgb_to_hsla(0x0F1419);
-    let foreground = rgb_to_hsla(0xB3B1AD);
-    let muted_foreground = rgb_to_hsla(0x828D9D);
-    let muted = rgb_to_hsla(0x5C6773);
-    let accent = rgb_to_hsla(0xFFB454);
-    let border = rgb_to_hsla(0x1F2430);
+    let assignments = [
+        (&mut syntax.keyword, colors.keyword),
+        (&mut syntax.string, colors.string),
+        (&mut syntax.string_escape, colors.string),
+        (&mut syntax.string_regex, colors.string),
+        (&mut syntax.string_special, colors.string),
+        (&mut syntax.string_special_symbol, colors.string),
+        (&mut syntax.number, colors.number),
+        (&mut syntax.boolean, colors.number),
+        (&mut syntax.constant, colors.number),
+        (&mut syntax.comment, colors.comment),
+        (&mut syntax.comment_doc, colors.comment),
+        (&mut syntax.type_, colors.type_name),
+        (&mut syntax.constructor, colors.type_name),
+        (&mut syntax.enum_, colors.type_name),
+        (&mut syntax.variable_special, colors.type_name),
+        (&mut syntax.function, colors.function),
+        (&mut syntax.operator, colors.operator),
+        (&mut syntax.punctuation, colors.operator),
+        (&mut syntax.punctuation_bracket, colors.operator),
+        (&mut syntax.punctuation_delimiter, colors.operator),
+        (&mut syntax.punctuation_special, colors.operator),
+        (&mut syntax.variable, colors.plain),
+        (&mut syntax.property, colors.plain),
+        (&mut syntax.primary, colors.plain),
+    ];
 
-    let raised = rgb_to_hsla(0x151E2B);
-    let selection = rgb_to_hsla(0x273747);
+    for (slot, color) in assignments {
+        match recolored_style(*slot, color) {
+            Ok(style) => *slot = Some(style),
+            Err(error) => log::warn!("Failed to recolor editor syntax style: {error}"),
+        }
+    }
 
-    let error = rgb_to_hsla(0xF07178);
-    let success = rgb_to_hsla(0xAAD94C);
-    let warning = rgb_to_hsla(0xFFB454);
-    let info = rgb_to_hsla(0x59C2FF);
-
-    persist_font_config(theme);
-    apply_style_radius(theme, style);
-
-    // Core colors
-    theme.background = background;
-    theme.foreground = foreground;
-    theme.border = border;
-    theme.caret = accent;
-
-    // Muted
-    theme.muted = muted;
-    theme.muted_foreground = muted_foreground;
-
-    // Primary (accent color)
-    theme.primary = accent;
-    theme.primary_hover = rgb_to_hsla(0xE6A34C);
-    theme.primary_active = rgb_to_hsla(0xCC9143);
-    theme.primary_foreground = rgb_to_hsla(0x0A0E14);
-
-    // Secondary
-    theme.secondary = raised;
-    theme.secondary_hover = rgb_to_hsla(0x1A2535);
-    theme.secondary_active = rgb_to_hsla(0x1F2A3F);
-    theme.secondary_foreground = foreground;
-
-    // Accent (hover states)
-    theme.accent = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
-    theme.accent_foreground = foreground;
-
-    // Semantic colors - Danger
-    theme.danger = error;
-    theme.danger_hover = rgb_to_hsla(0xD8656B);
-    theme.danger_active = rgb_to_hsla(0xC05A5E);
-    // White foreground on danger red — higher contrast than dark 0x0A0E14
-    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
-
-    // Semantic colors - Success
-    theme.success = success;
-    theme.success_hover = rgb_to_hsla(0x99C444);
-    theme.success_active = rgb_to_hsla(0x88AF3D);
-    theme.success_foreground = rgb_to_hsla(0x0A0E14);
-
-    // Semantic colors - Warning
-    theme.warning = warning;
-    theme.warning_hover = rgb_to_hsla(0xE6A34C);
-    theme.warning_active = rgb_to_hsla(0xCC9143);
-    theme.warning_foreground = rgb_to_hsla(0x0A0E14);
-
-    // Semantic colors - Info
-    theme.info = info;
-    theme.info_hover = rgb_to_hsla(0x50AFE6);
-    theme.info_active = rgb_to_hsla(0x479ACC);
-    theme.info_foreground = rgb_to_hsla(0x0A0E14);
-
-    // Popover / modal surface — match the shared raised chrome treatment.
-    theme.popover = raised;
-    theme.popover_foreground = foreground;
-
-    // Selection
-    theme.selection = selection;
-
-    // Focus ring
-    theme.ring = rgb_to_hsla_alpha(0xFFB454, 0.75);
-
-    // Input — alpha increased from 0.10 to 0.14 for better legibility on dark bg
-    theme.input = rgb_to_hsla_alpha(0xB3B1AD, 0.14);
-
-    // Scrollbar
-    theme.scrollbar = background;
-    theme.scrollbar_thumb = rgb_to_hsla_alpha(0xB3B1AD, 0.15);
-    theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.25);
-
-    // Sidebar tracks the primary workspace surface so nav and content stay visually aligned.
-    theme.sidebar = background;
-    theme.sidebar_foreground = foreground;
-    theme.sidebar_border = border;
-    theme.sidebar_accent = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
-    theme.sidebar_accent_foreground = foreground;
-    theme.sidebar_primary = accent;
-    theme.sidebar_primary_foreground = rgb_to_hsla(0x0A0E14);
-
-    // Tab bar
-    theme.tab = panel;
-    theme.tab_bar = panel;
-    theme.tab_foreground = muted_foreground;
-    theme.tab_active = background;
-    theme.tab_active_foreground = foreground;
-    theme.tab_bar_segmented = raised;
-
-    // Table
-    theme.table = background;
-    theme.table_head = panel;
-    theme.table_head_foreground = muted_foreground;
-    theme.table_even = rgb_to_hsla_alpha(0xB3B1AD, 0.02);
-    theme.table_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
-    theme.table_active = rgb_to_hsla_alpha(0x59C2FF, 0.15);
-    theme.table_active_border = rgb_to_hsla_alpha(0x59C2FF, 0.5);
-    // No row dividers — alternating tint (table_even) provides visual separation
-    theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
-
-    // List
-    theme.colors.list = background;
-    theme.list_head = panel;
-    theme.list_even = rgb_to_hsla_alpha(0xB3B1AD, 0.02);
-    theme.list_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
-    theme.list_active = selection;
-    theme.list_active_border = accent;
-
-    // Accordion
-    theme.accordion = panel;
-    // accordion_hover no longer exists in 0.6.1; hover feedback moved to
-    // AccordionItem::hover element styling.
-
-    // Title bar
-    theme.title_bar = panel;
-    theme.title_bar_border = border;
-
-    // Tiles
-    theme.tiles = rgb_to_hsla(0x111823);
-
-    // Overlay
-    theme.overlay = rgb_to_hsla_alpha(0x000000, 0.55);
-
-    // Window border (Linux only)
-    theme.window_border = border;
-
-    // Link
-    theme.link = info;
-    theme.link_hover = rgb_to_hsla(0x6BCFFF);
-    theme.link_active = rgb_to_hsla(0x50AFE6);
-
-    // Switch
-    theme.switch = muted;
-    theme.switch_thumb = foreground;
-
-    // Slider
-    theme.slider_bar = muted;
-    theme.slider_thumb = accent;
-
-    // Progress bar
-    theme.progress_bar = accent;
-
-    // Skeleton
-    theme.skeleton = raised;
-
-    // Description list
-    theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted_foreground;
-
-    // Drag and drop
-    theme.drag_border = accent;
-    theme.drop_target = rgb_to_hsla_alpha(0xFFB454, 0.1);
-
-    // Group box
-    theme.group_box = panel;
-    theme.group_box_foreground = foreground;
-
-    // Chart colors
-    theme.chart_1 = rgb_to_hsla(0x59C2FF);
-    theme.chart_2 = rgb_to_hsla(0xAAD94C);
-    theme.chart_3 = rgb_to_hsla(0xFFB454);
-    theme.chart_4 = rgb_to_hsla(0xF07178);
-    theme.chart_5 = rgb_to_hsla(0xD2A6FF);
-
-    // Candlestick
-    theme.chart_bullish = success;
-    theme.chart_bearish = error;
-
-    // Base colors
-    theme.red = error;
-    theme.red_light = rgb_to_hsla(0xF8A5AA);
-    theme.green = success;
-    theme.green_light = rgb_to_hsla(0xC5E88B);
-    theme.blue = info;
-    theme.blue_light = rgb_to_hsla(0x8DD6FF);
-    theme.yellow = warning;
-    theme.yellow_light = rgb_to_hsla(0xFFCC80);
-    theme.magenta = rgb_to_hsla(0xD2A6FF);
-    theme.magenta_light = rgb_to_hsla(0xE4CCFF);
-    theme.cyan = rgb_to_hsla(0x95E6CB);
-    theme.cyan_light = rgb_to_hsla(0xBBF0DF);
+    theme.highlight_theme = Arc::new(highlight_theme);
 }
 
-fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
-    let theme = Theme::global_mut(cx);
+/// Return `existing` (or an empty style) with its color replaced.
+///
+/// gpui-component keeps `ThemeStyle` fields private and only exposes serde, so
+/// the style goes through JSON; font style and weight are preserved.
+fn recolored_style(existing: Option<ThemeStyle>, color: Hsla) -> serde_json::Result<ThemeStyle> {
+    let mut value = match existing {
+        Some(style) => serde_json::to_value(style)?,
+        None => serde_json::Value::Object(serde_json::Map::new()),
+    };
 
-    let background = rgb_to_hsla(0x1F2430);
-    let panel = rgb_to_hsla(0x232834);
-    let foreground = rgb_to_hsla(0xCBCCC6);
-    let muted_foreground = rgb_to_hsla(0x8F98AA);
-    let muted = rgb_to_hsla(0x707A8C);
-    let accent = rgb_to_hsla(0xFFCC66);
-    let border = rgb_to_hsla(0x3A4052);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("color".to_string(), serde_json::to_value(color)?);
+    }
 
-    let raised = rgb_to_hsla(0x242936);
-    let selection = rgb_to_hsla(0x33415E);
-
-    let error = rgb_to_hsla(0xF28779);
-    let success = rgb_to_hsla(0xAAD94C);
-    let warning = rgb_to_hsla(0xFFCC66);
-    let info = rgb_to_hsla(0x73D0FF);
-
-    persist_font_config(theme);
-    apply_style_radius(theme, style);
-    apply_editor_chrome(theme, background, raised, muted, foreground);
-
-    theme.background = background;
-    theme.foreground = foreground;
-    theme.border = border;
-    theme.caret = accent;
-
-    theme.muted = muted;
-    theme.muted_foreground = muted_foreground;
-
-    theme.primary = accent;
-    theme.primary_hover = rgb_to_hsla(0xE6B85C);
-    theme.primary_active = rgb_to_hsla(0xCCA352);
-    theme.primary_foreground = background;
-
-    theme.secondary = panel;
-    theme.secondary_hover = rgb_to_hsla(0x2A3040);
-    theme.secondary_active = rgb_to_hsla(0x31394C);
-    theme.secondary_foreground = foreground;
-
-    theme.accent = rgb_to_hsla_alpha(0xCBCCC6, 0.06);
-    theme.accent_foreground = foreground;
-
-    theme.danger = error;
-    theme.danger_hover = rgb_to_hsla(0xDB7A6D);
-    theme.danger_active = rgb_to_hsla(0xC56D61);
-    // White foreground on danger red — higher contrast than dark background
-    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
-
-    theme.success = success;
-    theme.success_hover = rgb_to_hsla(0x99C444);
-    theme.success_active = rgb_to_hsla(0x88AF3D);
-    theme.success_foreground = background;
-
-    theme.warning = warning;
-    theme.warning_hover = rgb_to_hsla(0xE6B85C);
-    theme.warning_active = rgb_to_hsla(0xCCA352);
-    theme.warning_foreground = background;
-
-    theme.info = info;
-    theme.info_hover = rgb_to_hsla(0x68BBE6);
-    theme.info_active = rgb_to_hsla(0x5CA6CC);
-    theme.info_foreground = background;
-
-    theme.popover = raised;
-    theme.popover_foreground = foreground;
-
-    theme.selection = selection;
-    theme.ring = rgb_to_hsla_alpha(0xFFCC66, 0.72);
-    theme.input = rgb_to_hsla_alpha(0xCBCCC6, 0.09);
-
-    theme.scrollbar = background;
-    theme.scrollbar_thumb = rgb_to_hsla_alpha(0xCBCCC6, 0.14);
-    theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.22);
-
-    theme.sidebar = background;
-    theme.sidebar_foreground = foreground;
-    theme.sidebar_border = border;
-    theme.sidebar_accent = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
-    theme.sidebar_accent_foreground = foreground;
-    theme.sidebar_primary = accent;
-    theme.sidebar_primary_foreground = background;
-
-    theme.tab = panel;
-    theme.tab_bar = panel;
-    theme.tab_foreground = muted_foreground;
-    theme.tab_active = background;
-    theme.tab_active_foreground = foreground;
-    theme.tab_bar_segmented = raised;
-
-    theme.table = background;
-    theme.table_head = panel;
-    theme.table_head_foreground = muted_foreground;
-    theme.table_even = rgb_to_hsla_alpha(0xCBCCC6, 0.02);
-    theme.table_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
-    theme.table_active = rgb_to_hsla_alpha(0x73D0FF, 0.12);
-    theme.table_active_border = rgb_to_hsla_alpha(0x73D0FF, 0.4);
-    theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
-
-    theme.colors.list = background;
-    theme.list_head = panel;
-    theme.list_even = rgb_to_hsla_alpha(0xCBCCC6, 0.02);
-    theme.list_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
-    theme.list_active = selection;
-    theme.list_active_border = accent;
-
-    theme.accordion = panel;
-    // accordion_hover no longer exists in 0.6.1; hover feedback moved to
-    // AccordionItem::hover element styling.
-
-    theme.title_bar = panel;
-    theme.title_bar_border = border;
-
-    theme.tiles = rgb_to_hsla(0x202734);
-    theme.overlay = rgb_to_hsla_alpha(0x000000, 0.45);
-    theme.window_border = border;
-
-    theme.link = info;
-    theme.link_hover = rgb_to_hsla(0x8BD8FF);
-    theme.link_active = rgb_to_hsla(0x68BBE6);
-
-    theme.switch = muted;
-    theme.switch_thumb = foreground;
-
-    theme.slider_bar = muted;
-    theme.slider_thumb = accent;
-
-    theme.progress_bar = accent;
-    theme.skeleton = raised;
-
-    theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted_foreground;
-
-    theme.drag_border = accent;
-    theme.drop_target = rgb_to_hsla_alpha(0xFFCC66, 0.1);
-
-    theme.group_box = panel;
-    theme.group_box_foreground = foreground;
-
-    theme.chart_1 = info;
-    theme.chart_2 = success;
-    theme.chart_3 = warning;
-    theme.chart_4 = error;
-    theme.chart_5 = rgb_to_hsla(0xD4BFFF);
-
-    theme.chart_bullish = success;
-    theme.chart_bearish = error;
-
-    theme.red = error;
-    theme.red_light = rgb_to_hsla(0xF7B3AA);
-    theme.green = success;
-    theme.green_light = rgb_to_hsla(0xC5E88B);
-    theme.blue = info;
-    theme.blue_light = rgb_to_hsla(0xA6DDFF);
-    theme.yellow = warning;
-    theme.yellow_light = rgb_to_hsla(0xFFE099);
-    theme.magenta = rgb_to_hsla(0xD4BFFF);
-    theme.magenta_light = rgb_to_hsla(0xE6D9FF);
-    theme.cyan = rgb_to_hsla(0x95E6CB);
-    theme.cyan_light = rgb_to_hsla(0xBBF0DF);
+    serde_json::from_value(value)
 }
 
-fn apply_ayu_light(style: AppStyle, cx: &mut App) {
+/// Hand-picked color roles of one Bolt Byzantium variant.
+///
+/// Every value is taken from the design board; `apply_palette` maps the roles
+/// onto the gpui-component `Theme` fields so both variants share one mapping.
+struct Palette {
+    mode: ThemeMode,
+
+    background: Hsla,
+    panel: Hsla,
+    raised: Hsla,
+    line: Hsla,
+    line_strong: Hsla,
+    row_divider: Hsla,
+
+    text_strong: Hsla,
+    text_body: Hsla,
+    text_muted: Hsla,
+
+    byzantine: Hsla,
+    byzantine_hover: Hsla,
+    byzantine_deep: Hsla,
+    tint: Hsla,
+    ink: Hsla,
+
+    success: Hsla,
+    info: Hsla,
+    warning: Hsla,
+    danger: Hsla,
+    cyan: Hsla,
+    /// Text drawn on top of solid success/info/warning/danger fills.
+    semantic_foreground: Hsla,
+
+    hover_wash: Hsla,
+    alternating_row_wash: Hsla,
+    selected_row_wash: Hsla,
+    selected_item_wash: Hsla,
+    overlay: Hsla,
+    progress: Hsla,
+
+    syntax: SyntaxColors,
+}
+
+impl Palette {
+    fn dark() -> Self {
+        let tint = rgb_to_hsla(0xD48CC8);
+        let byzantine = rgb_to_hsla(0x702963);
+
+        Self {
+            mode: ThemeMode::Dark,
+
+            background: rgb_to_hsla(0x09090B),
+            panel: rgb_to_hsla(0x100F13),
+            raised: rgb_to_hsla(0x1A181E),
+            line: rgb_to_hsla(0x232128),
+            line_strong: rgb_to_hsla(0x37333D),
+            row_divider: rgb_to_hsla(0x18161B),
+
+            text_strong: rgb_to_hsla(0xF7F4F7),
+            text_body: rgb_to_hsla(0xC6C3CC),
+            text_muted: rgb_to_hsla(0x8E8996),
+
+            byzantine,
+            byzantine_hover: rgb_to_hsla(0x7F3171),
+            byzantine_deep: rgb_to_hsla(0x4A1B41),
+            tint,
+            ink: rgb_to_hsla(0xFFFFFF),
+
+            success: rgb_to_hsla(0x7BE0A0),
+            info: rgb_to_hsla(0x6EA8FF),
+            warning: rgb_to_hsla(0xFFC23D),
+            danger: rgb_to_hsla(0xFF6B5E),
+            cyan: rgb_to_hsla(0x6FD3D8),
+            semantic_foreground: rgb_to_hsla(0x09090B),
+
+            hover_wash: rgb_to_hsla_alpha(0xFFFFFF, 0.04),
+            alternating_row_wash: rgb_to_hsla_alpha(0xFFFFFF, 0.012),
+            selected_row_wash: rgb_to_hsla_alpha(0xD48CC8, 0.07),
+            selected_item_wash: rgb_to_hsla_alpha(0xD48CC8, 0.12),
+            overlay: rgb_to_hsla_alpha(0x000000, 0.60),
+            progress: tint,
+
+            syntax: SyntaxColors::dark(),
+        }
+    }
+
+    fn light() -> Self {
+        let byzantine = rgb_to_hsla(0x702963);
+
+        Self {
+            mode: ThemeMode::Light,
+
+            background: rgb_to_hsla(0xF6F4F7),
+            panel: rgb_to_hsla(0xFFFFFF),
+            raised: rgb_to_hsla(0xEEEAF0),
+            line: rgb_to_hsla(0xE3DEE6),
+            line_strong: rgb_to_hsla(0xCBC4D1),
+            row_divider: rgb_to_hsla(0xF0ECF2),
+
+            text_strong: rgb_to_hsla(0x141118),
+            text_body: rgb_to_hsla(0x3B3740),
+            text_muted: rgb_to_hsla(0x6B6572),
+
+            byzantine,
+            byzantine_hover: rgb_to_hsla(0x7F3171),
+            byzantine_deep: rgb_to_hsla(0x4A1B41),
+            // Byzantine doubles as the text accent on light surfaces.
+            tint: byzantine,
+            ink: rgb_to_hsla(0xFFFFFF),
+
+            success: rgb_to_hsla(0x1C7F45),
+            info: rgb_to_hsla(0x1F5FD1),
+            warning: rgb_to_hsla(0xB7791F),
+            danger: rgb_to_hsla(0xC7362B),
+            cyan: rgb_to_hsla(0x0F7C82),
+            semantic_foreground: rgb_to_hsla(0xFFFFFF),
+
+            hover_wash: rgb_to_hsla_alpha(0x141118, 0.04),
+            alternating_row_wash: rgb_to_hsla_alpha(0x141118, 0.015),
+            selected_row_wash: rgb_to_hsla_alpha(0x702963, 0.07),
+            selected_item_wash: rgb_to_hsla_alpha(0x702963, 0.14),
+            overlay: rgb_to_hsla_alpha(0x141118, 0.35),
+            progress: byzantine,
+
+            syntax: SyntaxColors::light(),
+        }
+    }
+}
+
+/// Lightness offset between a semantic fill and its hover state.
+const HOVER_LIGHTNESS_STEP: f32 = 0.05;
+
+/// Lightness offset between a semantic fill and its pressed state.
+const ACTIVE_LIGHTNESS_STEP: f32 = -0.06;
+
+/// Share of the remaining distance to white used for the `*_light` base colors.
+const LIGHT_VARIANT_MIX: f32 = 0.35;
+
+fn shift_lightness(color: Hsla, amount: f32) -> Hsla {
+    Hsla {
+        l: (color.l + amount).clamp(0.0, 1.0),
+        ..color
+    }
+}
+
+fn lighter_variant(color: Hsla) -> Hsla {
+    Hsla {
+        l: color.l + (1.0 - color.l) * LIGHT_VARIANT_MIX,
+        ..color
+    }
+}
+
+fn with_alpha(color: Hsla, alpha: f32) -> Hsla {
+    Hsla { a: alpha, ..color }
+}
+
+fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
     let theme = Theme::global_mut(cx);
-
-    let background = rgb_to_hsla(0xFAFAFA);
-    let panel = rgb_to_hsla(0xF3F3F3);
-    let foreground = rgb_to_hsla(0x5C6166);
-    let muted_foreground = rgb_to_hsla(0x676E75);
-    let muted = rgb_to_hsla(0xABB0B6);
-    let accent = rgb_to_hsla(0xFF9940);
-    let border = rgb_to_hsla(0xD9DEE8);
-
-    let raised = rgb_to_hsla(0xF7F8FA);
-    let selection = rgb_to_hsla(0xD3E8F8);
-
-    let error = rgb_to_hsla(0xE65050);
-    let success = rgb_to_hsla(0x86B300);
-    let warning = rgb_to_hsla(0xF2AE49);
-    let info = rgb_to_hsla(0x399EE6);
 
     persist_font_config(theme);
     apply_style_radius(theme, style);
+    apply_editor_chrome(
+        theme,
+        palette.background,
+        palette.hover_wash,
+        palette.text_muted,
+        palette.text_strong,
+    );
+    apply_syntax_colors(theme, &palette.syntax);
 
-    theme.background = background;
-    theme.foreground = foreground;
-    theme.border = border;
-    theme.caret = accent;
+    theme.background = palette.background;
+    theme.foreground = palette.text_body;
+    theme.border = palette.line;
+    theme.caret = palette.tint;
+    theme.window_border = palette.line;
 
-    theme.muted = muted;
-    theme.muted_foreground = muted_foreground;
+    theme.muted = palette.line_strong;
+    theme.muted_foreground = palette.text_muted;
 
-    theme.primary = accent;
-    theme.primary_hover = rgb_to_hsla(0xE68A3A);
-    theme.primary_active = rgb_to_hsla(0xCC7A33);
-    theme.primary_foreground = rgb_to_hsla(0x0A0E14);
+    theme.primary = palette.byzantine;
+    theme.primary_hover = palette.byzantine_hover;
+    theme.primary_active = palette.byzantine_deep;
+    theme.primary_foreground = palette.ink;
 
-    theme.secondary = raised;
-    theme.secondary_hover = rgb_to_hsla(0xE4E4E4);
-    theme.secondary_active = rgb_to_hsla(0xDADADA);
-    theme.secondary_foreground = foreground;
+    theme.secondary = palette.raised;
+    theme.secondary_hover = palette.line;
+    theme.secondary_active = palette.line_strong;
+    theme.secondary_foreground = palette.text_body;
 
-    theme.accent = rgb_to_hsla_alpha(0x5C6166, 0.06);
-    theme.accent_foreground = foreground;
+    theme.accent = palette.hover_wash;
+    theme.accent_foreground = palette.text_strong;
 
-    theme.danger = error;
-    theme.danger_hover = rgb_to_hsla(0xCF4848);
-    theme.danger_active = rgb_to_hsla(0xB84040);
-    // White foreground on danger red — higher contrast than near-black 0x0A0E14
-    theme.danger_foreground = rgb_to_hsla(0xFFFFFF);
+    theme.danger = palette.danger;
+    theme.danger_hover = shift_lightness(palette.danger, HOVER_LIGHTNESS_STEP);
+    theme.danger_active = shift_lightness(palette.danger, ACTIVE_LIGHTNESS_STEP);
+    theme.danger_foreground = palette.semantic_foreground;
 
-    theme.success = success;
-    theme.success_hover = rgb_to_hsla(0x79A100);
-    theme.success_active = rgb_to_hsla(0x6D9000);
-    theme.success_foreground = rgb_to_hsla(0x0A0E14);
+    theme.success = palette.success;
+    theme.success_hover = shift_lightness(palette.success, HOVER_LIGHTNESS_STEP);
+    theme.success_active = shift_lightness(palette.success, ACTIVE_LIGHTNESS_STEP);
+    theme.success_foreground = palette.semantic_foreground;
 
-    theme.warning = warning;
-    theme.warning_hover = rgb_to_hsla(0xDA9D42);
-    theme.warning_active = rgb_to_hsla(0xC28C3B);
-    theme.warning_foreground = rgb_to_hsla(0x0A0E14);
+    theme.warning = palette.warning;
+    theme.warning_hover = shift_lightness(palette.warning, HOVER_LIGHTNESS_STEP);
+    theme.warning_active = shift_lightness(palette.warning, ACTIVE_LIGHTNESS_STEP);
+    theme.warning_foreground = palette.semantic_foreground;
 
-    theme.info = info;
-    theme.info_hover = rgb_to_hsla(0x338ECF);
-    theme.info_active = rgb_to_hsla(0x2D7EB8);
-    theme.info_foreground = rgb_to_hsla(0x0A0E14);
+    theme.info = palette.info;
+    theme.info_hover = shift_lightness(palette.info, HOVER_LIGHTNESS_STEP);
+    theme.info_active = shift_lightness(palette.info, ACTIVE_LIGHTNESS_STEP);
+    theme.info_foreground = palette.semantic_foreground;
 
-    theme.popover = raised;
-    theme.popover_foreground = foreground;
+    theme.popover = palette.panel;
+    theme.popover_foreground = palette.text_body;
 
-    theme.selection = selection;
+    theme.selection = with_alpha(palette.tint, 0.25);
+    theme.ring = palette.tint;
+    theme.input = palette.line_strong;
 
-    theme.ring = rgb_to_hsla_alpha(0xFF9940, 0.5);
+    theme.scrollbar = hsla(0.0, 0.0, 0.0, 0.0);
+    theme.scrollbar_thumb = with_alpha(palette.text_muted, 0.30);
+    theme.scrollbar_thumb_hover = with_alpha(palette.text_muted, 0.50);
 
-    theme.input = rgb_to_hsla_alpha(0x5C6166, 0.06);
+    theme.sidebar = palette.background;
+    theme.sidebar_foreground = palette.text_body;
+    theme.sidebar_border = palette.line;
+    theme.sidebar_accent = palette.selected_item_wash;
+    theme.sidebar_accent_foreground = palette.text_strong;
+    theme.sidebar_primary = palette.tint;
+    theme.sidebar_primary_foreground = palette.ink;
 
-    theme.scrollbar = background;
-    theme.scrollbar_thumb = rgb_to_hsla_alpha(0x5C6166, 0.15);
-    theme.scrollbar_thumb_hover = rgb_to_hsla_alpha(0x5C6166, 0.3);
+    theme.tab = palette.background;
+    theme.tab_bar = palette.background;
+    theme.tab_foreground = palette.text_muted;
+    theme.tab_active = palette.panel;
+    theme.tab_active_foreground = palette.text_strong;
+    theme.tab_bar_segmented = palette.raised;
 
-    theme.sidebar = background;
-    theme.sidebar_foreground = foreground;
-    theme.sidebar_border = border;
-    theme.sidebar_accent = rgb_to_hsla_alpha(0x5C6166, 0.06);
-    theme.sidebar_accent_foreground = foreground;
-    theme.sidebar_primary = accent;
-    theme.sidebar_primary_foreground = rgb_to_hsla(0x0A0E14);
+    theme.table = palette.background;
+    theme.table_head = palette.background;
+    theme.table_head_foreground = palette.text_strong;
+    theme.table_even = palette.alternating_row_wash;
+    theme.table_hover = palette.hover_wash;
+    theme.table_active = palette.selected_row_wash;
+    theme.table_active_border = palette.tint;
+    theme.table_row_border = palette.row_divider;
 
-    theme.tab = panel;
-    theme.tab_bar = panel;
-    theme.tab_foreground = muted_foreground;
-    theme.tab_active = background;
-    theme.tab_active_foreground = foreground;
-    theme.tab_bar_segmented = raised;
+    theme.colors.list = palette.background;
+    theme.list_head = palette.panel;
+    theme.list_even = palette.alternating_row_wash;
+    theme.list_hover = palette.hover_wash;
+    theme.list_active = palette.selected_item_wash;
+    theme.list_active_border = palette.tint;
 
-    theme.table = background;
-    theme.table_head = panel;
-    theme.table_head_foreground = muted_foreground;
-    theme.table_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
-    theme.table_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
-    theme.table_active = rgb_to_hsla_alpha(0x399EE6, 0.12);
-    theme.table_active_border = rgb_to_hsla_alpha(0x399EE6, 0.4);
-    // No row dividers — alternating tint (table_even) provides visual separation
-    theme.table_row_border = hsla(0.0, 0.0, 0.0, 0.0);
+    theme.accordion = palette.panel;
+    theme.title_bar = palette.background;
+    theme.title_bar_border = palette.line;
+    theme.tiles = palette.panel;
+    theme.overlay = palette.overlay;
 
-    theme.colors.list = background;
-    theme.list_head = panel;
-    theme.list_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
-    theme.list_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
-    theme.list_active = selection;
-    theme.list_active_border = accent;
+    theme.link = palette.info;
+    theme.link_hover = shift_lightness(palette.info, HOVER_LIGHTNESS_STEP);
+    theme.link_active = shift_lightness(palette.info, ACTIVE_LIGHTNESS_STEP);
 
-    theme.accordion = panel;
-    // accordion_hover no longer exists in 0.6.1; hover feedback moved to
-    // AccordionItem::hover element styling.
+    theme.switch = palette.line_strong;
+    theme.switch_thumb = palette.text_strong;
+    theme.slider_bar = palette.line_strong;
+    theme.slider_thumb = palette.tint;
+    theme.progress_bar = palette.progress;
+    theme.skeleton = palette.raised;
 
-    theme.title_bar = panel;
-    theme.title_bar_border = border;
+    theme.description_list_label = palette.panel;
+    theme.description_list_label_foreground = palette.text_muted;
 
-    theme.tiles = rgb_to_hsla(0xE8E8E8);
+    theme.drag_border = palette.tint;
+    theme.drop_target = with_alpha(palette.tint, 0.10);
 
-    theme.overlay = rgb_to_hsla_alpha(0x000000, 0.3);
+    theme.group_box = palette.panel;
+    theme.group_box_foreground = palette.text_body;
 
-    theme.window_border = border;
+    theme.chart_1 = palette.tint;
+    theme.chart_2 = palette.info;
+    theme.chart_3 = palette.success;
+    theme.chart_4 = palette.warning;
+    theme.chart_5 = palette.danger;
+    theme.chart_bullish = palette.success;
+    theme.chart_bearish = palette.danger;
 
-    theme.link = info;
-    theme.link_hover = rgb_to_hsla(0x4CADF0);
-    theme.link_active = rgb_to_hsla(0x338ECF);
-
-    theme.switch = muted;
-    theme.switch_thumb = rgb_to_hsla(0xFFFFFF);
-
-    theme.slider_bar = muted;
-    theme.slider_thumb = accent;
-
-    theme.progress_bar = accent;
-
-    theme.skeleton = raised;
-
-    theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted_foreground;
-
-    theme.drag_border = accent;
-    theme.drop_target = rgb_to_hsla_alpha(0xFF9940, 0.1);
-
-    theme.group_box = panel;
-    theme.group_box_foreground = foreground;
-
-    theme.chart_1 = rgb_to_hsla(0x399EE6);
-    theme.chart_2 = rgb_to_hsla(0x86B300);
-    theme.chart_3 = rgb_to_hsla(0xFF9940);
-    theme.chart_4 = rgb_to_hsla(0xE65050);
-    theme.chart_5 = rgb_to_hsla(0xA37ACC);
-
-    theme.chart_bullish = success;
-    theme.chart_bearish = error;
-
-    theme.red = error;
-    theme.red_light = rgb_to_hsla(0xF09090);
-    theme.green = success;
-    theme.green_light = rgb_to_hsla(0xB8D96E);
-    theme.blue = info;
-    theme.blue_light = rgb_to_hsla(0x73B8F0);
-    theme.yellow = warning;
-    theme.yellow_light = rgb_to_hsla(0xF5C880);
-    theme.magenta = rgb_to_hsla(0xA37ACC);
-    theme.magenta_light = rgb_to_hsla(0xC4A6E0);
-    theme.cyan = rgb_to_hsla(0x4CBF99);
-    theme.cyan_light = rgb_to_hsla(0x86D9BF);
+    theme.red = palette.danger;
+    theme.red_light = lighter_variant(palette.danger);
+    theme.green = palette.success;
+    theme.green_light = lighter_variant(palette.success);
+    theme.blue = palette.info;
+    theme.blue_light = lighter_variant(palette.info);
+    theme.yellow = palette.warning;
+    theme.yellow_light = lighter_variant(palette.warning);
+    theme.magenta = palette.tint;
+    theme.magenta_light = lighter_variant(palette.tint);
+    theme.cyan = palette.cyan;
+    theme.cyan_light = lighter_variant(palette.cyan);
 }
 
 #[cfg(test)]
@@ -757,32 +605,28 @@ mod tests {
     use super::*;
     use gpui::TestAppContext;
 
-    /// The Ayu accent each palette assigns as primary.
-    fn expected_primary(setting: ThemeSetting) -> Hsla {
-        match setting {
-            ThemeSetting::Dark => rgb_to_hsla(0xFFB454),
-            ThemeSetting::Mirage => rgb_to_hsla(0xFFCC66),
-            ThemeSetting::Light => rgb_to_hsla(0xFF9940),
-        }
+    /// Byzantine is the primary fill of both variants.
+    fn expected_primary() -> Hsla {
+        rgb_to_hsla(0x702963)
     }
 
     /// Primary buttons fill from `tokens.button_primary` and checked
-    /// checkboxes from `tokens.primary`; both must carry the Ayu accent of
-    /// the applied setting, not the dependency's default (white in dark
+    /// checkboxes from `tokens.primary`; both must carry the byzantine fill
+    /// of the applied setting, not the dependency's default (white in dark
     /// mode). Exercises the production `apply_theme` path.
     #[gpui::test]
-    fn component_tokens_follow_ayu_primary_across_all_settings(cx: &mut TestAppContext) {
+    fn component_tokens_follow_byzantine_primary_across_all_settings(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
 
         for setting in [
+            ThemeSetting::System,
             ThemeSetting::Dark,
-            ThemeSetting::Mirage,
             ThemeSetting::Light,
         ] {
             cx.update(|cx| apply_theme(setting, AppStyle::Default, None, cx));
             cx.update(|cx| {
                 let theme = Theme::global(cx);
-                let expected = expected_primary(setting);
+                let expected = expected_primary();
 
                 assert_eq!(
                     theme.tokens.primary.color, expected,
@@ -813,7 +657,7 @@ mod tests {
     }
 
     /// Every button family and the surfaces whose dependency fallbacks derive
-    /// from overridden colors must resolve to the applied Ayu palette.
+    /// from overridden colors must resolve to the applied palette.
     #[gpui::test]
     fn button_families_and_surfaces_follow_semantic_colors(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
@@ -859,27 +703,124 @@ mod tests {
         cx.update(|cx| apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx));
         cx.update(|cx| {
             let theme = Theme::global(cx);
-            assert_eq!(
-                theme.tokens.button_primary.color,
-                expected_primary(ThemeSetting::Light)
-            );
-            assert_eq!(
-                theme.tokens.primary.color,
-                expected_primary(ThemeSetting::Light)
-            );
+            assert_eq!(theme.colors.background, rgb_to_hsla(0xF6F4F7));
+            assert_eq!(theme.tokens.button_primary.color, expected_primary());
+            assert_eq!(theme.tokens.primary.color, expected_primary());
+            assert_eq!(theme.colors.ring, rgb_to_hsla(0x702963));
         });
 
         cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
         cx.update(|cx| {
             let theme = Theme::global(cx);
+            assert_eq!(theme.colors.background, rgb_to_hsla(0x09090B));
+            assert_eq!(theme.tokens.button_primary.color, expected_primary());
+            assert_eq!(theme.tokens.primary.color, expected_primary());
+            assert_eq!(theme.colors.ring, rgb_to_hsla(0xD48CC8));
+        });
+    }
+
+    #[test]
+    fn os_appearance_maps_to_the_matching_variant() {
+        assert_eq!(
+            variant_for_appearance(WindowAppearance::Dark),
+            ThemeSetting::Dark
+        );
+        assert_eq!(
+            variant_for_appearance(WindowAppearance::VibrantDark),
+            ThemeSetting::Dark
+        );
+        assert_eq!(
+            variant_for_appearance(WindowAppearance::Light),
+            ThemeSetting::Light
+        );
+        assert_eq!(
+            variant_for_appearance(WindowAppearance::VibrantLight),
+            ThemeSetting::Light
+        );
+    }
+
+    /// The semantic color accessors read `ThemeSettingGlobal`, so every
+    /// `apply_theme` call must publish the variant it put on screen. The test
+    /// platform reports a light appearance, which `System` must follow.
+    #[gpui::test]
+    fn apply_theme_publishes_the_resolved_variant(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
+        cx.update(|cx| assert_eq!(ThemeSettingGlobal::get(cx), ThemeSetting::Dark));
+
+        cx.update(|cx| apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx));
+        cx.update(|cx| assert_eq!(ThemeSettingGlobal::get(cx), ThemeSetting::Light));
+
+        cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
+        cx.update(|cx| apply_theme(ThemeSetting::System, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            let expected = variant_for_appearance(cx.window_appearance());
+            assert_eq!(ThemeSettingGlobal::get(cx), expected);
             assert_eq!(
-                theme.tokens.button_primary.color,
-                expected_primary(ThemeSetting::Dark)
-            );
-            assert_eq!(
-                theme.tokens.primary.color,
-                expected_primary(ThemeSetting::Dark)
+                Theme::global(cx).colors.background == rgb_to_hsla(0xF6F4F7),
+                expected == ThemeSetting::Light
             );
         });
+    }
+
+    fn hex_of(color: Hsla) -> u32 {
+        let rgba = gpui::Rgba::from(color);
+        let channel = |value: f32| (value * 255.0).round() as u32;
+
+        (channel(rgba.r) << 16) | (channel(rgba.g) << 8) | channel(rgba.b)
+    }
+
+    fn syntax_hex(theme: &Theme, capture: &str) -> Option<u32> {
+        theme
+            .highlight_theme
+            .style
+            .syntax
+            .style(capture)
+            .and_then(|style| style.color)
+            .map(hex_of)
+    }
+
+    /// The SQL editor's highlight theme and the tint accessor follow the
+    /// palette's syntax roles in both variants.
+    #[gpui::test]
+    fn editor_syntax_and_tint_follow_the_palette(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        for (setting, expected) in [
+            (ThemeSetting::Dark, SyntaxColors::dark()),
+            (ThemeSetting::Light, SyntaxColors::light()),
+        ] {
+            cx.update(|cx| apply_theme(setting, AppStyle::Default, None, cx));
+            cx.update(|cx| {
+                let theme = Theme::global(cx);
+
+                for (capture, color) in [
+                    ("keyword", expected.keyword),
+                    ("string", expected.string),
+                    ("number", expected.number),
+                    ("comment", expected.comment),
+                    ("type", expected.type_name),
+                    ("function", expected.function),
+                    ("operator", expected.operator),
+                    ("punctuation.delimiter", expected.operator),
+                    ("variable", expected.plain),
+                ] {
+                    assert_eq!(
+                        syntax_hex(theme, capture),
+                        Some(hex_of(color)),
+                        "{setting:?}: {capture}"
+                    );
+                }
+
+                assert_eq!(
+                    hex_of(crate::tokens::ChromeColors::tint(theme)),
+                    hex_of(expected.keyword),
+                    "{setting:?}: tint"
+                );
+            });
+
+            cx.update(|cx| assert_eq!(SyntaxColors::for_current(cx), expected));
+        }
     }
 }

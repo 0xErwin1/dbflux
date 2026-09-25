@@ -2748,9 +2748,9 @@ settings:
       group: Storage
     theme:
       option:
-        ayu_dark: "Ayu Dark"
-        ayu_mirage: "Ayu Mirage"
-        ayu_light: "Ayu Light"
+        follow_system: "Follow system"
+        dark: "Dark"
+        light: "Light"
       label: Theme
     style:
       label: Style

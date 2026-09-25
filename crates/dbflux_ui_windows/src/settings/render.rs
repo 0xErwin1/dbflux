@@ -381,7 +381,7 @@ impl SettingsCoordinator {
             .justify_between()
             .gap_4()
             .border_t_1()
-            .border_color(ghost_border_color())
+            .border_color(ghost_border_color(cx.theme()))
             .bg(cx.theme().background)
             .child(
                 div()

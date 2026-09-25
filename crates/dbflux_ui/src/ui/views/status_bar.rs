@@ -243,7 +243,7 @@ impl Render for StatusBar {
             StatusDotVariant::Idle
         };
 
-        let divider_color = ChromeColors::ghost_border();
+        let divider_color = ChromeColors::ghost_border(cx.theme());
         let unread = app_state.unread_error_count;
 
         // Segments contributed by the active document (DEC-23) — e.g. engine
@@ -263,7 +263,7 @@ impl Render for StatusBar {
             .h(px(32.0))
             .bg(cx.theme().background)
             .border_t_1()
-            .border_color(ghost_border_color())
+            .border_color(ghost_border_color(cx.theme()))
             // Left section: connection indicator + task info
             .child(
                 div()

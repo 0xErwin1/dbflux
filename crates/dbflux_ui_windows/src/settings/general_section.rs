@@ -318,9 +318,11 @@ impl GeneralSection {
 
     fn theme_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_dark")),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_mirage")),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_light")),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.theme.option.follow_system"
+            )),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.dark")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.light")),
         ]
     }
 
@@ -374,15 +376,15 @@ impl GeneralSection {
 
     fn theme_index(theme: ThemeSetting) -> usize {
         match theme {
-            ThemeSetting::Dark => 0,
-            ThemeSetting::Mirage => 1,
+            ThemeSetting::System => 0,
+            ThemeSetting::Dark => 1,
             ThemeSetting::Light => 2,
         }
     }
 
     fn theme_for_index(index: usize) -> ThemeSetting {
         match index {
-            1 => ThemeSetting::Mirage,
+            0 => ThemeSetting::System,
             2 => ThemeSetting::Light,
             _ => ThemeSetting::Dark,
         }
@@ -693,53 +695,46 @@ mod tests {
     }
 
     #[test]
-    fn theme_dropdown_exposes_exactly_three_ayu_labels() {
+    fn theme_dropdown_lists_follow_system_then_dark_then_light() {
         let labels: Vec<_> = GeneralSection::theme_items()
             .into_iter()
             .map(|item| item.label)
             .collect();
 
-        assert_eq!(labels, vec!["Ayu Dark", "Ayu Mirage", "Ayu Light"]);
+        assert_eq!(labels, vec!["Follow system", "Dark", "Light"]);
     }
 
     #[test]
-    fn theme_option_keys_resolve_in_every_locale_and_keep_the_ayu_family_name() {
+    fn theme_option_keys_resolve_in_every_locale() {
         let keys = [
-            "settings.general.theme.option.ayu_dark",
-            "settings.general.theme.option.ayu_mirage",
-            "settings.general.theme.option.ayu_light",
+            "settings.general.theme.option.follow_system",
+            "settings.general.theme.option.dark",
+            "settings.general.theme.option.light",
         ];
 
         for key in keys {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
-                assert!(
-                    value.starts_with("Ayu "),
-                    "{key} must keep the Ayu name in {locale}, got {value:?}"
-                );
                 assert_ne!(value, format!("{locale}.{key}"));
+                assert!(!value.is_empty(), "{key} is empty in {locale}");
             }
         }
 
-        assert_eq!(
-            dbflux_i18n::t!("settings.general.theme.option.ayu_mirage", locale = "es"),
-            "Ayu Mirage"
-        );
         assert_ne!(
-            dbflux_i18n::t!("settings.general.theme.option.ayu_dark", locale = "en"),
-            dbflux_i18n::t!("settings.general.theme.option.ayu_dark", locale = "es")
+            dbflux_i18n::t!("settings.general.theme.option.follow_system", locale = "en"),
+            dbflux_i18n::t!("settings.general.theme.option.follow_system", locale = "es")
         );
     }
 
     #[test]
-    fn theme_index_and_reverse_mapping_cover_all_supported_ayu_themes() {
-        assert_eq!(GeneralSection::theme_index(ThemeSetting::Dark), 0);
-        assert_eq!(GeneralSection::theme_index(ThemeSetting::Mirage), 1);
+    fn theme_index_and_reverse_mapping_cover_all_supported_themes() {
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::System), 0);
+        assert_eq!(GeneralSection::theme_index(ThemeSetting::Dark), 1);
         assert_eq!(GeneralSection::theme_index(ThemeSetting::Light), 2);
 
-        assert_eq!(GeneralSection::theme_for_index(0), ThemeSetting::Dark);
-        assert_eq!(GeneralSection::theme_for_index(1), ThemeSetting::Mirage);
+        assert_eq!(GeneralSection::theme_for_index(0), ThemeSetting::System);
+        assert_eq!(GeneralSection::theme_for_index(1), ThemeSetting::Dark);
         assert_eq!(GeneralSection::theme_for_index(2), ThemeSetting::Light);
         assert_eq!(GeneralSection::theme_for_index(99), ThemeSetting::Dark);
     }

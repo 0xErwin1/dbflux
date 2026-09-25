@@ -142,8 +142,6 @@ impl Shadows {
     }
 }
 
-pub struct SyntaxColors;
-
 pub struct ChromeColors;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,48 +220,114 @@ impl ChromeSurfaceRole {
 }
 
 impl ChromeColors {
-    pub fn ghost_border() -> Hsla {
-        let mut color: Hsla = rgb(0x524436).into();
-        color.a = 0.15;
-        color
+    /// Structural separator between major UI regions: the palette line.
+    pub fn ghost_border(theme: &gpui_component::Theme) -> Hsla {
+        theme.border
     }
+
+    /// Text-accent tint: `#D48CC8` on dark, byzantine `#702963` on light.
+    ///
+    /// The palette assigns the tint to the focus ring, so this reads `ring`.
+    pub fn tint(theme: &gpui_component::Theme) -> Hsla {
+        theme.ring
+    }
+}
+
+/// Syntax roles of the Bolt Byzantium palette, per variant.
+///
+/// The code editor's highlight theme and the schema-tree icons both read these
+/// roles, so SQL text and tree glyphs share one color language.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SyntaxColors {
+    pub keyword: Hsla,
+    pub string: Hsla,
+    /// Numbers and NULL literals.
+    pub number: Hsla,
+    pub comment: Hsla,
+    /// Types and built-in identifiers.
+    pub type_name: Hsla,
+    pub function: Hsla,
+    /// Operators and punctuation.
+    pub operator: Hsla,
+    /// Plain identifiers.
+    pub plain: Hsla,
 }
 
 impl SyntaxColors {
-    pub fn table() -> Hsla {
-        rgb(0x4EC9B0).into()
+    pub fn dark() -> Self {
+        Self {
+            keyword: rgb(0xD48CC8).into(),
+            string: rgb(0x7BE0A0).into(),
+            number: rgb(0xB79CFF).into(),
+            comment: rgb(0x8E8996).into(),
+            type_name: rgb(0x6EA8FF).into(),
+            function: rgb(0xFFC23D).into(),
+            operator: rgb(0xC6C3CC).into(),
+            plain: rgb(0xF7F4F7).into(),
+        }
     }
 
-    pub fn view() -> Hsla {
-        rgb(0xDCDCAA).into()
+    pub fn light() -> Self {
+        Self {
+            keyword: rgb(0x702963).into(),
+            string: rgb(0x1C7F45).into(),
+            number: rgb(0x6B4FD8).into(),
+            comment: rgb(0x6B6572).into(),
+            type_name: rgb(0x1F5FD1).into(),
+            function: rgb(0xB7791F).into(),
+            operator: rgb(0x3B3740).into(),
+            plain: rgb(0x141118).into(),
+        }
     }
 
-    pub fn column() -> Hsla {
-        rgb(0x9CDCFE).into()
+    /// Return the `SyntaxColors` for the currently active theme.
+    ///
+    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
+    pub fn for_current(cx: &gpui::App) -> Self {
+        match crate::semantic::ThemeSettingGlobal::get(cx) {
+            dbflux_core::ThemeSetting::Light => Self::light(),
+            dbflux_core::ThemeSetting::Dark | dbflux_core::ThemeSetting::System => Self::dark(),
+        }
     }
 
-    pub fn type_item() -> Hsla {
-        rgb(0xC586C0).into()
+    /// Schema-tree table icon.
+    pub fn table(&self) -> Hsla {
+        self.type_name
     }
 
-    pub fn folder_dim() -> Hsla {
-        rgb(0x808080).into()
+    /// Schema-tree view icon.
+    pub fn view(&self) -> Hsla {
+        self.function
     }
 
-    pub fn database() -> Hsla {
-        rgb(0xCE9178).into()
+    /// Schema-tree column icon.
+    pub fn column(&self) -> Hsla {
+        self.operator
     }
 
-    pub fn schema() -> Hsla {
-        rgb(0x569CD6).into()
+    /// Schema-tree custom type icon.
+    pub fn type_item(&self) -> Hsla {
+        self.number
+    }
+
+    /// Schema-tree folder icon.
+    pub fn folder_dim(&self) -> Hsla {
+        self.comment
+    }
+
+    /// Schema-tree database icon.
+    pub fn database(&self) -> Hsla {
+        self.string
+    }
+
+    /// Schema-tree schema icon.
+    pub fn schema(&self) -> Hsla {
+        self.keyword
     }
 }
 
-/// Row-state background tints for the data grid.
-///
-/// All colors are fixed RGBA values sourced from the design-token sheet
-/// (`tokens.css --c-row-*`). They are intentionally theme-invariant: the
-/// tints are chosen to read on both dark and light workspace surfaces.
+/// Row-state background tints for the data grid, derived from the active
+/// theme's semantic colors so both palettes get matching washes.
 pub struct RowColors;
 
 impl RowColors {
@@ -277,29 +341,44 @@ impl RowColors {
         gpui::hsla(0.0, 0.0, 0.0, 0.0)
     }
 
-    /// Pending-insert row: green tint `rgba(170,217,76,0.15)`.
-    pub fn insert(_theme: &gpui_component::Theme) -> Hsla {
-        gpui::hsla(76.0 / 360.0, 0.65, 0.57, 0.15)
+    /// Pending-insert row: success at 15%.
+    pub fn insert(theme: &gpui_component::Theme) -> Hsla {
+        Hsla {
+            a: 0.15,
+            ..theme.success
+        }
     }
 
-    /// Dirty (unsaved edit) row: amber tint `rgba(255,180,84,0.20)`.
-    pub fn dirty(_theme: &gpui_component::Theme) -> Hsla {
-        gpui::hsla(33.0 / 360.0, 1.0, 0.66, 0.20)
+    /// Dirty (unsaved edit) row: warning at 20%.
+    pub fn dirty(theme: &gpui_component::Theme) -> Hsla {
+        Hsla {
+            a: 0.20,
+            ..theme.warning
+        }
     }
 
-    /// Pending-delete row: red tint `rgba(240,113,120,0.10)`.
-    pub fn delete(_theme: &gpui_component::Theme) -> Hsla {
-        gpui::hsla(358.0 / 360.0, 0.82, 0.69, 0.10)
+    /// Pending-delete row: danger at 10%.
+    pub fn delete(theme: &gpui_component::Theme) -> Hsla {
+        Hsla {
+            a: 0.10,
+            ..theme.danger
+        }
     }
 
-    /// Row with a validation error: red tint `rgba(240,113,120,0.15)`.
-    pub fn error(_theme: &gpui_component::Theme) -> Hsla {
-        gpui::hsla(358.0 / 360.0, 0.82, 0.69, 0.15)
+    /// Row with a validation error: danger at 15%.
+    pub fn error(theme: &gpui_component::Theme) -> Hsla {
+        Hsla {
+            a: 0.15,
+            ..theme.danger
+        }
     }
 
-    /// In-flight save row: faint amber `rgba(255,180,84,0.10)`.
-    pub fn saving(_theme: &gpui_component::Theme) -> Hsla {
-        gpui::hsla(33.0 / 360.0, 1.0, 0.66, 0.10)
+    /// In-flight save row: warning at 10%.
+    pub fn saving(theme: &gpui_component::Theme) -> Hsla {
+        Hsla {
+            a: 0.10,
+            ..theme.warning
+        }
     }
 }
 
@@ -315,7 +394,7 @@ impl StatusDotPalette {
         theme.muted_foreground
     }
 
-    /// Busy dot: theme `primary` (amber). Consumer drives the pulse animation.
+    /// Busy dot: theme `primary`. Consumer drives the pulse animation.
     pub fn busy(theme: &gpui_component::Theme) -> Hsla {
         theme.primary
     }

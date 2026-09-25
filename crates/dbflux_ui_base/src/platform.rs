@@ -186,7 +186,7 @@ pub fn render_csd_title_bar_with_crumbs(
                 },
             );
 
-        let sep_color = ChromeColors::ghost_border();
+        let sep_color = ChromeColors::ghost_border(theme);
 
         let mut drag_area = div()
             .flex()

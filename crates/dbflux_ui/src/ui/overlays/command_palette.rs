@@ -991,9 +991,9 @@ impl Render for CommandPalette {
             .child(
                 surface_modal_container(cx)
                     .id("command-palette-container")
-                    // Force the deepest Ayu Dark background; the default
-                    // ModalContainer surface is a raised popover tone which
-                    // read as too warm / Mirage-like inside this palette.
+                    // Use the workspace background instead of the default
+                    // ModalContainer popover surface so the palette reads as
+                    // the deepest layer of the window.
                     .bg(theme.background)
                     .w_full()
                     .max_w(px(560.0))

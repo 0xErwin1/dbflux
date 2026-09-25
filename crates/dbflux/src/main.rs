@@ -458,6 +458,31 @@ fn run_gui() {
 
                 dbflux_ui_base::ui_automation::install(window, cx);
 
+                // "Follow system" resolved against the app-level appearance
+                // before any window existed; the window's own appearance is
+                // the reliable source on Linux, so resolve once more here and
+                // again whenever the OS switches between light and dark.
+                if theme_setting == dbflux_core::ThemeSetting::System {
+                    dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
+                }
+
+                let app_state_for_appearance = app_state.clone();
+                window
+                    .observe_window_appearance(move |window, cx| {
+                        let settings = app_state_for_appearance.read(cx).general_settings();
+                        let (current_theme, current_style) = (settings.theme, settings.style);
+
+                        if current_theme == dbflux_core::ThemeSetting::System {
+                            dbflux_ui::theme::apply_theme(
+                                current_theme,
+                                current_style,
+                                Some(window),
+                                cx,
+                            );
+                        }
+                    })
+                    .detach();
+
                 cx.new(|cx| Root::new(workspace, window, cx))
             })
             .expect("Failed to open main window");

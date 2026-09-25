@@ -2748,9 +2748,9 @@ settings:
       group: 存储
     theme:
       option:
-        ayu_dark: "Ayu 深色"
-        ayu_mirage: "Ayu Mirage"
-        ayu_light: "Ayu 浅色"
+        follow_system: "跟随系统"
+        dark: "深色"
+        light: "浅色"
       label: 主题
     style:
       label: 样式

@@ -1091,16 +1091,16 @@ fn load_general_settings(
 
 fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
     match theme {
+        dbflux_core::ThemeSetting::System => "system",
         dbflux_core::ThemeSetting::Dark => "dark",
-        dbflux_core::ThemeSetting::Mirage => "mirage",
         dbflux_core::ThemeSetting::Light => "light",
     }
 }
 
 fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
     match theme {
+        "system" => dbflux_core::ThemeSetting::System,
         "light" => dbflux_core::ThemeSetting::Light,
-        "mirage" => dbflux_core::ThemeSetting::Mirage,
         _ => dbflux_core::ThemeSetting::Dark,
     }
 }
@@ -2385,23 +2385,28 @@ mod tests {
     }
 
     #[test]
-    fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {
+    fn theme_setting_storage_round_trip_supports_system_dark_and_light() {
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::System),
+            "system"
+        );
         assert_eq!(
             general_settings_theme_to_storage(ThemeSetting::Dark),
             "dark"
-        );
-        assert_eq!(
-            general_settings_theme_to_storage(ThemeSetting::Mirage),
-            "mirage"
         );
         assert_eq!(
             general_settings_theme_to_storage(ThemeSetting::Light),
             "light"
         );
 
+        assert_eq!(theme_setting_from_storage("system"), ThemeSetting::System);
         assert_eq!(theme_setting_from_storage("dark"), ThemeSetting::Dark);
-        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Mirage);
         assert_eq!(theme_setting_from_storage("light"), ThemeSetting::Light);
+    }
+
+    #[test]
+    fn legacy_mirage_theme_storage_value_reads_back_as_dark() {
+        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Dark);
     }
 
     #[test]
@@ -2614,9 +2619,9 @@ mod tests {
     }
 
     #[test]
-    fn save_general_settings_persists_mirage_without_mutating_fonts_or_other_fields() {
+    fn save_general_settings_persists_system_without_mutating_fonts_or_other_fields() {
         let settings = GeneralSettings {
-            theme: ThemeSetting::Mirage,
+            theme: ThemeSetting::System,
             max_history_entries: 77,
             auto_save_interval_ms: 1234,
             ..Default::default()
@@ -2632,7 +2637,7 @@ mod tests {
             .expect("load saved dto")
             .expect("general settings row");
 
-        assert_eq!(dto.theme, "mirage");
+        assert_eq!(dto.theme, "system");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
     }

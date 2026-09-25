@@ -1,8 +1,8 @@
-//! Semantic color tokens for banners and data-grid row states.
+//! Semantic color tokens for banners, data-grid row states, and chart chrome.
 //!
-//! These tokens are hand-picked per-theme (Ayu Dark, Mirage, Light) to ensure
-//! legibility across all three palettes. They are NOT derived at runtime from
-//! `theme.*` opacity calculations — the hex values are embedded here.
+//! These tokens are hand-picked per Bolt Byzantium variant (Dark, Light) from
+//! the design board. They are NOT derived at runtime from `theme.*` opacity
+//! calculations — the hex values are embedded here.
 //!
 //! # Usage
 //!
@@ -10,13 +10,13 @@
 //! use dbflux_components::semantic::{BannerColors, RowStateColors, ThemeSettingGlobal};
 //! ```
 //!
-//! Register the current theme once during startup via `ThemeSettingGlobal::set`.
-//! Then call `BannerColors::for_current(cx)` or `RowStateColors::for_current(cx)`
-//! in any rendering context.
+//! `theme::apply_theme` registers the resolved variant through
+//! `ThemeSettingGlobal::set`. Call `BannerColors::for_current(cx)`,
+//! `RowStateColors::for_current(cx)`, or `ChartColors::for_current(cx)` in any
+//! rendering context.
 
 use dbflux_core::ThemeSetting;
 use gpui::{App, Global, Hsla, hsla};
-use gpui_component::ActiveTheme;
 
 // ---------------------------------------------------------------------------
 // Hex helpers
@@ -68,11 +68,11 @@ fn from_hex(hex_value: u32, alpha: f32) -> Hsla {
 // GPUI global — tracks the active ThemeSetting
 // ---------------------------------------------------------------------------
 
-/// GPUI global tracking the active `ThemeSetting`.
+/// GPUI global tracking the palette variant currently on screen.
 ///
-/// Register once during startup (after `theme::apply_theme`) by calling
-/// `ThemeSettingGlobal::set(cx, setting)`. Semantic color accessors use it
-/// to select the correct token values for the active palette.
+/// `theme::apply_theme` stores the resolved variant (`Dark` or `Light`, never
+/// `System`) on every call. Semantic color accessors use it to select the
+/// token values that match the active palette.
 #[derive(Debug, Clone, Copy)]
 pub struct ThemeSettingGlobal {
     pub setting: ThemeSetting,
@@ -120,92 +120,43 @@ pub struct BannerColors {
 }
 
 impl BannerColors {
-    /// Select tokens for the Ayu Dark palette.
+    /// Banner tokens for the Bolt Byzantium dark palette: each semantic color
+    /// over a 12% wash of itself.
     pub fn dark() -> Self {
         Self {
-            // #59C2FF at 12% over dark background
-            info_bg: from_hex(0x59C2FF, 0.12),
-            info_fg: from_hex(0x59C2FF, 1.0),
-            // #AAD94C at 12% over dark background
-            success_bg: from_hex(0xAAD94C, 0.12),
-            success_fg: from_hex(0xAAD94C, 1.0),
-            // #FFB454 at 12% over dark background
-            warning_bg: from_hex(0xFFB454, 0.12),
-            warning_fg: from_hex(0xFFB454, 1.0),
-            // #F07178 at 12% over dark background
-            error_bg: from_hex(0xF07178, 0.12),
-            error_fg: from_hex(0xF07178, 1.0),
+            info_bg: from_hex(0x6EA8FF, 0.12),
+            info_fg: from_hex(0x6EA8FF, 1.0),
+            success_bg: from_hex(0x7BE0A0, 0.12),
+            success_fg: from_hex(0x7BE0A0, 1.0),
+            warning_bg: from_hex(0xFFC23D, 0.12),
+            warning_fg: from_hex(0xFFC23D, 1.0),
+            error_bg: from_hex(0xFF6B5E, 0.12),
+            error_fg: from_hex(0xFF6B5E, 1.0),
         }
     }
 
-    /// Select tokens for the Ayu Mirage palette.
-    pub fn mirage() -> Self {
-        Self {
-            // #73D0FF at 14% over mirage background — slightly more opaque for contrast
-            info_bg: from_hex(0x73D0FF, 0.14),
-            info_fg: from_hex(0x73D0FF, 1.0),
-            // #AAD94C at 14%
-            success_bg: from_hex(0xAAD94C, 0.14),
-            success_fg: from_hex(0xAAD94C, 1.0),
-            // #FFCC66 at 14%
-            warning_bg: from_hex(0xFFCC66, 0.14),
-            warning_fg: from_hex(0xFFCC66, 1.0),
-            // #F28779 at 14%
-            error_bg: from_hex(0xF28779, 0.14),
-            error_fg: from_hex(0xF28779, 1.0),
-        }
-    }
-
-    /// Select tokens for the Ayu Light palette.
+    /// Banner tokens for the Bolt Byzantium light palette: each semantic color
+    /// over a 14% wash of itself.
     pub fn light() -> Self {
         Self {
-            // #399EE6 at 10% over light background — low saturation tint
-            info_bg: from_hex(0x399EE6, 0.10),
-            info_fg: from_hex(0x2A7BBF, 1.0),
-            // #86B300 at 10%
-            success_bg: from_hex(0x86B300, 0.10),
-            success_fg: from_hex(0x6A8F00, 1.0),
-            // #F2AE49 at 10%
-            warning_bg: from_hex(0xF2AE49, 0.10),
-            warning_fg: from_hex(0xC07800, 1.0),
-            // #E65050 at 10%
-            error_bg: from_hex(0xE65050, 0.10),
-            error_fg: from_hex(0xBF3030, 1.0),
+            info_bg: from_hex(0x1F5FD1, 0.14),
+            info_fg: from_hex(0x1F5FD1, 1.0),
+            success_bg: from_hex(0x1C7F45, 0.14),
+            success_fg: from_hex(0x1C7F45, 1.0),
+            warning_bg: from_hex(0xB7791F, 0.14),
+            warning_fg: from_hex(0xB7791F, 1.0),
+            error_bg: from_hex(0xC7362B, 0.14),
+            error_fg: from_hex(0xC7362B, 1.0),
         }
     }
 
-    /// Return the `BannerColors` that reproduce exactly what the former
-    /// `tokens::BannerColors` produced for all 9 call-sites.
+    /// Return the `BannerColors` for the currently active theme.
     ///
-    /// - `info`, `success`, `error`: theme-agnostic fixed hex values taken
-    ///   verbatim from the former `tokens::BannerColors` implementation.
-    /// - `warning`: derived from `theme.primary` at runtime exactly as the
-    ///   former implementation did (bg = primary @ 0.20 alpha,
-    ///   fg = primary @ 1.0 alpha).
-    ///
-    /// The named constructors `dark()`, `mirage()`, and `light()` carry
-    /// per-palette semantic values intended for future use. Call sites that
-    /// need pixel-exact backwards compatibility MUST call this method instead.
+    /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
     pub fn for_current(cx: &App) -> Self {
-        let theme = cx.theme();
-        let mut warning_bg = theme.primary;
-        warning_bg.a = 0.20;
-        let mut warning_fg = theme.primary;
-        warning_fg.a = 1.0;
-
-        Self {
-            // #1E3A5F / #93C5FD — former tokens::BannerColors::info_*
-            info_bg: from_hex(0x1E3A5F, 1.0),
-            info_fg: from_hex(0x93C5FD, 1.0),
-            // #14532D / #86EFAC — former tokens::BannerColors::success_*
-            success_bg: from_hex(0x14532D, 1.0),
-            success_fg: from_hex(0x86EFAC, 1.0),
-            // theme.primary @ 0.20 / 1.0 — former tokens::BannerColors::warning_*
-            warning_bg,
-            warning_fg,
-            // #7F1D1D / #FCA5A5 — former tokens::BannerColors::danger_*
-            error_bg: from_hex(0x7F1D1D, 1.0),
-            error_fg: from_hex(0xFCA5A5, 1.0),
+        match ThemeSettingGlobal::get(cx) {
+            ThemeSetting::Light => Self::light(),
+            ThemeSetting::Dark | ThemeSetting::System => Self::dark(),
         }
     }
 }
@@ -233,36 +184,25 @@ pub struct RowStateColors {
 }
 
 impl RowStateColors {
-    /// Row state tokens for the Ayu Dark palette.
+    /// Row state tokens for the Bolt Byzantium dark palette.
     pub fn dark() -> Self {
         Self {
             dirty: None,
-            saving: from_hex(0xFFB454, 0.10),
-            error: from_hex(0xF07178, 0.15),
-            pending_insert: from_hex(0xAAD94C, 0.15),
-            pending_delete: from_hex(0xF07178, 0.10),
+            saving: from_hex(0xFFC23D, 0.10),
+            error: from_hex(0xFF6B5E, 0.15),
+            pending_insert: from_hex(0x7BE0A0, 0.15),
+            pending_delete: from_hex(0xFF6B5E, 0.10),
         }
     }
 
-    /// Row state tokens for the Ayu Mirage palette.
-    pub fn mirage() -> Self {
-        Self {
-            dirty: None,
-            saving: from_hex(0xFFCC66, 0.12),
-            error: from_hex(0xF28779, 0.16),
-            pending_insert: from_hex(0xAAD94C, 0.16),
-            pending_delete: from_hex(0xF28779, 0.12),
-        }
-    }
-
-    /// Row state tokens for the Ayu Light palette.
+    /// Row state tokens for the Bolt Byzantium light palette.
     pub fn light() -> Self {
         Self {
             dirty: None,
-            saving: from_hex(0xF2AE49, 0.14),
-            error: from_hex(0xE65050, 0.14),
-            pending_insert: from_hex(0x86B300, 0.14),
-            pending_delete: from_hex(0xE65050, 0.12),
+            saving: from_hex(0xB7791F, 0.14),
+            error: from_hex(0xC7362B, 0.14),
+            pending_insert: from_hex(0x1C7F45, 0.14),
+            pending_delete: from_hex(0xC7362B, 0.12),
         }
     }
 
@@ -271,9 +211,8 @@ impl RowStateColors {
     /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
     pub fn for_current(cx: &App) -> Self {
         match ThemeSettingGlobal::get(cx) {
-            ThemeSetting::Dark => Self::dark(),
-            ThemeSetting::Mirage => Self::mirage(),
             ThemeSetting::Light => Self::light(),
+            ThemeSetting::Dark | ThemeSetting::System => Self::dark(),
         }
     }
 }
@@ -285,11 +224,7 @@ impl RowStateColors {
 /// Semantic colors for chart chrome: inspector overlays, axis-bar pills,
 /// legend, and stats dock.
 ///
-/// `dark()` and `mirage()` reproduce today's hardcoded canvas literals so the
-/// visual output on those themes is unchanged. `light()` provides legible Ayu
-/// Light equivalents.
-///
-/// All values are self-contained per-theme hex/hsl literals — they do NOT
+/// All values are self-contained per-variant hex literals — they do NOT
 /// derive from `cx.theme()` at runtime so the struct can be constructed without
 /// a live render context (e.g., in unit tests and `for_current` dispatch).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,61 +252,35 @@ pub struct ChartColors {
 }
 
 impl ChartColors {
-    /// Chart chrome tokens for the Ayu Dark palette.
-    ///
-    /// Values reproduce the hardcoded canvas literals present before this
-    /// struct was introduced, preserving visual parity on Dark.
+    /// Chart chrome tokens for the Bolt Byzantium dark palette.
     pub fn dark() -> Self {
         Self {
-            panel_bg: hsla(0.0, 0.0, 0.08, 1.0),
-            panel_border: hsla(0.0, 0.0, 1.0, 0.08),
-            label_fg: hsla(0.0, 0.0, 0.55, 1.0),
-            value_fg: hsla(0.0, 0.0, 0.90, 1.0),
-            muted_fg: hsla(0.0, 0.0, 0.45, 1.0),
-            hover_bg: hsla(0.0, 0.0, 1.0, 0.06),
-            pill_bg: hsla(0.0, 0.0, 1.0, 0.06),
-            pill_border: hsla(0.0, 0.0, 1.0, 0.12),
-            checkbox_checked: hsla(0.55, 0.7, 0.5, 1.0),
-            stats_accent: from_hex(0x95E6CB, 1.0),
+            panel_bg: from_hex(0x100F13, 1.0),
+            panel_border: from_hex(0x232128, 1.0),
+            label_fg: from_hex(0x8E8996, 1.0),
+            value_fg: from_hex(0xF7F4F7, 1.0),
+            muted_fg: from_hex(0x8E8996, 1.0),
+            hover_bg: from_hex(0xFFFFFF, 0.04),
+            pill_bg: from_hex(0x1A181E, 1.0),
+            pill_border: from_hex(0x37333D, 1.0),
+            checkbox_checked: from_hex(0xD48CC8, 1.0),
+            stats_accent: from_hex(0x6FD3D8, 1.0),
         }
     }
 
-    /// Chart chrome tokens for the Ayu Mirage palette.
-    ///
-    /// Values are the Mirage equivalents of the Dark literals, preserving
-    /// visual parity on Mirage.
-    pub fn mirage() -> Self {
-        Self {
-            panel_bg: hsla(0.0, 0.0, 0.10, 1.0),
-            panel_border: hsla(0.0, 0.0, 1.0, 0.08),
-            label_fg: hsla(0.0, 0.0, 0.58, 1.0),
-            value_fg: hsla(0.0, 0.0, 0.92, 1.0),
-            muted_fg: hsla(0.0, 0.0, 0.48, 1.0),
-            hover_bg: hsla(0.0, 0.0, 1.0, 0.06),
-            pill_bg: hsla(0.0, 0.0, 1.0, 0.06),
-            pill_border: hsla(0.0, 0.0, 1.0, 0.12),
-            checkbox_checked: hsla(0.55, 0.7, 0.5, 1.0),
-            stats_accent: from_hex(0x95E6CB, 1.0),
-        }
-    }
-
-    /// Chart chrome tokens for the Ayu Light palette.
-    ///
-    /// Values are hand-picked Ayu Light equivalents ensuring legibility on a
-    /// light background. `stats_accent` uses Ayu Light's cyan (#4CBF99) and
-    /// `checkbox_checked` uses the Light info/chart-1 blue (#399EE6).
+    /// Chart chrome tokens for the Bolt Byzantium light palette.
     pub fn light() -> Self {
         Self {
-            panel_bg: from_hex(0xF7F8FA, 1.0),
-            panel_border: from_hex(0xD9DEE8, 1.0),
-            label_fg: from_hex(0x787E85, 1.0),
-            value_fg: from_hex(0x5C6166, 1.0),
-            muted_fg: from_hex(0x676E75, 1.0),
-            hover_bg: from_hex(0x5C6166, 0.06),
-            pill_bg: from_hex(0x5C6166, 0.06),
-            pill_border: from_hex(0xD9DEE8, 1.0),
-            checkbox_checked: from_hex(0x399EE6, 1.0),
-            stats_accent: from_hex(0x4CBF99, 1.0),
+            panel_bg: from_hex(0xFFFFFF, 1.0),
+            panel_border: from_hex(0xE3DEE6, 1.0),
+            label_fg: from_hex(0x6B6572, 1.0),
+            value_fg: from_hex(0x141118, 1.0),
+            muted_fg: from_hex(0x6B6572, 1.0),
+            hover_bg: from_hex(0x141118, 0.04),
+            pill_bg: from_hex(0xEEEAF0, 1.0),
+            pill_border: from_hex(0xCBC4D1, 1.0),
+            checkbox_checked: from_hex(0x702963, 1.0),
+            stats_accent: from_hex(0x0F7C82, 1.0),
         }
     }
 
@@ -380,9 +289,8 @@ impl ChartColors {
     /// Reads `ThemeSettingGlobal` from `cx`; falls back to Dark when absent.
     pub fn for_current(cx: &App) -> Self {
         match ThemeSettingGlobal::get(cx) {
-            ThemeSetting::Dark => Self::dark(),
-            ThemeSetting::Mirage => Self::mirage(),
             ThemeSetting::Light => Self::light(),
+            ThemeSetting::Dark | ThemeSetting::System => Self::dark(),
         }
     }
 }
@@ -397,6 +305,19 @@ mod tests {
     use dbflux_core::ThemeSetting;
     use gpui::TestAppContext;
 
+    fn assert_all_chart_fields_populated(colors: ChartColors) {
+        assert!(colors.panel_bg.a > 0.0);
+        assert!(colors.panel_border.a > 0.0);
+        assert!(colors.label_fg.a > 0.0);
+        assert!(colors.value_fg.a > 0.0);
+        assert!(colors.muted_fg.a > 0.0);
+        assert!(colors.hover_bg.a > 0.0);
+        assert!(colors.pill_bg.a > 0.0);
+        assert!(colors.pill_border.a > 0.0);
+        assert!(colors.checkbox_checked.a > 0.0);
+        assert!(colors.stats_accent.a > 0.0);
+    }
+
     #[gpui::test]
     fn theme_setting_global_falls_back_to_dark_when_absent(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -407,9 +328,6 @@ mod tests {
     #[gpui::test]
     fn theme_setting_global_roundtrips_all_variants(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            ThemeSettingGlobal::set(cx, ThemeSetting::Mirage);
-            assert_eq!(ThemeSettingGlobal::get(cx), ThemeSetting::Mirage);
-
             ThemeSettingGlobal::set(cx, ThemeSetting::Light);
             assert_eq!(ThemeSettingGlobal::get(cx), ThemeSetting::Light);
 
@@ -418,61 +336,50 @@ mod tests {
         });
     }
 
-    /// `for_current` returns the former `tokens::BannerColors` fixed values
-    /// for info/success/error across all themes, and derives warning from
-    /// `theme.primary`. The per-palette constructors (`dark`, `mirage`, `light`)
-    /// are distinct and carry per-theme semantic values for future use.
     #[gpui::test]
-    fn banner_colors_for_current_returns_legacy_pixel_exact_values(cx: &mut TestAppContext) {
-        // gpui_component::init registers the Theme global required by cx.theme().
-        cx.update(gpui_component::init);
+    fn banner_colors_for_current_dispatches_to_the_active_variant(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            // info/success/error are theme-agnostic (same across all themes).
-            ThemeSettingGlobal::set(cx, ThemeSetting::Dark);
-            let colors_dark = BannerColors::for_current(cx);
-            ThemeSettingGlobal::set(cx, ThemeSetting::Mirage);
-            let colors_mirage = BannerColors::for_current(cx);
+            assert_eq!(BannerColors::for_current(cx), BannerColors::dark());
+
             ThemeSettingGlobal::set(cx, ThemeSetting::Light);
-            let colors_light = BannerColors::for_current(cx);
+            assert_eq!(BannerColors::for_current(cx), BannerColors::light());
 
-            // Fixed hex values taken from former tokens::BannerColors.
-            // info_bg = #1E3A5F at full opacity.
-            assert_eq!(colors_dark.info_bg, colors_mirage.info_bg);
-            assert_eq!(colors_dark.info_bg, colors_light.info_bg);
-            assert_eq!(colors_dark.info_fg, colors_mirage.info_fg);
-
-            // success_bg = #14532D at full opacity.
-            assert_eq!(colors_dark.success_bg, colors_mirage.success_bg);
-            assert_eq!(colors_dark.success_fg, colors_mirage.success_fg);
-
-            // error_bg = #7F1D1D at full opacity.
-            assert_eq!(colors_dark.error_bg, colors_mirage.error_bg);
-            assert_eq!(colors_dark.error_fg, colors_mirage.error_fg);
-
-            // All fg colors must be fully opaque.
-            assert_eq!(colors_dark.info_fg.a, 1.0);
-            assert_eq!(colors_dark.success_fg.a, 1.0);
-            assert_eq!(colors_dark.error_fg.a, 1.0);
+            ThemeSettingGlobal::set(cx, ThemeSetting::Dark);
+            assert_eq!(BannerColors::for_current(cx), BannerColors::dark());
         });
     }
 
-    #[gpui::test]
-    fn banner_colors_for_current_warning_derives_from_theme_primary(cx: &mut TestAppContext) {
-        // gpui_component::init registers the Theme global required by cx.theme().
-        cx.update(gpui_component::init);
-        cx.update(|cx| {
-            // warning_bg = theme.primary @ 0.20, warning_fg = theme.primary @ 1.0.
-            let colors = BannerColors::for_current(cx);
-            assert!((colors.warning_bg.a - 0.20).abs() < 0.001);
-            assert!((colors.warning_fg.a - 1.0).abs() < 0.001);
-        });
+    /// Banners use the semantic color as text over a soft wash of itself:
+    /// 12% on dark surfaces, 14% on light ones.
+    #[test]
+    fn banner_colors_pair_semantic_foregrounds_with_soft_washes() {
+        for (colors, wash) in [(BannerColors::dark(), 0.12), (BannerColors::light(), 0.14)] {
+            for (background, foreground) in [
+                (colors.info_bg, colors.info_fg),
+                (colors.success_bg, colors.success_fg),
+                (colors.warning_bg, colors.warning_fg),
+                (colors.error_bg, colors.error_fg),
+            ] {
+                assert_eq!(foreground.a, 1.0);
+                assert!((background.a - wash).abs() < 0.001);
+                assert_eq!(
+                    Hsla {
+                        a: 1.0,
+                        ..background
+                    },
+                    foreground
+                );
+            }
+        }
+
+        assert_eq!(BannerColors::dark().error_fg, from_hex(0xFF6B5E, 1.0));
+        assert_eq!(BannerColors::light().error_fg, from_hex(0xC7362B, 1.0));
     }
 
     #[gpui::test]
     fn row_state_colors_dirty_is_none_in_all_themes(cx: &mut TestAppContext) {
         cx.update(|cx| {
             assert!(RowStateColors::dark().dirty.is_none());
-            assert!(RowStateColors::mirage().dirty.is_none());
             assert!(RowStateColors::light().dirty.is_none());
 
             // for_current also respects fallback
@@ -483,69 +390,24 @@ mod tests {
     #[gpui::test]
     fn row_state_colors_for_current_dispatches_to_correct_theme(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            ThemeSettingGlobal::set(cx, ThemeSetting::Mirage);
-            let mirage = RowStateColors::for_current(cx);
-            assert_eq!(mirage.saving.a, 0.12);
-
             ThemeSettingGlobal::set(cx, ThemeSetting::Light);
-            let light = RowStateColors::for_current(cx);
-            assert!(light.pending_insert.a > 0.0);
+            assert_eq!(RowStateColors::for_current(cx), RowStateColors::light());
+
+            ThemeSettingGlobal::set(cx, ThemeSetting::Dark);
+            let dark = RowStateColors::for_current(cx);
+            assert_eq!(dark, RowStateColors::dark());
+            assert_eq!(dark.saving, from_hex(0xFFC23D, 0.10));
         });
     }
 
     #[test]
-    fn banner_colors_info_fg_is_fully_opaque_in_dark_theme() {
-        assert_eq!(BannerColors::dark().info_fg.a, 1.0);
-        assert_eq!(BannerColors::mirage().info_fg.a, 1.0);
-        assert_eq!(BannerColors::light().info_fg.a, 1.0);
-    }
-
-    /// All 10 ChartColors fields must be populated (non-zero alpha) for Dark.
-    #[test]
     fn chart_colors_dark_all_fields_populated() {
-        let c = ChartColors::dark();
-        assert!(c.panel_bg.a > 0.0);
-        assert!(c.panel_border.a > 0.0);
-        assert!(c.label_fg.a > 0.0);
-        assert!(c.value_fg.a > 0.0);
-        assert!(c.muted_fg.a > 0.0);
-        assert!(c.hover_bg.a > 0.0);
-        assert!(c.pill_bg.a > 0.0);
-        assert!(c.pill_border.a > 0.0);
-        assert!(c.checkbox_checked.a > 0.0);
-        assert!(c.stats_accent.a > 0.0);
+        assert_all_chart_fields_populated(ChartColors::dark());
     }
 
-    /// All 10 ChartColors fields must be populated (non-zero alpha) for Mirage.
-    #[test]
-    fn chart_colors_mirage_all_fields_populated() {
-        let c = ChartColors::mirage();
-        assert!(c.panel_bg.a > 0.0);
-        assert!(c.panel_border.a > 0.0);
-        assert!(c.label_fg.a > 0.0);
-        assert!(c.value_fg.a > 0.0);
-        assert!(c.muted_fg.a > 0.0);
-        assert!(c.hover_bg.a > 0.0);
-        assert!(c.pill_bg.a > 0.0);
-        assert!(c.pill_border.a > 0.0);
-        assert!(c.checkbox_checked.a > 0.0);
-        assert!(c.stats_accent.a > 0.0);
-    }
-
-    /// All 10 ChartColors fields must be populated (non-zero alpha) for Light.
     #[test]
     fn chart_colors_light_all_fields_populated() {
-        let c = ChartColors::light();
-        assert!(c.panel_bg.a > 0.0);
-        assert!(c.panel_border.a > 0.0);
-        assert!(c.label_fg.a > 0.0);
-        assert!(c.value_fg.a > 0.0);
-        assert!(c.muted_fg.a > 0.0);
-        assert!(c.hover_bg.a > 0.0);
-        assert!(c.pill_bg.a > 0.0);
-        assert!(c.pill_border.a > 0.0);
-        assert!(c.checkbox_checked.a > 0.0);
-        assert!(c.stats_accent.a > 0.0);
+        assert_all_chart_fields_populated(ChartColors::light());
     }
 
     /// `for_current` must dispatch to the matching constructor for each theme.
@@ -554,9 +416,6 @@ mod tests {
         cx.update(|cx| {
             ThemeSettingGlobal::set(cx, ThemeSetting::Dark);
             assert_eq!(ChartColors::for_current(cx), ChartColors::dark());
-
-            ThemeSettingGlobal::set(cx, ThemeSetting::Mirage);
-            assert_eq!(ChartColors::for_current(cx), ChartColors::mirage());
 
             ThemeSettingGlobal::set(cx, ThemeSetting::Light);
             assert_eq!(ChartColors::for_current(cx), ChartColors::light());

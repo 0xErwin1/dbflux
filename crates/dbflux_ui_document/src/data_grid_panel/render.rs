@@ -3200,8 +3200,8 @@ impl DataGridPanel {
         let points_count = self.result.rows.len();
 
         // Value color per stat:
-        //   min, max, avg  → theme.cyan   (≈ #95E6CB on Dark/Mirage, #4CBF99 on Light)
-        //   p99            → theme.primary (≈ #FFB454 on Dark, varies per theme)
+        //   min, max, avg  → theme.cyan    (#6FD3D8 on Dark, #0F7C82 on Light)
+        //   p99            → theme.primary (byzantine #702963 on both)
         //   others         → theme.foreground
         let cyan_color = theme.cyan;
         let primary_color = theme.primary;
