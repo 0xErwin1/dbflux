@@ -30,6 +30,15 @@ pub use timing::{
 /// Matches GPUI's own default spring settling tolerance.
 const DEFAULT_SPRING_EPSILON: f32 = 0.001;
 
+fn scaled_duration(duration: Duration, factor: f32) -> Duration {
+    // Duration::mul_f32(1.0) can round up by a nanosecond.
+    if factor == 1.0 {
+        duration
+    } else {
+        duration.mul_f32(factor)
+    }
+}
+
 /// A value that can be interpolated between two application-owned targets.
 pub trait Interpolate: Clone {
     fn interpolate(&self, target: &Self, progress: f32) -> Self;
@@ -314,7 +323,7 @@ where
         } else {
             1.0
         };
-        let duration = policy.duration.mul_f32(reversing_factor);
+        let duration = scaled_duration(policy.duration, reversing_factor);
         state.update(cx, |state, _| {
             state.from = sampled.clone();
             state.target = target.clone();
@@ -1222,6 +1231,13 @@ mod tests {
                 .update(cx, |_, window, cx| window.simulate_next_frame(cx))
                 .unwrap()
         }
+    }
+
+    #[test]
+    fn identity_duration_scaling_preserves_exact_boundary() {
+        let duration = Duration::from_millis(100);
+        assert_eq!(scaled_duration(duration, 1.0), duration);
+        assert_eq!(scaled_duration(duration, 0.5), duration.mul_f32(0.5));
     }
 
     #[gpui::test]

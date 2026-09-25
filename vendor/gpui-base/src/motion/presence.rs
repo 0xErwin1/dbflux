@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use gpui::{App, ElementId, Window};
 
-use super::{MotionStatus, Transition, TransitionId};
+use super::{MotionStatus, Transition, TransitionId, scaled_duration};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresencePhase {
@@ -88,7 +88,7 @@ impl Presence {
             } else {
                 1.0
             };
-            let duration = self.transition.duration.mul_f32(reversing_factor);
+            let duration = scaled_duration(self.transition.duration, reversing_factor);
             state.update(cx, |state, _| {
                 state.from = sampled;
                 state.target = target;
