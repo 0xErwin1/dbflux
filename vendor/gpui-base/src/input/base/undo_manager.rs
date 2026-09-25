@@ -17,6 +17,7 @@ pub(crate) enum EditIntent {
 #[derive(Debug)]
 struct UndoTransaction {
     intent: EditIntent,
+    group_id: Option<u64>,
     changes: Vec<Change>,
     /// How many changes the most recently appended batch contributed. A batch
     /// is one logical edit with one change per cursor. Only a following batch
@@ -35,6 +36,7 @@ struct UndoTransaction {
 #[derive(Debug)]
 struct PendingTransaction {
     intent: EditIntent,
+    group_id: Option<u64>,
     changes: Vec<Change>,
     selections_before: Option<Vec<CursorSelection>>,
     selections_after: Option<Vec<CursorSelection>>,
@@ -66,6 +68,7 @@ pub(crate) struct UndoManager {
     transaction_depth: usize,
     pending: Option<PendingTransaction>,
     pending_intent: Option<EditIntent>,
+    active_group: Option<u64>,
     coalescing_boundary: bool,
 }
 
@@ -78,8 +81,32 @@ impl UndoManager {
             transaction_depth: 0,
             pending: None,
             pending_intent: None,
+            active_group: None,
             coalescing_boundary: false,
         }
+    }
+
+    pub(super) fn begin_edit_group(&mut self, id: u64) -> bool {
+        if self.active_group.is_some() {
+            return false;
+        }
+        self.active_group = Some(id);
+        self.break_transaction_coalescing();
+        true
+    }
+
+    pub(super) fn end_edit_group(&mut self, id: u64) -> bool {
+        if self.active_group != Some(id) {
+            return false;
+        }
+        self.active_group = None;
+        if let Some(last) = self.undo_transactions.last_mut() {
+            if last.group_id == Some(id) {
+                last.group_id = None;
+            }
+        }
+        self.break_transaction_coalescing();
+        true
     }
 
     /// The intent requested for the next recorded change, taken by the edit
@@ -104,7 +131,7 @@ impl UndoManager {
 
         match self.pending.as_mut() {
             Some(pending) => pending.changes.push(change),
-            None => self.push_batch(vec![change], intent),
+            None => self.push_batch(vec![change], intent, self.active_group),
         }
         true
     }
@@ -125,6 +152,7 @@ impl UndoManager {
         if self.transaction_depth == 1 {
             self.pending = Some(PendingTransaction {
                 intent,
+                group_id: self.active_group,
                 changes: Vec::new(),
                 selections_before: None,
                 selections_after: None,
@@ -152,7 +180,7 @@ impl UndoManager {
         if pending.changes.is_empty() || is_noop_batch(&pending.changes) {
             return;
         }
-        self.push_batch(pending.changes, pending.intent);
+        self.push_batch(pending.changes, pending.intent, pending.group_id);
         if let Some(before) = pending.selections_before {
             self.record_selections_before(before);
         }
@@ -173,19 +201,24 @@ impl UndoManager {
 
     /// Push one logical edit, which is one or more changes in application
     /// order, onto the undo stack.
-    fn push_batch(&mut self, changes: Vec<Change>, intent: EditIntent) {
+    fn push_batch(&mut self, changes: Vec<Change>, intent: EditIntent, group_id: Option<u64>) {
         if changes.is_empty() {
             return;
         }
 
         self.redo_transactions.clear();
         let can_coalesce = !self.coalescing_boundary
-            && intent != EditIntent::Atomic
             && self.undo_transactions.last().is_some_and(|previous| {
-                previous.intent == intent
-                    && previous.last_batch_len == changes.len()
+                previous.group_id == group_id
                     && previous.changes.len() + changes.len() <= MAX_CHANGES_PER_TRANSACTION
-                    && is_adjacent_batch(intent, previous.trailing_batch(), &changes)
+                    && if group_id.is_some() {
+                        true
+                    } else {
+                        intent != EditIntent::Atomic
+                            && previous.intent == intent
+                            && previous.last_batch_len == changes.len()
+                            && is_adjacent_batch(intent, previous.trailing_batch(), &changes)
+                    }
             });
 
         if can_coalesce {
@@ -203,6 +236,7 @@ impl UndoManager {
         }
         self.undo_transactions.push(UndoTransaction {
             intent,
+            group_id,
             last_batch_len: changes.len(),
             changes,
             selections_before: None,
@@ -210,7 +244,7 @@ impl UndoManager {
             auto_closed_pairs_before: None,
             auto_closed_pairs_after: None,
         });
-        self.coalescing_boundary = intent == EditIntent::Atomic;
+        self.coalescing_boundary = group_id.is_none() && intent == EditIntent::Atomic;
     }
 
     /// Record the cursors around the transaction being built, or around the
@@ -313,11 +347,15 @@ impl UndoManager {
         self.transaction_depth = 0;
         self.pending = None;
         self.pending_intent = None;
+        self.active_group = None;
         self.coalescing_boundary = false;
     }
 
     pub(super) fn undo(&mut self) -> Option<Replay> {
         self.commit_all_transactions();
+        if let Some(id) = self.active_group {
+            self.end_edit_group(id);
+        }
         let transaction = self.undo_transactions.pop()?;
         let replay = Replay {
             changes: transaction.changes.iter().rev().cloned().collect(),
@@ -331,6 +369,9 @@ impl UndoManager {
 
     pub(super) fn redo(&mut self) -> Option<Replay> {
         self.commit_all_transactions();
+        if let Some(id) = self.active_group {
+            self.end_edit_group(id);
+        }
         let transaction = self.redo_transactions.pop()?;
         let replay = Replay {
             changes: transaction.changes.clone(),
@@ -441,6 +482,64 @@ mod tests {
     fn typing_change(offset: usize, text: &str) -> Change {
         let end = offset + text.len();
         Change::new(offset..offset, "", offset..end, text)
+    }
+
+    #[test]
+    fn edit_group_merges_mixed_intents_but_not_different_or_closed_groups() {
+        let mut manager = UndoManager::new();
+        assert!(manager.begin_edit_group(1));
+        manager.record_transaction(typing_change(0, "a"), EditIntent::Atomic);
+        manager.record_transaction(typing_change(1, "b"), EditIntent::Typing);
+        assert!(manager.end_edit_group(1));
+        assert!(manager.begin_edit_group(2));
+        manager.record_transaction(typing_change(2, "c"), EditIntent::Typing);
+        assert!(!manager.end_edit_group(1));
+        assert!(manager.end_edit_group(2));
+        assert_eq!(manager.undo().unwrap().changes.len(), 1);
+        assert_eq!(manager.undo().unwrap().changes.len(), 2);
+    }
+
+    #[test]
+    fn edit_group_reused_id_and_history_limit_remain_separate() {
+        let mut manager = UndoManager::new();
+        assert!(manager.begin_edit_group(7));
+        for offset in 0..MAX_CHANGES_PER_TRANSACTION + 1 {
+            manager.record_transaction(typing_change(offset, "x"), EditIntent::Atomic);
+        }
+        assert!(manager.end_edit_group(7));
+        assert!(manager.begin_edit_group(7));
+        manager.record_transaction(
+            typing_change(MAX_CHANGES_PER_TRANSACTION + 1, "y"),
+            EditIntent::Atomic,
+        );
+        assert!(manager.end_edit_group(7));
+        assert_eq!(manager.undo().unwrap().changes.len(), 1);
+        assert_eq!(manager.undo().unwrap().changes.len(), 1);
+        assert_eq!(
+            manager.undo().unwrap().changes.len(),
+            MAX_CHANGES_PER_TRANSACTION
+        );
+    }
+
+    #[test]
+    fn edit_group_reused_id_after_undoing_split_chunk_stays_separate() {
+        let mut manager = UndoManager::new();
+        assert!(manager.begin_edit_group(7));
+        for batch in 0..2 {
+            manager.begin_transaction();
+            for offset in batch * 600..(batch + 1) * 600 {
+                manager.record_transaction(typing_change(offset, "x"), EditIntent::Atomic);
+            }
+            manager.commit_transaction();
+        }
+        assert!(manager.end_edit_group(7));
+        assert_eq!(manager.undo().unwrap().changes.len(), 600);
+
+        assert!(manager.begin_edit_group(7));
+        manager.record_transaction(typing_change(600, "y"), EditIntent::Atomic);
+        assert!(manager.end_edit_group(7));
+        assert_eq!(manager.undo().unwrap().changes.len(), 1);
+        assert_eq!(manager.undo().unwrap().changes.len(), 600);
     }
 
     #[test]

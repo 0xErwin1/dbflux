@@ -17,7 +17,9 @@ This directory starts from the complete published `gpui-base` 0.6.1 crate. DBF-2
 
 Live visual verification of block placement and glyph contrast is still required.
 
-The `state.rs` tests also cover a test-local outer undo bracket around programmatic deletion and native typing or IME composition. This is regression evidence for a future change operator, not a public undo-session API. They do not prove the ordering of a late `unmark_text` callback after a new composition begins.
+- `src/input/base/undo_manager.rs` and `src/input/base/state.rs`: public editor-owned `begin_edit_group(id)` / `end_edit_group(id)` combine adjacent committed edits with the same ID across edit intents, without nesting an outer native IME transaction. A different ID or explicit end creates an undo boundary. Begin/end return false when another group or a native composition is outstanding; the caller must retry after composition commit and end its own group on blur. Native `unmark_text` does not end the editor group. This does not attribute callbacks across platforms or distinguish a late unmark from a currently active native composition.
+
+The `state.rs` tests also cover a test-local outer undo bracket around programmatic deletion and native typing or IME composition; those older brackets are regression evidence rather than the public editor-owned grouping API.
 
 - `src/text/text_view.rs`: the stateless Markdown parser convergence regression uses a deterministic, resource-free fixture over 4 KiB to retain asynchronous parsing. The README fixture triggered unrelated embedded-content load notifications and inflated the root render count; the test still rebuilds its parser callback on each render and requires at most two renders.
 - `src/motion.rs` and `src/motion/presence.rs`: preserve exact transition duration when the reversal factor is 1.0 instead of passing it through `Duration::mul_f32`, which can round a 100 ms duration up by one nanosecond. Other reversal factors still scale normally.

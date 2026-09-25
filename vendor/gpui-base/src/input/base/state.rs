@@ -907,6 +907,24 @@ impl<M: InputModeKind> InputBaseState<M> {
         (0, 0, None)
     }
 
+    /// Start an editor-owned undo group. Returns false if another group or a
+    /// native composition is still active. The caller owns ending it on blur.
+    pub fn begin_edit_group(&mut self, id: u64) -> bool {
+        if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
+            return false;
+        }
+        self.undo_manager.begin_edit_group(id)
+    }
+
+    /// End exactly this group. Returns false if the ID is not active or a
+    /// native composition remains outstanding; retry after its commit/unmark.
+    pub fn end_edit_group(&mut self, id: u64) -> bool {
+        if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
+            return false;
+        }
+        self.undo_manager.end_edit_group(id)
+    }
+
     /// Set the text of the input field.
     ///
     /// For single-line inputs the caret is placed at the end of the text while
@@ -6627,6 +6645,43 @@ mod tests {
                 assert_eq!(state.value(), "a是");
             });
         });
+    }
+
+    #[gpui::test]
+    fn edit_group_owns_deletion_typing_and_composition(cx: &mut TestAppContext) {
+        for composition in [false, true] {
+            let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+            let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+            cx.update(|window, cx| {
+                input_view.input.update(cx, |state, cx| {
+                    assert!(state.begin_edit_group(1));
+                    state.replace_text_in_range(Some(2..3), "", window, cx);
+                    if composition {
+                        state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                        assert!(!state.end_edit_group(1));
+                        state.replace_text_in_range(None, "你", window, cx);
+                    } else {
+                        state.replace_text_in_range(None, "x", window, cx);
+                    }
+                    assert!(state.end_edit_group(1));
+                    let result = if composition { "ab你" } else { "abx" };
+                    assert_eq!(state.value(), result);
+                    assert!(state.begin_edit_group(2));
+                    assert!(!state.end_edit_group(1));
+                    state.replace_text_in_range(None, "!", window, cx);
+                    assert!(state.end_edit_group(2));
+                    state.unmark_text(window, cx);
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), result);
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), "abc");
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.value(), result);
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.value(), format!("{result}!"));
+                });
+            });
+        }
     }
 
     #[gpui::test]
