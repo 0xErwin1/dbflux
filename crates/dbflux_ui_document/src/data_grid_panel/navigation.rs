@@ -767,6 +767,10 @@ impl DataGridPanel {
                 self.toggle_value_panel(cx);
                 true
             }
+            Command::ToggleRowInspector => {
+                self.toggle_row_inspector(cx);
+                true
+            }
             _ => false,
         }
     }

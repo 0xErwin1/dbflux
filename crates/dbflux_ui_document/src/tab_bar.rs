@@ -210,14 +210,28 @@ impl Render for TabBar {
         let tab_data: Vec<_> = manager
             .documents()
             .iter()
-            .map(|doc| (doc.meta_snapshot(cx), doc.change_summary(cx)))
+            .map(|doc| {
+                (
+                    doc.meta_snapshot(cx),
+                    doc.change_summary(cx),
+                    doc.tab_tooltip(cx),
+                )
+            })
             .collect();
 
         let mut tabs: Vec<AnyElement> = Vec::with_capacity(tab_data.len());
-        for (idx, (meta, change_summary)) in tab_data.into_iter().enumerate() {
+        for (idx, (meta, change_summary, tooltip)) in tab_data.into_iter().enumerate() {
             tabs.push(
-                self.render_tab(meta, change_summary, idx, active_id, drop_target_index, cx)
-                    .into_any_element(),
+                self.render_tab(
+                    meta,
+                    change_summary,
+                    tooltip,
+                    idx,
+                    active_id,
+                    drop_target_index,
+                    cx,
+                )
+                .into_any_element(),
             );
         }
 
@@ -241,10 +255,12 @@ impl Render for TabBar {
 }
 
 impl TabBar {
+    #[allow(clippy::too_many_arguments)]
     fn render_tab(
         &self,
         meta: DocumentMetaSnapshot,
         change_summary: Option<String>,
+        tooltip: Option<SharedString>,
         idx: usize,
         active_id: Option<DocumentId>,
         drop_target_index: Option<usize>,
@@ -310,6 +326,9 @@ impl TabBar {
             )
         })
         .when(is_drop_target, |el| el.border_l_2().border_color(tint))
+        .when_some(tooltip, |el, tooltip| {
+            el.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        })
         // Click to activate
         .on_click({
             let tab_manager = tab_manager.clone();

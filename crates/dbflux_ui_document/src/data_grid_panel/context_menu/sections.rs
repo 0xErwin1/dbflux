@@ -1,12 +1,12 @@
 use super::{ContextMenuItem, DataGridEvent, DataGridPanel, FilterBackend, TableContextMenu};
-use dbflux_app::keymap::ContextId;
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::data_table::{ContextMenuAction, context_menu_keystroke};
 use dbflux_components::composites::{
     MenuItem, menu_frame, menu_row, render_menu_header, render_separator,
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::MenuMetrics;
-use dbflux_ui_base::keymap::key_chord_from_gpui;
+use dbflux_ui_base::keymap::{chord_display_parts, default_keymap, key_chord_from_gpui};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 
@@ -47,13 +47,28 @@ fn submenu_flyout(width: Pixels, cx: &App) -> Div {
 
 /// The shortcut shown on a menu row, formatted like the other keycaps in the
 /// app (`Ctrl C`, `Delete`).
+///
+/// Row actions the data table binds come from its GPUI bindings; the ones
+/// dispatched through the app keymap (inspect row, view value) come from the
+/// Results layer.
 fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> {
-    let keystroke = context_menu_keystroke(action, cx)?;
-    let label = key_chord_from_gpui(&keystroke)
-        .to_string()
-        .replace('+', " ");
+    if let Some(keystroke) = context_menu_keystroke(action, cx) {
+        let label = key_chord_from_gpui(&keystroke)
+            .to_string()
+            .replace('+', " ");
 
-    Some(label.into())
+        return Some(label.into());
+    }
+
+    let command = match action {
+        ContextMenuAction::InspectRow => Command::ToggleRowInspector,
+        ContextMenuAction::ViewValue => Command::ToggleValuePanel,
+        _ => return None,
+    };
+
+    default_keymap()
+        .chord_for_command(ContextId::Results, command)
+        .map(|chord| chord_display_parts(chord).join(" ").into())
 }
 
 impl DataGridPanel {
@@ -674,7 +689,7 @@ impl DataGridPanel {
         let submenu_selected_index = menu.submenu_selected_index;
 
         let trigger = MenuItem::new(copy_query_label)
-            .icon(AppIcon::Columns)
+            .icon(AppIcon::Table)
             .submenu();
 
         menu_items.push(

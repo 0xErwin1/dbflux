@@ -1585,10 +1585,15 @@ impl CodeDocument {
                         generation_type: *generation_type,
                     });
                 }
-                DataGridEvent::OpenInspector { title, content } => {
+                DataGridEvent::OpenInspector {
+                    title,
+                    content,
+                    content_has_header,
+                } => {
                     cx.emit(DocumentEvent::OpenInspector {
                         title: title.clone(),
                         content: content.clone(),
+                        content_has_header: *content_has_header,
                     });
                 }
                 DataGridEvent::CloseInspector => {

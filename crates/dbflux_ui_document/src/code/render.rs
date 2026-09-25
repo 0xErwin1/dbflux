@@ -1,13 +1,22 @@
 use super::*;
-use crate::chrome::compact_top_bar;
 use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
 use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text};
-use dbflux_components::tokens::{ChamferCut, Fields};
+use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields, TableViewMetrics};
+use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui_component::scroll::ScrollableElement;
+
+/// Vertical line between two groups of the toolbar.
+fn toolbar_divider(theme: &gpui_component::theme::Theme) -> impl IntoElement {
+    div()
+        .w(px(1.0))
+        .h(TableViewMetrics::DIVIDER_HEIGHT)
+        .mx(EditorMetrics::TOOLBAR_DIVIDER_MARGIN_X)
+        .bg(theme.border)
+}
 
 impl CodeDocument {
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -60,22 +69,26 @@ impl CodeDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
-        // Keep this base shortcut in sync with the RunQuery binding (Cmd+Enter
-        // on macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
-        #[cfg(target_os = "macos")]
-        let shortcut_hint_base = "Cmd+Enter";
-        #[cfg(not(target_os = "macos"))]
-        let shortcut_hint_base = "Ctrl+Enter";
+        // Keep this shortcut in sync with the RunQuery binding (Cmd+Enter on
+        // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
         #[cfg(target_os = "macos")]
         let run_shortcut = "Cmd \u{21B5}";
         #[cfg(not(target_os = "macos"))]
         let run_shortcut = "Ctrl \u{21B5}";
 
-        let shortcut_hint =
-            crate::labels::code_toolbar_shortcut_hint_label(shortcut_hint_base, is_db_language);
+        let show_run_group = !is_read_only && is_db_language && !is_executing;
 
-        compact_top_bar(&theme, std::iter::empty::<AnyElement>())
+        div()
             .id("sql-toolbar")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(EditorMetrics::TOOLBAR_GAP)
+            .h(EditorMetrics::BAR_HEIGHT)
+            .px(EditorMetrics::BAR_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
             .when(!is_read_only, |el| {
                 el.child(
                     Button::new("run-query-btn", run_label)
@@ -97,7 +110,7 @@ impl CodeDocument {
                         })),
                 )
             })
-            .when(!is_read_only && is_db_language && !is_executing, |el| {
+            .when(show_run_group, |el| {
                 el.child(
                     Button::new(
                         "run-in-new-tab-btn",
@@ -115,22 +128,24 @@ impl CodeDocument {
                         dbflux_i18n::t!("document.code.toolbar.selection"),
                     )
                     .small()
-                    .icon(AppIcon::ScrollText)
+                    .icon(AppIcon::Code)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_selected_query(window, cx);
                     })),
                 )
             })
-            .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
             .when(is_read_only, |el| {
                 el.child(
                     Text::caption(dbflux_i18n::t!("document.code.toolbar.read_only"))
                         .muted_foreground(),
                 )
             })
-            .child(self.render_secondary_actions(is_read_only, cx))
+            .when(!is_read_only, |el| {
+                el.child(toolbar_divider(&theme))
+                    .child(self.render_secondary_actions(is_read_only, cx))
+            })
             .when(!is_read_only && is_db_language, |el| {
-                el.child(SplitButton::new(
+                el.child(toolbar_divider(&theme)).child(SplitButton::new(
                     "sql-refresh-split",
                     Button::new("sql-refresh-action", refresh_label)
                         .small()
@@ -147,16 +162,46 @@ impl CodeDocument {
             })
             .child(div().flex_1())
             .when_some(execution_time, |el, duration| {
-                el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
+                el.child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .font_family(AppFonts::MONO)
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            Icon::new(AppIcon::History)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.muted_foreground),
+                        )
+                        .child(crate::labels::code_toolbar_last_run_label(
+                            duration.as_secs_f64(),
+                        )),
+                )
             })
             .when(self.session.show_saved_label, |el| {
-                el.child(Text::caption(dbflux_i18n::t!(
-                    "document.code.toolbar.saved"
-                )))
+                el.child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .font_family(AppFonts::MONO)
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.success)
+                        .child(
+                            Icon::new(AppIcon::Check)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.success),
+                        )
+                        .child(dbflux_i18n::t!("document.code.toolbar.saved")),
+                )
             })
     }
 
-    /// Renders the secondary action buttons: Save, Format, History, Explain, Chart.
+    /// Renders the icon group: Save, Format, History, Explain, Chart.
     ///
     /// All mutating or execution buttons are hidden when `is_read_only` is true.
     fn render_secondary_actions(
@@ -169,7 +214,7 @@ impl CodeDocument {
         div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
+            .gap(EditorMetrics::TOOLBAR_GAP)
             // Save button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
@@ -249,7 +294,7 @@ impl CodeDocument {
                         dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
                     )
                     .small()
-                    .icon(AppIcon::ChartSpline)
+                    .icon(AppIcon::ChartColumnBig)
                     .icon_only()
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.emit_chart_this_query(cx);
@@ -945,6 +990,7 @@ impl Render for CodeDocument {
         }
 
         let context_bar = self.render_context_bar(cx).into_any_element();
+        let production_banner = self.render_production_banner(cx);
         let toolbar = self.render_toolbar(cx).into_any_element();
 
         let editor_view = if self.routine_definition_pending {
@@ -968,6 +1014,7 @@ impl Render for CodeDocument {
             .bg(bg)
             .track_focus(&self.focus_handle)
             .child(context_bar)
+            .when_some(production_banner, |el, banner| el.child(banner))
             .child(toolbar)
             .child(
                 div()

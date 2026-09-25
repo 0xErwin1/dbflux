@@ -113,6 +113,7 @@ pub enum AppIcon {
 
     // Clipboard
     Clipboard,
+    Pin,
 
     // Generic non-database data sources
     Logs,
@@ -233,6 +234,7 @@ impl AppIcon {
             Self::Scale => "icons/ui/scale.svg",
             Self::ArrowLeftRight => "icons/ui/arrow-left-right.svg",
             Self::Clipboard => "icons/ui/clipboard.svg",
+            Self::Pin => "icons/ui/pin.svg",
             Self::Logs => "icons/ui/logs.svg",
             Self::ChartSpline => "icons/ui/chart-spline.svg",
             Self::ChartArea => "icons/ui/chart-area.svg",

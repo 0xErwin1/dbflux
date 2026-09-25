@@ -84,14 +84,20 @@ connections, with **Quit anyway** in place of **Disconnect anyway**.
 
 ## 2. Browsing the Schema
 
-The sidebar has two tabs:
+The sidebar has three views, chosen from the activity rail on its left:
 
 - **Connections** — the schema tree (databases, schemas, tables/collections,
   columns, indexes, and — where the driver supports it — a Routines folder).
 - **Scripts** — file and folder management for saved query files, script hooks,
   and other user files.
+- **Dashboards** — every saved dashboard, grouped by the connection it belongs
+  to, whether or not that connection is open. Dashboards without a connection
+  are listed under **No connection**. Double-click a dashboard, or select it
+  and press `Enter`, to open it; right-click it to open, rename, duplicate or
+  delete it. The `+` button creates a dashboard.
 
-Switch between the two tabs with `q` or `e`.
+Cycle through the views with `q` or `e`. Choosing the view already on screen
+from the rail collapses the sidebar.
 
 ### Navigating the tree
 
@@ -375,7 +381,7 @@ When the results panel has focus:
 
 ### Record view
 
-Press `i`, or use the Grid / Record toggle in the result status bar, to show
+Press `i`, or use the Record toggle in the result status bar, to show
 the active row as a Name / Value list that fills the result area. The header
 names the row's position in the result. Fields are edited exactly like grid
 cells, so unsaved changes, Save Row and revert work the same in both layouts;
@@ -396,6 +402,18 @@ plain text — detected from the content, and only when it really parses — wit
 pretty-print, compact and word wrap. You can edit there: **Save** commits the
 row directly, **Revert** discards the edit. The panel follows the selected cell
 as you move through the grid, except while it holds an unsaved change.
+
+### Row inspector
+
+Press `Ctrl+Space`, or right-click a row and choose **Inspect Row**, to open
+the selected row in the inspector rail on the right. It lists every column of
+the row with its value, marks primary and foreign key columns, and under
+**References** names the table each single-column foreign key points at, with
+the referenced row once it resolves. The inspector follows the selected row as
+you move through the grid; the pin button in its header keeps it on the current
+row instead. **Edit**, **Duplicate** and **Delete** at its foot act on the
+inspected row when the result is editable. Press `Ctrl+Space` again, or the
+close button, to dismiss it.
 
 ### Filtering results
 
@@ -753,6 +771,7 @@ A read-only delete does not change the clipboard.
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
 | `v` | Toggle the value panel for the selected cell |
+| `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
 | `m` (or `Shift+F10`) | Open context menu |

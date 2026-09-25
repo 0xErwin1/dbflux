@@ -269,6 +269,7 @@ impl Workspace {
                         dbflux_ui_sidebar::SidebarTab::Scripts => {
                             s.create_script_folder(cx);
                         }
+                        dbflux_ui_sidebar::SidebarTab::Dashboards => {}
                     });
                     Some(true)
                 } else {

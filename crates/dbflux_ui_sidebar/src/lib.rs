@@ -4,6 +4,7 @@
 mod code_generation;
 mod connection_failure;
 mod context_menu;
+mod dashboards;
 mod deletion;
 mod drag_drop;
 mod expansion;
@@ -50,6 +51,8 @@ use uuid::Uuid;
 pub enum SidebarTab {
     Connections,
     Scripts,
+    /// Every saved dashboard, grouped by connection profile.
+    Dashboards,
 }
 
 pub enum SidebarEvent {
@@ -183,6 +186,10 @@ pub enum SidebarEvent {
     OpenSavedChart {
         chart_id: Uuid,
     },
+
+    /// Request to create a dashboard without a chosen profile (the Dashboards
+    /// view's add button), the same flow as the "New Dashboard" command.
+    RequestNewDashboard,
 
     /// Request to open the "New Dashboard" creation modal for a specific profile.
     RequestCreateDashboard {
@@ -911,6 +918,9 @@ pub struct Sidebar {
     scripts_tree_state: Entity<TreeState>,
     scripts_search_input: Entity<InputState>,
     scripts_search_query: String,
+    dashboards_tree_state: Entity<TreeState>,
+    dashboards_search_input: Entity<InputState>,
+    dashboards_search_query: String,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
     search_input_focused: bool,
@@ -968,6 +978,10 @@ pub struct Sidebar {
     selection_anchor: Option<String>,
     /// Range-selection anchor for scripts tab
     scripts_selection_anchor: Option<String>,
+    /// Multi-selected rows of the Dashboards view
+    dashboards_multi_selection: HashSet<String>,
+    /// Range-selection anchor for the Dashboards view
+    dashboards_selection_anchor: Option<String>,
     /// Item ID pending delete confirmation (for keyboard x shortcut)
     pending_delete_item: Option<String>,
     /// Delete confirmation modal state (for context menu delete)
@@ -1084,6 +1098,12 @@ impl Sidebar {
                 .placeholder(dbflux_i18n::t!("sidebar.filter.scripts_placeholder"))
         });
 
+        let dashboards_tree_state = cx.new(|cx| TreeState::new(cx));
+        let dashboards_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.dashboards_placeholder"))
+        });
+
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
         let app_state_subscription = cx.subscribe(
@@ -1106,6 +1126,7 @@ impl Sidebar {
 
                 this.refresh_tree(cx);
                 this.refresh_scripts_tree(cx);
+                this.refresh_dashboards_tree(cx);
             },
         );
 
@@ -1182,6 +1203,27 @@ impl Sidebar {
             },
         );
 
+        let dashboards_search_entity = dashboards_search_input.clone();
+        let dashboards_search_subscription = cx.subscribe_in(
+            &dashboards_search_entity,
+            window,
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.dashboards_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_dashboards_tree(cx);
+                }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
+            },
+        );
+
         let tree_expansion_subscription =
             cx.observe(&tree_state, |this: &mut Self, tree_state, cx| {
                 if this.syncing_expansion {
@@ -1220,6 +1262,9 @@ impl Sidebar {
             scripts_tree_state,
             scripts_search_input,
             scripts_search_query: String::new(),
+            dashboards_tree_state,
+            dashboards_search_input,
+            dashboards_search_query: String::new(),
             pending_toast: None,
             connections_focused: false,
             search_input_focused: false,
@@ -1246,6 +1291,7 @@ impl Sidebar {
                 rename_subscription,
                 connections_search_subscription,
                 scripts_search_subscription,
+                dashboards_search_subscription,
                 tree_expansion_subscription,
             ],
             editing_id: None,
@@ -1261,6 +1307,8 @@ impl Sidebar {
             scripts_multi_selection: HashSet::new(),
             selection_anchor: None,
             scripts_selection_anchor: None,
+            dashboards_multi_selection: HashSet::new(),
+            dashboards_selection_anchor: None,
             pending_delete_item: None,
             delete_confirm_modal: None,
             delete_modal_focus: ModalFocus::new(cx),
@@ -1304,6 +1352,7 @@ impl Sidebar {
         let input = match self.active_tab {
             SidebarTab::Connections => &self.connections_search_input,
             SidebarTab::Scripts => &self.scripts_search_input,
+            SidebarTab::Dashboards => &self.dashboards_search_input,
         };
 
         input.read(cx).focus_handle(cx).is_focused(window)
@@ -1323,6 +1372,10 @@ impl Sidebar {
                 self.scripts_search_input
                     .update(cx, |input, cx| input.focus(window, cx));
             }
+            SidebarTab::Dashboards => {
+                self.dashboards_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
         }
 
         cx.notify();
@@ -1331,6 +1384,11 @@ impl Sidebar {
     pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
         if self.active_tab != tab {
             self.active_tab = tab;
+
+            if tab == SidebarTab::Dashboards {
+                self.refresh_dashboards_tree(cx);
+            }
+
             cx.notify();
         }
     }
@@ -1338,7 +1396,8 @@ impl Sidebar {
     pub fn cycle_tab(&mut self, cx: &mut Context<Self>) {
         let next = match self.active_tab {
             SidebarTab::Connections => SidebarTab::Scripts,
-            SidebarTab::Scripts => SidebarTab::Connections,
+            SidebarTab::Scripts => SidebarTab::Dashboards,
+            SidebarTab::Dashboards => SidebarTab::Connections,
         };
         self.set_active_tab(next, cx);
     }
@@ -1410,6 +1469,7 @@ impl Sidebar {
         match self.active_tab {
             SidebarTab::Connections => &self.tree_state,
             SidebarTab::Scripts => &self.scripts_tree_state,
+            SidebarTab::Dashboards => &self.dashboards_tree_state,
         }
     }
 
@@ -1417,6 +1477,7 @@ impl Sidebar {
         let tree = match self.active_tab {
             SidebarTab::Connections => &self.tree_state,
             SidebarTab::Scripts => &self.scripts_tree_state,
+            SidebarTab::Dashboards => &self.dashboards_tree_state,
         };
 
         let entry = tree.read(cx).selected_entry().cloned();
@@ -1866,6 +1927,7 @@ impl Sidebar {
         let items = match self.active_tab {
             SidebarTab::Connections => self.build_tree_items_with_overrides(cx),
             SidebarTab::Scripts => self.build_scripts_tree_items_with_overrides(cx),
+            SidebarTab::Dashboards => self.build_dashboards_tree_items(cx),
         };
         let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
         self.set_expanded(item_id, !currently_expanded, cx);

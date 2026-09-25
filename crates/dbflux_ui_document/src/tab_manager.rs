@@ -96,6 +96,12 @@ impl Tab {
         }
     }
 
+    pub fn tab_tooltip(&self, cx: &App) -> Option<gpui::SharedString> {
+        match self {
+            Tab::Pane(p) => p.tab_tooltip(cx),
+        }
+    }
+
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         match self {
             Tab::Pane(p) => p.refresh_policy(cx),
@@ -333,10 +339,15 @@ impl TabManager {
                         generation_type: *generation_type,
                     });
                 }
-                DocumentEvent::OpenInspector { title, content } => {
+                DocumentEvent::OpenInspector {
+                    title,
+                    content,
+                    content_has_header,
+                } => {
                     cx.emit(TabManagerEvent::OpenInspector {
                         title: title.clone(),
                         content: content.clone(),
+                        content_has_header: *content_has_header,
                     });
                 }
                 DocumentEvent::CloseInspector => {
@@ -760,6 +771,8 @@ pub enum TabManagerEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+        /// The content draws its own title bar; the rail must not add one.
+        content_has_header: bool,
     },
     /// Request to hide the workspace inspector rail without forgetting the
     /// document's cached inspector state.

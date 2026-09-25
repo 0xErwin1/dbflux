@@ -16,6 +16,7 @@ use dbflux_ui_base::platform;
 pub(super) mod rail_ids {
     pub const CONNECTIONS: &str = "connections";
     pub const SCRIPTS: &str = "scripts";
+    pub const DASHBOARDS: &str = "dashboards";
     pub const APPROVALS: &str = "approvals";
     pub const AUDIT: &str = "audit";
     pub const SETTINGS: &str = "settings";
@@ -48,6 +49,12 @@ pub(super) fn rail_entries(state: RailState) -> Vec<RailEntry> {
             dbflux_i18n::t!("workspace.rail.scripts"),
         )
         .active(state.sidebar_view == Some(SidebarTab::Scripts)),
+        RailEntry::new(
+            rail_ids::DASHBOARDS,
+            AppIcon::ChartColumnBig,
+            dbflux_i18n::t!("workspace.rail.dashboards"),
+        )
+        .active(state.sidebar_view == Some(SidebarTab::Dashboards)),
     ];
 
     if state.approvals_available {
@@ -288,6 +295,7 @@ impl Workspace {
         match id {
             rail_ids::CONNECTIONS => self.show_sidebar_view(SidebarTab::Connections, cx),
             rail_ids::SCRIPTS => self.show_sidebar_view(SidebarTab::Scripts, cx),
+            rail_ids::DASHBOARDS => self.show_sidebar_view(SidebarTab::Dashboards, cx),
             rail_ids::AUDIT => self.open_audit_viewer(window, cx),
             rail_ids::SETTINGS => self.open_settings(cx),
             #[cfg(feature = "mcp")]
@@ -678,6 +686,7 @@ mod tests {
             [
                 rail_ids::CONNECTIONS,
                 rail_ids::SCRIPTS,
+                rail_ids::DASHBOARDS,
                 rail_ids::APPROVALS,
                 rail_ids::AUDIT,
                 rail_ids::SETTINGS,
@@ -828,6 +837,7 @@ mod tests {
         let keys = [
             "workspace.rail.connections",
             "workspace.rail.scripts",
+            "workspace.rail.dashboards",
             "workspace.rail.approvals",
             "workspace.rail.audit",
             "workspace.rail.settings",

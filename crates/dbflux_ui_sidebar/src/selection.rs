@@ -216,6 +216,16 @@ impl Sidebar {
                     changed = true;
                 }
             }
+            SidebarTab::Dashboards => {
+                if !self.dashboards_multi_selection.is_empty() {
+                    self.dashboards_multi_selection.clear();
+                    changed = true;
+                }
+
+                if self.dashboards_selection_anchor.take().is_some() {
+                    changed = true;
+                }
+            }
         }
 
         if changed {
@@ -301,6 +311,10 @@ impl Sidebar {
                 self.scripts_multi_selection = selection;
                 self.scripts_selection_anchor = Some(anchor_id);
             }
+            SidebarTab::Dashboards => {
+                self.dashboards_multi_selection = selection;
+                self.dashboards_selection_anchor = Some(anchor_id);
+            }
         }
     }
 
@@ -316,6 +330,9 @@ impl Sidebar {
             SidebarTab::Scripts => {
                 self.scripts_selection_anchor = Some(item_id.to_string());
             }
+            SidebarTab::Dashboards => {
+                self.dashboards_selection_anchor = Some(item_id.to_string());
+            }
         }
     }
 
@@ -323,6 +340,7 @@ impl Sidebar {
         match self.active_tab {
             SidebarTab::Connections => &self.multi_selection,
             SidebarTab::Scripts => &self.scripts_multi_selection,
+            SidebarTab::Dashboards => &self.dashboards_multi_selection,
         }
     }
 
@@ -330,6 +348,7 @@ impl Sidebar {
         match self.active_tab {
             SidebarTab::Connections => &mut self.multi_selection,
             SidebarTab::Scripts => &mut self.scripts_multi_selection,
+            SidebarTab::Dashboards => &mut self.dashboards_multi_selection,
         }
     }
 
@@ -337,6 +356,7 @@ impl Sidebar {
         match self.active_tab {
             SidebarTab::Connections => self.selection_anchor.as_deref(),
             SidebarTab::Scripts => self.scripts_selection_anchor.as_deref(),
+            SidebarTab::Dashboards => self.dashboards_selection_anchor.as_deref(),
         }
     }
 
@@ -359,6 +379,10 @@ impl Sidebar {
                     None => Vec::new(),
                 };
                 let items = Self::build_scripts_tree_items(&entries);
+                Self::collect_visible_item_ids(&items)
+            }
+            SidebarTab::Dashboards => {
+                let items = self.build_dashboards_tree_items(cx);
                 Self::collect_visible_item_ids(&items)
             }
         }

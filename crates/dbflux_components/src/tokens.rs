@@ -872,6 +872,104 @@ impl StepperMetrics {
     pub const FONT: Pixels = px(13.0);
 }
 
+/// Geometry of the table view's header and filter rows (AppByzTable).
+pub struct TableViewMetrics;
+
+impl TableViewMetrics {
+    /// Header row: 40 px tall, 16 px side padding, 8 px gap.
+    pub const HEADER_HEIGHT: Pixels = px(40.0);
+    pub const HEADER_PADDING_X: Pixels = px(16.0);
+    pub const HEADER_GAP: Pixels = px(8.0);
+    /// Edit status: 14 px check icon, 6 px gap, 12 px text.
+    pub const STATUS_ICON: Pixels = px(14.0);
+    pub const STATUS_GAP: Pixels = px(6.0);
+    pub const STATUS_FONT: Pixels = px(12.0);
+    /// Vertical divider between groups of a toolbar: 1 x 20 px.
+    pub const DIVIDER_HEIGHT: Pixels = px(20.0);
+    /// Space on each side of the header's divider. (4 px)
+    pub const HEADER_DIVIDER_MARGIN_X: Pixels = px(4.0);
+    /// Filter row: 50 px tall, 14 px side padding, 8 px gap.
+    pub const FILTER_ROW_HEIGHT: Pixels = px(50.0);
+    pub const FILTER_ROW_PADDING_X: Pixels = px(14.0);
+    pub const FILTER_ROW_GAP: Pixels = px(8.0);
+}
+
+/// Geometry of the query editor's context bar, production banner and
+/// toolbar (AppByzEditor).
+pub struct EditorMetrics;
+
+impl EditorMetrics {
+    /// Context bar and toolbar: 46 px tall, 14 px side padding.
+    pub const BAR_HEIGHT: Pixels = px(46.0);
+    pub const BAR_PADDING_X: Pixels = px(14.0);
+    /// Gap between the context bar's selectors and separators. (8 px)
+    pub const CONTEXT_GAP: Pixels = px(8.0);
+    /// Leading icon of a context selector. (14 px)
+    pub const SELECTOR_ICON: Pixels = px(14.0);
+    /// Chevron between two context selectors. (12 px)
+    pub const SEPARATOR_ICON: Pixels = px(12.0);
+    /// Production banner: 34 px tall, 16 px side padding, 10 px gap, 15 px
+    /// icon, danger fill at 8 % and bottom line at 25 %.
+    pub const BANNER_HEIGHT: Pixels = px(34.0);
+    pub const BANNER_PADDING_X: Pixels = px(16.0);
+    pub const BANNER_GAP: Pixels = px(10.0);
+    pub const BANNER_ICON: Pixels = px(15.0);
+    pub const BANNER_FILL_ALPHA: f32 = 0.08;
+    pub const BANNER_LINE_ALPHA: f32 = 0.25;
+    /// Toolbar: 6 px between buttons, 6 px on each side of a group divider.
+    pub const TOOLBAR_GAP: Pixels = px(6.0);
+    pub const TOOLBAR_DIVIDER_MARGIN_X: Pixels = px(6.0);
+    /// Last-run summary at the end of the toolbar: 12 px mono text, 13 px
+    /// icon, 6 px gap.
+    pub const LAST_RUN_FONT: Pixels = px(12.0);
+    pub const LAST_RUN_ICON: Pixels = px(13.0);
+    pub const LAST_RUN_GAP: Pixels = px(6.0);
+}
+
+/// Geometry of the row inspector rail (AppByzTable, DSAppPlan "RowInspector").
+pub struct InspectorMetrics;
+
+impl InspectorMetrics {
+    /// Default rail width. (380 px)
+    pub const WIDTH: Pixels = px(380.0);
+    /// Header: 44 px tall, 16 px left and 14 px right padding, 10 px gap,
+    /// 16 px leading icon, 11 px mono row key.
+    pub const HEADER_HEIGHT: Pixels = px(44.0);
+    pub const HEADER_PADDING_LEFT: Pixels = px(16.0);
+    pub const HEADER_PADDING_RIGHT: Pixels = px(14.0);
+    pub const HEADER_GAP: Pixels = px(10.0);
+    pub const HEADER_ICON: Pixels = px(16.0);
+    pub const KEY_FONT: Pixels = px(11.0);
+    /// Horizontal padding of the section labels and field rows. (16 px)
+    pub const PADDING_X: Pixels = px(16.0);
+    /// ROW section label: 10 px above, 4 px below.
+    pub const ROW_LABEL_PADDING_TOP: Pixels = px(10.0);
+    pub const ROW_LABEL_PADDING_BOTTOM: Pixels = px(4.0);
+    /// REFERENCES section label: 16 px above, 8 px below.
+    pub const REFERENCES_LABEL_PADDING_TOP: Pixels = px(16.0);
+    pub const REFERENCES_LABEL_PADDING_BOTTOM: Pixels = px(8.0);
+    /// Field row: 9 px vertical padding, 4 px between label and value,
+    /// 11.5 px label with a 12 px key icon 6 px before it, 12.5 px mono value.
+    pub const FIELD_PADDING_Y: Pixels = px(9.0);
+    pub const FIELD_GAP: Pixels = px(4.0);
+    pub const FIELD_LABEL_FONT: Pixels = px(11.5);
+    pub const FIELD_LABEL_GAP: Pixels = px(6.0);
+    pub const FIELD_ICON: Pixels = px(12.0);
+    pub const FIELD_VALUE_FONT: Pixels = px(12.5);
+    /// Reference card: 12 px side and 6 px bottom margin, 9 x 12 px padding,
+    /// 10 px gap, 13 px key icon, 12 px chevron.
+    pub const REFERENCE_MARGIN_X: Pixels = px(12.0);
+    pub const REFERENCE_MARGIN_BOTTOM: Pixels = px(6.0);
+    pub const REFERENCE_PADDING_Y: Pixels = px(9.0);
+    pub const REFERENCE_PADDING_X: Pixels = px(12.0);
+    pub const REFERENCE_GAP: Pixels = px(10.0);
+    pub const REFERENCE_ICON: Pixels = px(13.0);
+    pub const REFERENCE_CHEVRON: Pixels = px(12.0);
+    /// Footer: 12 px padding, 8 px between buttons.
+    pub const FOOTER_PADDING: Pixels = px(12.0);
+    pub const FOOTER_GAP: Pixels = px(8.0);
+}
+
 /// Geometry of the extracted navigation helpers: breadcrumb, empty state and
 /// list rows (AppByzTable header, DSAppPlan).
 pub struct NavigationMetrics;

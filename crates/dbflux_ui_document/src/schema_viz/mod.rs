@@ -2409,6 +2409,7 @@ impl SchemaVizDocument {
         cx.emit(DocumentEvent::OpenInspector {
             title,
             content: content.into(),
+            content_has_header: false,
         });
     }
 
@@ -2430,6 +2431,7 @@ impl SchemaVizDocument {
         cx.emit(DocumentEvent::OpenInspector {
             title,
             content: content.into(),
+            content_has_header: false,
         });
     }
 

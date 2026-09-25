@@ -1689,8 +1689,9 @@ impl DataGridPanel {
     /// Build an `InspectorSnapshot` from the given row/col and emit
     /// `DataGridEvent::OpenInspector` so the workspace mounts the content.
     pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
-        use dbflux_components::components::data_table::model::ColumnKind;
+        use super::row_inspector::{
+            InspectorCell, InspectorSnapshot, RowInspectorContent, row_key_label,
+        };
 
         let Some(table_state) = &self.grid_table.table_state else {
             return;
@@ -1704,6 +1705,7 @@ impl DataGridPanel {
         // showing a phantom row of nulls.
         if row >= model.row_count() {
             self.inspector.follow_selection = false;
+            self.inspector.pinned = false;
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             cx.emit(DataGridEvent::CloseInspector);
@@ -1713,8 +1715,8 @@ impl DataGridPanel {
         let pk_cols: std::collections::HashSet<usize> =
             state.pk_columns().iter().copied().collect();
         let fk_cols = state.fk_columns().clone();
+        let can_edit = state.is_editable() && !self.is_grouped_result();
 
-        // Build cell values first so we can cross-reference with FK info below.
         let cells: Vec<InspectorCell> = model
             .columns
             .iter()
@@ -1725,32 +1727,20 @@ impl DataGridPanel {
                     .map(|c| self.cell_to_value(c))
                     .unwrap_or(dbflux_core::Value::Null);
 
-                let type_label = match spec.kind {
-                    ColumnKind::Text => "text",
-                    ColumnKind::Integer => "integer",
-                    ColumnKind::Float => "float",
-                    ColumnKind::Bool => "boolean",
-                    ColumnKind::Bytes => "bytes",
-                    ColumnKind::Json => "json",
-                    ColumnKind::Unknown => "unknown",
-                }
-                .to_string();
-
                 InspectorCell {
                     name: spec.title.to_string(),
                     value,
                     is_primary_key: pk_cols.contains(&ix),
                     is_foreign_key: fk_cols.contains(&ix),
-                    type_label,
-                    nullable: true, // conservative default; refined when column details are cached
                 }
             })
             .collect();
 
-        let row_label = crate::labels::row_inspector_title(row + 1);
         let snapshot = InspectorSnapshot {
+            row_number: row + 1,
+            row_key: row_key_label(&cells),
             cells: cells.clone(),
-            focused_col: col,
+            can_edit,
         };
 
         // Build per-FK reference entries from the cached TableInfo.foreign_keys.
@@ -1768,10 +1758,17 @@ impl DataGridPanel {
                 if !has_fk_lookups {
                     new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
                 }
+                self.inspector._row_inspector_subscription =
+                    Some(cx.subscribe(&new_content, |this, _, event, cx| {
+                        this.handle_row_inspector_event(*event, cx);
+                    }));
                 self.inspector.row_inspector_content = Some(new_content.clone());
                 new_content
             }
         };
+
+        let pinned = self.inspector.pinned;
+        content.update(cx, |c, cx| c.set_pinned(pinned, cx));
 
         // Fire FK resolution against the (possibly reused) content entity.
         self.fire_fk_resolution(fk_references, content.clone(), cx);
@@ -1781,14 +1778,71 @@ impl DataGridPanel {
         self.inspector.follow_selection = true;
         self.inspector.inspector_row = Some((row, col));
 
-        // Tell the workspace to mount/replace the inspector rail.
-        let title = SharedString::from(row_label);
-        let content_view = AnyView::from(content);
+        // Tell the workspace to mount/replace the inspector rail. The row
+        // inspector draws its own header, so the rail skips its title bar.
+        let title = SharedString::from(crate::labels::row_inspector_title(row + 1));
         cx.emit(DataGridEvent::OpenInspector {
             title,
-            content: content_view,
+            content: AnyView::from(content),
+            content_has_header: true,
         });
         cx.notify();
+    }
+
+    /// Carry out a request from the row inspector's buttons.
+    ///
+    /// Row actions need a `Window`, so they are queued for the next render;
+    /// pin and close only touch the grid's inspector state.
+    pub(in crate::data_grid_panel) fn handle_row_inspector_event(
+        &mut self,
+        event: super::row_inspector::RowInspectorContentEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::RowInspectorContentEvent;
+
+        match event {
+            RowInspectorContentEvent::Close => {
+                self.clear_inspector_state(cx);
+                cx.emit(DataGridEvent::CloseInspector);
+            }
+            RowInspectorContentEvent::TogglePin => {
+                self.inspector.pinned = !self.inspector.pinned;
+                let pinned = self.inspector.pinned;
+                if let Some(content) = &self.inspector.row_inspector_content {
+                    content.update(cx, |c, cx| c.set_pinned(pinned, cx));
+                }
+            }
+            RowInspectorContentEvent::Edit
+            | RowInspectorContentEvent::Duplicate
+            | RowInspectorContentEvent::Delete => {
+                if let Some((row, col)) = self.inspector.inspector_row {
+                    self.pending.row_inspector_action = Some((event, row, col));
+                }
+            }
+        }
+
+        cx.notify();
+    }
+
+    /// Run a row action queued by the row inspector's footer.
+    pub(super) fn apply_row_inspector_action(
+        &mut self,
+        (event, row, col): (super::row_inspector::RowInspectorContentEvent, usize, usize),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::RowInspectorContentEvent;
+
+        if !self.has_context_menu_row_target(row, false, cx) {
+            return;
+        }
+
+        match event {
+            RowInspectorContentEvent::Edit => self.handle_edit(row, col, window, cx),
+            RowInspectorContentEvent::Duplicate => self.handle_duplicate_row(row, false, cx),
+            RowInspectorContentEvent::Delete => self.handle_delete_row(row, cx),
+            RowInspectorContentEvent::Close | RowInspectorContentEvent::TogglePin => {}
+        }
     }
 
     /// Build the list of FK lookups for the current row from the schema cache.

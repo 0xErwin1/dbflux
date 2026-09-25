@@ -22,8 +22,10 @@
 //! `workspace/dispatch.rs` as a fallback after the active document declines
 //! Cancel: it calls `close()` and returns `true`.
 
+use dbflux_components::controls::Button;
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, InspectorMetrics};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -34,7 +36,7 @@ use gpui_component::ActiveTheme;
 
 pub const INSPECTOR_MIN_WIDTH: Pixels = px(240.0);
 pub const INSPECTOR_MAX_WIDTH: Pixels = px(1280.0);
-pub const INSPECTOR_DEFAULT_WIDTH: Pixels = px(520.0);
+pub const INSPECTOR_DEFAULT_WIDTH: Pixels = InspectorMetrics::WIDTH;
 pub const INSPECTOR_GRIP_WIDTH: Pixels = px(6.0);
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,8 @@ pub const INSPECTOR_GRIP_WIDTH: Pixels = px(6.0);
 pub struct WorkspaceInspector {
     content: Option<AnyView>,
     title: SharedString,
+    /// The content draws its own title bar, so the rail shows none.
+    content_has_header: bool,
     width: Pixels,
     is_open: bool,
     is_resizing: bool,
@@ -77,6 +81,7 @@ impl WorkspaceInspector {
         Self {
             content: None,
             title: SharedString::default(),
+            content_has_header: false,
             width,
             is_open: false,
             is_resizing: false,
@@ -103,9 +108,19 @@ impl WorkspaceInspector {
     }
 
     /// Open / replace the inspector content. Reuses the rail if already open.
-    pub fn open_with(&mut self, content: AnyView, title: SharedString, cx: &mut Context<Self>) {
+    ///
+    /// `content_has_header` is set for content that draws its own title bar
+    /// (the row inspector); the rail then shows only the content.
+    pub fn open_with(
+        &mut self,
+        content: AnyView,
+        title: SharedString,
+        content_has_header: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.content = Some(content);
         self.title = title;
+        self.content_has_header = content_has_header;
         self.is_open = true;
         cx.notify();
     }
@@ -210,40 +225,40 @@ impl Render for WorkspaceInspector {
         let content = self.content.clone();
         let close_entity = cx.entity().clone();
 
-        // Build header inline to avoid split-borrow issues with render_header.
-        let header = {
-            let theme2 = theme.clone();
-            let close_entity2 = close_entity.clone();
+        let header = (!self.content_has_header).then(|| {
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .h(Heights::TOOLBAR)
-                .px(Spacing::SM)
                 .flex_shrink_0()
+                .items_center()
+                .gap(InspectorMetrics::HEADER_GAP)
+                .h(InspectorMetrics::HEADER_HEIGHT)
+                .pl(InspectorMetrics::HEADER_PADDING_LEFT)
+                .pr(InspectorMetrics::HEADER_PADDING_RIGHT)
                 .border_b_1()
-                .border_color(theme2.border)
-                .child(Text::caption(title).color(theme2.muted_foreground))
+                .border_color(theme.border)
                 .child(
-                    div()
-                        .id("workspace-inspector-close")
-                        .w(px(20.0))
-                        .h(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .text_color(theme2.muted_foreground)
-                        .hover(move |d| d.bg(theme2.secondary).text_color(theme2.foreground))
-                        .on_click(move |_, _, cx| {
-                            close_entity2.update(cx, |inspector, cx| {
-                                inspector.close(cx);
-                            });
-                        })
-                        .child("\u{00d7}"),
+                    div().flex_1().min_w_0().truncate().child(
+                        Text::body(title)
+                            .color(ChromeColors::strong(&theme))
+                            .font_weight(FontWeight::BOLD),
+                    ),
                 )
-        };
+                .child(
+                    Button::new(
+                        "workspace-inspector-close",
+                        dbflux_i18n::t!("document.data.row_inspector.action.close"),
+                    )
+                    .small()
+                    .icon(AppIcon::CircleX)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(move |_, _, cx| {
+                        close_entity.update(cx, |inspector, cx| {
+                            inspector.close(cx);
+                        });
+                    }),
+                )
+        });
 
         // Outer flex_row: grip (resize handle) + body (header + content host).
         div()
@@ -253,7 +268,7 @@ impl Render for WorkspaceInspector {
             .flex_shrink_0()
             .flex()
             .flex_row()
-            .bg(theme.background)
+            .bg(theme.popover)
             .border_l_1()
             .border_color(theme.border)
             .track_focus(&self.focus_handle)
@@ -284,7 +299,7 @@ impl Render for WorkspaceInspector {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(header)
+                    .when_some(header, |body, header| body.child(header))
                     .child(
                         div()
                             .id("workspace-inspector-body")

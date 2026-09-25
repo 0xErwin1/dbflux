@@ -803,7 +803,7 @@ document:
       cancel: 취소
       checking: "확인 중…"
       run: 실행
-      shortcut_hint_with_selection: "%{shortcut} (선택 영역/전체)"
+      last_run: "마지막 실행 %{seconds}초"
       new_tab: 새 탭
       selection: 선택 영역
       read_only: 읽기 전용
@@ -905,10 +905,7 @@ document:
         database: 데이터베이스
         schema: 스키마
       label:
-        connection: "연결:"
         source: "소스:"
-        database: "데이터베이스:"
-        schema: "스키마:"
       fallback:
         syntax: 구문
         sources: 소스
@@ -918,6 +915,9 @@ document:
       apply: 적용
       connect_error: "데이터베이스 '%{database}'에 연결할 수 없습니다"
       connect_failed: "데이터베이스 '%{database}'에 연결하지 못했습니다: %{error}"
+      production:
+        title: "프로덕션 연결입니다."
+        body: "위험한 구문은 실행 전에 확인을 요청합니다."
     execution:
       toast:
         select_query: 실행할 쿼리 텍스트를 선택하세요
@@ -1162,6 +1162,8 @@ document:
           many: "저장하지 않은 변경 사항 %{count}개"
         save: 저장
         revert: 되돌리기
+        undo: "실행 취소"
+        redo: "다시 실행"
         reload_blocked: 먼저 저장하지 않은 변경 사항을 저장하거나 되돌리세요
         edits_dropped:
           one: "행 %{count}개의 저장하지 않은 변경 사항이 삭제되었습니다: 다시 불러온 결과에 해당 행이 없습니다"
@@ -1319,24 +1321,19 @@ document:
           one: "행 %{count}개를 처리한 후 변경이 취소되었습니다"
           many: "행 %{count}개를 처리한 후 변경이 취소되었습니다"
     row_inspector:
-      badge:
-        primary_key: PK
-        foreign_key: FK
-      meta:
-        name: 이름
-        type: 타입
-        nullable: NULL 허용
-        primary_key: 기본 키
-        foreign_key: 외래 키
-        yes: "예"
-        no: "아니요"
+      action:
+        pin: "이 행 고정"
+        unpin: "선택 따라가기"
+        close: "닫기"
+        edit: "편집"
+        duplicate: "복제"
+        delete: "삭제"
       references:
         empty: 참조 없음
         loading: "스키마를 불러오는 중…"
         not_found: "— 찾을 수 없음"
         resolving: "확인 중…"
       section:
-        column: 열
         references: 참조
         row: 행
       title: "행 %{row}"
@@ -2915,6 +2912,7 @@ settings:
       results_copy_cell: 셀 복사
       toggle_record_view: 레코드 뷰 전환
       toggle_value_panel: 값 패널 전환
+      toggle_row_inspector: 행 검사기 전환
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
       menu_up: 메뉴 위로
@@ -3539,6 +3537,7 @@ shutdown:
 
 sidebar:
   header:
+    new_dashboard: "새 대시보드"
     add: "추가"
     filter: "필터"
   failure:
@@ -3564,6 +3563,7 @@ sidebar:
     cannot_load_schema_foreign_keys: 외래 키를 불러올 수 없습니다
     cannot_load_schema_routines: 루틴을 불러올 수 없습니다
   filter:
+    dashboards_placeholder: "대시보드 필터..."
     connections_placeholder: 연결 및 스키마 필터...
     scripts_placeholder: 스크립트 필터...
     stream_placeholder: 스트림 이름 필터...
@@ -3639,6 +3639,7 @@ sidebar:
     connection_summary: "%{connected} 연결됨 · %{idle} 유휴"
     profile_fallback_name: 연결
   tabs:
+    dashboards: "대시보드"
     connections: 연결
     scripts: 스크립트
   task:
@@ -3777,6 +3778,12 @@ sidebar:
       metrics: 사용할 수 있는 지표가 없습니다
       inspectors: 사용할 수 있는 검사기가 없습니다
       remote_dashboards: 이 계정/리전에 대시보드가 없습니다
+  dashboards:
+    unassigned: "연결 없음"
+    empty_title: "아직 대시보드가 없습니다"
+    empty_hint: "+ 를 눌러 대시보드를 만드세요"
+    no_matches_title: "일치하는 대시보드가 없습니다"
+    no_matches_hint: "다른 이름이나 연결로 검색해 보세요"
 sql_preview:
   title:
     sql: SQL 미리 보기
@@ -3894,6 +3901,7 @@ workspace:
   rail:
     connections: "연결"
     scripts: "스크립트"
+    dashboards: "대시보드"
     approvals: "MCP 승인"
     audit: "감사"
     settings: "설정"

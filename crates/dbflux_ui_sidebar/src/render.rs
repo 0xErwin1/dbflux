@@ -14,6 +14,7 @@ fn sidebar_header_label(tab: SidebarTab, focused: bool, tint: Hsla) -> Text {
     let title = match tab {
         SidebarTab::Connections => dbflux_i18n::t!("sidebar.tabs.connections"),
         SidebarTab::Scripts => dbflux_i18n::t!("sidebar.tabs.scripts"),
+        SidebarTab::Dashboards => dbflux_i18n::t!("sidebar.tabs.dashboards"),
     };
 
     let label = Text::label(title).font_size(ShellMetrics::SECTION_LABEL_FONT);
@@ -27,6 +28,11 @@ impl Sidebar {
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tint = ChromeColors::tint(cx.theme());
         let sidebar_for_add = cx.entity().clone();
+        let add_label = if self.active_tab == SidebarTab::Dashboards {
+            dbflux_i18n::t!("sidebar.header.new_dashboard")
+        } else {
+            dbflux_i18n::t!("sidebar.header.add")
+        };
         let sidebar_for_filter = cx.entity().clone();
 
         div()
@@ -44,7 +50,7 @@ impl Sidebar {
             ))
             .child(div().flex_1())
             .child(
-                Button::new("sidebar-add", dbflux_i18n::t!("sidebar.header.add"))
+                Button::new("sidebar-add", add_label)
                     .small()
                     .icon(AppIcon::Plus)
                     .icon_size(ShellMetrics::SIDEBAR_FILTER_ICON)
@@ -52,7 +58,11 @@ impl Sidebar {
                     .tab_stop(false)
                     .on_click(move |_, _, cx| {
                         sidebar_for_add.update(cx, |this, cx| {
-                            this.toggle_add_menu(cx);
+                            if this.active_tab == SidebarTab::Dashboards {
+                                cx.emit(SidebarEvent::RequestNewDashboard);
+                            } else {
+                                this.toggle_add_menu(cx);
+                            }
                         });
                     }),
             )
@@ -351,6 +361,10 @@ impl Render for Sidebar {
                 self.scripts_search_input.clone(),
                 self.scripts_search_query.is_empty(),
             ),
+            SidebarTab::Dashboards => (
+                self.dashboards_search_input.clone(),
+                self.dashboards_search_query.is_empty(),
+            ),
         };
         let search_focused = search_input.read(cx).focus_handle(cx).is_focused(window);
         let filter_field = self
@@ -476,6 +490,9 @@ impl Render for Sidebar {
             SidebarTab::Scripts => self
                 .render_scripts_content(filter_field, cx)
                 .into_any_element(),
+            SidebarTab::Dashboards => self
+                .render_dashboards_content(filter_field, cx)
+                .into_any_element(),
         };
 
         // No right border here — the outer `SidebarDock` already paints
@@ -531,8 +548,9 @@ mod tests {
         let connections =
             sidebar_header_label(SidebarTab::Connections, false, gpui::red()).inspect();
         let scripts = sidebar_header_label(SidebarTab::Scripts, false, gpui::red()).inspect();
+        let dashboards = sidebar_header_label(SidebarTab::Dashboards, false, gpui::red()).inspect();
 
-        for inspection in [connections, scripts] {
+        for inspection in [connections, scripts, dashboards] {
             assert_eq!(inspection.variant, TextVariant::Label);
             assert_eq!(
                 inspection.size_override,

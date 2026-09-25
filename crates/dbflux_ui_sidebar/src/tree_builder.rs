@@ -1195,6 +1195,10 @@ impl Sidebar {
                 let items = Self::build_scripts_tree_items(&entries);
                 Self::find_item_index_in_tree(&items, item_id, &mut 0)
             }
+            SidebarTab::Dashboards => {
+                let items = self.build_dashboards_tree_items(cx);
+                Self::find_item_index_in_tree(&items, item_id, &mut 0)
+            }
         }
     }
 

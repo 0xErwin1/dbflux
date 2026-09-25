@@ -48,7 +48,7 @@ fn inspector_opens_with_title(cx: &mut TestAppContext) {
     cx.update(|cx| {
         inspector.update(cx, |insp, cx| {
             let view = cx.new(|_| DummyContent);
-            insp.open_with(AnyView::from(view), SharedString::from("Row 1"), cx);
+            insp.open_with(AnyView::from(view), SharedString::from("Row 1"), false, cx);
         });
     });
 
@@ -66,7 +66,7 @@ fn inspector_close_sets_is_open_false(cx: &mut TestAppContext) {
     cx.update(|cx| {
         inspector.update(cx, |insp, cx| {
             let view = cx.new(|_| DummyContent);
-            insp.open_with(AnyView::from(view), SharedString::from("Row 1"), cx);
+            insp.open_with(AnyView::from(view), SharedString::from("Row 1"), false, cx);
         });
         inspector.update(cx, |insp, cx| {
             insp.close(cx);

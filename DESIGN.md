@@ -366,7 +366,7 @@ The window is a fixed frame of chrome around one flexible document area: sidebar
 - **Heights:** rows 28px (24px compact), inline controls and buttons 28px, inputs and toolbars 32px, tabs 36px, panel headers 40px. Anything packed into a toolbar uses the 28px control height so heterogeneous controls align.
 - **Icons:** 16, 20, 24px.
 - **Tree indent:** 14px per depth level in the sidebar.
-- **Fixed regions:** the SQL results panel is 220px tall in split layout, the row inspector is 320px wide, the settings list panel is 300px wide with a 220px form-label column.
+- **Fixed regions:** the SQL results panel is 220px tall in split layout, the row inspector rail opens 380px wide, the settings list panel is 300px wide with a 220px form-label column.
 - **Borders:** 1px thin, 2px medium. Border tokens are widths only and are never reused as margins or radii.
 
 ## Elevation & Depth

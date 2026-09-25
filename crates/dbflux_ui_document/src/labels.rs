@@ -58,12 +58,19 @@ pub(crate) fn result_view_mode_label(mode: crate::result_view::ResultViewMode) -
     }
 }
 
-/// Label for the grid / record presentation toggle in the results status bar.
-pub(crate) fn record_mode_label(record_mode: bool) -> String {
-    if record_mode {
-        dbflux_i18n::t!("document.data.grid.views.record")
-    } else {
-        dbflux_i18n::t!("document.data.grid.views.grid")
+/// Label for the record presentation toggle in the results status bar.
+pub(crate) fn record_view_label() -> String {
+    dbflux_i18n::t!("document.data.grid.views.record")
+}
+
+/// Label of a mode in a table's footer view switch, where the data view is
+/// the "Grid" (AppByzTable) rather than a query result's "Data".
+pub(crate) fn table_view_mode_label(mode: crate::result_view::ResultViewMode) -> String {
+    match mode {
+        crate::result_view::ResultViewMode::Table => {
+            dbflux_i18n::t!("document.data.grid.views.grid")
+        }
+        other => result_view_mode_label(other),
     }
 }
 
@@ -538,21 +545,13 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
-/// Label for the code editor toolbar's run-shortcut caption.
-///
-/// `shortcut` is the platform-specific key chord (e.g. `"Cmd+Enter"`), which
-/// stays a literal outside the catalog. Only the surrounding "(selection/full)"
-/// qualifier, shown for query languages that support connection context, is
-/// translated.
-pub(crate) fn code_toolbar_shortcut_hint_label(shortcut: &str, with_selection: bool) -> String {
-    if with_selection {
-        dbflux_i18n::t!(
-            "document.code.toolbar.shortcut_hint_with_selection",
-            shortcut = shortcut
-        )
-    } else {
-        shortcut.to_string()
-    }
+/// Summary of the last run at the end of the editor toolbar
+/// ("last run 0.32 s").
+pub(crate) fn code_toolbar_last_run_label(seconds: f64) -> String {
+    dbflux_i18n::t!(
+        "document.code.toolbar.last_run",
+        seconds = format!("{seconds:.2}")
+    )
 }
 
 /// Task-panel description for a running script, with the query language's
@@ -2431,7 +2430,7 @@ mod tests {
         bucket_encryption_choice_label, buckets_table_summary_line, builder_mode_label,
         bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
-        chart_saved_toast, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
+        chart_saved_toast, chart_toolbar_points_label, code_toolbar_last_run_label,
         comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
         context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
         context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
@@ -2931,7 +2930,7 @@ mod tests {
             "document.code.toolbar.cancel",
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
-            "document.code.toolbar.shortcut_hint_with_selection",
+            "document.code.toolbar.last_run",
             "document.code.toolbar.new_tab",
             "document.code.toolbar.selection",
             "document.code.toolbar.read_only",
@@ -3013,13 +3012,8 @@ mod tests {
     }
 
     #[test]
-    fn code_toolbar_shortcut_hint_label_with_and_without_selection() {
-        let plain = code_toolbar_shortcut_hint_label("Ctrl+Enter", false);
-        let with_selection = code_toolbar_shortcut_hint_label("Ctrl+Enter", true);
-
-        assert_eq!(plain, "Ctrl+Enter");
-        assert!(with_selection.contains("Ctrl+Enter"));
-        assert_ne!(with_selection, plain);
+    fn code_toolbar_last_run_label_formats_two_decimals() {
+        assert_eq!(code_toolbar_last_run_label(0.3214), "last run 0.32 s");
     }
 
     #[test]

@@ -803,7 +803,7 @@ document:
       cancel: Cancel
       checking: "Checking…"
       run: Run
-      shortcut_hint_with_selection: "%{shortcut} (selection/full)"
+      last_run: "last run %{seconds} s"
       new_tab: New tab
       selection: Selection
       read_only: Read-only
@@ -905,10 +905,7 @@ document:
         database: Database
         schema: Schema
       label:
-        connection: "Connection:"
         source: "Source:"
-        database: "Database:"
-        schema: "Schema:"
       fallback:
         syntax: Syntax
         sources: Sources
@@ -918,6 +915,9 @@ document:
       apply: Apply
       connect_error: "Cannot connect to database '%{database}'"
       connect_failed: "Failed to connect to database '%{database}': %{error}"
+      production:
+        title: "Production connection."
+        body: "Dangerous statements ask for confirmation before they run."
     execution:
       toast:
         select_query: Select query text to run
@@ -1162,6 +1162,8 @@ document:
           many: "%{count} unsaved changes"
         save: Save
         revert: Revert
+        undo: "Undo"
+        redo: "Redo"
         reload_blocked: Save or revert your unsaved changes first
         edits_dropped:
           one: "Unsaved changes on %{count} row were dropped: the row is not in the reloaded results"
@@ -1319,24 +1321,19 @@ document:
           one: "Mutation cancelled after %{count} row processed"
           many: "Mutation cancelled after %{count} rows processed"
     row_inspector:
-      badge:
-        primary_key: PK
-        foreign_key: FK
-      meta:
-        name: Name
-        type: Type
-        nullable: Nullable
-        primary_key: Primary Key
-        foreign_key: Foreign Key
-        yes: "yes"
-        no: "no"
+      action:
+        pin: "Pin this row"
+        unpin: "Follow the selection"
+        close: "Close"
+        edit: "Edit"
+        duplicate: "Duplicate"
+        delete: "Delete"
       references:
         empty: No references
         loading: "Loading schema…"
         not_found: "— not found"
         resolving: "Resolving…"
       section:
-        column: COLUMN
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
@@ -2915,6 +2912,7 @@ settings:
       results_copy_cell: Copy Cell
       toggle_record_view: Toggle Record View
       toggle_value_panel: Toggle Value Panel
+      toggle_row_inspector: Toggle Row Inspector
       results_set_null: Set Cell to NULL
       open_context_menu: Open Context Menu
       menu_up: Menu Up
@@ -3540,6 +3538,7 @@ shutdown:
 
 sidebar:
   header:
+    new_dashboard: "New Dashboard"
     add: "Add"
     filter: "Filter"
   failure:
@@ -3565,6 +3564,7 @@ sidebar:
     cannot_load_schema_foreign_keys: Cannot load schema foreign keys
     cannot_load_schema_routines: Cannot load schema routines
   filter:
+    dashboards_placeholder: "Filter dashboards..."
     connections_placeholder: Filter connections and schema
     scripts_placeholder: Filter scripts...
     stream_placeholder: Filter stream names...
@@ -3640,6 +3640,7 @@ sidebar:
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
   tabs:
+    dashboards: "Dashboards"
     connections: CONNECTIONS
     scripts: SCRIPTS
   task:
@@ -3778,6 +3779,12 @@ sidebar:
       metrics: No metrics available
       inspectors: No inspectors available
       remote_dashboards: No dashboards in this account/region
+  dashboards:
+    unassigned: "No connection"
+    empty_title: "No dashboards yet"
+    empty_hint: "Use + to create a dashboard"
+    no_matches_title: "No dashboards match"
+    no_matches_hint: "Try another name or connection"
 sql_preview:
   title:
     sql: SQL Preview
@@ -3895,6 +3902,7 @@ workspace:
   rail:
     connections: "Connections"
     scripts: "Scripts"
+    dashboards: "Dashboards"
     approvals: "MCP approvals"
     audit: "Audit"
     settings: "Settings"

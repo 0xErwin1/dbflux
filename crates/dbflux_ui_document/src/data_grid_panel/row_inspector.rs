@@ -2,26 +2,31 @@
 //!
 //! # `RowInspectorContent`
 //!
-//! Content-only entity that renders the scrollable ROW / REFERENCES / COLUMN
-//! sections.  All chrome (title bar, close button, resize grip, drag mask) is
-//! owned by `WorkspaceInspector` in `workspace/inspector.rs`.
+//! The row inspector draws its whole panel (AppByzTable, DSAppPlan
+//! "RowInspector"): a header with the row number, its key and the pin and
+//! close buttons, the scrollable ROW and REFERENCES sections, and a footer
+//! with the row actions. The workspace rail only hosts it and owns the resize
+//! grip; it skips its own title bar for this content.
 //!
 //! # Opening
 //!
 //! `DataGridPanel::open_row_inspector` builds an `InspectorSnapshot`, creates
 //! or updates a `RowInspectorContent` entity, and emits
 //! `DataGridEvent::OpenInspector` so the workspace mounts it in the inspector
-//! rail.
+//! rail. The buttons emit `RowInspectorContentEvent`s that the grid acts on.
 //!
 //! # Sections
 //!
-//! - **ROW** — all column name / value pairs for the selected row.
-//! - **COLUMN** — metadata for the focused column (type, nullable, PK/FK flags).
-//! - **REFERENCES** — FK-resolved values; each FK resolves asynchronously.
+//! - **ROW** — every column name / value pair of the row, with the key icons
+//!   the table metadata gives the primary and foreign key columns.
+//! - **REFERENCES** — one card per single-column foreign key, naming the
+//!   referenced table; the referenced row resolves asynchronously.
 
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, LoadingState, Text};
-use dbflux_components::tokens::{ChromeColors, Spacing};
+use dbflux_components::primitives::{Chamfer, Icon, LoadingState, Text};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, InspectorMetrics, SyntaxColors};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::Value;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -39,18 +44,33 @@ pub struct InspectorCell {
     pub value: Value,
     pub is_primary_key: bool,
     pub is_foreign_key: bool,
-    pub type_label: String,
-    pub nullable: bool,
 }
 
 /// All data the inspector needs to render without further async calls
 /// (except FK reference resolution which is done lazily).
 #[derive(Debug, Clone)]
 pub struct InspectorSnapshot {
+    /// One-based row number shown in the header.
+    pub row_number: usize,
+    /// The row's primary key value(s), shown next to the row number.
+    pub row_key: Option<String>,
     /// Column values for the row.
     pub cells: Vec<InspectorCell>,
-    /// Index of the column that was focused when the inspector opened.
-    pub focused_col: usize,
+    /// Whether the footer's Edit, Duplicate and Delete actions apply: the
+    /// result is editable and the row is not grouped.
+    pub can_edit: bool,
+}
+
+/// The primary key value(s) of `cells`, joined in column order, or `None`
+/// when the row has no primary key column.
+pub fn row_key_label(cells: &[InspectorCell]) -> Option<String> {
+    let parts: Vec<String> = cells
+        .iter()
+        .filter(|cell| cell.is_primary_key)
+        .map(|cell| cell.value.as_display_string_truncated(60))
+        .collect();
+
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 // ---------------------------------------------------------------------------
@@ -74,96 +94,102 @@ pub struct FkReference {
     pub row: LoadingState<HashMap<String, Value>>,
 }
 
+impl FkReference {
+    /// The referenced table, schema-qualified when the schema is known.
+    pub fn qualified_target(&self) -> String {
+        match &self.target_schema {
+            Some(schema) => format!("{}.{}", schema, self.target_table),
+            None => self.target_table.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Section helpers
 // ---------------------------------------------------------------------------
 
-fn render_section_header(
+fn render_section_label(
     label: impl Into<SharedString>,
+    padding_top: Pixels,
+    padding_bottom: Pixels,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
     div()
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .border_b_1()
-        .border_color(theme.border)
-        .bg(theme.secondary.opacity(0.5))
-        .child(
-            Text::caption(label.into())
-                .font_size(dbflux_components::tokens::FontSizes::XS)
-                .color(theme.muted_foreground),
-        )
+        .px(InspectorMetrics::PADDING_X)
+        .pt(padding_top)
+        .pb(padding_bottom)
+        .child(Text::label(label.into()).color(theme.muted_foreground))
+}
+
+/// The key icon of a field label: the warning-toned key for a primary key,
+/// the info-toned cable for a foreign key, or an empty slot of the same width
+/// so every name lines up.
+fn render_key_icon(
+    is_primary_key: bool,
+    is_foreign_key: bool,
+    size: Pixels,
+    theme: &gpui_component::theme::Theme,
+) -> AnyElement {
+    if is_primary_key {
+        Icon::new(AppIcon::KeyRound)
+            .size(size)
+            .color(theme.warning)
+            .into_any_element()
+    } else if is_foreign_key {
+        Icon::new(AppIcon::Cable)
+            .size(size)
+            .color(theme.info)
+            .into_any_element()
+    } else {
+        div().w(size).flex_shrink_0().into_any_element()
+    }
 }
 
 fn render_row_entry(
     cell: &InspectorCell,
-    pk_badge: &str,
-    fk_badge: &str,
+    null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
-    let value_text = cell.value.as_display_string_truncated(200);
     let is_null = cell.value.is_null();
+    let value_text = cell.value.as_display_string_truncated(200);
 
     div()
         .flex()
-        .items_start()
-        .justify_between()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(Spacing::XS)
+        .flex_col()
+        .gap(InspectorMetrics::FIELD_GAP)
+        .px(InspectorMetrics::PADDING_X)
+        .py(InspectorMetrics::FIELD_PADDING_Y)
         .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        // Column name (left). flex_1 + flex_basis(140) makes the name column
-        // share extra horizontal space with the value column as the inspector
-        // rail is resized, instead of staying frozen at a fixed 120px.
+        .border_color(theme.table_row_border)
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
-                .flex_1()
-                .flex_basis(px(140.0))
-                .min_w(px(80.0))
-                .overflow_hidden()
-                .when(cell.is_primary_key, |d| {
-                    d.child(
-                        Text::caption(pk_badge.to_string())
-                            .font_size(dbflux_components::tokens::FontSizes::XS)
-                            .color(ChromeColors::tint(theme)),
-                    )
-                })
-                .when(cell.is_foreign_key, |d| {
-                    d.child(
-                        Text::caption(fk_badge.to_string())
-                            .font_size(dbflux_components::tokens::FontSizes::XS)
-                            .color(theme.muted_foreground),
-                    )
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(Text::caption(cell.name.clone()).color(theme.muted_foreground)),
-                ),
+                .gap(InspectorMetrics::FIELD_LABEL_GAP)
+                .min_w_0()
+                .text_size(InspectorMetrics::FIELD_LABEL_FONT)
+                .text_color(theme.muted_foreground)
+                .child(render_key_icon(
+                    cell.is_primary_key,
+                    cell.is_foreign_key,
+                    InspectorMetrics::FIELD_ICON,
+                    theme,
+                ))
+                .child(div().min_w_0().truncate().child(cell.name.clone())),
         )
-        // Value (right). Slightly larger flex_basis so the value gets more
-        // initial room than the name, but both grow together on rail resize.
         .child(
             div()
-                .flex_1()
-                .flex_basis(px(220.0))
-                .min_w(px(60.0))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .when(is_null, |d| d.italic())
-                .child(Text::caption(value_text).color(if is_null {
-                    theme.muted_foreground
+                .min_w_0()
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_size(InspectorMetrics::FIELD_VALUE_FONT)
+                .text_color(if is_null {
+                    null_color
                 } else {
-                    theme.foreground
-                })),
+                    ChromeColors::strong(theme)
+                })
+                .when(is_null, |value| value.italic())
+                .child(value_text),
         )
 }
 
@@ -176,12 +202,11 @@ fn render_references_section(
         return div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
+            .gap(InspectorMetrics::FIELD_LABEL_GAP)
+            .px(InspectorMetrics::PADDING_X)
             .child(
                 Icon::new(AppIcon::Loader)
-                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                    .size(InspectorMetrics::FIELD_ICON)
                     .color(theme.muted_foreground),
             )
             .child(
@@ -195,8 +220,7 @@ fn render_references_section(
 
     if references.is_empty() {
         return div()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
+            .px(InspectorMetrics::PADDING_X)
             .child(
                 Text::caption(dbflux_i18n::t!(
                     "document.data.row_inspector.references.empty"
@@ -218,83 +242,75 @@ fn render_references_section(
         .into_any_element()
 }
 
+/// One reference card: the foreign key column and the table it points at,
+/// with the referenced row's resolution state underneath.
 fn render_fk_reference_entry(
     fk_ref: &FkReference,
     resolving_label: &str,
     not_found_label: &str,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
-    let qualified_table = match &fk_ref.target_schema {
-        Some(s) => format!("{}.{}", s, fk_ref.target_table),
-        None => fk_ref.target_table.clone(),
+    let status: Option<(String, Hsla)> = match &fk_ref.row {
+        LoadingState::Idle => None,
+        LoadingState::Loading => Some((resolving_label.to_string(), theme.muted_foreground)),
+        LoadingState::Failed { message } => Some((message.to_string(), theme.danger)),
+        LoadingState::Loaded(map) if map.is_empty() => {
+            Some((not_found_label.to_string(), theme.muted_foreground))
+        }
+        LoadingState::Loaded(map) => Some((summarize_row(map), theme.foreground)),
     };
-    let header_label = format!(
-        "{} → {}.{} = {}",
-        fk_ref.column,
-        qualified_table,
-        fk_ref.target_pk,
-        fk_ref.value.as_display_string_truncated(40),
-    );
 
     div()
+        .relative()
         .flex()
         .flex_col()
-        .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        // Header line — wraps for long FK target strings.
+        .gap(InspectorMetrics::FIELD_GAP)
+        .mx(InspectorMetrics::REFERENCE_MARGIN_X)
+        .mb(InspectorMetrics::REFERENCE_MARGIN_BOTTOM)
+        .px(InspectorMetrics::REFERENCE_PADDING_X)
+        .py(InspectorMetrics::REFERENCE_PADDING_Y)
+        .child(Chamfer::new(ChamferCut::CONTROL).fill(theme.secondary))
         .child(
             div()
-                .w_full()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .text_color(theme.muted_foreground)
-                .text_size(dbflux_components::tokens::FontSizes::XS)
-                .child(SharedString::from(header_label)),
-        )
-        // Body: resolution state
-        .child(match &fk_ref.row {
-            LoadingState::Idle => div().into_any_element(),
-
-            LoadingState::Loading => div()
                 .flex()
                 .items_center()
-                .gap(Spacing::SM)
-                .px(Spacing::SM)
-                .py(Spacing::XS)
+                .gap(InspectorMetrics::REFERENCE_GAP)
+                .min_w_0()
+                .font_family(AppFonts::MONO)
+                .text_size(InspectorMetrics::FIELD_VALUE_FONT)
                 .child(
-                    Icon::new(AppIcon::Loader)
-                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                        .color(theme.muted_foreground),
+                    Icon::new(AppIcon::Cable)
+                        .size(InspectorMetrics::REFERENCE_ICON)
+                        .color(theme.info),
                 )
-                .child(Text::caption(resolving_label.to_string()).color(theme.muted_foreground))
-                .into_any_element(),
-
-            LoadingState::Failed { message } => div()
-                .w_full()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .text_color(theme.danger.opacity(0.85))
-                .text_size(dbflux_components::tokens::FontSizes::XS)
-                // Inline error: muted danger text that wraps. The full
-                // BannerBlock variant is overkill inside the narrow
-                // inspector and breaks the layout for long server errors.
-                .child(SharedString::from(message.to_string()))
-                .into_any_element(),
-
-            LoadingState::Loaded(map) if map.is_empty() => div()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .child(Text::caption(not_found_label.to_string()).color(theme.muted_foreground))
-                .into_any_element(),
-
-            LoadingState::Loaded(map) => {
-                let summary = summarize_row(map);
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_color(theme.foreground)
+                        .child(fk_ref.column.clone()),
+                )
+                .child(
+                    Icon::new(AppIcon::ChevronRight)
+                        .size(InspectorMetrics::REFERENCE_CHEVRON)
+                        .color(theme.input),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(ChromeColors::strong(theme))
+                        .child(fk_ref.qualified_target()),
+                ),
+        )
+        .when_some(status, |card, (text, color)| {
+            card.child(
                 div()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .child(Text::caption(summary).color(theme.foreground))
-                    .into_any_element()
-            }
+                    .min_w_0()
+                    .truncate()
+                    .text_size(InspectorMetrics::FIELD_LABEL_FONT)
+                    .text_color(color)
+                    .child(text),
+            )
         })
 }
 
@@ -341,93 +357,32 @@ pub fn summarize_row(map: &HashMap<String, Value>) -> String {
     parts.join(" · ")
 }
 
-fn render_column_metadata(
-    cell: &InspectorCell,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    let yes_label = dbflux_i18n::t!("document.data.row_inspector.meta.yes");
-    let no_label = dbflux_i18n::t!("document.data.row_inspector.meta.no");
-    let bool_label = |value: bool| if value { &yes_label } else { &no_label };
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(Spacing::SM)
-        .child(render_meta_row(
-            &dbflux_i18n::t!("document.data.row_inspector.meta.name"),
-            &cell.name,
-            theme,
-        ))
-        .child(render_meta_row(
-            &dbflux_i18n::t!("document.data.row_inspector.meta.type"),
-            &cell.type_label,
-            theme,
-        ))
-        .child(render_meta_row(
-            &dbflux_i18n::t!("document.data.row_inspector.meta.nullable"),
-            bool_label(cell.nullable),
-            theme,
-        ))
-        .child(render_meta_row(
-            &dbflux_i18n::t!("document.data.row_inspector.meta.primary_key"),
-            bool_label(cell.is_primary_key),
-            theme,
-        ))
-        .child(render_meta_row(
-            &dbflux_i18n::t!("document.data.row_inspector.meta.foreign_key"),
-            bool_label(cell.is_foreign_key),
-            theme,
-        ))
-}
-
-fn render_meta_row(
-    label: &str,
-    value: &str,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap(Spacing::SM)
-        .child(
-            div()
-                .flex_shrink_0()
-                .child(Text::caption(label.to_string()).color(theme.muted_foreground)),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .text_right()
-                .child(Text::caption(value.to_string()).color(theme.foreground)),
-        )
-}
-
 // ---------------------------------------------------------------------------
 // RowInspectorContent entity
 // ---------------------------------------------------------------------------
 
-/// Content-only inspector for the workspace-level inspector rail.
-///
-/// Unlike `RowInspector`, `RowInspectorContent` renders ONLY the scrollable
-/// body (ROW / REFERENCES / COLUMN sections).  All chrome — title bar, close
-/// button, resize grip, and drag mask — is owned by `WorkspaceInspector`.
+/// The row inspector panel mounted in the workspace inspector rail.
 pub struct RowInspectorContent {
     snapshot: InspectorSnapshot,
     references: Vec<FkReference>,
     references_ready: bool,
+    pinned: bool,
     focus_handle: FocusHandle,
 }
 
-#[derive(Clone, Debug)]
+/// Requests from the inspector's buttons; the owning grid carries them out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowInspectorContentEvent {
-    // Reserved for future use (no Close — workspace owns lifecycle now).
+    /// The close button: dismiss the inspector.
+    Close,
+    /// The pin button: stop or resume following the grid selection.
+    TogglePin,
+    /// Edit the inspected row.
+    Edit,
+    /// Duplicate the inspected row.
+    Duplicate,
+    /// Delete the inspected row.
+    Delete,
 }
 
 impl EventEmitter<RowInspectorContentEvent> for RowInspectorContent {}
@@ -438,6 +393,7 @@ impl RowInspectorContent {
             snapshot,
             references: Vec::new(),
             references_ready: false,
+            pinned: false,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -450,6 +406,14 @@ impl RowInspectorContent {
         cx.notify();
     }
 
+    /// Show the pin button as pressed (`true`) or released.
+    pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
+        if self.pinned != pinned {
+            self.pinned = pinned;
+            cx.notify();
+        }
+    }
+
     /// Set the resolved FK references after an async lookup completes.
     pub fn set_references(&mut self, references: Vec<FkReference>, cx: &mut Context<Self>) {
         self.references = references;
@@ -459,7 +423,7 @@ impl RowInspectorContent {
 
     /// Update the resolution state for a single FK reference by index.
     ///
-    /// Out-of-bounds index is silently ignored (same behaviour as `RowInspector`).
+    /// Out-of-bounds index is silently ignored.
     pub fn resolve_reference(
         &mut self,
         index: usize,
@@ -492,6 +456,135 @@ impl RowInspectorContent {
     pub fn references_len(&self) -> usize {
         self.references.len()
     }
+
+    #[cfg(test)]
+    pub fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let title = crate::labels::row_inspector_title(self.snapshot.row_number);
+        let pin_label = if self.pinned {
+            dbflux_i18n::t!("document.data.row_inspector.action.unpin")
+        } else {
+            dbflux_i18n::t!("document.data.row_inspector.action.pin")
+        };
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(InspectorMetrics::HEADER_GAP)
+            .h(InspectorMetrics::HEADER_HEIGHT)
+            .pl(InspectorMetrics::HEADER_PADDING_LEFT)
+            .pr(InspectorMetrics::HEADER_PADDING_RIGHT)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Icon::new(AppIcon::Info)
+                    .size(InspectorMetrics::HEADER_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                Text::body(title)
+                    .color(ChromeColors::strong(theme))
+                    .font_weight(FontWeight::BOLD),
+            )
+            .when_some(self.snapshot.row_key.clone(), |header, key| {
+                header.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(AppFonts::MONO)
+                        .text_size(InspectorMetrics::KEY_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(key),
+                )
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new("row-inspector-pin", pin_label)
+                    .small()
+                    .icon(AppIcon::Pin)
+                    .icon_only()
+                    .selected(self.pinned)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(RowInspectorContentEvent::TogglePin);
+                    })),
+            )
+            .child(
+                Button::new(
+                    "row-inspector-close",
+                    dbflux_i18n::t!("document.data.row_inspector.action.close"),
+                )
+                .small()
+                .icon(AppIcon::CircleX)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(RowInspectorContentEvent::Close);
+                })),
+            )
+            .into_any_element()
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let can_edit = self.snapshot.can_edit;
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(InspectorMetrics::FOOTER_GAP)
+            .p(InspectorMetrics::FOOTER_PADDING)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                Button::new(
+                    "row-inspector-edit",
+                    dbflux_i18n::t!("document.data.row_inspector.action.edit"),
+                )
+                .small()
+                .icon(AppIcon::Pencil)
+                .disabled(!can_edit)
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(RowInspectorContentEvent::Edit);
+                })),
+            )
+            .child(
+                Button::new(
+                    "row-inspector-duplicate",
+                    dbflux_i18n::t!("document.data.row_inspector.action.duplicate"),
+                )
+                .small()
+                .icon(AppIcon::Copy)
+                .disabled(!can_edit)
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(RowInspectorContentEvent::Duplicate);
+                })),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new(
+                    "row-inspector-delete",
+                    dbflux_i18n::t!("document.data.row_inspector.action.delete"),
+                )
+                .small()
+                .danger()
+                .icon(AppIcon::Delete)
+                .disabled(!can_edit)
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(RowInspectorContentEvent::Delete);
+                })),
+            )
+            .into_any_element()
+    }
 }
 
 impl Focusable for RowInspectorContent {
@@ -502,32 +595,37 @@ impl Focusable for RowInspectorContent {
 
 impl Render for RowInspectorContent {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let snapshot = self.snapshot.clone();
-        let has_fk = snapshot.cells.iter().any(|c| c.is_foreign_key);
-        let pk_badge = dbflux_i18n::t!("document.data.row_inspector.badge.primary_key");
-        let fk_badge = dbflux_i18n::t!("document.data.row_inspector.badge.foreign_key");
+        let header = self.render_header(cx);
+        let footer = self.render_footer(cx);
 
-        div()
-            .id("row-inspector-content")
-            .size_full()
+        let null_color = SyntaxColors::for_current(cx).number;
+        let theme = cx.theme();
+        let has_fk = self.snapshot.cells.iter().any(|cell| cell.is_foreign_key);
+
+        let body = div()
+            .id("row-inspector-body")
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .track_focus(&self.focus_handle)
-            .child(render_section_header(
+            .child(render_section_label(
                 dbflux_i18n::t!("document.data.row_inspector.section.row"),
+                InspectorMetrics::ROW_LABEL_PADDING_TOP,
+                InspectorMetrics::ROW_LABEL_PADDING_BOTTOM,
                 theme,
             ))
             .children(
-                snapshot
+                self.snapshot
                     .cells
                     .iter()
-                    .map(|cell| render_row_entry(cell, &pk_badge, &fk_badge, theme)),
+                    .map(|cell| render_row_entry(cell, null_color, theme)),
             )
-            .when(has_fk, |d| {
-                d.child(render_section_header(
+            .when(has_fk, |body| {
+                body.child(render_section_label(
                     dbflux_i18n::t!("document.data.row_inspector.section.references"),
+                    InspectorMetrics::REFERENCES_LABEL_PADDING_TOP,
+                    InspectorMetrics::REFERENCES_LABEL_PADDING_BOTTOM,
                     theme,
                 ))
                 .child(render_references_section(
@@ -535,19 +633,18 @@ impl Render for RowInspectorContent {
                     self.references_ready,
                     theme,
                 ))
-            })
-            .child(render_section_header(
-                dbflux_i18n::t!("document.data.row_inspector.section.column"),
-                theme,
-            ))
-            .when_some(
-                snapshot.cells.get(
-                    snapshot
-                        .focused_col
-                        .min(snapshot.cells.len().saturating_sub(1)),
-                ),
-                |d, cell| d.child(render_column_metadata(cell, theme)),
-            )
+            });
+
+        div()
+            .id("row-inspector-content")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.popover)
+            .track_focus(&self.focus_handle)
+            .child(header)
+            .child(body)
+            .child(footer)
     }
 }
 
@@ -558,25 +655,67 @@ impl Render for RowInspectorContent {
 #[cfg(test)]
 mod tests {
     use super::{
-        FkReference, InspectorCell, InspectorSnapshot, RowInspectorContent, summarize_row,
+        FkReference, InspectorCell, InspectorSnapshot, RowInspectorContent, row_key_label,
+        summarize_row,
     };
     use dbflux_components::primitives::LoadingState;
     use dbflux_core::Value;
     use gpui::{AppContext as _, TestAppContext};
     use std::collections::HashMap;
 
-    fn make_snapshot() -> InspectorSnapshot {
-        InspectorSnapshot {
-            cells: vec![InspectorCell {
-                name: "id".to_string(),
-                value: Value::Int(1),
-                is_primary_key: true,
-                is_foreign_key: false,
-                type_label: "integer".to_string(),
-                nullable: false,
-            }],
-            focused_col: 0,
+    fn cell(name: &str, value: Value, is_primary_key: bool) -> InspectorCell {
+        InspectorCell {
+            name: name.to_string(),
+            value,
+            is_primary_key,
+            is_foreign_key: false,
         }
+    }
+
+    fn make_snapshot() -> InspectorSnapshot {
+        let cells = vec![cell("id", Value::Int(1), true)];
+
+        InspectorSnapshot {
+            row_number: 1,
+            row_key: row_key_label(&cells),
+            cells,
+            can_edit: true,
+        }
+    }
+
+    #[test]
+    fn row_key_label_joins_primary_key_values_in_column_order() {
+        let cells = vec![
+            cell("tenant", Value::Text("acme".to_string()), true),
+            cell("name", Value::Text("Alice".to_string()), false),
+            cell("id", Value::Int(7), true),
+        ];
+
+        assert_eq!(row_key_label(&cells).as_deref(), Some("acme, 7"));
+    }
+
+    #[test]
+    fn row_key_label_is_none_without_a_primary_key() {
+        let cells = vec![cell("name", Value::Text("Alice".to_string()), false)];
+
+        assert_eq!(row_key_label(&cells), None);
+    }
+
+    #[test]
+    fn qualified_target_prefixes_the_schema_when_known() {
+        let mut reference = FkReference {
+            column: "user_id".to_string(),
+            target_schema: Some("public".to_string()),
+            target_table: "users".to_string(),
+            target_pk: "id".to_string(),
+            value: Value::Int(1),
+            row: LoadingState::Idle,
+        };
+
+        assert_eq!(reference.qualified_target(), "public.users");
+
+        reference.target_schema = None;
+        assert_eq!(reference.qualified_target(), "users");
     }
 
     #[gpui::test]
@@ -584,15 +723,10 @@ mod tests {
         let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
 
         let new_snap = InspectorSnapshot {
-            cells: vec![InspectorCell {
-                name: "name".to_string(),
-                value: Value::Text("Alice".to_string()),
-                is_primary_key: false,
-                is_foreign_key: false,
-                type_label: "text".to_string(),
-                nullable: true,
-            }],
-            focused_col: 0,
+            row_number: 4,
+            row_key: None,
+            cells: vec![cell("name", Value::Text("Alice".to_string()), false)],
+            can_edit: false,
         };
 
         cx.update(|cx| {
@@ -604,8 +738,23 @@ mod tests {
         cx.read(|cx| {
             let content = entity.read(cx);
             assert_eq!(content.snapshot.cells[0].name, "name");
+            assert_eq!(content.snapshot.row_number, 4);
             assert!(!content.references_ready(), "open resets references_ready");
         });
+    }
+
+    #[gpui::test]
+    fn row_inspector_content_pin_state_survives_open(cx: &mut TestAppContext) {
+        let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
+
+        cx.update(|cx| {
+            entity.update(cx, |content, cx| {
+                content.set_pinned(true, cx);
+                content.open(make_snapshot(), cx);
+            });
+        });
+
+        cx.read(|cx| assert!(entity.read(cx).is_pinned()));
     }
 
     #[gpui::test]
@@ -675,7 +824,6 @@ mod tests {
     fn row_inspector_content_resolve_reference_out_of_bounds_is_noop(cx: &mut TestAppContext) {
         let entity = cx.new(|cx| RowInspectorContent::new(make_snapshot(), cx));
 
-        // Should not panic when index is out of bounds
         cx.update(|cx| {
             entity.update(cx, |content, cx| {
                 content.resolve_reference(99, Ok(None), cx);
@@ -752,20 +900,16 @@ mod tests {
     #[test]
     fn row_inspector_keys_resolve_in_both_locales() {
         let keys = [
-            "document.data.row_inspector.badge.primary_key",
-            "document.data.row_inspector.badge.foreign_key",
-            "document.data.row_inspector.meta.name",
-            "document.data.row_inspector.meta.type",
-            "document.data.row_inspector.meta.nullable",
-            "document.data.row_inspector.meta.primary_key",
-            "document.data.row_inspector.meta.foreign_key",
-            "document.data.row_inspector.meta.yes",
-            "document.data.row_inspector.meta.no",
+            "document.data.row_inspector.action.pin",
+            "document.data.row_inspector.action.unpin",
+            "document.data.row_inspector.action.close",
+            "document.data.row_inspector.action.edit",
+            "document.data.row_inspector.action.duplicate",
+            "document.data.row_inspector.action.delete",
             "document.data.row_inspector.references.empty",
             "document.data.row_inspector.references.loading",
             "document.data.row_inspector.references.not_found",
             "document.data.row_inspector.references.resolving",
-            "document.data.row_inspector.section.column",
             "document.data.row_inspector.section.references",
             "document.data.row_inspector.section.row",
         ];
@@ -795,12 +939,12 @@ mod tests {
     }
 
     #[test]
-    fn row_inspector_meta_yes_no_labels_differ_between_locales() {
-        let en_yes = dbflux_i18n::t!("document.data.row_inspector.meta.yes", locale = "en");
-        let es_yes = dbflux_i18n::t!("document.data.row_inspector.meta.yes", locale = "es");
+    fn row_inspector_pin_labels_differ_between_locales() {
+        let en_pin = dbflux_i18n::t!("document.data.row_inspector.action.pin", locale = "en");
+        let es_pin = dbflux_i18n::t!("document.data.row_inspector.action.pin", locale = "es");
 
-        assert_eq!(en_yes, "yes");
-        assert_ne!(en_yes, es_yes);
+        assert_eq!(en_pin, "Pin this row");
+        assert_ne!(en_pin, es_pin);
     }
 
     #[test]
@@ -813,7 +957,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{function_name} not found in row_inspector.rs"));
             let after_signature = &source[start + function_name.len()..];
             let end = after_signature
-                .find("\nfn ")
+                .find("\n}\n")
                 .unwrap_or(after_signature.len());
             let body = &after_signature[..end];
 

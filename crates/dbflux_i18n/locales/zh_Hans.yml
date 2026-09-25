@@ -803,7 +803,7 @@ document:
       cancel: 取消
       checking: 正在检查…
       run: 执行
-      shortcut_hint_with_selection: "%{shortcut}（选区 / 全部）"
+      last_run: "上次运行 %{seconds} 秒"
       new_tab: 新建标签页
       selection: 选区
       read_only: 只读
@@ -905,10 +905,7 @@ document:
         database: 数据库
         schema: Schema
       label:
-        connection: 连接：
         source: 来源：
-        database: 数据库：
-        schema: Schema：
       fallback:
         syntax: 语法
         sources: 来源
@@ -918,6 +915,9 @@ document:
       apply: 应用
       connect_error: "无法连接到数据库 %{database} "
       connect_failed: "连接数据库 %{database} 失败：%{error}"
+      production:
+        title: "生产环境连接。"
+        body: "危险语句在运行前会请求确认。"
     execution:
       toast:
         select_query: 选择要执行的查询文本
@@ -1162,6 +1162,8 @@ document:
           many: "%{count} 处未保存更改"
         save: 保存
         revert: 还原
+        undo: "撤销"
+        redo: "重做"
         reload_blocked: 请先保存或还原未保存的更改
         edits_dropped:
           one: "已丢弃 %{count} 行的未保存更改：重新加载的结果中没有该行"
@@ -1319,24 +1321,19 @@ document:
           one: "变更已取消，已处理 %{count} 行"
           many: "变更已取消，已处理 %{count} 行"
     row_inspector:
-      badge:
-        primary_key: PK
-        foreign_key: FK
-      meta:
-        name: 名称
-        type: 类型
-        nullable: 可空
-        primary_key: 主键
-        foreign_key: 外键
-        yes: 是
-        no: 否
+      action:
+        pin: "固定此行"
+        unpin: "跟随选择"
+        close: "关闭"
+        edit: "编辑"
+        duplicate: "复制"
+        delete: "删除"
       references:
         empty: 无引用
         loading: 正在加载 Schema…
         not_found: — 未找到
         resolving: 正在解析…
       section:
-        column: 列
         references: 引用
         row: 行
       title: "行 %{row}"
@@ -2915,6 +2912,7 @@ settings:
       results_copy_cell: 复制单元格
       toggle_record_view: 切换记录视图
       toggle_value_panel: 切换值面板
+      toggle_row_inspector: 切换行检查器
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
       menu_up: 菜单上移
@@ -3538,6 +3536,7 @@ shutdown:
   failed: 关闭失败
 sidebar:
   header:
+    new_dashboard: "新建仪表板"
     add: "添加"
     filter: "筛选"
   failure:
@@ -3563,6 +3562,7 @@ sidebar:
     cannot_load_schema_foreign_keys: 无法加载 Schema 外键
     cannot_load_schema_routines: 无法加载 Schema 例程
   filter:
+    dashboards_placeholder: "筛选仪表板..."
     connections_placeholder: 筛选连接和 Schema…
     scripts_placeholder: 筛选脚本…
     stream_placeholder: 筛选流名称…
@@ -3638,6 +3638,7 @@ sidebar:
     connection_summary: "%{connected} 已连接 · %{idle} 空闲"
     profile_fallback_name: 连接
   tabs:
+    dashboards: "仪表板"
     connections: 连接
     scripts: 脚本
   task:
@@ -3776,6 +3777,12 @@ sidebar:
       metrics: 无可用指标
       inspectors: 无可用检查器
       remote_dashboards: 此账户 / 区域中没有仪表盘
+  dashboards:
+    unassigned: "无连接"
+    empty_title: "还没有仪表板"
+    empty_hint: "使用 + 创建仪表板"
+    no_matches_title: "没有匹配的仪表板"
+    no_matches_hint: "换个名称或连接试试"
 sql_preview:
   title:
     sql: SQL 预览
@@ -3893,6 +3900,7 @@ workspace:
   rail:
     connections: "连接"
     scripts: "脚本"
+    dashboards: "仪表板"
     approvals: "MCP 审批"
     audit: "审计"
     settings: "设置"

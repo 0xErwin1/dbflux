@@ -45,6 +45,8 @@ pub enum DocumentEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+        /// The content draws its own title bar; the rail must not add one.
+        content_has_header: bool,
     },
     /// Request to hide the workspace inspector rail without losing the
     /// document's cached inspector state (e.g. when switching away from a

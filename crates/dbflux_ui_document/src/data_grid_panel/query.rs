@@ -1,5 +1,6 @@
 use super::filter_bar::{FilterMode, RelationalFilterState, classify_filter_input};
 use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount, TableReload};
+use crate::result_view::ResultViewMode;
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, EditableBinding, OrderByColumn,
@@ -830,6 +831,16 @@ impl DataGridPanel {
             order_by,
             total_rows: total_rows.or(existing_total),
         };
+
+        // A table keeps the JSON view across pages and refreshes; the chart
+        // follows the same rules as a query result.
+        let keeps_json = self.chrome.result_view_mode == ResultViewMode::Json;
+        self.chrome.derived_json = None;
+        self.chrome.derived_text = None;
+        self.apply_chart_for_result(&result, cx);
+        if keeps_json {
+            self.chrome.result_view_mode = ResultViewMode::Json;
+        }
 
         self.result = result;
         self.grid_table.local_sort_state = None;

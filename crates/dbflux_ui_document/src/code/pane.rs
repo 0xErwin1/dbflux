@@ -211,6 +211,17 @@ impl CodeDocument {
             Box::new(move |cx| e.read(cx).status_segments(cx))
         });
 
+        handle.tab_tooltip = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.read(cx)
+                    .editor
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string().into())
+            })
+        });
+
         handle.empty_script_cleanup = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).pending_empty_script_cleanup(cx))

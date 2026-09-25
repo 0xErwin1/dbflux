@@ -93,15 +93,22 @@ pregunta, nombrando las conexiones, con **Salir de todos modos** en lugar de
 
 ## 2. Explorar el schema
 
-El sidebar tiene dos pestañas:
+El sidebar tiene tres vistas, que se eligen desde la barra de actividad a su
+izquierda:
 
 - **Connections** — el árbol del schema (bases de datos, schemas,
   tablas/collections, columnas, índices y — donde el driver lo soporte — una
   carpeta Routines).
 - **Scripts** — gestión de archivos y carpetas para archivos de query guardados,
   script hooks y otros archivos de usuario.
+- **Dashboards** — todos los dashboards guardados, agrupados por la conexión a
+  la que pertenecen, esté abierta o no. Los dashboards sin conexión aparecen en
+  **Sin conexión**. Haz doble clic en un dashboard, o selecciónalo y pulsa
+  `Enter`, para abrirlo; haz clic derecho para abrirlo, renombrarlo,
+  duplicarlo o eliminarlo. El botón `+` crea un dashboard.
 
-Cambia entre las dos pestañas con `q` o `e`.
+Recorre las vistas con `q` o `e`. Elegir desde la barra la vista que ya está en
+pantalla contrae el sidebar.
 
 ### Navegar el árbol
 
@@ -409,7 +416,7 @@ Cuando el panel de resultados tiene el foco:
 
 ### Vista de registro
 
-Pulsa `i`, o usa el conmutador Cuadrícula / Registro en la barra de estado del
+Pulsa `i`, o usa el conmutador Registro en la barra de estado del
 resultado, para mostrar la fila activa como una lista de Nombre / Valor que
 ocupa toda el área de resultados. La cabecera indica la posición de la fila en
 el resultado. Los campos se editan igual que las celdas de la cuadrícula, así
@@ -434,6 +441,18 @@ analiza — con formato legible, compacto y ajuste de línea. Se puede editar al
 panel sigue la celda seleccionada al moverte por la cuadrícula, salvo mientras
 tenga un cambio sin guardar.
 
+
+### Inspector de fila
+
+Pulsa `Ctrl+Space`, o haz clic derecho en una fila y elige **Inspeccionar
+fila**, para abrir la fila seleccionada en el panel inspector de la derecha.
+Lista cada columna de la fila con su valor, marca las columnas de clave
+primaria y foránea y, bajo **Referencias**, nombra la tabla a la que apunta cada
+clave foránea de una sola columna, con la fila referenciada cuando se resuelve.
+El inspector sigue la fila seleccionada al moverte por la cuadrícula; el botón
+de fijar de su cabecera lo mantiene en la fila actual. **Editar**, **Duplicar**
+y **Eliminar**, al pie, actúan sobre la fila inspeccionada cuando el resultado
+es editable. Pulsa `Ctrl+Space` de nuevo, o el botón de cerrar, para ocultarlo.
 ### Filtrar resultados
 
 La toolbar del data grid tiene un input de filtro `WHERE` que vuelve a ejecutar
@@ -811,6 +830,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
 | `v`                                           | Alternar el panel de valor de la celda     |
+| `Ctrl+Space`                                  | Alternar el inspector de la fila           |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual                      |

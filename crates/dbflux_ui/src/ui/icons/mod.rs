@@ -98,6 +98,8 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandBash,
     AppIcon::BrandJavaScript,
     AppIcon::BrandInfluxDb,
+    AppIcon::Clipboard,
+    AppIcon::Pin,
     AppIcon::DbFlux,
 ];
 
@@ -227,6 +229,7 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/ui/arrow-left-right.svg")
         }
         AppIcon::Clipboard => include_bytes!("../../../../../resources/icons/ui/clipboard.svg"),
+        AppIcon::Pin => include_bytes!("../../../../../resources/icons/ui/pin.svg"),
         AppIcon::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
         AppIcon::ChartSpline => {
             include_bytes!("../../../../../resources/icons/ui/chart-spline.svg")

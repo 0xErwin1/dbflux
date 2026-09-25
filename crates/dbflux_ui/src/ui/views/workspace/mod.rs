@@ -1182,6 +1182,9 @@ impl Workspace {
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
                 }
+                SidebarEvent::RequestNewDashboard => {
+                    this.create_dashboard_from_palette(window, cx);
+                }
                 SidebarEvent::RequestCreateDashboard { profile_id } => {
                     this.create_dashboard_from_sidebar(*profile_id, window, cx);
                 }
@@ -1412,9 +1415,13 @@ impl Workspace {
                             modal.open(context.as_ref().clone(), *generation_type, window, cx);
                         });
                     }
-                    TabManagerEvent::OpenInspector { title, content } => {
+                    TabManagerEvent::OpenInspector {
+                        title,
+                        content,
+                        content_has_header,
+                    } => {
                         this.workspace_inspector.update(cx, |insp, cx| {
-                            insp.open_with(content.clone(), title.clone(), cx);
+                            insp.open_with(content.clone(), title.clone(), *content_has_header, cx);
                         });
                     }
                     TabManagerEvent::CloseInspector => {
@@ -3716,6 +3723,7 @@ mod tab_close_request_tests {
                     cx.emit(TabManagerEvent::OpenInspector {
                         title: "Row".into(),
                         content,
+                        content_has_header: false,
                     });
                 });
             });
@@ -3825,6 +3833,7 @@ mod tab_close_request_tests {
                         cx.emit(TabManagerEvent::OpenInspector {
                             title: "Row".into(),
                             content,
+                            content_has_header: false,
                         });
                     });
                 }

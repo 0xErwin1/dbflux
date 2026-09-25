@@ -803,7 +803,7 @@ document:
       cancel: Cancelar
       checking: "Verificando…"
       run: Ejecutar
-      shortcut_hint_with_selection: "%{shortcut} (selección/completo)"
+      last_run: "última ejecución %{seconds} s"
       new_tab: Nueva pestaña
       selection: Selección
       read_only: Solo lectura
@@ -905,10 +905,7 @@ document:
         database: Base de datos
         schema: Esquema
       label:
-        connection: "Conexión:"
         source: "Origen:"
-        database: "Base de datos:"
-        schema: "Esquema:"
       fallback:
         syntax: Sintaxis
         sources: Orígenes
@@ -918,6 +915,9 @@ document:
       apply: Aplicar
       connect_error: "No se puede conectar a la base de datos '%{database}'"
       connect_failed: "No se pudo conectar a la base de datos '%{database}': %{error}"
+      production:
+        title: "Conexión de producción."
+        body: "Las sentencias peligrosas piden confirmación antes de ejecutarse."
     execution:
       toast:
         select_query: Selecciona el texto de la consulta a ejecutar
@@ -1162,6 +1162,8 @@ document:
           many: "%{count} cambios sin guardar"
         save: Guardar
         revert: Descartar
+        undo: "Deshacer"
+        redo: "Rehacer"
         reload_blocked: Guarda o descarta primero los cambios sin guardar
         edits_dropped:
           one: "Se descartaron los cambios sin guardar de %{count} fila: la fila no está en los resultados recargados"
@@ -1319,24 +1321,19 @@ document:
           one: "Mutación cancelada después de procesar %{count} fila"
           many: "Mutación cancelada después de procesar %{count} filas"
     row_inspector:
-      badge:
-        primary_key: PK
-        foreign_key: FK
-      meta:
-        name: Nombre
-        type: Tipo
-        nullable: Anulable
-        primary_key: Clave primaria
-        foreign_key: Clave foránea
-        yes: "sí"
-        no: "no"
+      action:
+        pin: "Fijar esta fila"
+        unpin: "Seguir la selección"
+        close: "Cerrar"
+        edit: "Editar"
+        duplicate: "Duplicar"
+        delete: "Eliminar"
       references:
         empty: Sin referencias
         loading: "Cargando esquema…"
         not_found: "— no encontrado"
         resolving: "Resolviendo…"
       section:
-        column: COLUMNA
         references: REFERENCIAS
         row: FILA
       title: "Fila %{row}"
@@ -2915,6 +2912,7 @@ settings:
       results_copy_cell: Copiar celda
       toggle_record_view: Alternar vista de registro
       toggle_value_panel: Alternar panel de valor
+      toggle_row_inspector: Alternar inspector de fila
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       menu_up: "Menú: arriba"
@@ -3540,6 +3538,7 @@ shutdown:
 
 sidebar:
   header:
+    new_dashboard: "Nuevo dashboard"
     add: "Agregar"
     filter: "Filtrar"
   failure:
@@ -3565,6 +3564,7 @@ sidebar:
     cannot_load_schema_foreign_keys: No se pueden cargar las claves foráneas del esquema
     cannot_load_schema_routines: No se pueden cargar las rutinas del esquema
   filter:
+    dashboards_placeholder: "Filtrar dashboards..."
     connections_placeholder: Filtrar conexiones y esquema...
     scripts_placeholder: Filtrar scripts...
     stream_placeholder: Filtrar nombres de streams...
@@ -3640,6 +3640,7 @@ sidebar:
     connection_summary: "%{connected} conectadas · %{idle} inactivas"
     profile_fallback_name: conexión
   tabs:
+    dashboards: "Dashboards"
     connections: CONEXIONES
     scripts: SCRIPTS
   task:
@@ -3778,6 +3779,12 @@ sidebar:
       metrics: No hay métricas disponibles
       inspectors: No hay inspectores disponibles
       remote_dashboards: No hay dashboards en esta cuenta/región
+  dashboards:
+    unassigned: "Sin conexión"
+    empty_title: "Todavía no hay dashboards"
+    empty_hint: "Usa + para crear un dashboard"
+    no_matches_title: "Ningún dashboard coincide"
+    no_matches_hint: "Prueba con otro nombre o conexión"
 sql_preview:
   title:
     sql: Vista previa de SQL
@@ -3895,6 +3902,7 @@ workspace:
   rail:
     connections: "Conexiones"
     scripts: "Scripts"
+    dashboards: "Dashboards"
     approvals: "Aprobaciones de MCP"
     audit: "Auditoría"
     settings: "Configuración"

@@ -81,9 +81,9 @@ impl DataDocument {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Build a ViewHandle from the DataGridPanel entity. This also sets
-        // `toolbar_in_chrome_row = true` on the grid, suppressing its own
-        // toolbar row so the filter bar appears in the chrome row instead.
+        // Build a ViewHandle from the DataGridPanel entity. The grid draws its
+        // own header, filter row and view switch for table and collection
+        // sources.
         let view_handle = DataGridPanel::into_view_handle(data_grid.clone(), cx);
 
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
@@ -137,10 +137,15 @@ impl DataDocument {
                     generation_type: *generation_type,
                 });
             }
-            DataGridEvent::OpenInspector { title, content } => {
+            DataGridEvent::OpenInspector {
+                title,
+                content,
+                content_has_header,
+            } => {
                 cx.emit(DocumentEvent::OpenInspector {
                     title: title.clone(),
                     content: content.clone(),
+                    content_has_header: *content_has_header,
                 });
             }
             DataGridEvent::CloseInspector => {

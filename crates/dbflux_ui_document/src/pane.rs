@@ -211,6 +211,10 @@ pub struct PaneHandle {
     /// extra for it, unchanged from today's behavior.
     pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
 
+    /// Returns the text of the tab's hover tooltip (a script's file path).
+    /// `None`, or a closure returning `None`, shows no tooltip.
+    pub tab_tooltip: Option<Box<dyn Fn(&App) -> Option<gpui::SharedString>>>,
+
     /// Drains a browse-this-bucket intent raised by row activation (Enter),
     /// same `pending_*` + `take()` convention as the other optional helpers.
     /// Only `BucketsTableDocument` populates this — the workspace polls the
@@ -312,6 +316,7 @@ impl PaneHandle {
             value_panel_is_open: None,
             set_value_panel_open: None,
             status_segments: None,
+            tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
             on_close: None,
@@ -509,6 +514,11 @@ impl PaneHandle {
             .as_ref()
             .map(|f| f(cx))
             .unwrap_or_default()
+    }
+
+    /// The tab's hover tooltip, if the document provides one.
+    pub fn tab_tooltip(&self, cx: &App) -> Option<gpui::SharedString> {
+        self.tab_tooltip.as_ref().and_then(|f| f(cx))
     }
 }
 

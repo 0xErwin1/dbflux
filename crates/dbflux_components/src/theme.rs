@@ -550,7 +550,10 @@ fn apply_palette(palette: &Palette, style: AppStyle, cx: &mut App) {
     theme.list_even = palette.alternating_row_wash;
     theme.list_hover = palette.hover_wash;
     theme.list_active = palette.selected_item_wash;
-    theme.list_active_border = palette.tint;
+    // The sidebar tree marks its selected row with the tint wash and a 2 px
+    // tint bar on the left (DSApp "Tree"); gpui-component's rectangular
+    // outline around the selected list item is not part of the design.
+    theme.list_active_border = gpui::transparent_black();
 
     theme.accordion = palette.panel;
     theme.title_bar = palette.background;

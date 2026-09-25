@@ -151,6 +151,7 @@ pub struct Dropdown {
     compact_trigger: bool,
     chevron_trigger: Option<ButtonVariant>,
     toolbar_style: bool,
+    mono_label: bool,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
@@ -177,6 +178,7 @@ impl Dropdown {
             compact_trigger: false,
             chevron_trigger: None,
             toolbar_style: false,
+            mono_label: false,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
         }
@@ -294,6 +296,13 @@ impl Dropdown {
 
     pub fn toolbar_style(mut self, toolbar: bool) -> Self {
         self.toolbar_style = toolbar;
+        self
+    }
+
+    /// Sets the toolbar trigger's label in the monospace face, for values
+    /// that are identifiers (a connection, database or schema name).
+    pub fn mono_label(mut self, mono: bool) -> Self {
+        self.mono_label = mono;
         self
     }
 
@@ -643,17 +652,19 @@ impl Dropdown {
             DropdownTriggerVariant::Toolbar => {
                 trigger = trigger
                     .justify_between()
-                    .gap(Spacing::XS)
-                    .px(Spacing::XS)
-                    .font_family(AppFonts::INTERFACE)
+                    .gap(Fields::GAP)
+                    .font_family(if self.mono_label {
+                        AppFonts::MONO
+                    } else {
+                        AppFonts::INTERFACE
+                    })
                     .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(font_sm)
+                    .text_size(Fields::TEXT)
                     .child(div().flex_1().truncate().child(label))
                     .child(
-                        div()
-                            .text_size(font_sm)
-                            .text_color(theme.muted_foreground)
-                            .child("▾"),
+                        Icon::new(AppIcon::ChevronDown)
+                            .size(Fields::CHEVRON)
+                            .color(theme.muted_foreground),
                     );
             }
             DropdownTriggerVariant::Standard => {

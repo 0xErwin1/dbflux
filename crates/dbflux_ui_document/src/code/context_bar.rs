@@ -1,8 +1,9 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
-use dbflux_components::tokens::ChamferCut;
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::primitives::{BadgeTone, EnvTag, FocusShape, Icon, Text, focus_ring};
+use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
@@ -12,6 +13,26 @@ fn context_dropdown_min_width(index: usize) -> Pixels {
         1 => px(120.0),
         _ => px(100.0),
     }
+}
+
+/// The inside of a context selector (AppByzEditor): a leading icon, then the
+/// dropdown with its value and chevron. The caller wraps it in the select
+/// field shape.
+fn context_selector(icon: Icon, dropdown: Entity<Dropdown>) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(Fields::GAP)
+        .w_full()
+        .child(icon)
+        .child(div().flex_1().min_w_0().child(dropdown))
+}
+
+/// The chevron between two context selectors.
+fn context_separator(theme: &gpui_component::theme::Theme) -> impl IntoElement {
+    Icon::new(AppIcon::ChevronRight)
+        .size(EditorMetrics::SEPARATOR_ICON)
+        .color(theme.input)
 }
 
 fn context_slot_is_keyboard_focused(
@@ -107,6 +128,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.connection"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -715,6 +737,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.database"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -749,6 +772,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.schema"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -1327,6 +1351,97 @@ impl CodeDocument {
 
     // === Render the context bar ===
 
+    /// The profile the context bar is bound to, connected or not.
+    fn bound_profile<'a>(&self, cx: &'a App) -> Option<&'a dbflux_core::ConnectionProfile> {
+        let connection_id = self.source.exec_ctx.connection_id.or(self.connection_id)?;
+
+        self.app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == connection_id)
+    }
+
+    /// Driver logo and tone for the connection selector, or a muted database
+    /// icon while no connection is bound.
+    fn connection_driver_icon(&self, cx: &App) -> (AppIcon, Hsla) {
+        let fallback = (AppIcon::Database, cx.theme().muted_foreground);
+
+        let Some(profile) = self.bound_profile(cx) else {
+            return fallback;
+        };
+
+        let Some(driver) = self.app_state.read(cx).drivers().get(&profile.driver_id()) else {
+            return fallback;
+        };
+
+        let metadata = driver.metadata();
+        (
+            AppIcon::for_driver(metadata.icon, metadata.category),
+            DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+        )
+    }
+
+    /// The bound connection's environment as `(label, is_production)`, shown
+    /// as an EnvTag in the connection selector; a production environment also
+    /// raises the production banner.
+    ///
+    /// Connection profiles do not record an environment yet, so this is always
+    /// `None` and neither the tag nor the banner renders. When the profile
+    /// gains the field, map it here: both consumers read only this method.
+    fn connection_environment(&self, cx: &App) -> Option<(SharedString, bool)> {
+        let _profile = self.bound_profile(cx)?;
+        None
+    }
+
+    /// The production banner under the context bar (AppByzEditor): a danger
+    /// stripe warning that dangerous statements ask for confirmation.
+    pub(super) fn render_production_banner(&self, cx: &App) -> Option<AnyElement> {
+        let (_, is_production) = self.connection_environment(cx)?;
+        if !is_production {
+            return None;
+        }
+
+        let theme = cx.theme();
+
+        Some(
+            div()
+                .id("production-banner")
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(EditorMetrics::BANNER_GAP)
+                .h(EditorMetrics::BANNER_HEIGHT)
+                .px(EditorMetrics::BANNER_PADDING_X)
+                .bg(theme.danger.opacity(EditorMetrics::BANNER_FILL_ALPHA))
+                .border_b_1()
+                .border_color(theme.danger.opacity(EditorMetrics::BANNER_LINE_ALPHA))
+                .text_size(Fields::TEXT)
+                .child(
+                    Icon::new(AppIcon::TriangleAlert)
+                        .size(EditorMetrics::BANNER_ICON)
+                        .color(theme.danger),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.danger)
+                        .child(dbflux_i18n::t!(
+                            "document.code.context_bar.production.title"
+                        )),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(dbflux_i18n::t!("document.code.context_bar.production.body")),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         if !self.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
@@ -1366,23 +1481,14 @@ impl CodeDocument {
         // Build the primary (always-visible) controls row.
         // flex_wrap() allows controls to wrap to the next line on narrow viewports
         // rather than overflowing the bar's right edge.
+        let (connection_icon, connection_icon_color) = self.connection_driver_icon(cx);
+        let environment = self.connection_environment(cx);
+
         let main_row = div()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(Spacing::SM)
-            .child(
-                // flex_none keeps the label+control pair together on the same wrap line.
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1()
-                    .child(Icon::new(AppIcon::Database).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.code.context_bar.label.connection"
-                    ))),
-            )
+            .gap(EditorMetrics::CONTEXT_GAP)
             .child(
                 div()
                     .flex_none()
@@ -1395,7 +1501,25 @@ impl CodeDocument {
                         ),
                         FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(theme.ring),
-                        control_shell(self.source.connection_dropdown.clone(), cx),
+                        control_shell(
+                            context_selector(
+                                Icon::new(connection_icon)
+                                    .size(EditorMetrics::SELECTOR_ICON)
+                                    .color(connection_icon_color),
+                                self.source.connection_dropdown.clone(),
+                            )
+                            .when_some(
+                                environment,
+                                |selector, (label, is_production)| {
+                                    selector.child(EnvTag::new(label).tone(if is_production {
+                                        BadgeTone::Danger
+                                    } else {
+                                        BadgeTone::Warning
+                                    }))
+                                },
+                            ),
+                            cx,
+                        ),
                         cx,
                     )),
             )
@@ -1540,10 +1664,7 @@ impl CodeDocument {
                 )
             })
             .when(!show_source_controls && show_db, |el| {
-                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
-                    "document.code.context_bar.label.database"
-                ))))
-                .child(
+                el.child(context_separator(theme)).child(
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(1))
@@ -1555,16 +1676,21 @@ impl CodeDocument {
                             ),
                             FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(self.source.database_dropdown.clone(), cx),
+                            control_shell(
+                                context_selector(
+                                    Icon::new(AppIcon::Database)
+                                        .size(EditorMetrics::SELECTOR_ICON)
+                                        .color(theme.muted_foreground),
+                                    self.source.database_dropdown.clone(),
+                                ),
+                                cx,
+                            ),
                             cx,
                         )),
                 )
             })
             .when(!show_source_controls && show_schema, |el| {
-                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
-                    "document.code.context_bar.label.schema"
-                ))))
-                .child(
+                el.child(context_separator(theme)).child(
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(2))
@@ -1576,17 +1702,17 @@ impl CodeDocument {
                             ),
                             FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(self.source.schema_dropdown.clone(), cx),
+                            control_shell(
+                                context_selector(
+                                    Icon::new(AppIcon::Layers)
+                                        .size(EditorMetrics::SELECTOR_ICON)
+                                        .color(theme.muted_foreground),
+                                    self.source.schema_dropdown.clone(),
+                                ),
+                                cx,
+                            ),
                             cx,
                         )),
-                )
-            })
-            .child(div().flex_1())
-            .when_some(self.editor.path.as_ref(), |el, path| {
-                el.child(
-                    div()
-                        .overflow_x_hidden()
-                        .child(Text::caption(path.display().to_string())),
                 )
             });
 
@@ -1596,11 +1722,13 @@ impl CodeDocument {
             .id("exec-context-bar")
             .flex()
             .flex_col()
-            .px(Spacing::SM)
+            .justify_center()
+            .min_h(EditorMetrics::BAR_HEIGHT)
+            .px(EditorMetrics::BAR_PADDING_X)
             .py(Spacing::XS)
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.tab_bar)
+            .bg(theme.popover)
             .child(main_row)
             // Custom date-range second row — only visible when Custom is active.
             // This avoids overflowing the single-line bar with the date picker,
@@ -1894,10 +2022,9 @@ mod tests {
             "document.code.context_bar.placeholder.connection",
             "document.code.context_bar.placeholder.database",
             "document.code.context_bar.placeholder.schema",
-            "document.code.context_bar.label.connection",
             "document.code.context_bar.label.source",
-            "document.code.context_bar.label.database",
-            "document.code.context_bar.label.schema",
+            "document.code.context_bar.production.title",
+            "document.code.context_bar.production.body",
             "document.code.context_bar.fallback.syntax",
             "document.code.context_bar.fallback.sources",
             "document.code.context_bar.fallback.time",
