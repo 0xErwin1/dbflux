@@ -66,6 +66,7 @@ pub(super) struct VimState {
     /// Characters overwritten in this Replace session, innermost last: where the
     /// typed character starts and what it covered (`None` when it was appended).
     replaced: Vec<(usize, Option<String>)>,
+    block_change: Option<BlockChange>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
 }
@@ -74,6 +75,19 @@ struct PendingReplace {
     start: usize,
     count: usize,
     original: String,
+}
+
+/// A Visual Block `c` waiting for Insert to end, when the text typed on its
+/// first row is copied to the others.
+struct BlockChange {
+    /// Row where Insert started, the byte column there, and that row's length
+    /// and the buffer's line count right after the block was deleted.
+    row: usize,
+    column: usize,
+    line_len: usize,
+    lines: usize,
+    /// The other block rows and the byte column each receives the text at.
+    targets: Vec<(usize, usize)>,
 }
 
 /// What `r` writes when its key is not delivered as typed text.
@@ -744,6 +758,7 @@ impl CodeDocument {
             // menu opened some other way still closes before the mode changes.
             self.dismiss_editor_menus(cx);
         } else {
+            self.finish_block_change(window, cx);
             self.close_change_group(cx);
             self.set_vim_mode(
                 machine::mode_after(self.vim.mode, VimCommand::LeaveInsert),
@@ -894,6 +909,10 @@ impl CodeDocument {
     }
 
     fn apply_visual_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.vim.mode == VimMode::VisualBlock {
+            self.apply_visual_block_change(window, cx);
+            return;
+        }
         let (range, clipboard) = {
             let state = self.editor.input_state.read(cx);
             let content = state.text().to_string();
@@ -921,6 +940,126 @@ impl CodeDocument {
         self.vim.visual_anchor = None;
         self.vim.visual_cursor = None;
         self.schedule_editor_refocus(window, cx);
+    }
+
+    /// Deletes the block on every row that reaches its left column and starts
+    /// Insert on the first such row. Leaving Insert copies the typed text to the
+    /// other rows (`finish_block_change`), all in one undo step.
+    fn apply_visual_block_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(anchor), Some(cursor)) = (self.vim.visual_anchor, self.vim.visual_cursor) else {
+            return;
+        };
+        let (rows, columns, clipboard) = {
+            let state = self.editor.input_state.read(cx);
+            let text = state.text();
+            let content = text.to_string();
+            let rows = machine::block_rows(text, anchor, cursor);
+            let columns: Vec<(usize, usize)> = rows
+                .iter()
+                .map(|(row, range)| (*row, range.start - text.line_start_offset(*row)))
+                .collect();
+            let clipboard = rows
+                .iter()
+                .filter_map(|(_, range)| content.get(range.clone()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (rows, columns, clipboard)
+        };
+
+        let group = NEXT_CHANGE_GROUP.fetch_add(1, Ordering::Relaxed);
+        let started = self
+            .editor
+            .input_state
+            .update(cx, |state, _| state.begin_edit_group(group));
+        if !started {
+            return;
+        }
+        self.vim.change_group = Some(group);
+        self.vim.vertical_goal = None;
+        if !clipboard.is_empty() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(clipboard));
+        }
+
+        self.editor.input_state.update(cx, |state, cx| {
+            for (_, range) in rows.iter().rev().filter(|(_, range)| !range.is_empty()) {
+                state.set_selected_range(range.clone(), cx);
+                state.replace("", window, cx);
+            }
+        });
+
+        let block_change = {
+            let state = self.editor.input_state.read(cx);
+            let text = state.text();
+            columns.split_first().map(|(&(row, column), targets)| {
+                (
+                    text.line_start_offset(row) + column,
+                    BlockChange {
+                        row,
+                        column,
+                        line_len: machine::line_content_len(text, row),
+                        lines: text.lines_len(),
+                        targets: targets.to_vec(),
+                    },
+                )
+            })
+        };
+
+        let insert_at = block_change
+            .as_ref()
+            .map_or_else(|| anchor.min(cursor), |(offset, _)| *offset);
+        self.vim.block_change = block_change.map(|(_, change)| change);
+        self.vim.visual_anchor = None;
+        self.vim.visual_cursor = None;
+        self.set_vim_mode(VimMode::Insert, cx);
+        self.editor.input_state.update(cx, |state, cx| {
+            state.set_selected_range(insert_at..insert_at, cx);
+        });
+        self.schedule_editor_refocus(window, cx);
+    }
+
+    /// Copies the text typed on the first row of a Visual Block change into the
+    /// same column of the other rows. Nothing is copied when the insert added a
+    /// line break or removed text, as in Vim, or while a composition is open.
+    fn finish_block_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(block) = self.vim.block_change.take() else {
+            return;
+        };
+
+        let edits = {
+            let state = self.editor.input_state.read(cx);
+            let text = state.text();
+            if state.has_active_composition() || text.lines_len() != block.lines {
+                return;
+            }
+            let line_len = machine::line_content_len(text, block.row);
+            let Some(inserted_len) = line_len.checked_sub(block.line_len) else {
+                return;
+            };
+            let line_start = text.line_start_offset(block.row);
+            let content = text.to_string();
+            let Some(inserted) = content
+                .get(line_start + block.column..line_start + block.column + inserted_len)
+                .filter(|inserted| !inserted.is_empty())
+                .map(str::to_owned)
+            else {
+                return;
+            };
+            let offsets: Vec<usize> = block
+                .targets
+                .iter()
+                .map(|(row, column)| text.line_start_offset(*row) + column)
+                .collect();
+            (inserted, offsets, state.selected_range())
+        };
+
+        let (inserted, offsets, selection) = edits;
+        self.editor.input_state.update(cx, |state, cx| {
+            for offset in offsets.into_iter().rev() {
+                state.set_selected_range(offset..offset, cx);
+                state.replace(inserted.clone(), window, cx);
+            }
+            state.set_selected_range(selection, cx);
+        });
     }
 
     fn apply_visual_operator(&mut self, delete: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1197,6 +1336,7 @@ impl CodeDocument {
             return;
         }
         if self.vim.change_group.is_some() {
+            self.vim.block_change = None;
             self.close_change_group(cx);
             self.set_vim_mode(VimMode::Normal, cx);
         }

@@ -2406,6 +2406,111 @@ fn visual_change_read_only_keeps_selection_text_and_clipboard(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn visual_block_change_replicates_insert_on_every_row(cx: &mut TestAppContext) {
+    let content = "abcdef\nab\nabcdef\nabc";
+    let mut editor = open_editor(cx, content, true);
+    editor.set_cursor(1);
+    editor.keys("ctrl-v 3 j l c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "adef\na\nadef\na");
+    assert_eq!(editor.cursor(), 1);
+    assert_eq!(editor.clipboard_text().as_deref(), Some("bc\nb\nbc\nbc"));
+
+    editor.type_text("XY");
+    assert_eq!(editor.text(), "aXYdef\na\nadef\na");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "aXYdef\naXY\naXYdef\naXY");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 2);
+    assert_eq!(editor.selected_query(), None);
+
+    editor.keys("u");
+    assert_eq!(editor.text(), content);
+    editor.keys("ctrl-y");
+    assert_eq!(editor.text(), "aXYdef\naXY\naXYdef\naXY");
+}
+
+#[gpui::test]
+fn visual_block_change_skips_rows_short_of_the_left_column(cx: &mut TestAppContext) {
+    for (content, expected) in [
+        ("abcdef\nab\nabcdef", "abXYef\nabXY\nabXYef"),
+        ("abcdef\n\nabcdef", "abXYef\n\nabXYef"),
+        ("abcd\r\nabcd", "aXYd\r\naXYd"),
+        ("a中cdef\nabcdef", "aXYdef\naXYdef"),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        let left = if content.starts_with("abcdef") { 2 } else { 1 };
+        editor.set_cursor(left);
+        let down = content.lines().count() - 1;
+        editor.keys(&format!("ctrl-v {down} j l c"));
+        editor.type_text("XY");
+        editor.keys("escape");
+        assert_eq!(editor.text(), expected, "{content:?}");
+        editor.keys("u");
+        assert_eq!(editor.text(), content, "{content:?}");
+    }
+}
+
+#[gpui::test]
+fn visual_block_change_does_not_replicate_line_breaks_or_empty_inserts(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef\nabcdef", true);
+    editor.set_cursor(1);
+    editor.keys("ctrl-v j l c");
+    editor.type_text("X");
+    editor.keys("enter");
+    editor.type_text("Y");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "aX\nYdef\nadef");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcdef\nabcdef");
+
+    editor.set_cursor(1);
+    editor.keys("ctrl-v j l c escape");
+    assert_eq!(editor.text(), "adef\nadef");
+    assert_eq!(editor.cursor(), 0);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn visual_block_change_read_only_and_blur(cx: &mut TestAppContext) {
+    let mut readonly = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "abcdef\nabcdef",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    readonly
+        .window
+        .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+    readonly.set_cursor(1);
+    readonly.keys("ctrl-v j l");
+    let selection = readonly.selection();
+    readonly.keys("c");
+    assert_eq!(readonly.mode(), Some(VimMode::VisualBlock));
+    assert_eq!(readonly.selection(), selection);
+    assert_eq!(readonly.text(), "abcdef\nabcdef");
+    assert_eq!(readonly.clipboard_text().as_deref(), Some("sentinel"));
+
+    let mut editor = open_editor(cx, "abcdef\nabcdef", true);
+    editor.focus_document(&editor.document.clone());
+    editor.set_cursor(1);
+    editor.keys("ctrl-v j l c");
+    editor.type_text("XY");
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| document.close_change_group_on_blur(cx));
+    });
+    editor.window.run_until_parked();
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "aXYdef\nadef");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcdef\nabcdef");
+}
+
+#[gpui::test]
 fn visual_change_empty_selection_enters_insert(cx: &mut TestAppContext) {
     for visual in ["v", "shift-v"] {
         let mut editor = open_editor(cx, "", true);

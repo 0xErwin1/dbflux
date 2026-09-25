@@ -151,9 +151,7 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
                 "x" | "d" if visual => Some(VimCommand::VisualDelete),
-                "c" if matches!(mode, VimMode::Visual | VimMode::VisualLine) => {
-                    Some(VimCommand::VisualChange)
-                }
+                "c" if visual => Some(VimCommand::VisualChange),
                 "y" if visual => Some(VimCommand::VisualYank),
                 "x" if !visual => Some(VimCommand::DeleteChar),
                 "r" if !visual => Some(VimCommand::ReplaceOnce),
@@ -725,6 +723,41 @@ pub(crate) fn visual_range(
     }
 }
 
+/// Rows of a Visual Block that reach its left column, each with the byte range
+/// of its block columns. Columns count Unicode scalars, as the native columnar
+/// selection does; rows shorter than the left column are skipped, like Vim.
+pub(crate) fn block_rows(text: &Rope, anchor: usize, cursor: usize) -> Vec<(usize, Range<usize>)> {
+    let column = |offset: usize| {
+        let line = Line::containing(text, offset);
+        (line.row, line.char_count_before(line.column_of(offset)))
+    };
+    let (anchor_row, anchor_column) = column(anchor);
+    let (cursor_row, cursor_column) = column(cursor);
+    let left = anchor_column.min(cursor_column);
+    let right = anchor_column.max(cursor_column);
+
+    (anchor_row.min(cursor_row)..=anchor_row.max(cursor_row))
+        .filter_map(|row| {
+            let line = Line::at_row(text, row);
+            let columns: Vec<usize> = line.content.char_indices().map(|(at, _)| at).collect();
+            if columns.len() < left {
+                return None;
+            }
+            let start = columns.get(left).copied().unwrap_or(line.content.len());
+            let end = columns
+                .get(right.saturating_add(1))
+                .copied()
+                .unwrap_or(line.content.len());
+            Some((row, line.start + start..line.start + end))
+        })
+        .collect()
+}
+
+/// Byte length of a logical line, without its terminator.
+pub(crate) fn line_content_len(text: &Rope, row: usize) -> usize {
+    Line::at_row(text, row).content.len()
+}
+
 /// Whole logical lines, including their terminators when present. The final
 /// unterminated line has no invented newline in the returned range.
 pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Range<usize> {
@@ -1231,6 +1264,17 @@ mod tests {
         assert_eq!(character_range(&text, 1), Some(1..4));
         assert_eq!(character_range(&text, 4), Some(4..5));
         assert_eq!(character_range(&text, 5), None, "past the last character");
+    }
+
+    #[test]
+    fn block_rows_skip_short_rows_and_use_scalar_columns() {
+        let text = Rope::from("abcdef\r\nab\r\n\r\na中cdef");
+        let rows = block_rows(&text, 2, 19);
+        assert_eq!(rows, vec![(0, 2..4), (1, 10..10), (3, 18..20)]);
+        assert_eq!(block_rows(&text, 19, 2), rows);
+        assert_eq!(line_content_len(&text, 0), 6);
+        assert_eq!(line_content_len(&text, 2), 0);
+        assert_eq!(block_rows(&Rope::from(""), 0, 0), vec![(0, 0..0)]);
     }
 
     #[test]
