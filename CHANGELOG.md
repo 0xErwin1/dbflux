@@ -6,6 +6,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim Visual selection operators** — Visual character, line, and block
+  selections support `d` / `x` deletion and `y` yank to the system clipboard.
+  Block deletion uses disjoint row ranges in one undo step. An empty selection
+  returns to Normal without editing or changing the clipboard; read-only
+  deletion keeps the selection with no effect, while yank still works. `dd`
+  remains Normal-only; Visual `c` awaits the native undo/IME seam.
+
 * **Vim horizontal and vertical operators** — Normal-mode `d` and `y`
   accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
   Operator and motion counts multiply (`2d3j` spans six lines). Yanks use

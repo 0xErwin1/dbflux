@@ -950,6 +950,87 @@ fn visual_block_selects_rows_and_executes_fragments(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn visual_edit_uses_raw_reversed_character_bytes_and_undo(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "aé中z", true);
+    editor.set_cursor(6);
+    editor.keys("v h h");
+    assert_eq!(editor.selected_query().as_deref(), Some("é中z"));
+    editor.keys("d");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("é中z"));
+    assert_eq!(editor.text(), "a");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("u");
+    assert_eq!(editor.text(), "aé中z");
+}
+
+#[gpui::test]
+fn visual_block_delete_is_disjoint_and_atomic(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abXX\na\nabYY", true);
+    editor.set_cursor(1);
+    editor.keys("ctrl-v j j 2 l");
+    assert_eq!(editor.selected_query().as_deref(), Some("bXX\nbYY"));
+    editor.keys("x");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("bXX\nbYY"));
+    assert_eq!(editor.text(), "a\na\na");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abXX\na\nabYY");
+}
+
+#[gpui::test]
+fn empty_visual_operators_exit_without_replacing_clipboard(cx: &mut TestAppContext) {
+    for entry in ["v", "shift-v", "ctrl-v"] {
+        for operator in ["d", "x", "y"] {
+            let mut editor = open_editor(cx, "", true);
+            editor.window.update(|_, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()))
+            });
+            editor.keys(&format!("{entry} {operator}"));
+            assert_eq!(editor.mode(), Some(VimMode::Normal), "{entry} {operator}");
+            assert_eq!(editor.text(), "");
+            assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+            editor.keys("u");
+            assert_eq!(editor.text(), "");
+        }
+    }
+}
+
+#[gpui::test]
+fn read_only_visual_delete_keeps_selection_and_clipboard_but_yank_exits(cx: &mut TestAppContext) {
+    for operator in ["d", "x"] {
+        let mut editor = open_editor_with(
+            cx,
+            EditorSetup {
+                content: "alpha",
+                vim_enabled: true,
+                language: QueryLanguage::Sql,
+                read_only: true,
+            },
+        );
+        editor
+            .window
+            .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+        editor.keys(&format!("v l {operator}"));
+        assert_eq!(editor.mode(), Some(VimMode::Visual));
+        assert_eq!(editor.text(), "alpha");
+        assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+        editor.keys("y");
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        assert_eq!(editor.clipboard_text().as_deref(), Some("al"));
+    }
+}
+
+#[gpui::test]
+fn visual_line_eof_delete_preserves_yank_bytes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\r\nlast", true);
+    editor.set_cursor(7);
+    editor.keys("shift-v d");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("last"));
+    assert_eq!(editor.text(), "first");
+    editor.keys("u");
+    assert_eq!(editor.text(), "first\r\nlast");
+}
+
+#[gpui::test]
 fn visual_block_nonzero_utf8_column_selects_matching_scalars(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "éx\nax", true);
     editor.set_cursor(2);

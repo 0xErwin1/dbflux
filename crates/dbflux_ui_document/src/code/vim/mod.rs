@@ -307,6 +307,11 @@ impl CodeDocument {
                 self.schedule_editor_refocus(window, cx);
             }
             VimCommand::LeaveInsert => self.leave_insert(window, cx),
+            VimCommand::VisualDelete if !self.read_only => {
+                self.apply_visual_operator(true, window, cx)
+            }
+            VimCommand::VisualYank => self.apply_visual_operator(false, window, cx),
+            VimCommand::VisualDelete => {}
             // A read-only document keeps its text: motions work, edits do nothing.
             VimCommand::Operator(operator) => self.vim.pending_operator = Some((operator, count)),
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
@@ -546,6 +551,57 @@ impl CodeDocument {
         if clamped != cursor {
             self.set_editor_cursor(clamped, cx);
         }
+    }
+
+    fn apply_visual_operator(&mut self, delete: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let mode = self.vim.mode;
+        let (selected, delete_range) = {
+            let state = self.editor.input_state.read(cx);
+            let content = state.text().to_string();
+            let ranges = state.selected_nonempty_ranges();
+            let range = state.selected_range();
+            let selected = match mode {
+                VimMode::VisualBlock => ranges
+                    .iter()
+                    .filter_map(|range| content.get(range.clone()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                VimMode::VisualLine => machine::line_yank_text(&content, range.clone())
+                    .unwrap_or_default()
+                    .to_string(),
+                _ => content.get(range.clone()).unwrap_or_default().to_string(),
+            };
+            let delete_range = (mode == VimMode::VisualLine)
+                .then(|| machine::line_delete_range(state.text(), range));
+            (selected, delete_range)
+        };
+        let has_selection = !selected.is_empty();
+        if has_selection {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        }
+        if delete && has_selection {
+            self.editor.input_state.update(cx, |state, cx| {
+                if let Some(range) = delete_range {
+                    state.set_selected_range(range, cx);
+                }
+                // The native multi-cursor replace applies disjoint block fragments
+                // in one history transaction; never collapse them into one span.
+                state.replace("", window, cx);
+            });
+        }
+        let cursor = self
+            .vim
+            .visual_anchor
+            .unwrap_or(0)
+            .min(self.vim.visual_cursor.unwrap_or(0));
+        self.vim.visual_anchor = None;
+        self.vim.visual_cursor = None;
+        self.set_vim_mode(VimMode::Normal, cx);
+        self.editor.input_state.update(cx, |state, cx| {
+            let cursor = machine::clamp_to_character(state.text(), cursor.min(state.text().len()));
+            state.set_selected_range(cursor..cursor, cx);
+        });
+        self.schedule_editor_refocus(window, cx);
     }
 
     fn apply_line_operator(

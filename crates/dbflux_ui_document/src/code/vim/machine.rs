@@ -42,6 +42,8 @@ pub(crate) enum VimCommand {
     Digit(u8),
     LeaveInsert,
     DeleteChar,
+    VisualDelete,
+    VisualYank,
     Operator(char),
     Undo,
     /// Consumed without effect, so the key neither edits nor reaches other handlers.
@@ -120,6 +122,8 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => {
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
+                "x" | "d" if visual => Some(VimCommand::VisualDelete),
+                "y" if visual => Some(VimCommand::VisualYank),
                 "x" if !visual => Some(VimCommand::DeleteChar),
                 "d" if !visual => Some(VimCommand::Operator('d')),
                 "y" if !visual => Some(VimCommand::Operator('y')),

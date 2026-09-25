@@ -613,6 +613,7 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
 | Visual / Visual Line | `v` / `V` | Exit the active Visual mode / switch between characterwise and linewise selection |
+| Visual / Visual Line / Visual Block | `d` / `x` / `y` | Delete the selection (`d` / `x`) or yank it to the system clipboard (`y`) |
 | Visual / Visual Line / Visual Block | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
 
@@ -656,6 +657,8 @@ In Insert mode the editor behaves as it does with Vim mode off, including `Ctrl+
 and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
+
+Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` is Normal-only. Visual `c` is unsupported until the native undo/IME seam is available.
 
 **Undo.** Each `x`, `dd`, or motion-based `d` invocation is one undo step,
 including counted commands. Everything typed in one Insert session is one
