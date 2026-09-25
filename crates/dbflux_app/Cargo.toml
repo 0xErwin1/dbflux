@@ -46,6 +46,8 @@ uuid.workspace = true
 log.workspace = true
 indexmap.workspace = true
 async-trait = { workspace = true }
+reqwest.workspace = true
+semver.workspace = true
 
 [features]
 default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "mssql"]

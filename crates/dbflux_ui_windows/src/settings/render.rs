@@ -34,6 +34,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             super::SettingsSectionId::McpPolicies => dbflux_i18n::t!("settings.nav.mcp_policies"),
             super::SettingsSectionId::Keybindings => dbflux_i18n::t!("settings.nav.keybindings"),
+            super::SettingsSectionId::Updates => dbflux_i18n::t!("settings.nav.updates"),
             super::SettingsSectionId::Proxies => dbflux_i18n::t!("settings.nav.proxies"),
             super::SettingsSectionId::SshTunnels => dbflux_i18n::t!("settings.nav.ssh_tunnels"),
             super::SettingsSectionId::AuthProfiles => {
@@ -412,6 +413,7 @@ mod section_title_i18n_tests {
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies,
             SettingsSectionId::Keybindings,
+            SettingsSectionId::Updates,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
             SettingsSectionId::AuthProfiles,

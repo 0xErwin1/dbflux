@@ -3514,6 +3514,7 @@ settings:
     general_group: General
     general: General
     keybindings: Keybindings
+    updates: Updates
     audit: Audit
     about: About
     network: Network
@@ -3936,3 +3937,76 @@ workspace:
     delete_folder: 'Delete folder "%{name}"?'
     delete_connection: 'Delete connection "%{name}"?'
   default_object_type: Object
+updates:
+  settings:
+    title: Updates
+    subtitle: New version checks and the changelog after updates.
+    group: Updates
+    new_versions: New versions
+    check_on_startup: Check GitHub for a new release at startup
+    status: Status
+    up_to_date: Up to date
+    available: "%{version} available"
+    failed: Could not check
+    checking: Checking
+    not_checked: Not checked yet
+    detail: "%{version} · %{channel} · checked %{ago}"
+    detail_unchecked: "%{version} · %{channel}"
+    check_now: Check now
+    changelog: Changelog
+    show_whats_new: Show what is new after each update
+    open_whats_new: Open what is new
+    show_welcome: Show welcome again
+    reset: Reset to defaults
+    save: Save
+    saved: Update settings saved.
+    save_error: "Could not save the update settings: %{error}"
+  ago:
+    just_now: just now
+    minutes: "%{count} min ago"
+    hours: "%{count} h ago"
+    days: "%{count} d ago"
+  toast:
+    title: "DBFlux %{version} is available"
+    download_body: "You have %{current}. The download page opens in your browser."
+    nix_body: "You have %{current}. Installed with Nix, so update it with your usual rebuild."
+    aur_body: "You have %{current}. Installed from the AUR, so update it with your AUR helper."
+    flatpak_body: "You have %{current}. Installed with Flatpak, so update it with flatpak update."
+    download: Download
+    release_notes: Release notes
+    skip: Skip
+    skip_version: Skip this version
+    skip_error: "Could not skip this version: %{error}"
+  status_bar:
+    available: "%{version} available"
+    tooltip: Open the release notes
+  sections:
+    added: Added
+    changed: Changed
+    deprecated: Deprecated
+    removed: Removed
+    fixed: Fixed
+    security: Security
+  whats_new:
+    title: What is new
+    releases_since:
+      one: "1 release since you last opened DBFlux"
+      many: "%{count} releases since you last opened DBFlux"
+    this_release: The version you are running
+    unreleased: Unreleased
+    show_after_update: Show what is new after each update
+    full_changelog: Full changelog
+    close: Close
+    empty: No changes are listed for this version.
+  welcome:
+    title: Welcome to DBFlux
+    tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
+    whats_new: What is new
+    updates: Updates
+    notify: Tell me when a new version is out
+    notify_hint: At startup DBFlux asks GitHub for the latest release. Nothing about you is sent.
+    show_whats_new: Show what is new after each update
+    show_whats_new_hint: Opens this changelog once, the first time a new version starts.
+    change_later: Change these later in Settings › Updates
+    get_started: Get started
+    full_changelog: Full changelog

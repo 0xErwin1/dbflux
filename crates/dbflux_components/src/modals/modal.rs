@@ -131,6 +131,9 @@ pub struct Modal {
     focus_handle: Option<FocusHandle>,
     key_context: Option<SharedString>,
     block_scroll: bool,
+    cut: Pixels,
+    fill: Option<Hsla>,
+    show_header: bool,
 }
 
 impl Modal {
@@ -154,6 +157,9 @@ impl Modal {
             focus_handle: None,
             key_context: None,
             block_scroll: false,
+            cut: ChamferCut::MODAL,
+            fill: None,
+            show_header: true,
         }
     }
 
@@ -274,6 +280,26 @@ impl Modal {
     /// Stop scroll-wheel events from reaching what is behind the modal.
     pub fn block_scroll(mut self) -> Self {
         self.block_scroll = true;
+        self
+    }
+
+    /// Corner cut of the card (default: `ChamferCut::MODAL`), for boards that
+    /// draw a dialog with a different cut.
+    pub fn cut(mut self, cut: Pixels) -> Self {
+        self.cut = cut;
+        self
+    }
+
+    /// Replace the card fill (default: the modal surface fill).
+    pub fn fill(mut self, fill: impl Into<Hsla>) -> Self {
+        self.fill = Some(fill.into());
+        self
+    }
+
+    /// Leave out the header bar, for dialogs whose content brings its own
+    /// head. Escape and the backdrop still call `on_close`.
+    pub fn without_header(mut self) -> Self {
+        self.show_header = false;
         self
     }
 }
@@ -429,8 +455,8 @@ impl RenderOnce for Modal {
             .child(div().flex_1())
             .when_some(close_control, |header, close| header.child(close));
 
-        let mut shape = Chamfer::new(ChamferCut::MODAL)
-            .fill(surface.fill.resolve(theme))
+        let mut shape = Chamfer::new(self.cut)
+            .fill(self.fill.unwrap_or_else(|| surface.fill.resolve(theme)))
             .border(surface.border.resolve(theme));
 
         if is_danger {
@@ -446,7 +472,7 @@ impl RenderOnce for Modal {
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(shape)
-            .child(header)
+            .when(self.show_header, |card| card.child(header))
             .children(self.children);
 
         card = match self.height {

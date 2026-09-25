@@ -25,6 +25,11 @@ impl SettingsCoordinator {
                         Some(AppIcon::Keyboard),
                     ),
                     TreeNavNode::leaf(
+                        "updates",
+                        dbflux_i18n::t!("settings.nav.updates"),
+                        Some(AppIcon::Download),
+                    ),
+                    TreeNavNode::leaf(
                         "audit",
                         dbflux_i18n::t!("settings.nav.audit"),
                         Some(AppIcon::History),
@@ -126,6 +131,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
             "keybindings" => Some(SettingsSectionId::Keybindings),
+            "updates" => Some(SettingsSectionId::Updates),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
             "auth-profiles" => Some(SettingsSectionId::AuthProfiles),
@@ -148,6 +154,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
             SettingsSectionId::Keybindings => "keybindings",
+            SettingsSectionId::Updates => "updates",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
             SettingsSectionId::AuthProfiles => "auth-profiles",
@@ -212,6 +219,7 @@ mod tests {
             SettingsSectionId::General,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
+            SettingsSectionId::Updates,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
             SettingsSectionId::AuthProfiles,
@@ -255,6 +263,7 @@ mod tests {
         "settings.nav.general_group",
         "settings.nav.general",
         "settings.nav.keybindings",
+        "settings.nav.updates",
         "settings.nav.audit",
         "settings.nav.about",
         "settings.nav.network",

@@ -81,6 +81,8 @@ pub struct ToastAction {
     pub label: SharedString,
     pub primary: bool,
     pub callback: Option<ToastActionCallback>,
+    /// Close the toast after the callback runs.
+    pub dismisses: bool,
 }
 
 impl ToastAction {
@@ -90,6 +92,7 @@ impl ToastAction {
             label: label.into(),
             primary: false,
             callback: None,
+            dismisses: false,
         }
     }
 
@@ -103,6 +106,13 @@ impl ToastAction {
         F: Fn(&mut App) + Send + Sync + 'static,
     {
         self.callback = Some(Arc::new(callback));
+        self
+    }
+
+    /// Close the toast once the action has run, for actions that settle what
+    /// the toast was about (for example "Skip").
+    pub fn dismisses(mut self) -> Self {
+        self.dismisses = true;
         self
     }
 }
@@ -330,6 +340,35 @@ impl ToastHost {
 
         if let Some(delay) = auto_dismiss {
             self.schedule_dismiss(id, delay, cx);
+        }
+    }
+
+    /// Runs the action at `index` of toast `toast_id`, then closes the toast
+    /// when the action asks for it. The callback runs outside any host
+    /// update, so it may push toasts of its own.
+    pub fn run_action(host: &Entity<Self>, toast_id: u64, index: usize, cx: &mut App) {
+        let action = host
+            .read(cx)
+            .toasts
+            .iter()
+            .find(|toast| toast.id == toast_id)
+            .and_then(|toast| {
+                toast
+                    .actions
+                    .get(index)
+                    .map(|action| (action.callback.clone(), action.dismisses))
+            });
+
+        let Some((callback, dismisses)) = action else {
+            return;
+        };
+
+        if let Some(callback) = callback {
+            callback(cx);
+        }
+
+        if dismisses {
+            host.update(cx, |host, cx| host.dismiss(toast_id, cx));
         }
     }
 
@@ -633,9 +672,12 @@ impl ToastHost {
                 if action.primary {
                     button = button.primary();
                 }
-                match action.callback.clone() {
-                    Some(callback) => {
-                        button = button.on_click(move |_, _, app| callback(app));
+                match action.callback.as_ref() {
+                    Some(_) => {
+                        let host = cx.entity();
+                        button = button.on_click(move |_, _, app| {
+                            Self::run_action(&host, toast_id, idx, app);
+                        });
                     }
                     None => {
                         // No callback: render disabled — never fake an action.
@@ -680,5 +722,42 @@ pub fn flush_pending_toast<T>(
             .push(cx);
     } else {
         Toast::success(toast.message).meta_right(now_hms()).push(cx);
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::{Toast, ToastAction, ToastHost};
+    use gpui::{AppContext as _, TestAppContext};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[gpui::test]
+    fn only_dismissing_actions_close_their_toast(cx: &mut TestAppContext) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let host = cx.new(|_| ToastHost::new());
+
+        let keep_runs = runs.clone();
+        let skip_runs = runs.clone();
+        let toast = Toast::error("Update available")
+            .action(ToastAction::new("keep", "Keep").on_click(move |_| {
+                keep_runs.fetch_add(1, Ordering::SeqCst);
+            }))
+            .action(
+                ToastAction::new("skip", "Skip")
+                    .dismisses()
+                    .on_click(move |_| {
+                        skip_runs.fetch_add(1, Ordering::SeqCst);
+                    }),
+            );
+        host.update(cx, |host, cx| host.push_rich(toast, cx));
+
+        cx.update(|cx| ToastHost::run_action(&host, 1, 0, cx));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 1);
+
+        cx.update(|cx| ToastHost::run_action(&host, 1, 1, cx));
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        assert_eq!(host.read_with(cx, |host, _| host.toast_count()), 0);
     }
 }

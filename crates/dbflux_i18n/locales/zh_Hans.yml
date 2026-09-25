@@ -3514,6 +3514,7 @@ settings:
     general_group: 常规
     general: 常规
     keybindings: 键盘快捷键
+    updates: 更新
     audit: 审计
     about: 关于
     network: 网络
@@ -3934,3 +3935,76 @@ workspace:
     delete_folder: "删除文件夹 %{name}？"
     delete_connection: "删除连接 %{name}？"
   default_object_type: 对象
+updates:
+  settings:
+    title: 更新
+    subtitle: 新版本检查以及更新后的更新日志。
+    group: 更新
+    new_versions: 新版本
+    check_on_startup: 启动时在 GitHub 上检查新版本
+    status: 状态
+    up_to_date: 已是最新
+    available: "%{version} 可用"
+    failed: 无法检查
+    checking: 正在检查
+    not_checked: 尚未检查
+    detail: "%{version} · %{channel} · %{ago}检查"
+    detail_unchecked: "%{version} · %{channel}"
+    check_now: 立即检查
+    changelog: 更新日志
+    show_whats_new: 每次更新后显示新功能
+    open_whats_new: 打开新功能
+    show_welcome: 再次显示欢迎页
+    reset: 恢复默认设置
+    save: 保存
+    saved: 更新设置已保存。
+    save_error: "无法保存更新设置：%{error}"
+  ago:
+    just_now: 刚刚
+    minutes: "%{count} 分钟前"
+    hours: "%{count} 小时前"
+    days: "%{count} 天前"
+  toast:
+    title: "DBFlux %{version} 已发布"
+    download_body: "当前版本为 %{current}。下载页面将在浏览器中打开。"
+    nix_body: "当前版本为 %{current}。此版本通过 Nix 安装，请使用常用的重新构建方式更新。"
+    aur_body: "当前版本为 %{current}。此版本从 AUR 安装，请使用 AUR 助手更新。"
+    flatpak_body: "当前版本为 %{current}。此版本通过 Flatpak 安装，请使用 flatpak update 更新。"
+    download: 下载
+    release_notes: 发行说明
+    skip: 跳过
+    skip_version: 跳过此版本
+    skip_error: "无法跳过此版本：%{error}"
+  status_bar:
+    available: "%{version} 可用"
+    tooltip: 打开发行说明
+  sections:
+    added: 新增
+    changed: 变更
+    deprecated: 弃用
+    removed: 移除
+    fixed: 修复
+    security: 安全
+  whats_new:
+    title: 新功能
+    releases_since:
+      one: "自上次打开 DBFlux 以来有 1 个版本"
+      many: "自上次打开 DBFlux 以来有 %{count} 个版本"
+    this_release: 当前运行的版本
+    unreleased: 未发布
+    show_after_update: 每次更新后显示新功能
+    full_changelog: 完整更新日志
+    close: 关闭
+    empty: 此版本没有记录的变更。
+  welcome:
+    title: 欢迎使用 DBFlux
+    tagline: 面向键盘操作的客户端，支持 SQL、文档、键值、时间序列和对象存储。
+    whats_new: 新功能
+    updates: 更新
+    notify: 有新版本时通知我
+    notify_hint: 启动时 DBFlux 会向 GitHub 查询最新版本，不会发送任何关于您的信息。
+    show_whats_new: 每次更新后显示新功能
+    show_whats_new_hint: 新版本首次启动时打开一次此更新日志。
+    change_later: 稍后可在 设置 › 更新 中更改
+    get_started: 开始使用
+    full_changelog: 完整更新日志

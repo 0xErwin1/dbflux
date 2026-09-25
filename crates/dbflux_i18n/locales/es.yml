@@ -3514,6 +3514,7 @@ settings:
     general_group: General
     general: General
     keybindings: Atajos de teclado
+    updates: Actualizaciones
     audit: Auditoría
     about: Acerca de
     network: Red
@@ -3936,3 +3937,76 @@ workspace:
     delete_folder: '¿Eliminar la carpeta "%{name}"?'
     delete_connection: '¿Eliminar la conexión "%{name}"?'
   default_object_type: Objeto
+updates:
+  settings:
+    title: Actualizaciones
+    subtitle: Búsqueda de nuevas versiones y el registro de cambios tras actualizar.
+    group: Actualizaciones
+    new_versions: Nuevas versiones
+    check_on_startup: Buscar una nueva versión en GitHub al iniciar
+    status: Estado
+    up_to_date: Actualizado
+    available: "%{version} disponible"
+    failed: No se pudo comprobar
+    checking: Comprobando
+    not_checked: Aún no se comprobó
+    detail: "%{version} · %{channel} · comprobado %{ago}"
+    detail_unchecked: "%{version} · %{channel}"
+    check_now: Comprobar ahora
+    changelog: Registro de cambios
+    show_whats_new: Mostrar las novedades después de cada actualización
+    open_whats_new: Ver novedades
+    show_welcome: Mostrar la bienvenida de nuevo
+    reset: Restablecer valores predeterminados
+    save: Guardar
+    saved: Configuración de actualizaciones guardada.
+    save_error: "No se pudo guardar la configuración de actualizaciones: %{error}"
+  ago:
+    just_now: ahora mismo
+    minutes: "hace %{count} min"
+    hours: "hace %{count} h"
+    days: "hace %{count} d"
+  toast:
+    title: "DBFlux %{version} está disponible"
+    download_body: "Tienes %{current}. La página de descarga se abre en el navegador."
+    nix_body: "Tienes %{current}. Se instaló con Nix, así que actualízalo con tu rebuild habitual."
+    aur_body: "Tienes %{current}. Se instaló desde AUR, así que actualízalo con tu helper de AUR."
+    flatpak_body: "Tienes %{current}. Se instaló con Flatpak, así que actualízalo con flatpak update."
+    download: Descargar
+    release_notes: Notas de la versión
+    skip: Omitir
+    skip_version: Omitir esta versión
+    skip_error: "No se pudo omitir esta versión: %{error}"
+  status_bar:
+    available: "%{version} disponible"
+    tooltip: Abrir las notas de la versión
+  sections:
+    added: Agregado
+    changed: Cambiado
+    deprecated: Obsoleto
+    removed: Eliminado
+    fixed: Corregido
+    security: Seguridad
+  whats_new:
+    title: Novedades
+    releases_since:
+      one: "1 versión desde la última vez que abriste DBFlux"
+      many: "%{count} versiones desde la última vez que abriste DBFlux"
+    this_release: La versión que estás usando
+    unreleased: Sin publicar
+    show_after_update: Mostrar las novedades después de cada actualización
+    full_changelog: Registro de cambios completo
+    close: Cerrar
+    empty: No hay cambios registrados para esta versión.
+  welcome:
+    title: Te damos la bienvenida a DBFlux
+    tagline: Un cliente pensado para el teclado para SQL, documentos, clave-valor, series temporales y almacenamiento de objetos.
+    whats_new: Novedades
+    updates: Actualizaciones
+    notify: Avisarme cuando salga una nueva versión
+    notify_hint: Al iniciar, DBFlux le pregunta a GitHub por la última versión. No se envía nada sobre ti.
+    show_whats_new: Mostrar las novedades después de cada actualización
+    show_whats_new_hint: Abre este registro de cambios una vez, la primera vez que inicia una versión nueva.
+    change_later: Puedes cambiar esto después en Configuración › Actualizaciones
+    get_started: Empezar
+    full_changelog: Registro de cambios completo

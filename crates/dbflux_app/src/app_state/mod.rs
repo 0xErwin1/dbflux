@@ -70,6 +70,8 @@ pub struct AppState {
     pub facade: SessionFacade,
     external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
     general_settings: GeneralSettings,
+    update_settings: crate::updates::UpdateSettings,
+    update_check: crate::updates::UpdateCheckState,
     driver_overrides: HashMap<DriverKey, GlobalOverrides>,
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
@@ -2178,6 +2180,29 @@ impl AppState {
 
     pub fn general_settings(&self) -> &GeneralSettings {
         &self.general_settings
+    }
+
+    pub fn update_settings(&self) -> &crate::updates::UpdateSettings {
+        &self.update_settings
+    }
+
+    /// Persists `settings` and, only when the write succeeds, makes them the
+    /// in-memory copy.
+    pub fn set_update_settings(
+        &mut self,
+        settings: crate::updates::UpdateSettings,
+    ) -> Result<(), dbflux_storage::error::StorageError> {
+        crate::updates::save_update_settings(&self.storage_runtime, &settings)?;
+        self.update_settings = settings;
+        Ok(())
+    }
+
+    pub fn update_check(&self) -> &crate::updates::UpdateCheckState {
+        &self.update_check
+    }
+
+    pub fn set_update_check(&mut self, state: crate::updates::UpdateCheckState) {
+        self.update_check = state;
     }
 
     pub fn effective_settings(&self, driver_key: &str) -> EffectiveSettings {

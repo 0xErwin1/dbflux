@@ -42,6 +42,7 @@ pub mod services;
 pub mod settings;
 pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
+pub mod update_settings;
 
 pub mod state;
 

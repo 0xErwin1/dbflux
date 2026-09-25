@@ -3513,6 +3513,7 @@ settings:
     general_group: 일반
     general: 일반
     keybindings: 키 바인딩
+    updates: 업데이트
     audit: 감사
     about: 정보
     network: 네트워크
@@ -3935,3 +3936,76 @@ workspace:
     delete_folder: '폴더 "%{name}"을(를) 삭제하시겠습니까?'
     delete_connection: '연결 "%{name}"을(를) 삭제하시겠습니까?'
   default_object_type: 개체
+updates:
+  settings:
+    title: 업데이트
+    subtitle: 새 버전 확인과 업데이트 후 변경 사항.
+    group: 업데이트
+    new_versions: 새 버전
+    check_on_startup: 시작할 때 GitHub에서 새 릴리스 확인
+    status: 상태
+    up_to_date: 최신 버전
+    available: "%{version} 사용 가능"
+    failed: 확인할 수 없음
+    checking: 확인 중
+    not_checked: 아직 확인하지 않음
+    detail: "%{version} · %{channel} · %{ago} 확인"
+    detail_unchecked: "%{version} · %{channel}"
+    check_now: 지금 확인
+    changelog: 변경 사항
+    show_whats_new: 업데이트할 때마다 새로운 기능 표시
+    open_whats_new: 새로운 기능 열기
+    show_welcome: 환영 화면 다시 보기
+    reset: 기본값으로 재설정
+    save: 저장
+    saved: 업데이트 설정을 저장했습니다.
+    save_error: "업데이트 설정을 저장할 수 없습니다: %{error}"
+  ago:
+    just_now: 방금
+    minutes: "%{count}분 전"
+    hours: "%{count}시간 전"
+    days: "%{count}일 전"
+  toast:
+    title: "DBFlux %{version}을(를) 사용할 수 있습니다"
+    download_body: "현재 버전은 %{current}입니다. 다운로드 페이지가 브라우저에서 열립니다."
+    nix_body: "현재 버전은 %{current}입니다. Nix로 설치했으므로 평소처럼 다시 빌드하여 업데이트하세요."
+    aur_body: "현재 버전은 %{current}입니다. AUR에서 설치했으므로 AUR 도우미로 업데이트하세요."
+    flatpak_body: "현재 버전은 %{current}입니다. Flatpak으로 설치했으므로 flatpak update로 업데이트하세요."
+    download: 다운로드
+    release_notes: 릴리스 노트
+    skip: 건너뛰기
+    skip_version: 이 버전 건너뛰기
+    skip_error: "이 버전을 건너뛸 수 없습니다: %{error}"
+  status_bar:
+    available: "%{version} 사용 가능"
+    tooltip: 릴리스 노트 열기
+  sections:
+    added: 추가됨
+    changed: 변경됨
+    deprecated: 지원 중단 예정
+    removed: 제거됨
+    fixed: 수정됨
+    security: 보안
+  whats_new:
+    title: 새로운 기능
+    releases_since:
+      one: "DBFlux를 마지막으로 연 이후 릴리스 1개"
+      many: "DBFlux를 마지막으로 연 이후 릴리스 %{count}개"
+    this_release: 실행 중인 버전
+    unreleased: 미출시
+    show_after_update: 업데이트할 때마다 새로운 기능 표시
+    full_changelog: 전체 변경 사항
+    close: 닫기
+    empty: 이 버전에 기록된 변경 사항이 없습니다.
+  welcome:
+    title: DBFlux에 오신 것을 환영합니다
+    tagline: SQL, 문서, 키-값, 시계열, 오브젝트 스토리지를 위한 키보드 중심 클라이언트입니다.
+    whats_new: 새로운 기능
+    updates: 업데이트
+    notify: 새 버전이 나오면 알림
+    notify_hint: 시작할 때 DBFlux가 GitHub에 최신 릴리스를 묻습니다. 사용자에 대한 정보는 보내지 않습니다.
+    show_whats_new: 업데이트할 때마다 새로운 기능 표시
+    show_whats_new_hint: 새 버전을 처음 시작할 때 이 변경 사항을 한 번 엽니다.
+    change_later: 나중에 설정 › 업데이트에서 변경할 수 있습니다
+    get_started: 시작하기
+    full_changelog: 전체 변경 사항

@@ -209,6 +209,14 @@ pub struct AppStateEntity {
     /// Optional per-entity Save As override. `None` preserves the normal
     /// native-dialog / fallback-export behavior.
     save_target_override: Option<SaveTargetProvider>,
+
+    /// Update dialog requested by Settings or the startup flow, taken by the
+    /// first workspace that handles [`crate::updates::UpdateDialogRequested`].
+    pub pending_update_dialog: Option<crate::updates::UpdateDialogRequest>,
+
+    /// Label of the release whose notice was already shown this session, so
+    /// a repeated check does not raise a second toast for the same version.
+    pub notified_update_label: Option<String>,
 }
 
 impl AppStateEntity {
@@ -244,6 +252,8 @@ impl AppStateEntity {
             hook_load_diagnostics,
             scripts_directory_diagnostics,
             save_target_override: None,
+            pending_update_dialog: None,
+            notified_update_label: None,
         })
     }
 
@@ -281,6 +291,8 @@ impl AppStateEntity {
             hook_load_diagnostics,
             scripts_directory_diagnostics,
             save_target_override: None,
+            pending_update_dialog: None,
+            notified_update_label: None,
         })
     }
 
@@ -363,6 +375,7 @@ impl EventEmitter<AuthProfileCreated> for AppStateEntity {}
 impl EventEmitter<ObjectTreeEvent> for AppStateEntity {}
 impl EventEmitter<UserErrorReported> for AppStateEntity {}
 impl EventEmitter<OpenAuditRequested> for AppStateEntity {}
+impl EventEmitter<crate::updates::UpdateDialogRequested> for AppStateEntity {}
 
 #[cfg(feature = "mcp")]
 impl EventEmitter<McpRuntimeEventRaised> for AppStateEntity {}

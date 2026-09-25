@@ -322,6 +322,8 @@ pub struct Workspace {
     login_modal: Entity<LoginModal>,
     sso_wizard: Entity<SsoWizard>,
     shutdown_overlay: Entity<ShutdownOverlay>,
+    whats_new_dialog: Entity<crate::ui::overlays::updates::WhatsNewDialog>,
+    welcome_dialog: Entity<crate::ui::overlays::updates::WelcomeDialog>,
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
@@ -470,6 +472,10 @@ impl Workspace {
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
         let sso_wizard = cx.new(|cx| SsoWizard::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
+        let whats_new_dialog =
+            cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
+        let welcome_dialog =
+            cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -701,6 +707,14 @@ impl Workspace {
             window,
             |this, _, event: &OpenAuditRequested, window, cx| {
                 this.open_audit_viewer_with_correlation(event.0, window, cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &app_state,
+            |this, _, _: &dbflux_ui_base::updates::UpdateDialogRequested, cx| {
+                this.open_requested_update_dialog(cx);
             },
         )
         .detach();
@@ -1524,6 +1538,8 @@ impl Workspace {
             login_modal,
             sso_wizard,
             shutdown_overlay,
+            whats_new_dialog,
+            welcome_dialog,
             tab_manager,
             tab_bar,
             workspace_inspector,

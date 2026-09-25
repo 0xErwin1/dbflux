@@ -221,10 +221,14 @@ impl AppState {
             schema_snapshot_repo,
         ) = Self::build_viz_repositories(&storage_runtime)?;
 
+        let update_settings = crate::updates::load_update_settings(&storage_runtime);
+
         let mut state = Self {
             facade,
             external_driver_diagnostics,
             general_settings,
+            update_settings,
+            update_check: crate::updates::UpdateCheckState::default(),
             driver_overrides,
             driver_settings,
             hook_definitions,

@@ -431,6 +431,7 @@ fn run_gui() {
                 cx.bind_keys(workspace_keybindings());
 
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
 
                 // Publish a weak handle before the view is moved into `Root` so
                 // both shutdown entry points (window close and SIGINT/SIGTERM)

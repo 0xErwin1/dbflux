@@ -28,6 +28,7 @@ use crate::repositories::state::{
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
     ui_state::UiStateRepository,
 };
+use crate::repositories::update_settings::UpdateSettingsRepository;
 use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use crate::repositories::viz_dashboards::DashboardsRepository;
 use crate::repositories::viz_saved_charts::SavedChartsRepository;
@@ -208,6 +209,11 @@ impl StorageRuntime {
     /// Creates a general settings repository.
     pub fn general_settings(&self) -> GeneralSettingsRepository {
         GeneralSettingsRepository::new(self.dbflux_db())
+    }
+
+    /// Creates an update settings repository.
+    pub fn update_settings(&self) -> UpdateSettingsRepository {
+        UpdateSettingsRepository::new(self.dbflux_db())
     }
 
     /// Creates a governance settings repository.

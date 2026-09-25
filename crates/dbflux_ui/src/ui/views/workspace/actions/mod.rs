@@ -95,6 +95,7 @@ mod query;
 mod schema_diff;
 mod scripts;
 mod settings;
+mod updates;
 
 impl Workspace {
     pub(super) fn handle_command(

@@ -4,3 +4,4 @@ pub mod modals;
 pub mod shutdown_overlay;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
+pub mod updates;

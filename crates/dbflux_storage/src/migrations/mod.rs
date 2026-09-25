@@ -174,6 +174,7 @@ impl MigrationRegistry {
         registry.register(mod_029_sch_snapshot_creation_metadata::MigrationImpl);
         registry.register(mod_030_general_settings_vim_mode::MigrationImpl);
         registry.register(mod_031_general_settings_editor_row_limit::MigrationImpl);
+        registry.register(mod_032_cfg_update_settings::MigrationImpl);
         registry
     }
 
@@ -223,6 +224,13 @@ impl MigrationRegistry {
                 applied.len(),
                 self.migrations.len()
             );
+
+            record_run_origin(&outer_tx, !applied.is_empty()).map_err(|source| {
+                MigrationError::Sqlite {
+                    path: conn_path(conn),
+                    source,
+                }
+            })?;
 
             let mut pending: Vec<&dyn Migration> = self
                 .migrations
@@ -388,6 +396,7 @@ mod mod_028_redis_topology_columns;
 mod mod_029_sch_snapshot_creation_metadata;
 mod mod_030_general_settings_vim_mode;
 mod mod_031_general_settings_editor_row_limit;
+mod mod_032_cfg_update_settings;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -412,6 +421,51 @@ pub fn verify_integrity(conn: &Connection) -> Result<bool, StorageError> {
             source,
         })?;
     Ok(result == "ok")
+}
+
+/// Records, for the migrations of the current run, whether the database
+/// already held applied migrations when the run started, that is, whether this
+/// is an existing install rather than a fresh one. Kept in a connection-local
+/// `temp` table so it never reaches the database file.
+fn record_run_origin(tx: &Transaction, preexisting: bool) -> Result<(), rusqlite::Error> {
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS sys_migration_run (preexisting_database INTEGER NOT NULL);
+         DELETE FROM temp.sys_migration_run;",
+    )?;
+    tx.execute(
+        "INSERT INTO temp.sys_migration_run (preexisting_database) VALUES (?1)",
+        rusqlite::params![i32::from(preexisting)],
+    )?;
+
+    Ok(())
+}
+
+/// Whether the database this migration runs on already existed before the
+/// current migration run, as recorded by [`MigrationRegistry::run_all`].
+/// Outside a registry run (no record) the database counts as new.
+pub(crate) fn is_preexisting_database(tx: &Transaction) -> Result<bool, rusqlite::Error> {
+    let table_exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM sqlite_temp_master WHERE type = 'table' AND name = 'sys_migration_run'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_exists == 0 {
+        return Ok(false);
+    }
+
+    let preexisting: Option<i64> = tx
+        .query_row(
+            "SELECT preexisting_database FROM temp.sys_migration_run LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|error| match error {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+
+    Ok(preexisting == Some(1))
 }
 
 fn conn_path(conn: &Connection) -> std::path::PathBuf {
@@ -1044,6 +1098,7 @@ mod tests {
             "029_sch_snapshot_creation_metadata",
             "030_general_settings_vim_mode",
             "031_general_settings_editor_row_limit",
+            "032_cfg_update_settings",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();
