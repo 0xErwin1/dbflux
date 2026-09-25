@@ -95,6 +95,10 @@ impl UndoManager {
         true
     }
 
+    pub(super) fn owns_edit_group(&self, id: u64) -> bool {
+        self.active_group == Some(id)
+    }
+
     pub(super) fn end_edit_group(&mut self, id: u64) -> bool {
         if self.active_group != Some(id) {
             return false;

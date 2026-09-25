@@ -349,6 +349,13 @@ pub enum EditAnchorAffinity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EditAnchor(u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditGroupClosure {
+    Closed,
+    Pending,
+    NotOwner,
+}
+
 pub struct InputBaseState<M: InputModeKind> {
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
@@ -379,6 +386,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) selected_word_range: Option<CursorSelection>,
     /// The marked range is the temporary insert text on IME typing.
     pub(super) ime_marked_range: Option<CursorSelection>,
+    pending_edit_group_end: Option<u64>,
     /// Presentation-only caret offset, bound to the selection that installed it.
     pub(super) visual_caret: Option<(usize, CursorSelection)>,
     pub(super) last_layout: Option<LastLayout>,
@@ -714,6 +722,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             selections: Selections::default(),
             selected_word_range: None,
             ime_marked_range: None,
+            pending_edit_group_end: None,
             visual_caret: None,
             input_bounds: Bounds::default(),
             selecting: false,
@@ -910,7 +919,10 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Start an editor-owned undo group. Returns false if another group or a
     /// native composition is still active. The caller owns ending it on blur.
     pub fn begin_edit_group(&mut self, id: u64) -> bool {
-        if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
+        if self.pending_edit_group_end.is_some()
+            || self.ime_marked_range.is_some()
+            || self.undo_manager.has_open_transaction()
+        {
             return false;
         }
         self.undo_manager.begin_edit_group(id)
@@ -922,7 +934,33 @@ impl<M: InputModeKind> InputBaseState<M> {
         if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
             return false;
         }
-        self.undo_manager.end_edit_group(id)
+        let closed = self.undo_manager.end_edit_group(id);
+        if closed {
+            self.pending_edit_group_end = None;
+        }
+        closed
+    }
+
+    /// Request closure of exactly this editor-owned group after native composition ends.
+    pub fn request_end_edit_group(&mut self, id: u64) -> EditGroupClosure {
+        if !self.undo_manager.owns_edit_group(id) {
+            return EditGroupClosure::NotOwner;
+        }
+        if self.ime_marked_range.is_some() || self.undo_manager.has_open_transaction() {
+            self.pending_edit_group_end = Some(id);
+            EditGroupClosure::Pending
+        } else {
+            self.end_edit_group(id);
+            EditGroupClosure::Closed
+        }
+    }
+
+    fn finish_pending_edit_group(&mut self) {
+        if self.ime_marked_range.is_none() && !self.undo_manager.has_open_transaction() {
+            if let Some(id) = self.pending_edit_group_end.take() {
+                self.undo_manager.end_edit_group(id);
+            }
+        }
     }
 
     /// Set the text of the input field.
@@ -937,6 +975,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_edit_group_end = None;
         self.undo_manager.set_ignoring(true);
         self.emit_events = false;
         self.replace_text(value, window, cx);
@@ -1120,6 +1159,14 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
+        if readonly {
+            // The displayed preedit is already in the buffer. Commit it before
+            // locking out platform callbacks so the pending group can close.
+            if self.ime_marked_range.take().is_some() {
+                self.undo_manager.commit_transaction();
+                self.finish_pending_edit_group();
+            }
+        }
         self.readonly = readonly;
         if readonly {
             self.search_session.replace_mode = false;
@@ -2765,6 +2812,8 @@ impl<M: InputModeKind> InputBaseState<M> {
                 .restore_auto_closed_pairs(replay.auto_closed_pairs.unwrap_or_default());
         }
         self.undo_manager.set_ignoring(false);
+        self.ime_marked_range = None;
+        self.finish_pending_edit_group();
     }
 
     pub(super) fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
@@ -2780,6 +2829,8 @@ impl<M: InputModeKind> InputBaseState<M> {
                 .restore_auto_closed_pairs(replay.auto_closed_pairs.unwrap_or_default());
         }
         self.undo_manager.set_ignoring(false);
+        self.ime_marked_range = None;
+        self.finish_pending_edit_group();
     }
 
     /// Restore a set of selections captured in a transaction, clamping offsets
@@ -3875,6 +3926,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.ime_marked_range = None;
         self.undo_manager.commit_transaction();
+        self.finish_pending_edit_group();
     }
 
     /// Replace text in range.
@@ -3990,6 +4042,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             }
             if ends_composition {
                 self.undo_manager.commit_transaction();
+                self.finish_pending_edit_group();
             }
 
             if !self.silent_replace_text {
@@ -4102,6 +4155,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             self.undo_manager
                 .record_selections(vec![selection_before], vec![*self.active_selection()]);
             self.undo_manager.commit_transaction();
+            self.finish_pending_edit_group();
         }
         self.update_preferred_column();
         self.update_search(cx);
@@ -4236,6 +4290,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         }
         if new_text.is_empty() {
             self.undo_manager.commit_transaction();
+            self.finish_pending_edit_group();
         }
         cx.notify();
     }
@@ -6643,6 +6698,110 @@ mod tests {
                 assert_eq!(state.value(), "a");
                 state.redo(&Redo, window, cx);
                 assert_eq!(state.value(), "a是");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn edit_group_readonly_finalizes_displayed_preedit(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                assert!(state.begin_edit_group(1));
+                state.replace_text_in_range(None, "x", window, cx);
+                state.replace_and_mark_text_in_range(None, "あ", None, window, cx);
+                let displayed = state.value().to_string();
+                assert_eq!(state.request_end_edit_group(1), EditGroupClosure::Pending);
+                state.set_readonly(true, cx);
+                assert_eq!(state.value(), displayed);
+                assert!(state.ime_marked_range.is_none());
+                assert!(!state.undo_manager.has_open_transaction());
+                assert!(!state.end_edit_group(1));
+                state.set_readonly(true, cx);
+                state.replace_text_in_range(None, "late", window, cx);
+                state.replace_and_mark_text_in_range(None, "late", None, window, cx);
+                state.unmark_text(window, cx);
+                assert_eq!(state.value(), displayed);
+                assert!(state.ime_marked_range.is_none());
+                state.set_readonly(false, cx);
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abc");
+                assert!(state.begin_edit_group(2));
+                assert!(state.end_edit_group(2));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn edit_group_deferred_native_commit(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                assert!(state.begin_edit_group(1));
+                state.replace_text_in_range(None, "a", window, cx);
+                state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                assert_eq!(state.request_end_edit_group(2), EditGroupClosure::NotOwner);
+                assert_eq!(state.request_end_edit_group(1), EditGroupClosure::Pending);
+                assert!(!state.begin_edit_group(2));
+                state.replace_text_in_range(None, "你", window, cx);
+                state.unmark_text(window, cx);
+                assert!(!state.end_edit_group(1));
+                assert!(state.begin_edit_group(2));
+                state.replace_text_in_range(None, "!", window, cx);
+                state.unmark_text(window, cx);
+                assert_eq!(state.request_end_edit_group(1), EditGroupClosure::NotOwner);
+                assert!(state.end_edit_group(2));
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "a你abc");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abc");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn edit_group_pending_closure_paths(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                assert!(state.begin_edit_group(1));
+                state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                assert_eq!(state.request_end_edit_group(1), EditGroupClosure::Pending);
+                state.replace_text_in_range(None, "你", window, cx);
+                assert!(state.begin_edit_group(2));
+                state.unmark_text(window, cx);
+                assert!(state.end_edit_group(2));
+
+                assert!(state.begin_edit_group(3));
+                state.replace_and_mark_text_in_range(None, "m", None, window, cx);
+                assert_eq!(state.request_end_edit_group(3), EditGroupClosure::Pending);
+                state.undo(&Undo, window, cx);
+                assert!(state.begin_edit_group(4));
+                assert!(state.end_edit_group(4));
+
+                assert!(state.begin_edit_group(5));
+                state.replace_and_mark_text_in_range(None, "x", None, window, cx);
+                assert_eq!(state.request_end_edit_group(5), EditGroupClosure::Pending);
+                state.redo(&Redo, window, cx);
+                assert!(state.begin_edit_group(6));
+                assert!(state.end_edit_group(6));
+
+                assert!(state.begin_edit_group(7));
+                state.replace_and_mark_text_in_range(None, "y", None, window, cx);
+                assert_eq!(state.request_end_edit_group(7), EditGroupClosure::Pending);
+                state.replace_and_mark_text_in_range(None, "", None, window, cx);
+                assert!(state.begin_edit_group(8));
+                assert!(state.end_edit_group(8));
+
+                assert!(state.begin_edit_group(9));
+                state.replace_and_mark_text_in_range(None, "z", None, window, cx);
+                assert_eq!(state.request_end_edit_group(9), EditGroupClosure::Pending);
+                state.set_value("reset".to_string(), window, cx);
+                assert!(state.begin_edit_group(10));
+                assert!(state.end_edit_group(10));
             });
         });
     }
