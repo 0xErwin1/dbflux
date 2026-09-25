@@ -63,6 +63,9 @@ pub(super) struct VimState {
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
     replace_once: Option<PendingReplace>,
+    /// Characters overwritten in this Replace session, innermost last: where the
+    /// typed character starts and what it covered (`None` when it was appended).
+    replaced: Vec<(usize, Option<String>)>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
 }
@@ -93,7 +96,8 @@ pub(super) fn intercept_vim_keystrokes(cx: &mut Context<CodeDocument>) -> Subscr
         let Some(document) = document.upgrade() else {
             return;
         };
-        if document.read(cx).vim.replace_once.is_none() {
+        let vim = &document.read(cx).vim;
+        if vim.replace_once.is_none() && !(vim.enabled && vim.mode == VimMode::Replace) {
             return;
         }
 
@@ -168,7 +172,7 @@ impl CodeDocument {
     /// Whether the editor must reject user text changes right now.
     pub(super) fn editor_input_locked(&self) -> bool {
         self.read_only
-            || (self.vim.enabled && self.vim.mode != VimMode::Insert && !self.vim.history_unlocked)
+            || (self.vim.enabled && !self.vim.mode.accepts_text() && !self.vim.history_unlocked)
     }
 
     /// Applies the lock immediately. Render applies it again every frame, but text
@@ -184,7 +188,7 @@ impl CodeDocument {
     fn sync_editor_cursor_shape(&mut self, cx: &mut Context<Self>) {
         use gpui_base::input::InputCursorShape;
 
-        let shape = if self.vim.enabled && self.vim.mode != VimMode::Insert {
+        let shape = if self.vim.enabled && !self.vim.mode.accepts_text() {
             InputCursorShape::Block
         } else {
             InputCursorShape::Bar
@@ -232,7 +236,7 @@ impl CodeDocument {
             && !modifiers.function
             && !modifiers.shift
             && key.key == "v"
-            && self.vim.mode != VimMode::Insert;
+            && !self.vim.mode.accepts_text();
         let command = if block_key {
             Some(if self.vim.mode == VimMode::VisualBlock {
                 VimCommand::LeaveVisual
@@ -463,6 +467,7 @@ impl CodeDocument {
                 self.set_vim_mode(VimMode::Insert, cx);
             }
             VimCommand::EnterInsert => self.set_vim_mode(VimMode::Insert, cx),
+            VimCommand::EnterReplace if !self.read_only => self.enter_replace(cx),
             VimCommand::EnterVisual
             | VimCommand::EnterVisualLine
             | VimCommand::EnterVisualBlock => {
@@ -535,6 +540,7 @@ impl CodeDocument {
             }
             VimCommand::DeleteChar
             | VimCommand::ReplaceOnce
+            | VimCommand::EnterReplace
             | VimCommand::Undo
             | VimCommand::Swallow => {}
         }
@@ -688,7 +694,7 @@ impl CodeDocument {
             self.apply_vim_command(VimCommand::LeaveVisual, window, cx);
             return true;
         }
-        if self.vim.mode != VimMode::Insert || !self.editor_menu_open(cx) {
+        if !self.vim.mode.accepts_text() || !self.editor_menu_open(cx) {
             return false;
         }
 
@@ -1265,6 +1271,9 @@ impl CodeDocument {
         let shortcut = modifiers.control
             || modifiers.platform
             || ((modifiers.alt || modifiers.function) && !printable);
+        if self.vim.replace_once.is_none() {
+            return self.intercept_replace_mode_key(keystroke, printable && !shortcut, window, cx);
+        }
         if shortcut {
             self.cancel_replace_once(cx);
             return false;
@@ -1286,6 +1295,92 @@ impl CodeDocument {
             }
             _ => false,
         }
+    }
+
+    /// Replace mode: a typed character first selects the character under the
+    /// cursor, so the native insertion overwrites it, and Backspace restores what
+    /// this session overwrote. Every other key keeps its Insert-mode behavior.
+    fn intercept_replace_mode_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        typed_character: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if keystroke.key == "backspace" && !typed_character {
+            self.replace_mode_backspace(window, cx);
+            return true;
+        }
+        if !typed_character || machine::is_editing_key(&keystroke.key) {
+            return false;
+        }
+
+        let (cursor, covered) = {
+            let state = self.editor.input_state.read(cx);
+            let selection = state.selected_range();
+            if !selection.is_empty() {
+                return false;
+            }
+            let covered = machine::counted_character_range(state.text(), selection.start, 1);
+            (selection.start, covered)
+        };
+        let original = covered.map(|range| {
+            let content = self
+                .editor
+                .input_state
+                .read(cx)
+                .text()
+                .slice(range.clone())
+                .to_string();
+            self.editor
+                .input_state
+                .update(cx, |state, cx| state.set_selected_range(range, cx));
+            content
+        });
+        self.vim.replaced.push((cursor, original));
+        false
+    }
+
+    fn replace_mode_backspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (cursor, previous) = {
+            let state = self.editor.input_state.read(cx);
+            let cursor = state.cursor();
+            (cursor, machine::step_left(state.text(), cursor))
+        };
+
+        let restorable = self
+            .vim
+            .replaced
+            .last()
+            .is_some_and(|(start, _)| *start == previous && previous < cursor);
+        if !restorable {
+            self.vim.replaced.clear();
+            self.set_editor_cursor(previous, cx);
+            return;
+        }
+
+        if let Some((start, original)) = self.vim.replaced.pop() {
+            self.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(start..cursor, cx);
+                state.replace(original.unwrap_or_default(), window, cx);
+            });
+            self.set_editor_cursor(start, cx);
+        }
+    }
+
+    fn enter_replace(&mut self, cx: &mut Context<Self>) {
+        let group = NEXT_CHANGE_GROUP.fetch_add(1, Ordering::Relaxed);
+        let started = self
+            .editor
+            .input_state
+            .update(cx, |state, _| state.begin_edit_group(group));
+        if !started {
+            return;
+        }
+
+        self.vim.change_group = Some(group);
+        self.vim.replaced.clear();
+        self.set_vim_mode(VimMode::Replace, cx);
     }
 
     fn replace_once_directly(

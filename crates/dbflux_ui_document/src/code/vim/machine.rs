@@ -16,9 +16,17 @@ pub enum VimMode {
     #[default]
     Normal,
     Insert,
+    Replace,
     Visual,
     VisualLine,
     VisualBlock,
+}
+
+impl VimMode {
+    /// Insert and Replace let the native input edit text; the other modes lock it.
+    pub(crate) fn accepts_text(self) -> bool {
+        matches!(self, VimMode::Insert | VimMode::Replace)
+    }
 }
 
 /// What a key does in the current mode.
@@ -56,6 +64,7 @@ pub(crate) enum VimCommand {
     RepeatSearch(bool),
     /// Consumed without effect, so the key neither edits nor reaches other handlers.
     Swallow,
+    EnterReplace,
 }
 
 /// The parts of a keystroke the machine needs.
@@ -77,7 +86,9 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
     }
 
     match mode {
-        VimMode::Insert => (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert),
+        VimMode::Insert | VimMode::Replace => {
+            (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert)
+        }
         VimMode::Normal | VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => {
             let visual = matches!(
                 mode,
@@ -109,6 +120,7 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 return match key.key {
                     "a" if !visual => Some(VimCommand::AppendLine),
                     "i" if !visual => Some(VimCommand::InsertLine),
+                    "r" if !visual => Some(VimCommand::EnterReplace),
                     "e" => Some(VimCommand::WordEnd(true)),
                     "w" => Some(VimCommand::WordForward(true)),
                     "b" => Some(VimCommand::WordBackward(true)),
@@ -188,6 +200,7 @@ pub(crate) fn cursor_relative_match(
 pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
         VimCommand::EnterInsert => VimMode::Insert,
+        VimCommand::EnterReplace => VimMode::Replace,
         VimCommand::LeaveInsert | VimCommand::LeaveVisual => VimMode::Normal,
         VimCommand::EnterVisual => VimMode::Visual,
         VimCommand::EnterVisualLine => VimMode::VisualLine,
@@ -909,7 +922,14 @@ mod tests {
 
     #[test]
     fn keys_with_command_modifiers_always_pass_through() {
-        for mode in [VimMode::Normal, VimMode::Insert] {
+        for mode in [
+            VimMode::Normal,
+            VimMode::Insert,
+            VimMode::Replace,
+            VimMode::Visual,
+            VimMode::VisualLine,
+            VimMode::VisualBlock,
+        ] {
             for name in ["h", "j", "k", "l", "x", "u", "enter", "tab", "escape", "s"] {
                 assert_eq!(
                     command_for(mode, with_command_modifier(name)),
@@ -921,17 +941,31 @@ mod tests {
     }
 
     #[test]
-    fn insert_mode_only_claims_escape() {
-        assert_eq!(
-            command_for(VimMode::Insert, key("escape")),
-            Some(VimCommand::LeaveInsert)
-        );
+    fn insert_and_replace_modes_only_claim_escape() {
+        for mode in [VimMode::Insert, VimMode::Replace] {
+            assert_eq!(
+                command_for(mode, key("escape")),
+                Some(VimCommand::LeaveInsert)
+            );
 
-        for name in ["h", "j", "x", "u", "i", "enter", "tab"] {
-            assert_eq!(command_for(VimMode::Insert, key(name)), None, "{name}");
+            for name in ["h", "j", "x", "u", "i", "r", "enter", "tab", "backspace"] {
+                assert_eq!(command_for(mode, key(name)), None, "{mode:?} {name}");
+            }
+
+            assert_eq!(command_for(mode, shifted("escape")), None);
+            assert_eq!(command_for(mode, shifted("r")), None);
+            assert!(mode.accepts_text());
         }
 
-        assert_eq!(command_for(VimMode::Insert, shifted("escape")), None);
+        assert_eq!(
+            command_for(VimMode::Normal, shifted("r")),
+            Some(VimCommand::EnterReplace)
+        );
+        assert_eq!(command_for(VimMode::Visual, shifted("r")), None);
+        assert_eq!(
+            mode_after(VimMode::Replace, VimCommand::LeaveInsert),
+            VimMode::Normal
+        );
     }
 
     #[test]

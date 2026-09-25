@@ -816,6 +816,7 @@ document:
     vim:
       normal: "노멀"
       insert: "삽입"
+      replace: "바꾸기"
       visual: "비주얼"
       visual_line: "비주얼 줄"
       visual_block: "비주얼 블록"

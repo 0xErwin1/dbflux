@@ -560,6 +560,7 @@ pub(crate) fn vim_mode_label(mode: crate::code::VimMode) -> String {
     match mode {
         crate::code::VimMode::Normal => dbflux_i18n::t!("document.code.vim.normal"),
         crate::code::VimMode::Insert => dbflux_i18n::t!("document.code.vim.insert"),
+        crate::code::VimMode::Replace => dbflux_i18n::t!("document.code.vim.replace"),
         crate::code::VimMode::Visual => dbflux_i18n::t!("document.code.vim.visual"),
         crate::code::VimMode::VisualLine => dbflux_i18n::t!("document.code.vim.visual_line"),
         crate::code::VimMode::VisualBlock => dbflux_i18n::t!("document.code.vim.visual_block"),

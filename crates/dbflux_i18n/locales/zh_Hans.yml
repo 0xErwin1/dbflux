@@ -816,6 +816,7 @@ document:
     vim:
       normal: "普通"
       insert: "插入"
+      replace: "替换"
       visual: "可视"
       visual_line: "可视行"
       visual_block: "可视块"

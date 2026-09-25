@@ -658,6 +658,134 @@ fn replace_once_on_empty_line_is_a_no_op(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn replace_mode_overwrites_characters_and_undoes_as_one_edit(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef", true);
+    editor.set_cursor(1);
+    editor.keys("shift-r");
+    assert_eq!(editor.mode(), Some(VimMode::Replace));
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Bar);
+    assert_eq!(
+        crate::labels::vim_mode_label(VimMode::Replace),
+        dbflux_i18n::t!("document.code.vim.replace")
+    );
+
+    editor.type_text("XY");
+    assert_eq!(editor.text(), "aXYdef");
+    assert_eq!(editor.cursor(), 3);
+
+    editor.keys("escape");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 2);
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Block);
+
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcdef");
+    assert_eq!(editor.cursor(), 1);
+}
+
+#[gpui::test]
+fn replace_mode_appends_before_line_terminators(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("ab{separator}cd");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(1);
+        editor.keys("shift-r");
+        editor.type_text("XYZ");
+        assert_eq!(editor.text(), format!("aXYZ{separator}cd"), "{separator:?}");
+        editor.keys("escape");
+        assert_eq!(editor.cursor(), 3);
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+
+    let mut editor = open_editor(cx, "", true);
+    editor.keys("shift-r");
+    editor.type_text("é中");
+    assert_eq!(editor.text(), "é中");
+}
+
+#[gpui::test]
+fn replace_mode_backspace_restores_overwritten_characters(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcd\nnext", true);
+    editor.set_cursor(1);
+    editor.keys("shift-r");
+    editor.type_text("XYZW");
+    assert_eq!(editor.text(), "aXYZW\nnext");
+
+    editor.keys("backspace");
+    assert_eq!(editor.text(), "aXYZ\nnext");
+    editor.keys("backspace");
+    assert_eq!(editor.text(), "aXYd\nnext");
+    editor.keys("backspace backspace");
+    assert_eq!(editor.text(), "abcd\nnext");
+    assert_eq!(editor.cursor(), 1);
+
+    editor.keys("backspace");
+    assert_eq!(editor.text(), "abcd\nnext");
+    assert_eq!(editor.cursor(), 0);
+    assert_eq!(editor.mode(), Some(VimMode::Replace));
+
+    editor.type_text("Q");
+    assert_eq!(editor.text(), "Qbcd\nnext");
+    editor.keys("escape");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcd\nnext");
+}
+
+#[gpui::test]
+fn replace_mode_enter_inserts_a_line_break_without_overwriting(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.set_cursor(1);
+    editor.keys("shift-r enter");
+    assert_eq!(editor.text(), "a\nbc");
+    editor.type_text("X");
+    assert_eq!(editor.text(), "a\nXc");
+    editor.keys("escape u");
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
+fn replace_mode_read_only_blur_and_ime(cx: &mut TestAppContext) {
+    let mut readonly = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "abc",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    readonly.keys("shift-r");
+    assert_eq!(readonly.mode(), Some(VimMode::Normal));
+    readonly.type_text("X");
+    assert_eq!(readonly.text(), "abc");
+
+    let mut editor = open_editor(cx, "abc", true);
+    editor.focus_document(&editor.document.clone());
+    editor.keys("shift-r");
+    editor.type_text("X");
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| document.close_change_group_on_blur(cx));
+    });
+    editor.window.run_until_parked();
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "Xbc");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+
+    // Composed text reaches the input without a key character, so it is
+    // inserted rather than overwriting; it still joins the one undo step.
+    editor.keys("shift-r");
+    editor.ime_mark("zh");
+    editor.ime_commit("中");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "中abc");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
 fn mark_prefixes_do_not_interrupt_operator_or_g(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "first\nsecond", true);
     editor.set_cursor(8);
@@ -3020,19 +3148,29 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
     disabled_cx: &mut TestAppContext,
     normal_cx: &mut TestAppContext,
     insert_cx: &mut TestAppContext,
+    replace_cx: &mut TestAppContext,
+    pending_replace_cx: &mut TestAppContext,
+    visual_cx: &mut TestAppContext,
+    visual_line_cx: &mut TestAppContext,
+    visual_block_cx: &mut TestAppContext,
 ) {
     const SHORTCUTS: &str = "ctrl-h ctrl-j ctrl-k ctrl-l ctrl-s alt-h ctrl-enter ctrl-shift-s";
 
     let mut outcomes = Vec::new();
 
-    for (setup, app_cx) in [
-        ("disabled", disabled_cx),
-        ("normal", normal_cx),
-        ("insert", insert_cx),
+    for (setup, prefix, app_cx) in [
+        ("disabled", "", disabled_cx),
+        ("normal", "", normal_cx),
+        ("insert", "i", insert_cx),
+        ("replace", "shift-r", replace_cx),
+        ("pending replace", "r", pending_replace_cx),
+        ("visual", "v", visual_cx),
+        ("visual line", "shift-v", visual_line_cx),
+        ("visual block", "ctrl-v", visual_block_cx),
     ] {
         let mut editor = open_editor(app_cx, "abc", setup != "disabled");
-        if setup == "insert" {
-            editor.keys("i");
+        if !prefix.is_empty() {
+            editor.keys(prefix);
         }
 
         editor.keys(SHORTCUTS);
