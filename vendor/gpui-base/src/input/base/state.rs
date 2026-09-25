@@ -14,9 +14,13 @@ use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use sum_tree::Bias;
+
+static NEXT_EDIT_ANCHOR: AtomicU64 = AtomicU64::new(0);
 use unicode_segmentation::*;
 
 use super::{
@@ -334,12 +338,24 @@ impl ColumnarPoint {
 /// public: an alias is only as usable as the type behind it, so hiding this
 /// would leave `InputState` unable to do anything. Prefer naming the aliases
 /// — write `InputState`, not `InputBaseState<InputMode>`.
+/// Which side of inserted text an edit anchor follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditAnchorAffinity {
+    Left,
+    Right,
+}
+
+/// Opaque handle to a position owned by an input editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EditAnchor(u64);
+
 pub struct InputBaseState<M: InputModeKind> {
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: LayoutMode,
     pub(super) text: Rope,
+    edit_anchors: HashMap<EditAnchor, (usize, EditAnchorAffinity)>,
     pub(super) display_map: DisplayMap,
     pub(super) undo_manager: UndoManager,
     pub(super) search_session: super::SearchSession,
@@ -682,6 +698,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             extras: M::Extras::default(),
             focus_handle: focus_handle.clone(),
             text: "".into(),
+            edit_anchors: HashMap::new(),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
             search_session: super::SearchSession::default(),
             search_activation_revision: 0,
@@ -905,6 +922,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.undo_manager.set_ignoring(true);
         self.emit_events = false;
         self.replace_text(value, window, cx);
+        self.edit_anchors.clear();
         self.undo_manager.set_ignoring(false);
         self.emit_events = true;
 
@@ -1198,6 +1216,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn default_value(mut self, value: impl Into<SharedString>) -> Self {
         let text: SharedString = value.into();
         self.text = Rope::from(self.normalize_input(&text).as_ref());
+        self.edit_anchors.clear();
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
             diagnostics.reset(&self.text)
         }
@@ -2766,6 +2785,49 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.selections.merge_overlapping();
     }
 
+    /// Create an editor-owned position at a UTF-8 boundary.
+    pub fn create_edit_anchor(
+        &mut self,
+        offset: usize,
+        affinity: EditAnchorAffinity,
+    ) -> Option<EditAnchor> {
+        if offset > self.text.len() || !self.text.is_char_boundary(offset) {
+            return None;
+        }
+        let id = EditAnchor(
+            NEXT_EDIT_ANCHOR
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                    next.checked_add(1)
+                })
+                .ok()?,
+        );
+        self.edit_anchors.insert(id, (offset, affinity));
+        Some(id)
+    }
+
+    pub fn resolve_edit_anchor(&self, anchor: EditAnchor) -> Option<usize> {
+        self.edit_anchors.get(&anchor).map(|(offset, _)| *offset)
+    }
+
+    pub fn remove_edit_anchor(&mut self, anchor: EditAnchor) {
+        self.edit_anchors.remove(&anchor);
+    }
+
+    fn transform_edit_anchors(&mut self, range: &Range<usize>, inserted_len: usize) {
+        for (offset, affinity) in self.edit_anchors.values_mut() {
+            if *offset < range.start {
+                continue;
+            }
+            if *offset > range.end || (range.start != range.end && *offset == range.end) {
+                *offset = (*offset - range.end) + range.start + inserted_len;
+            } else if range.start == range.end && *affinity == EditAnchorAffinity::Right {
+                *offset = range.start + inserted_len;
+            } else {
+                *offset = range.start;
+            }
+        }
+    }
+
     /// Get byte offset of the cursor.
     ///
     /// The offset is the UTF-8 offset.
@@ -3605,6 +3667,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             let old_text = self.text.clone();
             self.mode.adjust_auto_closed_pair(range, new_text.len());
             self.text.replace(range.clone(), new_text);
+            self.transform_edit_anchors(range, new_text.len());
 
             M::adjust_annotations(self, range, new_text.len());
             recorded |= self.push_history(
@@ -3953,6 +4016,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         }
 
         if mask_changed {
+            self.edit_anchors.clear();
+        } else {
+            self.transform_edit_anchors(&range, new_text.len());
+        }
+
+        if mask_changed {
             // Masking rewrites the whole document, so ranges recorded against
             // the old text no longer point at anything.
             M::reset_annotations(self);
@@ -4088,6 +4157,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             }
         }
 
+        self.transform_edit_anchors(&range, new_text.len());
         M::adjust_annotations(self, &range, new_text.len());
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
             diagnostics.reset(&self.text)
@@ -4378,6 +4448,169 @@ mod tests {
     use gpui::{TestAppContext, VisualTestContext, size};
 
     use crate::input::{EditorMode, EditorState, InputMode, LanguageConfig, TextareaMode};
+
+    #[gpui::test]
+    fn edit_anchor_handles_do_not_cross_editors(cx: &mut TestAppContext) {
+        let first = InputView::<EditorMode>::new(cx);
+        let second = InputView::<EditorMode>::new(cx);
+        let first_anchor = first.input.update(cx, |state, _| {
+            state
+                .create_edit_anchor(0, EditAnchorAffinity::Left)
+                .unwrap()
+        });
+        let second_anchor = second.input.update(cx, |state, _| {
+            state
+                .create_edit_anchor(0, EditAnchorAffinity::Right)
+                .unwrap()
+        });
+        assert_ne!(first_anchor, second_anchor);
+        first.input.update(cx, |state, _| {
+            assert_eq!(state.resolve_edit_anchor(second_anchor), None);
+            state.remove_edit_anchor(second_anchor);
+            assert_eq!(state.resolve_edit_anchor(first_anchor), Some(0));
+        });
+        second.input.update(cx, |state, _| {
+            assert_eq!(state.resolve_edit_anchor(first_anchor), None);
+            state.remove_edit_anchor(first_anchor);
+            assert_eq!(state.resolve_edit_anchor(second_anchor), Some(0));
+        });
+        first
+            .window_handle
+            .update(cx, |_, window, cx| {
+                first.input.update(cx, |state, cx| {
+                    state.set_value("replaced", window, cx);
+                    assert_eq!(state.resolve_edit_anchor(first_anchor), None);
+                    assert_eq!(state.resolve_edit_anchor(second_anchor), None);
+                    let replacement = state
+                        .create_edit_anchor(0, EditAnchorAffinity::Left)
+                        .unwrap();
+                    assert_ne!(replacement, second_anchor);
+                });
+            })
+            .expect("test window should remain available");
+        second.input.update(cx, |state, _| {
+            assert_eq!(state.resolve_edit_anchor(second_anchor), Some(0));
+        });
+    }
+
+    #[gpui::test]
+    fn edit_anchor_affinity_and_replay(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        view.window_handle
+            .update(cx, |_, window, cx| {
+                view.input.update(cx, |state, cx| {
+                    state.set_value("abcd", window, cx);
+                    assert!(
+                        state
+                            .create_edit_anchor(5, EditAnchorAffinity::Left)
+                            .is_none()
+                    );
+                    let left = state
+                        .create_edit_anchor(2, EditAnchorAffinity::Left)
+                        .unwrap();
+                    let right = state
+                        .create_edit_anchor(2, EditAnchorAffinity::Right)
+                        .unwrap();
+                    state.replace_text_in_ranges(&[(2..2, "é".into())], window, cx);
+                    assert_eq!(state.resolve_edit_anchor(left), Some(2));
+                    assert_eq!(state.resolve_edit_anchor(right), Some(4));
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(2));
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(4));
+                    state.replace_text_in_ranges(&[(1..5, "X".into())], window, cx);
+                    assert_eq!(state.resolve_edit_anchor(left), Some(1));
+                    assert_eq!(state.resolve_edit_anchor(right), Some(1));
+                    state.remove_edit_anchor(left);
+                    assert_eq!(state.resolve_edit_anchor(left), None);
+                    state.set_value("reset", window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), None);
+                });
+            })
+            .expect("test window should remain available");
+    }
+
+    #[gpui::test]
+    fn edit_anchor_replacement_collapses_interior_and_shifts_end(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        view.window_handle
+            .update(cx, |_, window, cx| {
+                view.input.update(cx, |state, cx| {
+                    state.set_value("aébcd", window, cx);
+                    assert!(
+                        state
+                            .create_edit_anchor(2, EditAnchorAffinity::Left)
+                            .is_none()
+                    );
+                    let interior_left = state
+                        .create_edit_anchor(3, EditAnchorAffinity::Left)
+                        .unwrap();
+                    let interior_right = state
+                        .create_edit_anchor(3, EditAnchorAffinity::Right)
+                        .unwrap();
+                    let end = state
+                        .create_edit_anchor(5, EditAnchorAffinity::Left)
+                        .unwrap();
+                    state.replace_text_in_ranges(&[(1..5, "XYZ".into())], window, cx);
+                    assert_eq!(state.resolve_edit_anchor(interior_left), Some(1));
+                    assert_eq!(state.resolve_edit_anchor(interior_right), Some(1));
+                    assert_eq!(state.resolve_edit_anchor(end), Some(4));
+                });
+            })
+            .expect("test window should remain available");
+    }
+
+    #[gpui::test]
+    fn edit_anchor_ime_composition_and_replay(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        view.window_handle
+            .update(cx, |_, window, cx| {
+                view.input.update(cx, |state, cx| {
+                    state.set_value("abcd", window, cx);
+                    let left = state
+                        .create_edit_anchor(2, EditAnchorAffinity::Left)
+                        .unwrap();
+                    let right = state
+                        .create_edit_anchor(2, EditAnchorAffinity::Right)
+                        .unwrap();
+                    state.set_cursor_to(2);
+                    state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(3));
+                    state.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(left), Some(2));
+                    assert_eq!(state.resolve_edit_anchor(right), Some(4));
+                    state.replace_and_mark_text_in_range(None, "你", None, window, cx);
+                    state.unmark_text(window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(5));
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(2));
+                    state.redo(&Redo, window, cx);
+                    assert_eq!(state.resolve_edit_anchor(right), Some(5));
+                });
+            })
+            .expect("test window should remain available");
+    }
+
+    #[gpui::test]
+    fn edit_anchor_batch_applies_in_descending_order(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        view.window_handle
+            .update(cx, |_, window, cx| {
+                view.input.update(cx, |state, cx| {
+                    state.set_value("abcdef", window, cx);
+                    let anchor = state
+                        .create_edit_anchor(3, EditAnchorAffinity::Right)
+                        .unwrap();
+                    state.replace_text_in_ranges(
+                        &[(1..2, "XX".into()), (4..5, "".into())],
+                        window,
+                        cx,
+                    );
+                    assert_eq!(state.resolve_edit_anchor(anchor), Some(4));
+                });
+            })
+            .expect("test window should remain available");
+    }
 
     fn set_test_syntax_provider(
         provider: Rc<dyn crate::input::SyntaxContextProvider>,
