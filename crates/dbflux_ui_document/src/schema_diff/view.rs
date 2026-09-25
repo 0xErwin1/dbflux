@@ -15,7 +15,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
 };
-use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
@@ -1986,11 +1986,11 @@ impl Focusable for SchemaDiffDocument {
 
 impl EventEmitter<DocumentEvent> for SchemaDiffDocument {}
 
-fn badge_variant(badge: RiskBadge) -> BadgeVariant {
+fn badge_tone(badge: RiskBadge) -> BadgeTone {
     match badge {
-        RiskBadge::Safe => BadgeVariant::Success,
-        RiskBadge::Warning => BadgeVariant::Warning,
-        RiskBadge::Destructive => BadgeVariant::Danger,
+        RiskBadge::Safe => BadgeTone::Success,
+        RiskBadge::Warning => BadgeTone::Warning,
+        RiskBadge::Destructive => BadgeTone::Danger,
     }
 }
 
@@ -2478,7 +2478,7 @@ impl SchemaDiffDocument {
             .gap(Spacing::SM)
             .py(Spacing::XS)
             .child(checkbox)
-            .child(Badge::new(badge.label(), badge_variant(badge)))
+            .child(Badge::new(badge.label(), badge_tone(badge)))
             .child(Text::body(description))
             .into_any_element()
     }
@@ -2524,7 +2524,7 @@ impl SchemaDiffDocument {
                     .gap(Spacing::SM)
                     .py(Spacing::XS)
                     .child(checkbox)
-                    .child(Badge::new(badge.label(), badge_variant(badge)))
+                    .child(Badge::new(badge.label(), badge_tone(badge)))
                     .child(Text::body(description))
                     .into_any_element()
             }
@@ -2551,7 +2551,7 @@ impl SchemaDiffDocument {
                     .py(Spacing::XS)
                     .child(Badge::new(
                         dbflux_i18n::t!("document.schema_diff.status.unsupported"),
-                        BadgeVariant::Neutral,
+                        BadgeTone::Neutral,
                     ))
                     .child(Text::body(description))
                     .child(Text::caption(reason_text).muted_foreground())
@@ -2613,7 +2613,7 @@ fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
         .py(Spacing::XS)
         .child(Badge::new(
             dbflux_i18n::t!("document.schema_diff.status.unsupported"),
-            BadgeVariant::Neutral,
+            BadgeTone::Neutral,
         ))
         .child(Text::body(crate::labels::schema_change_description(
             &unsupported.change,

@@ -176,7 +176,11 @@ impl Render for Workspace {
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
         let tasks_panel = self.tasks_panel.clone();
-        let toast_host = self.toast_host.clone();
+        // Toasts stack at the top right of the document area, never over the
+        // sidebar or the status bar. They are deferred so they still paint
+        // above modals, and hidden while the shutdown overlay is up.
+        let toast_layer = (!self.app_state.read(cx).shutdown_phase().is_active())
+            .then(|| deferred(self.toast_host.clone()));
         let command_palette = self.command_palette.clone();
         let login_modal = self.login_modal.clone();
         let sso_wizard = self.sso_wizard.clone();
@@ -275,6 +279,7 @@ impl Render for Workspace {
                                 .child(
                                     div()
                                         .id("document-content-row")
+                                        .relative()
                                         .flex()
                                         .flex_row()
                                         .flex_1()
@@ -293,7 +298,8 @@ impl Render for Workspace {
                                         })
                                         .when(inspector_open, |el| {
                                             el.child(inspector_entity.clone())
-                                        }),
+                                        })
+                                        .children(toast_layer),
                                 ),
                         ),
                 )
@@ -359,6 +365,7 @@ impl Render for Workspace {
                         .child(
                             div()
                                 .id("empty-state")
+                                .relative()
                                 .flex()
                                 .flex_col()
                                 .size_full()
@@ -396,7 +403,8 @@ impl Render for Workspace {
                                             Command::OpenConnectionManager,
                                             dbflux_i18n::t!("workspace.hint.new_connection"),
                                         )),
-                                ),
+                                )
+                                .children(toast_layer),
                         ),
                 )
                 .child(
@@ -763,15 +771,6 @@ impl Render for Workspace {
             .when(self.modal_active_query.read(cx).is_visible(), |root| {
                 root.child(self.modal_active_query.clone())
             })
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .child(toast_host),
-            )
             // Drag mask — rendered only while inspector grip is being dragged.
             // Sits above document/inspector content so cursor tracking works
             // anywhere on screen, but below toast host and shutdown overlay.

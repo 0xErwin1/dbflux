@@ -19,8 +19,8 @@ pub use field_row::{
     field_row_with_label_width,
 };
 pub use master_detail_list::{
-    BadgeTone, MasterDetailAction, MasterDetailActionKind, MasterDetailItem,
-    MasterDetailListConfig, RowKind, master_detail_row_kind, render_master_detail_list,
+    MasterDetailAction, MasterDetailActionKind, MasterDetailItem, MasterDetailListConfig, RowKind,
+    master_detail_row_kind, render_master_detail_list,
 };
 pub use menu_item::{MenuItem, render_menu_container, render_menu_item, render_separator};
 pub use menu_popup::{render_menu_items, render_menu_overlay};

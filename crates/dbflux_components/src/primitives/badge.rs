@@ -1,64 +1,57 @@
 use gpui::prelude::*;
-use gpui::{App, Hsla, SharedString, Window, div, px};
+use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::density;
-use crate::tokens::Spacing;
+use crate::primitives::Chamfer;
+use crate::tokens::{ChamferCut, ChromeColors, Feedback};
 
-/// Semantic badge variant controlling the color scheme.
+/// Semantic tone shared by [`Badge`] and [`EnvTag`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BadgeVariant {
+pub enum BadgeTone {
+    Neutral,
+    Accent,
     Info,
     Success,
     Warning,
     Danger,
-    Neutral,
 }
 
-/// Stateless badge primitive. When `label` is empty renders as a small
-/// colored dot; otherwise renders as a pill with text.
-#[derive(IntoElement)]
-pub struct Badge {
-    variant: BadgeVariant,
-    label: SharedString,
-    dot_mode: bool,
-}
-
-impl Badge {
-    pub fn new(label: impl Into<SharedString>, variant: BadgeVariant) -> Self {
-        Self {
-            variant,
-            label: label.into(),
-            dot_mode: false,
+impl BadgeTone {
+    /// Label color for the tone. Accent resolves to the tint so it stays
+    /// readable on the dark ground.
+    pub fn text_color(self, theme: &gpui_component::Theme) -> Hsla {
+        match self {
+            Self::Neutral => theme.muted_foreground,
+            Self::Accent => ChromeColors::tint(theme),
+            Self::Info => theme.info,
+            Self::Success => theme.success,
+            Self::Warning => theme.warning,
+            Self::Danger => theme.danger,
         }
     }
 
-    /// Force dot-only mode regardless of label content.
-    pub fn dot(mut self) -> Self {
-        self.dot_mode = true;
-        self
+    /// Fill behind the label: the raised surface for Neutral, a wash of the
+    /// label color at `alpha` for every other tone.
+    fn fill(self, theme: &gpui_component::Theme, alpha: f32) -> Hsla {
+        match self {
+            Self::Neutral => theme.secondary,
+            _ => self.text_color(theme).opacity(alpha),
+        }
     }
+}
 
-    fn colors(&self, theme: &gpui_component::Theme) -> (Hsla, Hsla) {
-        // (background, text)
-        match self.variant {
-            BadgeVariant::Info => {
-                let bg = theme.info.opacity(0.15);
-                (bg, theme.info)
-            }
-            BadgeVariant::Success => {
-                let bg = theme.success.opacity(0.15);
-                (bg, theme.success)
-            }
-            BadgeVariant::Warning => {
-                let bg = theme.warning.opacity(0.15);
-                (bg, theme.warning)
-            }
-            BadgeVariant::Danger => {
-                let bg = theme.danger.opacity(0.15);
-                (bg, theme.danger)
-            }
-            BadgeVariant::Neutral => (theme.secondary, theme.muted_foreground),
+/// Stateless badge: a short label on a 4 px chamfer, 20 px tall.
+#[derive(IntoElement)]
+pub struct Badge {
+    tone: BadgeTone,
+    label: SharedString,
+}
+
+impl Badge {
+    pub fn new(label: impl Into<SharedString>, tone: BadgeTone) -> Self {
+        Self {
+            tone,
+            label: label.into(),
         }
     }
 }
@@ -66,22 +59,116 @@ impl Badge {
 impl RenderOnce for Badge {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let (bg, text_color) = self.colors(theme);
+        let fill = self.tone.fill(theme, Feedback::BADGE_FILL_ALPHA);
+        let text_color = self.tone.text_color(theme);
 
-        let is_dot = self.dot_mode || self.label.is_empty();
+        div()
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .h(Feedback::BADGE_HEIGHT)
+            .px(Feedback::BADGE_PADDING_X)
+            .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .text_size(Feedback::BADGE_FONT)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(text_color)
+                    .child(self.label),
+            )
+    }
+}
 
-        if is_dot {
-            div().size(Spacing::SM).rounded_full().bg(text_color)
-        } else {
-            div()
-                .px(Spacing::XS)
-                .py(px(2.0))
-                .rounded(density::radius_sm(cx))
-                .bg(bg)
-                .text_size(density::font_xs(cx))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(text_color)
-                .child(self.label)
+/// Environment tag (PROD, STAGING, ...) shown next to a connection name.
+///
+/// Bold 10 px caps on a 4 px chamfer; Danger by default, the tone used for
+/// production.
+#[derive(IntoElement)]
+pub struct EnvTag {
+    tone: BadgeTone,
+    label: SharedString,
+}
+
+impl EnvTag {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            tone: BadgeTone::Danger,
+            label: label.into(),
         }
+    }
+
+    pub fn tone(mut self, tone: BadgeTone) -> Self {
+        self.tone = tone;
+        self
+    }
+}
+
+impl RenderOnce for EnvTag {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let fill = self.tone.fill(theme, Feedback::ENV_TAG_FILL_ALPHA);
+        let text_color = self.tone.text_color(theme);
+        let label: SharedString = self.label.to_uppercase().into();
+
+        div()
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .px(Feedback::ENV_TAG_PADDING_X)
+            .py(Feedback::ENV_TAG_PADDING_Y)
+            .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .text_size(Feedback::ENV_TAG_FONT)
+                    .font_weight(FontWeight::BOLD)
+                    .letter_spacing(Feedback::ENV_TAG_FONT * Feedback::ENV_TAG_TRACKING_EM)
+                    .text_color(text_color)
+                    .child(label),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn neutral_badge_uses_the_raised_surface() {
+        let theme = gpui_component::Theme::default();
+
+        assert_eq!(BadgeTone::Neutral.fill(&theme, 0.14), theme.secondary);
+        assert_eq!(
+            BadgeTone::Neutral.text_color(&theme),
+            theme.muted_foreground
+        );
+    }
+
+    #[test]
+    fn colored_tones_wash_their_label_color() {
+        let theme = gpui_component::Theme::default();
+
+        for tone in [
+            BadgeTone::Accent,
+            BadgeTone::Info,
+            BadgeTone::Success,
+            BadgeTone::Warning,
+            BadgeTone::Danger,
+        ] {
+            let text = tone.text_color(&theme);
+            assert_eq!(tone.fill(&theme, 0.14), text.opacity(0.14));
+        }
+    }
+
+    #[test]
+    fn env_tag_defaults_to_danger() {
+        assert_eq!(EnvTag::new("prod").tone, BadgeTone::Danger);
+        assert_eq!(
+            EnvTag::new("staging").tone(BadgeTone::Warning).tone,
+            BadgeTone::Warning
+        );
     }
 }

@@ -455,7 +455,6 @@ impl ConnectionManagerWindow {
                                     )
                                     .ghost()
                                     .small()
-                                    .text_color(gpui::white())
                                     .icon(Icon::new(AppIcon::Copy))
                                     .on_click(
                                         move |_, _, cx| {

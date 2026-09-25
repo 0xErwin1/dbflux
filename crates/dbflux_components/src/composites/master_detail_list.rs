@@ -9,16 +9,8 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
-use crate::primitives::{Icon, Text, focus_frame};
+use crate::primitives::{Badge, BadgeTone, Icon, Text, focus_frame};
 use crate::tokens::{ChromeColors, Radii, Spacing, Widths};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BadgeTone {
-    Neutral,
-    Accent,
-    Success,
-    Danger,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MasterDetailItem {
@@ -91,19 +83,7 @@ struct RowColors {
     secondary: Hsla,
     list_even: Hsla,
     muted_foreground: Hsla,
-    accent: Hsla,
-    success: Hsla,
-    danger: Hsla,
     border: Hsla,
-}
-
-fn badge_color(tone: BadgeTone, colors: &RowColors) -> Hsla {
-    match tone {
-        BadgeTone::Neutral => colors.muted_foreground,
-        BadgeTone::Accent => colors.accent,
-        BadgeTone::Success => colors.success,
-        BadgeTone::Danger => colors.danger,
-    }
 }
 
 fn render_action_button(
@@ -194,7 +174,7 @@ where
                         .when_some(item.detail, |el, detail| el.child(Text::caption(detail))),
                 )
                 .when_some(item.badge, |el, (label, tone)| {
-                    el.child(Text::caption(label).color(badge_color(tone, colors)))
+                    el.child(Badge::new(label, tone))
                 }),
         );
 
@@ -219,9 +199,6 @@ where
         secondary: theme.secondary,
         list_even: theme.list_even,
         muted_foreground: theme.muted_foreground,
-        accent: ChromeColors::tint(theme),
-        success: theme.success,
-        danger: theme.danger,
         border: theme.border,
     };
 

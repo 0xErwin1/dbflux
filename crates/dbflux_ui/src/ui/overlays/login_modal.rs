@@ -467,7 +467,7 @@ mod tests {
         login_elapsed_message,
     };
     use dbflux_core::PipelineState;
-    use gpui::{AccessibilityFrame, FrameObserver, TestAppContext};
+    use gpui::{AccessibilityFrame, FrameObserver, TestAppContext, VisualTestContext};
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
@@ -566,14 +566,6 @@ mod tests {
         ));
     }
 
-    fn waiting_indicator_text(frame: &AccessibilityFrame) -> String {
-        frame
-            .nodes()
-            .find(|(_, node)| node.id() == "login-waiting-indicator")
-            .map(|(_, node)| node.content_text().to_owned())
-            .expect("the waiting indicator is rendered")
-    }
-
     fn shown_elapsed_seconds(frame: &AccessibilityFrame) -> u64 {
         (0..=SSO_LOGIN_TIMEOUT.as_secs())
             .find(|seconds| frame_shows_text(frame, &login_elapsed_message(*seconds)))
@@ -606,8 +598,15 @@ mod tests {
         });
         visual.run_until_parked();
 
+        let spinner_frame =
+            |visual: &mut VisualTestContext| visual.update(|_, cx| modal.read(cx).spinner_frame);
+
         let first = latest_frame(&capture);
-        let mut indicator_texts = HashSet::from([waiting_indicator_text(&first)]);
+        assert!(
+            has_node(&first, "login-waiting-indicator"),
+            "the waiting indicator is rendered"
+        );
+        let mut spinner_frames = HashSet::from([spinner_frame(visual)]);
         let mut shown_seconds = vec![shown_elapsed_seconds(&first)];
 
         const TEST_CLOCK_PER_TICK: Duration = Duration::from_secs(1);
@@ -617,7 +616,7 @@ mod tests {
             visual.run_until_parked();
 
             let frame = latest_frame(&capture);
-            indicator_texts.insert(waiting_indicator_text(&frame));
+            spinner_frames.insert(spinner_frame(visual));
             shown_seconds.push(shown_elapsed_seconds(&frame));
         }
 
@@ -625,8 +624,8 @@ mod tests {
         let wall_clock_seconds = wall_clock_start.elapsed().as_secs();
 
         assert!(
-            indicator_texts.len() > 1,
-            "the waiting indicator did not animate: {indicator_texts:?}"
+            spinner_frames.len() > 1,
+            "the waiting indicator did not animate: {spinner_frames:?}"
         );
         assert!(
             test_clock_advanced.as_secs() > wall_clock_seconds,

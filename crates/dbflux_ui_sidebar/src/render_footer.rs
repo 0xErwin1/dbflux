@@ -1,5 +1,5 @@
 use super::*;
-use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 
 impl Sidebar {
     pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -12,10 +12,10 @@ impl Sidebar {
         let idle_count = total_profiles.saturating_sub(connected_count);
 
         let status_text = crate::labels::footer_counts_label(connected_count, idle_count);
-        let dot_variant = if connected_count > 0 {
-            StatusDotVariant::Success
+        let status = if connected_count > 0 {
+            Status::Connected
         } else {
-            StatusDotVariant::Idle
+            Status::Idle
         };
 
         div()
@@ -32,7 +32,7 @@ impl Sidebar {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(StatusDot::new(dot_variant))
+                    .child(StatusIndicator::new(status))
                     .child(
                         Text::body(status_text)
                             .font_size(FontSizes::XS)

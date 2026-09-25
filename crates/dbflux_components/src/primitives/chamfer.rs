@@ -21,7 +21,7 @@ pub enum ChamferCorners {
     TopLeft,
 }
 
-/// A straight edge painted along the top or bottom side of the shape, inside
+/// A straight edge painted along the top, bottom or left side of the shape, inside
 /// its bounds and following the shape outline where the side meets a cut.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChamferEdge {
@@ -218,6 +218,21 @@ pub fn chamfer_bottom_edge_polygon(
     band_polygon(bounds, cut, corners, (left, band_top, right, bottom))
 }
 
+/// Region of the shape within `thickness` of its left side. Where the left
+/// side meets the top-left cut it follows the diagonal, like an inset
+/// box-shadow on the left edge clipped by the shape.
+pub fn chamfer_left_edge_polygon(
+    bounds: Bounds<Pixels>,
+    cut: Pixels,
+    corners: ChamferCorners,
+    thickness: Pixels,
+) -> Vec<Point<Pixels>> {
+    let (left, top, right, bottom) = edges_of(bounds);
+    let band_right = (left + f32::from(thickness)).min(right);
+
+    band_polygon(bounds, cut, corners, (left, top, band_right, bottom))
+}
+
 /// Centerline of a [`ChamferRing`] around the shape: the outline moved
 /// outward by `offset + thickness / 2` (inward when negative), keeping every
 /// diagonal parallel to the shape's own cut. Stroking this closed polygon with
@@ -339,6 +354,7 @@ pub struct Chamfer {
     colors: ChamferColors,
     top_edge: Option<ChamferEdge>,
     bottom_edge: Option<ChamferEdge>,
+    left_edge: Option<ChamferEdge>,
     ring: Option<ChamferRing>,
     interaction_id: Option<ElementId>,
 }
@@ -353,6 +369,7 @@ impl Chamfer {
             colors: ChamferColors::default(),
             top_edge: None,
             bottom_edge: None,
+            left_edge: None,
             ring: None,
             interaction_id: None,
         }
@@ -405,6 +422,15 @@ impl Chamfer {
         self
     }
 
+    /// Kind stripe along the left side, as used by banners and toasts.
+    pub fn left_edge(mut self, color: impl Into<Hsla>, thickness: Pixels) -> Self {
+        self.left_edge = Some(ChamferEdge {
+            color: color.into(),
+            thickness,
+        });
+        self
+    }
+
     /// Strokes a ring along the full outline, painted above everything else.
     pub fn ring(mut self, ring: ChamferRing) -> Self {
         self.ring = Some(ring);
@@ -419,8 +445,8 @@ impl Chamfer {
     }
 
     /// Paints the shape into `bounds` with the given fill. The border is drawn
-    /// on top of the fill, the top and bottom edges over the border, and the
-    /// ring last. Bounds, cut, border and edges snap to the device pixel grid.
+    /// on top of the fill, the top, bottom and left edges over the border, and
+    /// the ring last. Bounds, cut, border and edges snap to the device pixel grid.
     pub fn paint(&self, bounds: Bounds<Pixels>, fill: Hsla, window: &mut Window) {
         let scale_factor = window.scale_factor();
         let bounds = snap_bounds_to_device(bounds, scale_factor);
@@ -445,6 +471,12 @@ impl Chamfer {
         if let Some(edge) = self.bottom_edge {
             let thickness = snap_length_to_device(edge.thickness, scale_factor);
             let polygon = chamfer_bottom_edge_polygon(bounds, cut, self.corners, thickness);
+            paint_polygon(&polygon, edge.color, window);
+        }
+
+        if let Some(edge) = self.left_edge {
+            let thickness = snap_length_to_device(edge.thickness, scale_factor);
+            let polygon = chamfer_left_edge_polygon(bounds, cut, self.corners, thickness);
             paint_polygon(&polygon, edge.color, window);
         }
 
@@ -1030,6 +1062,22 @@ mod tests {
         assert_eq!(
             vertex_set(&polygon),
             sorted(vec![(18.0, 0.0), (110.0, 0.0), (110.0, 2.0), (16.0, 2.0)])
+        );
+    }
+
+    #[test]
+    fn left_edge_follows_the_top_left_cut() {
+        let bounds = rect(0.0, 0.0, 100.0, 40.0);
+        let polygon = chamfer_left_edge_polygon(
+            bounds,
+            ChamferCut::INPUT,
+            ChamferCorners::TopLeftBottomRight,
+            Borders::MEDIUM,
+        );
+
+        assert_eq!(
+            vertex_set(&polygon),
+            sorted(vec![(0.0, 8.0), (2.0, 6.0), (2.0, 40.0), (0.0, 40.0)])
         );
     }
 

@@ -6,15 +6,15 @@ use crate::user_error::throttle::TokenBucket;
 
 use dbflux_components::controls::Button;
 use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{Icon, IconButton, Text};
+use dbflux_components::primitives::{Chamfer, Icon, IconButton};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, Global, Hsla, SharedString, Window, px, rems};
+use gpui::{App, Context, Entity, FontWeight, Global, Hsla, SharedString, Window};
 use gpui_component::ActiveTheme;
 
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Feedback, FontSizes, Spacing};
 
 /// Wall-clock snapshot used as the default `meta_right` timestamp on toasts.
 /// Captured once at build time — no tick/loop logic.
@@ -36,7 +36,7 @@ pub fn copy_action(payload: impl Into<String>) -> ToastAction {
     )
 }
 
-/// Toast visual variant. Drives icon, accent stripe, banner colors, and the
+/// Toast visual variant. Drives the icon, the edge stripe color, and the
 /// default auto-dismiss policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -47,8 +47,10 @@ pub enum ToastKind {
 }
 
 impl ToastKind {
-    fn icon(self) -> AppIcon {
+    /// Kind icon. A toast that reports progress shows the loader instead.
+    fn icon(self, has_progress: bool) -> AppIcon {
         match self {
+            _ if has_progress => AppIcon::Loader,
             Self::Success => AppIcon::CircleCheck,
             Self::Info => AppIcon::Info,
             Self::Warning => AppIcon::TriangleAlert,
@@ -56,30 +58,16 @@ impl ToastKind {
         }
     }
 
-    fn icon_source(self) -> IconSource {
-        IconSource::Svg(self.icon().path().into())
-    }
-
-    /// Foreground / accent fill color (icon, stripe, progress fill where appropriate).
-    fn accent(self, cx: &App) -> Hsla {
-        let b = SemBannerColors::for_current(cx);
+    /// Edge stripe and icon color. An Info toast that reports progress is
+    /// work in flight, so it carries the tint like a busy status.
+    fn accent(self, has_progress: bool, cx: &App) -> Hsla {
+        let banners = SemBannerColors::for_current(cx);
         match self {
-            Self::Success => b.success_fg,
-            Self::Info => b.info_fg,
-            Self::Warning => b.warning_fg,
-            Self::Error => b.error_fg,
-        }
-    }
-
-    /// Background tint applied to the toast card. Kept subtle so the accent
-    /// stripe and theme chrome carry the variant signal.
-    fn background(self, cx: &App) -> Hsla {
-        let b = SemBannerColors::for_current(cx);
-        match self {
-            Self::Success => b.success_bg,
-            Self::Info => b.info_bg,
-            Self::Warning => b.warning_bg,
-            Self::Error => b.error_bg,
+            Self::Info if has_progress => ChromeColors::tint(cx.theme()),
+            Self::Success => banners.success_fg,
+            Self::Info => banners.info_fg,
+            Self::Warning => banners.warning_fg,
+            Self::Error => banners.error_fg,
         }
     }
 }
@@ -437,24 +425,19 @@ impl Render for ToastHost {
             return gpui::div().into_any_element();
         }
 
-        let theme = cx.theme();
-        let card_bg = theme.background;
-        let border_color = theme.border;
-        let muted = theme.muted_foreground;
-
         let items = self
             .toasts
             .iter()
-            .map(|toast| self.render_toast(toast, card_bg, border_color, muted, cx))
+            .map(|toast| self.render_toast(toast, cx))
             .collect::<Vec<_>>();
 
-        // Anchored bottom-left above the status bar; the workspace wraps us in
-        // a full-screen absolute layer so `bottom`/`left` align to the window.
+        // Stacks from the top-right corner of whatever region the workspace
+        // mounts the host in (the document area), newest last.
         gpui::div()
             .id("toast-host")
             .absolute()
-            .bottom(Spacing::LG)
-            .left(Spacing::LG)
+            .top(Feedback::TOAST_STACK_INSET)
+            .right(Feedback::TOAST_STACK_INSET)
             .flex()
             .flex_col()
             .gap(Spacing::SM)
@@ -464,155 +447,162 @@ impl Render for ToastHost {
 }
 
 impl ToastHost {
-    fn render_toast(
-        &self,
-        toast: &StoredToast,
-        card_bg: Hsla,
-        border_color: Hsla,
-        muted: Hsla,
-        cx: &Context<Self>,
-    ) -> gpui::AnyElement {
+    fn render_toast(&self, toast: &StoredToast, cx: &Context<Self>) -> gpui::AnyElement {
         let toast_id = toast.id;
-        let accent = toast.kind.accent(cx);
-        let stripe_bg = toast.kind.background(cx);
-        let icon_source = toast.kind.icon_source();
+        let has_progress = toast.progress.is_some();
+        let accent = toast.kind.accent(has_progress, cx);
+        let icon = toast.kind.icon(has_progress);
+
+        let theme = cx.theme();
+        let card_fill = theme.secondary;
+        let well = theme.background;
+        let strong = ChromeColors::strong(theme);
+        let body_color = theme.foreground;
+        let muted = theme.muted_foreground;
+        let progress_fill = theme.primary;
 
         let is_collapsed = self.collapsed.contains(&toast_id);
         let can_collapse = toast.details_collapsible && toast.has_collapsible_content();
         let show_details = !(can_collapse && is_collapsed);
 
-        // Title row: icon · title · subtitle · spacer · meta_right · close
-        let icon_element = match icon_source {
-            IconSource::Svg(path) => Icon::new(IconSource::Svg(path))
-                .size(Heights::ICON_SM)
-                .color(accent)
-                .into_any_element(),
-            IconSource::Named(name) => Icon::new(name)
-                .size(Heights::ICON_SM)
-                .color(accent)
-                .into_any_element(),
-        };
-
-        // Title block: title on its own line, optional subtitle below. Wrapping
-        // the text in a `flex_1 min_w_0` column lets multi-line subtitles wrap
-        // within the toast's `max_w` instead of pushing the card past it.
-        let mut title_block = gpui::div().flex().flex_col().flex_1().min_w_0();
-
-        title_block =
-            title_block.child(Text::body(toast.title.clone()).font_weight(gpui::FontWeight::BOLD));
-
-        if let Some(subtitle) = &toast.subtitle {
-            title_block = title_block.child(Text::caption(subtitle.clone()).color(muted));
-        }
-
-        let mut title_row = gpui::div()
+        // Title block: title, optional subtitle below. `flex_1 min_w_0` lets a
+        // long subtitle wrap within the toast width.
+        let title_block = gpui::div()
             .flex()
-            .flex_row()
-            .items_start()
-            .gap(Spacing::SM)
-            .child(gpui::div().flex_shrink_0().mt(px(2.0)).child(icon_element))
-            .child(title_block);
-
-        if let Some(meta) = &toast.meta_right {
-            title_row = title_row.child(
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .gap(Feedback::TOAST_TITLE_LINE_GAP)
+            .child(
                 gpui::div()
-                    .flex_shrink_0()
-                    .mt(px(2.0))
-                    .child(Text::caption_xs(meta.clone())),
-            );
-        }
+                    .text_size(FontSizes::BASE)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(strong)
+                    .child(toast.title.clone()),
+            )
+            .when_some(toast.subtitle.clone(), |el, subtitle| {
+                el.child(
+                    gpui::div()
+                        .text_size(Feedback::TOAST_BODY_FONT)
+                        .text_color(muted)
+                        .child(subtitle),
+                )
+            });
 
         let close_button = IconButton::new(
             ("toast-close", toast_id),
-            IconSource::Svg(AppIcon::X.path().into()),
+            IconSource::Svg(AppIcon::CircleX.path().into()),
         )
-        .icon_size(Spacing::MD)
+        .icon_size(Feedback::TOAST_CLOSE_ICON)
         .on_click(cx.listener(move |host, _, _, cx| {
             host.dismiss(toast_id, cx);
         }));
 
-        title_row = title_row.child(gpui::div().flex_shrink_0().child(close_button));
+        let title_row = gpui::div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(Feedback::TOAST_TITLE_GAP)
+            .child(
+                gpui::div()
+                    .flex_shrink_0()
+                    .child(Icon::new(icon).size(Feedback::TOAST_ICON).color(accent)),
+            )
+            .child(title_block)
+            .when_some(toast.meta_right.clone(), |el, meta| {
+                el.child(
+                    gpui::div()
+                        .flex_shrink_0()
+                        .font_family(AppFonts::MONO)
+                        .text_size(Feedback::TOAST_META_FONT)
+                        .text_color(muted)
+                        .child(meta),
+                )
+            })
+            .child(gpui::div().flex_shrink_0().child(close_button));
 
         // `.occlude()` makes the toast card opaque to hit-testing so clicks on
         // empty toast area do not leak through to the workspace underneath.
         let mut card = gpui::div()
             .id(("toast", toast_id))
             .occlude()
-            .flex()
-            .flex_row()
-            .min_w(rems(22.0))
-            .max_w(rems(28.0))
-            .border_1()
-            .border_color(border_color)
-            .bg(card_bg)
-            .rounded(Radii::MD)
-            .shadow_lg();
-
-        // Left accent stripe — fills the toast height.
-        let stripe = gpui::div().w(Spacing::XS).flex_shrink_0().bg(stripe_bg);
-
-        let mut content = gpui::div()
-            .flex_1()
-            .min_w_0()
+            .relative()
             .flex()
             .flex_col()
-            .gap(Spacing::XS)
-            .px(Spacing::MD)
-            .py(Spacing::SM)
+            .w(Feedback::TOAST_WIDTH)
+            .gap(Feedback::TOAST_ROW_GAP)
+            .py(Feedback::TOAST_PADDING_Y)
+            .px(Feedback::TOAST_PADDING_X)
+            .child(
+                Chamfer::new(ChamferCut::OVERLAY)
+                    .fill(card_fill)
+                    .left_edge(accent, Feedback::TOAST_STRIPE),
+            )
             .child(title_row);
 
         if show_details {
             if let Some(body) = &toast.body {
-                content = content.child(Text::body_sm(body.clone()));
+                card = card.child(
+                    gpui::div()
+                        .text_size(Feedback::TOAST_BODY_FONT)
+                        .text_color(body_color)
+                        .child(body.clone()),
+                );
             }
 
             if let Some(details) = &toast.details {
-                content =
-                    content.child(Text::caption_xs(details.clone()).color(muted.opacity(0.7)));
+                card = card.child(
+                    gpui::div()
+                        .text_size(Feedback::TOAST_META_FONT)
+                        .text_color(muted)
+                        .child(details.clone()),
+                );
             }
 
             if let Some(code) = &toast.code_block {
-                let code_block = gpui::div()
-                    .mt(Spacing::XS)
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .border_1()
-                    .border_color(border_color.opacity(0.6))
-                    .bg(cx.theme().secondary)
-                    .rounded(Radii::SM)
-                    .font_family(AppFonts::MONO)
-                    .text_size(FontSizes::XS)
-                    .text_color(cx.theme().foreground)
-                    .child(code.clone());
-                content = content.child(code_block);
+                card = card.child(
+                    gpui::div()
+                        .px(Spacing::SM)
+                        .py(Spacing::XS)
+                        .bg(well)
+                        .font_family(AppFonts::MONO)
+                        .text_size(FontSizes::XS)
+                        .text_color(body_color)
+                        .child(code.clone()),
+                );
             }
         }
 
         if let Some(progress) = toast.progress {
             let percent = (progress * 100.0).round() as u32;
             let percent_label: SharedString = format!("{}%", percent).into();
-            let progress_row = gpui::div()
-                .mt(Spacing::XS)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(Spacing::SM)
-                .child(
-                    gpui::div()
-                        .flex_1()
-                        .h(px(2.0))
-                        .bg(border_color.opacity(0.6))
-                        .rounded(Radii::FULL)
-                        .child(
-                            gpui::div()
-                                .h_full()
-                                .w(gpui::relative(progress))
-                                .bg(cx.theme().primary)
-                                .rounded(Radii::FULL),
-                        ),
-                )
-                .child(Text::caption_xs(percent_label));
-            content = content.child(progress_row);
+
+            card = card.child(
+                gpui::div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(Feedback::TOAST_TITLE_GAP)
+                    .child(
+                        gpui::div()
+                            .flex_1()
+                            .h(Feedback::TOAST_PROGRESS_HEIGHT)
+                            .bg(well)
+                            .child(
+                                gpui::div()
+                                    .h_full()
+                                    .w(gpui::relative(progress))
+                                    .bg(progress_fill),
+                            ),
+                    )
+                    .child(
+                        gpui::div()
+                            .font_family(AppFonts::MONO)
+                            .text_size(Feedback::TOAST_META_FONT)
+                            .text_color(muted)
+                            .child(percent_label),
+                    ),
+            );
         }
 
         if can_collapse {
@@ -621,24 +611,21 @@ impl ToastHost {
             } else {
                 dbflux_i18n::t!("toast.action.hide_details")
             };
-            let toggle = gpui::div()
-                .id(("toast-toggle", toast_id))
-                .mt(Spacing::XS)
-                .cursor_pointer()
-                .child(Text::caption_xs(label).color(accent))
-                .on_click(cx.listener(move |host, _, _, cx| {
-                    host.toggle_collapsed(toast_id, cx);
-                }));
-            content = content.child(toggle);
+            card = card.child(
+                gpui::div()
+                    .id(("toast-toggle", toast_id))
+                    .cursor_pointer()
+                    .text_size(Feedback::TOAST_META_FONT)
+                    .text_color(accent)
+                    .child(label)
+                    .on_click(cx.listener(move |host, _, _, cx| {
+                        host.toggle_collapsed(toast_id, cx);
+                    })),
+            );
         }
 
         if !toast.actions.is_empty() {
-            let mut action_row = gpui::div()
-                .mt(Spacing::SM)
-                .flex()
-                .flex_row()
-                .justify_end()
-                .gap(Spacing::SM);
+            let mut action_row = gpui::div().flex().flex_row().gap(Spacing::SM);
 
             for (idx, action) in toast.actions.iter().take(MAX_ACTIONS).enumerate() {
                 let button_id: SharedString = format!("toast-action-{}-{}", toast_id, idx).into();
@@ -658,10 +645,9 @@ impl ToastHost {
                 action_row = action_row.child(button);
             }
 
-            content = content.child(action_row);
+            card = card.child(action_row);
         }
 
-        card = card.child(stripe).child(content);
         card.into_any_element()
     }
 }

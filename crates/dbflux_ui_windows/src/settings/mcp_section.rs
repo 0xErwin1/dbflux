@@ -5,13 +5,13 @@ use crate::labels::{mcp_policy_tools_classes_summary, mcp_role_policy_count};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::components::multi_select::MultiSelect;
 use dbflux_components::composites::{
-    BadgeTone, MasterDetailAction, MasterDetailActionKind, MasterDetailItem,
-    MasterDetailListConfig, render_master_detail_list,
+    MasterDetailAction, MasterDetailActionKind, MasterDetailItem, MasterDetailListConfig,
+    render_master_detail_list,
 };
 use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::primitives::{Label, focus_frame};
+use dbflux_components::primitives::{BadgeTone, Label, focus_frame};
 use dbflux_components::tokens::{ChromeColors, Widths};
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};

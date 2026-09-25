@@ -5,7 +5,7 @@ use dbflux_components::controls::Button;
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{
-    Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame,
+    Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text, focus_frame,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -481,7 +481,7 @@ impl CodeDocument {
                     .child(Text::label(status))
                     .child(Text::caption(line_count_label))
                     .when(live_output.has_stderr(), |el| {
-                        el.child(Badge::new("stderr", BadgeVariant::Warning))
+                        el.child(Badge::new("stderr", BadgeTone::Warning))
                     }),
             )
             .child(

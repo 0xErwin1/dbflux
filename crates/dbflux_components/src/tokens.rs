@@ -315,6 +315,13 @@ impl ChromeColors {
     pub fn tint(theme: &gpui_component::Theme) -> Hsla {
         theme.ring
     }
+
+    /// Strong text for titles and data: `#F7F4F7` on dark, `#141118` on light.
+    ///
+    /// The palette assigns strong text to `accent_foreground`, so this reads it.
+    pub fn strong(theme: &gpui_component::Theme) -> Hsla {
+        theme.accent_foreground
+    }
 }
 
 /// Syntax roles of the Bolt Byzantium palette, per variant.
@@ -466,44 +473,78 @@ impl RowColors {
     }
 }
 
-/// Status-dot palette colors for connection/task indicators.
-///
-/// The palette returns the dot color only — animation (pulsing) is the
-/// consumer's responsibility.
-pub struct StatusDotPalette;
+/// Geometry of the status and feedback components (badge, environment tag,
+/// status diamond, banner, toast, spinner), measured from the Bolt Byzantium
+/// app boards.
+pub struct Feedback;
 
-impl StatusDotPalette {
-    /// Idle dot: theme `muted_foreground`.
-    pub fn idle(theme: &gpui_component::Theme) -> Hsla {
-        theme.muted_foreground
-    }
+impl Feedback {
+    /// Badge height (20 px).
+    pub const BADGE_HEIGHT: Pixels = px(20.0);
+    /// Badge horizontal padding (7 px).
+    pub const BADGE_PADDING_X: Pixels = px(7.0);
+    /// Badge label size (11 px, semibold).
+    pub const BADGE_FONT: Pixels = px(11.0);
+    /// Opacity of the kind color behind a badge label.
+    pub const BADGE_FILL_ALPHA: f32 = 0.14;
 
-    /// Busy dot: the text-accent tint. Consumer drives the pulse animation.
-    pub fn busy(theme: &gpui_component::Theme) -> Hsla {
-        ChromeColors::tint(theme)
-    }
+    /// Environment tag padding: 1 px vertical, 6 px horizontal.
+    pub const ENV_TAG_PADDING_Y: Pixels = px(1.0);
+    pub const ENV_TAG_PADDING_X: Pixels = px(6.0);
+    /// Environment tag label size (10 px, bold, 0.08 em tracking).
+    pub const ENV_TAG_FONT: Pixels = px(10.0);
+    pub const ENV_TAG_TRACKING_EM: f32 = 0.08;
+    /// Opacity of the kind color behind an environment tag.
+    pub const ENV_TAG_FILL_ALPHA: f32 = 0.16;
 
-    /// Success dot: theme `success`.
-    pub fn success(theme: &gpui_component::Theme) -> Hsla {
-        theme.success
-    }
+    /// Status diamond next to connection names and in the status bar (7 px).
+    pub const STATUS_DIAMOND: Pixels = px(7.0);
+    /// Compact status diamond, used for the document-tab dirty marker (6 px).
+    pub const STATUS_DIAMOND_COMPACT: Pixels = px(6.0);
+    /// Gap between the diamond and its label (6 px).
+    pub const STATUS_GAP: Pixels = px(6.0);
 
-    /// Warning dot: theme `warning`.
-    pub fn warning(theme: &gpui_component::Theme) -> Hsla {
-        theme.warning
-    }
+    /// Banner padding: 10 px vertical, 14 px horizontal.
+    pub const BANNER_PADDING_Y: Pixels = px(10.0);
+    pub const BANNER_PADDING_X: Pixels = px(14.0);
+    /// Gap between the banner icon and its text (10 px).
+    pub const BANNER_GAP: Pixels = px(10.0);
+    /// Banner icon size (15 px).
+    pub const BANNER_ICON: Pixels = px(15.0);
+    /// Banner edge stripe width (3 px).
+    pub const BANNER_STRIPE: Pixels = px(3.0);
+    /// Opacity of the kind color on the banner field.
+    pub const BANNER_FILL_ALPHA: f32 = 0.08;
 
-    /// Danger dot: theme `danger`.
-    pub fn danger(theme: &gpui_component::Theme) -> Hsla {
-        theme.danger
-    }
+    /// Toast width (440 px).
+    pub const TOAST_WIDTH: Pixels = px(440.0);
+    /// Toast padding: 12 px vertical, 14 px horizontal.
+    pub const TOAST_PADDING_Y: Pixels = px(12.0);
+    pub const TOAST_PADDING_X: Pixels = px(14.0);
+    /// Gap between toast rows (8 px) and inside the title row (10 px).
+    pub const TOAST_ROW_GAP: Pixels = px(8.0);
+    pub const TOAST_TITLE_GAP: Pixels = px(10.0);
+    /// Gap between a toast title and its subtitle (2 px).
+    pub const TOAST_TITLE_LINE_GAP: Pixels = px(2.0);
+    /// Toast kind icon (16 px) and close icon (12 px).
+    pub const TOAST_ICON: Pixels = px(16.0);
+    pub const TOAST_CLOSE_ICON: Pixels = px(12.0);
+    /// Toast edge stripe width (4 px).
+    pub const TOAST_STRIPE: Pixels = px(4.0);
+    /// Toast body text (12.5 px) and timestamp / percentage (11 px, mono).
+    pub const TOAST_BODY_FONT: Pixels = px(12.5);
+    pub const TOAST_META_FONT: Pixels = px(11.0);
+    /// Toast progress track height (4 px).
+    pub const TOAST_PROGRESS_HEIGHT: Pixels = px(4.0);
+    /// Distance between the toast stack and the document area edges (16 px).
+    pub const TOAST_STACK_INSET: Pixels = px(16.0);
 
-    /// Neutral dot: theme `muted_foreground` at 0.5 alpha.
-    pub fn neutral(theme: &gpui_component::Theme) -> Hsla {
-        let mut color = theme.muted_foreground;
-        color.a = 0.5;
-        color
-    }
+    /// Spinner box (16 px) holding the bolt glyph (12 x 14 px).
+    pub const SPINNER_BOX: Pixels = px(16.0);
+    pub const SPINNER_BOLT_WIDTH: Pixels = px(12.0);
+    pub const SPINNER_BOLT_HEIGHT: Pixels = px(14.0);
+    /// Opacity of the unfilled part of the bolt.
+    pub const SPINNER_TRACK_ALPHA: f32 = 0.25;
 }
 
 /// Shared animation timing constants.

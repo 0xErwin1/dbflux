@@ -879,14 +879,14 @@ impl ConnectionManagerWindow {
                             SharedString::from(dbflux_i18n::t!(
                                 "connection_manager.mcp_badge_granted"
                             )),
-                            dbflux_components::composites::BadgeTone::Success,
+                            dbflux_components::primitives::BadgeTone::Success,
                         )
                     } else {
                         (
                             SharedString::from(dbflux_i18n::t!(
                                 "connection_manager.mcp_badge_no_access"
                             )),
-                            dbflux_components::composites::BadgeTone::Neutral,
+                            dbflux_components::primitives::BadgeTone::Neutral,
                         )
                     }),
                     selected: is_selected,

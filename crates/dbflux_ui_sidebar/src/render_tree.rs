@@ -1,6 +1,6 @@
 use super::*;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant, Text};
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::ChromeColors;
 use dbflux_components::typography::InterfaceText;
 use gpui::FontWeight;
@@ -413,14 +413,14 @@ pub(super) fn render_tree_item(
                                 && unicode_icon.is_empty()
                                 && node_kind == SchemaNodeKind::Profile,
                             |el| {
-                                let dot_variant = if is_connected {
-                                    StatusDotVariant::Success
+                                let status = if is_connected {
+                                    Status::Connected
                                 } else if connect_failure.is_some() {
-                                    StatusDotVariant::Danger
+                                    Status::Error
                                 } else {
-                                    StatusDotVariant::Idle
+                                    Status::Idle
                                 };
-                                el.child(StatusDot::new(dot_variant))
+                                el.child(StatusIndicator::new(status))
                             },
                         ),
                 )
@@ -1067,7 +1067,7 @@ fn resolve_node_icon(
                 theme.muted_foreground
             };
 
-            // When no driver icon is set, signal that a StatusDot should render
+            // When no driver icon is set, signal that a status diamond should render
             // (the icon slot handles this via the `use_status_dot` branch).
             let unicode = "";
             (icon, unicode, color)

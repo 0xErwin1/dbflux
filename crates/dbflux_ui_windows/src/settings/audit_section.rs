@@ -7,7 +7,7 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{
     Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent, InputState,
 };
-use dbflux_components::primitives::{StatusDot, StatusDotVariant, Text};
+use dbflux_components::primitives::{Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChromeColors, Radii};
 use dbflux_components::typography::{FieldLabel, SubSectionLabel};
 use dbflux_core::observability::EventSeverity;
@@ -58,11 +58,11 @@ impl AuditStatus {
         }
     }
 
-    fn dot_variant(self) -> StatusDotVariant {
+    fn status(self) -> Status {
         match self {
-            AuditStatus::Enabled => StatusDotVariant::Success,
-            AuditStatus::Degraded => StatusDotVariant::Warning,
-            AuditStatus::Disabled => StatusDotVariant::Idle,
+            AuditStatus::Enabled => Status::Connected,
+            AuditStatus::Degraded => Status::Warning,
+            AuditStatus::Disabled => Status::Idle,
         }
     }
 
@@ -861,7 +861,7 @@ impl AuditSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(gpui::transparent_black())
-            .child(StatusDot::new(status.dot_variant()))
+            .child(StatusIndicator::new(status.status()))
             .child(div().text_sm().child(dbflux_i18n::t!(status.label_key())))
     }
 
@@ -1037,7 +1037,7 @@ impl AuditSection {
 #[cfg(test)]
 mod tests {
     use super::{AuditFormRow, AuditStatus, audit_form_rows};
-    use dbflux_components::primitives::StatusDotVariant;
+    use dbflux_components::primitives::Status;
 
     #[test]
     fn audit_form_rows_excludes_status_indicator_row() {
@@ -1176,17 +1176,17 @@ mod tests {
     fn audit_status_maps_each_variant_to_its_own_dot_token() {
         for status in ALL_AUDIT_STATUSES {
             let expected = match status {
-                AuditStatus::Enabled => StatusDotVariant::Success,
-                AuditStatus::Degraded => StatusDotVariant::Warning,
-                AuditStatus::Disabled => StatusDotVariant::Idle,
+                AuditStatus::Enabled => Status::Connected,
+                AuditStatus::Degraded => Status::Warning,
+                AuditStatus::Disabled => Status::Idle,
             };
 
-            assert_eq!(status.dot_variant(), expected, "status {status:?}");
+            assert_eq!(status.status(), expected, "status {status:?}");
         }
 
         assert_ne!(
-            AuditStatus::Degraded.dot_variant(),
-            AuditStatus::Enabled.dot_variant()
+            AuditStatus::Degraded.status(),
+            AuditStatus::Enabled.status()
         );
     }
 

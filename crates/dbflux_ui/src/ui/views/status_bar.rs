@@ -1,6 +1,6 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::document::{TabManager, TabManagerEvent};
-use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
+use dbflux_components::primitives::{Icon, Status, StatusIndicator};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
@@ -233,19 +233,19 @@ impl Render for StatusBar {
             None
         };
 
-        // Pick the StatusDot variant.
+        // Pick the connection status.
         // While busy, alternate between Busy and Idle on each pulse tick to emulate
         // the CSS @keyframes pulse effect from the design bundle.
-        let dot_variant = if is_busy {
+        let connection_status = if is_busy {
             if self.pulse_visible {
-                StatusDotVariant::Busy
+                Status::Busy
             } else {
-                StatusDotVariant::Idle
+                Status::Idle
             }
         } else if is_connected {
-            StatusDotVariant::Success
+            Status::Connected
         } else {
-            StatusDotVariant::Idle
+            Status::Idle
         };
 
         let divider_color = ChromeColors::ghost_border(cx.theme());
@@ -277,7 +277,7 @@ impl Render for StatusBar {
                     .items_center()
                     .overflow_x_hidden()
                     .whitespace_nowrap()
-                    // Segment: StatusDot + connection name
+                    // Segment: status diamond + connection name
                     .child(
                         div()
                             .flex()
@@ -285,7 +285,7 @@ impl Render for StatusBar {
                             .gap_1()
                             .px(px(10.0))
                             .h(px(22.0))
-                            .child(StatusDot::new(dot_variant))
+                            .child(StatusIndicator::new(connection_status))
                             .when(is_connected, |this| {
                                 this.child(Self::metadata_text(connection_name))
                             })

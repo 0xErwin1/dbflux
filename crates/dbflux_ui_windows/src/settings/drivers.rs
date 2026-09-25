@@ -9,7 +9,7 @@ use dbflux_components::components::form_renderer;
 use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, Label};
 use dbflux_components::tokens::{ChromeColors, Heights, Radii, Widths};
 use dbflux_components::typography::{
     Body, FieldLabel, InterfaceText, MonoMeta, PanelTitle, SubSectionLabel,
@@ -810,7 +810,7 @@ impl DriversSection {
                                     .when_some(entry.metadata.deployment_class, |row, class| {
                                         row.child(Badge::new(
                                             class.display_name().to_uppercase(),
-                                            BadgeVariant::Neutral,
+                                            BadgeTone::Neutral,
                                         ))
                                     }),
                             )
