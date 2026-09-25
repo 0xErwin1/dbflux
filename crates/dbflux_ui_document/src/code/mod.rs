@@ -470,6 +470,8 @@ pub struct CodeDocument {
 
     /// Opt-in modal editing state for the editor.
     vim: vim::VimState,
+    vim_search_input: Entity<InputState>,
+    _vim_search_subscription: Subscription,
 }
 
 struct PendingQueryResult {
@@ -918,6 +920,17 @@ impl CodeDocument {
                     "document.code.context_bar.fallback.sources"
                 ))
         });
+        let vim_search_input = cx.new(|cx| InputState::new(window, cx));
+        let vim_search_subscription = cx.subscribe_in(
+            &vim_search_input,
+            window,
+            |this, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) && this.vim.search_open {
+                    let query = input.read(cx).value().to_string();
+                    this.accept_vim_search(query, window, cx);
+                }
+            },
+        );
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
         let source_end_input =
@@ -1077,6 +1090,8 @@ impl CodeDocument {
             pending: PendingActions::default(),
             close_after_save: false,
             vim: vim::VimState::default(),
+            vim_search_input,
+            _vim_search_subscription: vim_search_subscription,
         };
 
         document.sync_context_dropdowns(cx);

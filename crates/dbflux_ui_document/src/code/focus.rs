@@ -13,6 +13,10 @@ impl CodeDocument {
         self.clear_vim_count_and_notify(cx);
         self.focus_handle.focus(window, cx);
 
+        if self.focus_vim_search_prompt(window, cx) {
+            return;
+        }
+
         if self.focus_mode == SqlQueryFocus::Editor {
             self.editor
                 .input_state

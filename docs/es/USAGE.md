@@ -656,6 +656,8 @@ de estado del espacio de trabajo.
 | Normal | `h` / `l` | Mover un carácter a la izquierda / derecha dentro de la línea |
 | Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
 | Normal | `Enter` | Mover una línea abajo |
+| Normal | `/` | Abrir el campo nativo de búsqueda de texto |
+| Normal | `n` / `N` | Repetir la última búsqueda hacia adelante / atrás (admite contador previo) |
 | Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
 | Normal | `i` | Insertar antes del cursor |
 | Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
@@ -695,6 +697,17 @@ arrastrar el mouse. Si el bloque solo contiene espacios en blanco, usa todo el
 editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
 las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
 alinearse con las columnas en pantalla.
+
+En modo Normal, `/` abre un campo nativo de búsqueda de texto. Escribe una
+cadena literal, que distingue mayúsculas y minúsculas, y pulsa `Enter` para
+buscar hacia adelante desde el cursor, volviendo al inicio al llegar al final.
+`Escape` cancela sin mover el cursor ni sustituir la última búsqueda. `n`
+repite hacia adelante y `N` hacia atrás; un contador previo repite la búsqueda
+ese número de veces. Funciona también en editores de solo lectura; cada pestaña
+conserva su última búsqueda. Mientras el campo está abierto, `Tab` / `Shift+Tab`
+no hacen nada y mantienen el foco en él. No admite expresiones regulares ni
+resaltado de búsqueda al estilo Vim. No se ha validado el IME de escritorio ni
+la interfaz renderizada.
 
 Todo lo demás en modo Normal:
 
@@ -742,7 +755,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten `c`, búsqueda, `r` / `R`, marcas, objetos de texto, registros,
+  No se admiten `c`, `r` / `R`, marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así

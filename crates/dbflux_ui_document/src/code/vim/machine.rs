@@ -49,6 +49,8 @@ pub(crate) enum VimCommand {
     VisualYank,
     Operator(char),
     Undo,
+    OpenSearch,
+    RepeatSearch(bool),
     /// Consumed without effect, so the key neither edits nor reaches other handlers.
     Swallow,
 }
@@ -108,12 +110,15 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     "w" => Some(VimCommand::WordForward(true)),
                     "b" => Some(VimCommand::WordBackward(true)),
                     "g" => Some(VimCommand::LastLine),
+                    "n" if !visual => Some(VimCommand::RepeatSearch(true)),
                     _ => None,
                 };
             }
 
             match key.key {
                 "g" => Some(VimCommand::PendingG),
+                "/" if !visual => Some(VimCommand::OpenSearch),
+                "n" if !visual => Some(VimCommand::RepeatSearch(false)),
                 "h" => Some(VimCommand::MoveLeft),
                 "l" => Some(VimCommand::MoveRight),
                 "j" | "enter" => Some(VimCommand::MoveDown),
@@ -137,6 +142,35 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
             }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+/// Selects a literal match by its UTF-8 byte start, excluding the cursor's start.
+/// Ranges must be sorted and nonoverlapping.
+pub(crate) fn cursor_relative_match(
+    matches: &[Range<usize>],
+    cursor: usize,
+    direction: SearchDirection,
+) -> Option<Range<usize>> {
+    if matches.is_empty() {
+        return None;
+    }
+
+    let index = match direction {
+        SearchDirection::Forward => {
+            matches.partition_point(|range| range.start <= cursor) % matches.len()
+        }
+        SearchDirection::Backward => matches
+            .partition_point(|range| range.start < cursor)
+            .checked_sub(1)
+            .unwrap_or(matches.len() - 1),
+    };
+    Some(matches[index].clone())
 }
 
 /// The mode a command leaves the editor in.
@@ -634,6 +668,44 @@ mod tests {
     }
 
     #[test]
+    fn search_selects_strictly_by_start_and_wraps() {
+        let matches = [0..2, 5..7, 10..12];
+        for (cursor, forward, backward) in [
+            (0, 5..7, 10..12),
+            (6, 10..12, 5..7),
+            (10, 0..2, 5..7),
+            (12, 0..2, 10..12),
+        ] {
+            assert_eq!(
+                cursor_relative_match(&matches, cursor, SearchDirection::Forward),
+                Some(forward)
+            );
+            assert_eq!(
+                cursor_relative_match(&matches, cursor, SearchDirection::Backward),
+                Some(backward)
+            );
+        }
+    }
+
+    #[test]
+    fn search_uses_utf8_byte_offsets_without_splitting_matches() {
+        let content = "é中é中";
+        let matches = [0..2, 5..7];
+        assert!(content.is_char_boundary(matches[1].start));
+        assert_eq!(
+            cursor_relative_match(&matches, 2, SearchDirection::Forward),
+            Some(5..7)
+        );
+        assert_eq!(
+            cursor_relative_match(&matches, 6, SearchDirection::Backward),
+            Some(5..7)
+        );
+        for direction in [SearchDirection::Forward, SearchDirection::Backward] {
+            assert_eq!(cursor_relative_match(&[], 0, direction), None);
+        }
+    }
+
+    #[test]
     fn absolute_lines_use_logical_rows_and_first_nonblank() {
         for content in ["", "  é\n\t中\n", "  é\r\n\t中\r\n"] {
             let text = Rope::from(content);
@@ -674,6 +746,8 @@ mod tests {
             ("i", VimCommand::EnterInsert),
             ("x", VimCommand::DeleteChar),
             ("u", VimCommand::Undo),
+            ("/", VimCommand::OpenSearch),
+            ("n", VimCommand::RepeatSearch(false)),
             ("tab", VimCommand::Swallow),
         ];
 
@@ -685,7 +759,7 @@ mod tests {
             );
         }
 
-        for name in ["o", "p", "/", "escape", "backspace", "space"] {
+        for name in ["o", "p", "escape", "backspace", "space"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
     }

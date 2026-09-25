@@ -41,6 +41,8 @@ pub(super) enum HistoryStep {
 pub(super) struct VimState {
     enabled: bool,
     mode: VimMode,
+    pub(super) search_open: bool,
+    last_search: Option<String>,
     /// Set while a Normal-mode undo or redo temporarily lifts the read-only lock
     /// so the component's own handler is registered for one dispatch.
     history_unlocked: bool,
@@ -145,6 +147,9 @@ impl CodeDocument {
     ) -> bool {
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
             self.clear_vim_count_and_notify(cx);
+            return false;
+        }
+        if self.vim.search_open {
             return false;
         }
 
@@ -380,8 +385,101 @@ impl CodeDocument {
             VimCommand::Undo if !self.read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
+            VimCommand::OpenSearch => {
+                self.vim.search_open = true;
+                self.vim_search_input.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                    state.focus(window, cx);
+                });
+                cx.notify();
+            }
+            VimCommand::RepeatSearch(reverse) => {
+                self.repeat_vim_search(
+                    if reverse {
+                        machine::SearchDirection::Backward
+                    } else {
+                        machine::SearchDirection::Forward
+                    },
+                    count,
+                    cx,
+                );
+            }
             VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
         }
+    }
+
+    pub(super) fn focus_vim_search_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.vim.search_open {
+            return false;
+        }
+        self.vim_search_input
+            .update(cx, |state, cx| state.focus(window, cx));
+        true
+    }
+
+    pub(super) fn accept_vim_search(
+        &mut self,
+        query: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.vim.search_open {
+            return;
+        }
+        self.vim.search_open = false;
+        if !query.is_empty() {
+            self.vim.last_search = Some(query.clone());
+            self.editor
+                .input_state
+                .update(cx, |state, cx| state.set_search_query(query, false, cx));
+            self.repeat_vim_search(machine::SearchDirection::Forward, 1, cx);
+        }
+        self.schedule_editor_refocus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn cancel_vim_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.vim.search_open {
+            return false;
+        }
+        self.vim.search_open = false;
+        self.schedule_editor_refocus(window, cx);
+        cx.notify();
+        true
+    }
+
+    fn repeat_vim_search(
+        &mut self,
+        direction: machine::SearchDirection,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(query) = self.vim.last_search.clone() else {
+            return;
+        };
+        let (matches, mut cursor) = self.editor.input_state.update(cx, |state, cx| {
+            state.set_search_query(query, false, cx);
+            (
+                state.search_session().matcher.matched_ranges(),
+                state.cursor(),
+            )
+        });
+        for _ in 0..count.min(10_000) {
+            let Some(range) = machine::cursor_relative_match(&matches, cursor, direction) else {
+                return;
+            };
+            cursor = range.start;
+        }
+        self.vim.vertical_goal = None;
+        self.set_editor_cursor(cursor, cx);
     }
 
     fn apply_absolute_operator(
@@ -469,6 +567,9 @@ impl CodeDocument {
     /// out of the editor. Checked in the actions' capture phase, because key
     /// bindings are dispatched before any key listener runs.
     pub(super) fn vim_swallows_indent_action(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.vim.search_open {
+            return true;
+        }
         self.clear_vim_count_and_notify(cx);
         self.vim.enabled
             && self.focus_mode == SqlQueryFocus::Editor
@@ -849,6 +950,9 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.vim.search_open {
+            return false;
+        }
         self.clear_vim_count_and_notify(cx);
         if !self.vim.enabled
             || self.vim.mode != VimMode::Normal

@@ -266,6 +266,15 @@ impl CodeDocument {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
+                        if this.vim.search_open
+                            && this
+                                .vim_search_input
+                                .read(cx)
+                                .focus_handle(cx)
+                                .is_focused(window)
+                        {
+                            return;
+                        }
                         this.enter_editor_mode(cx);
                         this.editor
                             .input_state
@@ -276,7 +285,9 @@ impl CodeDocument {
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::Escape, window, cx| {
                         this.clear_vim_count_and_notify(cx);
-                        if this.handle_vim_escape_action(window, cx) {
+                        if this.cancel_vim_search(window, cx)
+                            || this.handle_vim_escape_action(window, cx)
+                        {
                             cx.stop_propagation();
                         }
                     },
@@ -337,6 +348,16 @@ impl CodeDocument {
                             .h_full(),
                     ),
                 )
+                .when(self.vim.search_open, |el| {
+                    el.child(
+                        div()
+                            .id("vim-search-prompt")
+                            .flex()
+                            .items_center()
+                            .child("/")
+                            .child(Input::new(&self.vim_search_input).id("vim-search-input")),
+                    )
+                })
                 .when_some(self.vim_mode(), |el, mode| {
                     el.child(self.render_vim_mode_indicator(mode, cx))
                 }),

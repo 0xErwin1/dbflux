@@ -90,6 +90,36 @@ struct Fixture<'a> {
 }
 
 impl Fixture<'_> {
+    fn search_open(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window
+            .update(|_, cx| document.read(cx).vim.search_open)
+    }
+
+    fn prompt_focused(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window.update(|window, cx| {
+            document
+                .read(cx)
+                .vim_search_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        })
+    }
+
+    fn prompt_text(&mut self) -> String {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .vim_search_input
+                .read(cx)
+                .value()
+                .to_string()
+        })
+    }
+
     fn text(&mut self) -> String {
         let document = self.document.clone();
         self.window.update(|_, cx| {
@@ -330,6 +360,121 @@ impl Fixture<'_> {
         });
         self.window.run_until_parked();
     }
+}
+
+#[gpui::test]
+fn search_prompt_survives_document_focus_and_bypasses_normal_history(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta alpha", true);
+    let second = editor.open_second_document("other");
+    editor.keys("/");
+    assert!(editor.prompt_focused());
+    editor.type_text("alpha");
+    editor.focus_document(&second);
+    editor.focus_document(&editor.document.clone());
+    assert!(editor.search_open());
+    assert!(editor.prompt_focused());
+    assert!(!editor.editor_focused());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("tab");
+    assert!(editor.prompt_focused());
+    assert_eq!(editor.prompt_text(), "alpha");
+    editor.keys("shift-tab");
+    assert!(editor.prompt_focused());
+    assert_eq!(editor.prompt_text(), "alpha");
+    editor.type_text(" beta");
+    assert_eq!(editor.prompt_text(), "alpha beta");
+    editor.keys("ctrl-z ctrl-shift-z");
+    assert_eq!(editor.text(), "alpha beta alpha");
+    assert!(editor.search_open());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("enter");
+    assert!(!editor.search_open());
+    assert_eq!(editor.text(), "alpha beta alpha");
+}
+
+#[gpui::test]
+fn search_prompt_does_not_capture_editor_history_or_tab(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha", true);
+    editor.keys("x");
+    assert_eq!(editor.text(), "lpha");
+    editor.keys("/");
+    editor.type_text("query");
+    editor.keys("ctrl-z");
+    assert_eq!(editor.text(), "lpha");
+    assert!(editor.prompt_focused());
+    editor.keys("ctrl-y");
+    assert_eq!(editor.text(), "lpha");
+    assert!(editor.prompt_focused());
+    assert!(editor.search_open());
+    for key in ["tab", "shift-tab"] {
+        editor.keys(key);
+        assert_eq!(editor.text(), "lpha");
+        assert_eq!(editor.prompt_text(), "query");
+        assert!(editor.prompt_focused());
+        assert!(editor.search_open());
+    }
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            assert!(document.cancel_vim_search(window, cx));
+        });
+    });
+    assert!(!editor.search_open());
+    editor.focus_document(&editor.document.clone());
+    editor.keys("u");
+    assert_eq!(editor.text(), "alpha");
+}
+
+#[gpui::test]
+fn literal_search_prompt_accept_repeat_cancel_and_wrap(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é x é x é", true);
+    editor.keys("/");
+    assert!(editor.search_open());
+    editor.type_text("é");
+    assert_eq!(editor.prompt_text(), "é");
+    assert_eq!(editor.text(), "é x é x é");
+    editor.keys("enter");
+    assert!(!editor.search_open());
+    assert_eq!(editor.cursor(), 5);
+    editor.keys("2 n");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-n");
+    assert_eq!(editor.cursor(), 10);
+    editor.keys("/");
+    editor.type_text("missing");
+    editor.keys("escape");
+    assert!(!editor.search_open());
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 0);
+    assert_eq!(editor.text(), "é x é x é");
+}
+
+#[gpui::test]
+fn search_prompt_ime_and_no_match_are_read_only_safe(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "é one é",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor.keys("/");
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).vim_search_input.clone();
+        input.update(cx, |state, cx| {
+            state.replace_and_mark_text_in_range(None, "中", None, window, cx);
+            state.replace_text_in_range(None, "中", window, cx);
+        });
+    });
+    assert_eq!(editor.prompt_text(), "中");
+    editor.keys("enter");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("n shift-n");
+    assert_eq!(editor.cursor(), 0);
+    assert_eq!(editor.text(), "é one é");
 }
 
 #[gpui::test]
@@ -1488,7 +1633,7 @@ fn normal_mode_inserts_no_text_for_unbound_keys(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abc", true);
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 
-    editor.keys("b c d 1 2 9 0 ; , . / ? space shift-z");
+    editor.keys("b c d 1 2 9 0 ; , . ? space shift-z");
     editor.type_text("é中🎉ñ");
 
     assert_eq!(editor.text(), "abc");

@@ -605,6 +605,8 @@ status bar.
 | Normal | `h` / `l` | Move one character left / right within the line |
 | Normal | `j` / `k` | Move one line down / up, keeping the column across shorter lines |
 | Normal | `Enter` | Move one line down |
+| Normal | `/` | Open the native text-search prompt |
+| Normal | `n` / `N` | Repeat the last search forward / backward (accepts a prefix count) |
 | Normal / Visual / Visual Line / Visual Block | `gg` / `G` / `Ngg` / `NG` | Go to the first / last / 1-based absolute logical line (clamped to the buffer); Visual extends the selection |
 | Normal | `i` | Insert before the cursor |
 | Normal | `a` / `A` / `I` | Insert after the cursor / at the end of the line / at the first non-blank character of the line |
@@ -643,6 +645,16 @@ ordered nonempty row fragments with newlines, as with mouse Alt-drag. A
 whitespace-only block selection uses the full buffer. Block columns count
 Unicode scalars, not visual cells: tabs, wide characters, and combining
 sequences may not align with on-screen columns.
+
+In Normal mode, `/` opens a native text prompt. Type a literal, case-sensitive
+query and press `Enter` to search forward from the cursor, wrapping at the end
+of the buffer. `Escape` cancels without moving the cursor or replacing the last
+query. Use `n` to repeat forward or `N` to repeat backward; a prefix count
+repeats the search that many times. Search works in read-only editors, and each
+tab keeps its own last query. While the prompt is open, `Tab` / `Shift+Tab` do
+nothing and leave focus in the prompt. This is literal text search, not regex;
+Vim-style search highlighting is not provided. Desktop IME behavior and the
+rendered UI have not been validated.
 
 Everything else in Normal mode:
 
@@ -688,7 +700,7 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  `c`, search, `r` / `R`, marks, text objects, registers, macros, `.` repeat,
+  `c`, `r` / `R`, marks, text objects, registers, macros, `.` repeat,
   `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

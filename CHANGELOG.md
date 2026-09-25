@@ -6,6 +6,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim literal search in code editors** — In Normal mode, `/` opens a native
+  text prompt; `Enter` searches forward from the cursor with wrap and
+  case-sensitive literal matching. `Escape` cancels without changing the cursor
+  or last query. Counted `n` / `N` repeat forward / backward, including in
+  read-only editors. Each tab retains its own search query; `Tab` / `Shift+Tab`
+  leave focus in the prompt without action. Regex and Vim-style search
+  highlighting are not supported; desktop IME and rendered UI validation remain
+  pending.
+
 * **Vim pending keys in the code-pane strip** — Shows incomplete raw key
   sequences such as `2`, `2d3`, and `4g`. The sequence clears on completion,
   interruption, focus loss, `Escape`, or `Tab`; no command history or workspace
