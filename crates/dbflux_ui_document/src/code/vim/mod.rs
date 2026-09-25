@@ -62,8 +62,48 @@ pub(super) struct VimState {
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     change_group: Option<u64>,
+    replace_once: Option<PendingReplace>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
+}
+
+struct PendingReplace {
+    start: usize,
+    count: usize,
+    original: String,
+}
+
+/// What `r` writes when its key is not delivered as typed text.
+#[derive(Clone, Copy)]
+enum ReplaceOnceText {
+    LineBreak,
+    Character(char),
+}
+
+/// Registers the interceptor that sees every key before GPUI resolves key
+/// bindings.
+///
+/// While `r` waits for its character the editor is editable, so the platform
+/// input handler and an IME can deliver it. Editor actions bound to keys such
+/// as Backspace, Delete, the arrows or Tab run before key listeners, so only an
+/// interceptor can stop them from editing or moving the cursor first.
+pub(super) fn intercept_vim_keystrokes(cx: &mut Context<CodeDocument>) -> Subscription {
+    let document = cx.entity().downgrade();
+    cx.intercept_keystrokes(move |event, window, cx| {
+        let Some(document) = document.upgrade() else {
+            return;
+        };
+        if document.read(cx).vim.replace_once.is_none() {
+            return;
+        }
+
+        let consumed = document.update(cx, |document, cx| {
+            document.intercept_vim_keystroke(&event.keystroke, window, cx)
+        });
+        if consumed {
+            cx.stop_propagation();
+        }
+    })
 }
 
 impl CodeDocument {
@@ -89,6 +129,7 @@ impl CodeDocument {
         }
 
         if !enabled {
+            self.vim.replace_once = None;
             self.close_change_group(cx);
             let marks = std::mem::take(&mut self.vim.marks);
             self.editor.input_state.update(cx, |state, _cx| {
@@ -168,6 +209,11 @@ impl CodeDocument {
         }
         if self.vim.search_open {
             return false;
+        }
+
+        if self.vim.replace_once.is_some() && event.keystroke.key == "escape" {
+            self.cancel_replace_once(cx);
+            return true;
         }
 
         let modifiers = event.keystroke.modifiers;
@@ -464,6 +510,7 @@ impl CodeDocument {
                 self.push_pending_key(operator, cx);
             }
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
+            VimCommand::ReplaceOnce if !self.read_only => self.start_replace_once(count, cx),
             VimCommand::Undo if !self.read_only => {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
@@ -486,7 +533,10 @@ impl CodeDocument {
                     cx,
                 );
             }
-            VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
+            VimCommand::DeleteChar
+            | VimCommand::ReplaceOnce
+            | VimCommand::Undo
+            | VimCommand::Swallow => {}
         }
     }
 
@@ -624,6 +674,10 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         self.clear_vim_count_and_notify(cx);
+        if self.vim.replace_once.is_some() {
+            self.cancel_replace_once(cx);
+            return true;
+        }
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
             return false;
         }
@@ -1132,6 +1186,10 @@ impl CodeDocument {
     }
 
     pub(super) fn close_change_group_on_blur(&mut self, cx: &mut Context<Self>) {
+        if self.vim.replace_once.is_some() {
+            self.cancel_replace_once(cx);
+            return;
+        }
         if self.vim.change_group.is_some() {
             self.close_change_group(cx);
             self.set_vim_mode(VimMode::Normal, cx);
@@ -1144,6 +1202,216 @@ impl CodeDocument {
                 state.request_end_edit_group(group);
             });
         }
+    }
+
+    fn start_replace_once(&mut self, count: usize, cx: &mut Context<Self>) {
+        let pending = {
+            let state = self.editor.input_state.read(cx);
+            let start = state.cursor();
+            let Some(range) = machine::counted_character_range(state.text(), start, count) else {
+                return;
+            };
+            if state.text().slice(range).chars().count() != count {
+                return;
+            }
+            PendingReplace {
+                start,
+                count,
+                original: state.text().to_string(),
+            }
+        };
+        let group = NEXT_CHANGE_GROUP.fetch_add(1, Ordering::Relaxed);
+        let started = self
+            .editor
+            .input_state
+            .update(cx, |state, _| state.begin_edit_group(group));
+        if !started {
+            return;
+        }
+        self.vim.change_group = Some(group);
+        self.editor.input_state.update(cx, |state, cx| {
+            state.set_selected_range(pending.start..pending.start, cx);
+        });
+        self.vim.replace_once = Some(pending);
+        self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    /// Decides a key while `r` waits for its character. Returns true when the key
+    /// is consumed before any binding or input handler sees it.
+    ///
+    /// Text keys go on to the native input so an IME or a dead key can compose
+    /// the character, and `finish_replace_once` completes the replacement from
+    /// the edit. Enter and Tab replace directly, a shortcut cancels and still
+    /// reaches the application, and the other editing and movement keys cancel
+    /// without moving or editing.
+    fn intercept_vim_keystroke(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        {
+            let state = self.editor.input_state.read(cx);
+            if !state.focus_handle(cx).is_focused(window) || state.has_active_composition() {
+                return false;
+            }
+        }
+
+        let modifiers = keystroke.modifiers;
+        let printable = keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control));
+        let shortcut = modifiers.control
+            || modifiers.platform
+            || ((modifiers.alt || modifiers.function) && !printable);
+        if shortcut {
+            self.cancel_replace_once(cx);
+            return false;
+        }
+
+        match (keystroke.key.as_str(), modifiers.shift) {
+            ("escape", _) => false,
+            ("enter", false) => {
+                self.replace_once_directly(ReplaceOnceText::LineBreak, window, cx);
+                true
+            }
+            ("tab", false) => {
+                self.replace_once_directly(ReplaceOnceText::Character('\t'), window, cx);
+                true
+            }
+            (key, _) if machine::is_editing_key(key) => {
+                self.cancel_replace_once(cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn replace_once_directly(
+        &mut self,
+        text: ReplaceOnceText,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.vim.replace_once.take() else {
+            return;
+        };
+
+        let edit = {
+            let state = self.editor.input_state.read(cx);
+            let content = state.text();
+            machine::counted_character_range(content, pending.start, pending.count)
+                .filter(|range| content.slice(range.clone()).chars().count() == pending.count)
+                .map(|range| {
+                    let replacement = match text {
+                        ReplaceOnceText::LineBreak => {
+                            machine::line_break_with_indent(content, pending.start)
+                        }
+                        ReplaceOnceText::Character(character) => {
+                            character.to_string().repeat(pending.count)
+                        }
+                    };
+                    (range, replacement)
+                })
+        };
+
+        if let Some((range, replacement)) = edit {
+            let cursor = match text {
+                ReplaceOnceText::LineBreak => range.start + replacement.len(),
+                ReplaceOnceText::Character(_) => range.start,
+            };
+            self.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(range, cx);
+                state.replace(replacement, window, cx);
+            });
+            self.set_editor_cursor(cursor, cx);
+            if matches!(text, ReplaceOnceText::LineBreak) {
+                // Vim leaves the cursor where Esc would after typing the break.
+                self.move_cursor_with(machine::step_left, cx);
+            }
+        }
+
+        self.close_change_group(cx);
+        self.set_vim_mode(VimMode::Normal, cx);
+    }
+
+    fn cancel_replace_once(&mut self, cx: &mut Context<Self>) {
+        let pending = self.vim.replace_once.take();
+        let marked_text_changed = pending.is_some_and(|pending| {
+            let state = self.editor.input_state.read(cx);
+            state.has_active_composition() && *state.text() != pending.original
+        });
+        self.close_change_group(cx);
+        self.set_vim_mode(VimMode::Normal, cx);
+        if marked_text_changed && !self.read_only {
+            self.mark_dirty(cx);
+            self.schedule_auto_save(cx);
+            self.schedule_diagnostic_refresh(cx);
+            self.editor.last_change_length = self.editor.input_state.read(cx).text().len();
+        }
+    }
+
+    pub(super) fn finish_replace_once(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.vim.replace_once.is_none() {
+            return;
+        };
+        if self.read_only {
+            self.cancel_replace_once(cx);
+            return;
+        }
+        if self.editor.input_state.read(cx).has_active_composition() {
+            return;
+        }
+        let current = self.editor.input_state.read(cx).text().to_string();
+        if self
+            .vim
+            .replace_once
+            .as_ref()
+            .is_some_and(|pending| pending.original == current)
+        {
+            return;
+        }
+        let Some(pending) = self.vim.replace_once.take() else {
+            return;
+        };
+        let Some(prefix) = pending.original.get(..pending.start) else {
+            self.cancel_replace_once(cx);
+            return;
+        };
+        let Some(suffix) = pending.original.get(pending.start..) else {
+            self.cancel_replace_once(cx);
+            return;
+        };
+        let Some(inserted) = current
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+        else {
+            self.cancel_replace_once(cx);
+            return;
+        };
+        if inserted.chars().count() != 1 || inserted.contains(['\n', '\r']) {
+            self.cancel_replace_once(cx);
+            return;
+        }
+        let Some(range) = machine::counted_character_range(
+            self.editor.input_state.read(cx).text(),
+            pending.start + inserted.len(),
+            pending.count,
+        ) else {
+            self.cancel_replace_once(cx);
+            return;
+        };
+        let replacement = inserted.repeat(pending.count.saturating_sub(1));
+        self.editor.input_state.update(cx, |state, cx| {
+            let text = state.text().to_string();
+            let start = text[..range.start].encode_utf16().count();
+            let end = start + text[range].encode_utf16().count();
+            state.replace_text_in_range(Some(start..end), &replacement, window, cx);
+        });
+        self.set_editor_cursor(pending.start, cx);
+        self.close_change_group(cx);
+        self.set_vim_mode(VimMode::Normal, cx);
     }
 
     fn delete_chars(&mut self, count: usize, window: &mut Window, cx: &mut Context<Self>) {

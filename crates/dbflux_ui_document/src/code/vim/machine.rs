@@ -46,6 +46,7 @@ pub(crate) enum VimCommand {
     Digit(u8),
     LeaveInsert,
     DeleteChar,
+    ReplaceOnce,
     VisualDelete,
     VisualChange,
     VisualYank,
@@ -143,6 +144,7 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 }
                 "y" if visual => Some(VimCommand::VisualYank),
                 "x" if !visual => Some(VimCommand::DeleteChar),
+                "r" if !visual => Some(VimCommand::ReplaceOnce),
                 "d" if !visual => Some(VimCommand::Operator('d')),
                 "c" if !visual => Some(VimCommand::Operator('c')),
                 "y" if !visual => Some(VimCommand::Operator('y')),
@@ -313,6 +315,50 @@ pub(crate) fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
 pub(crate) fn line_end(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     line.start + line.content.len()
+}
+
+/// Keys that edit or move the cursor through editor actions instead of
+/// delivering text.
+pub(crate) fn is_editing_key(key: &str) -> bool {
+    matches!(
+        key,
+        "backspace"
+            | "delete"
+            | "enter"
+            | "tab"
+            | "left"
+            | "right"
+            | "up"
+            | "down"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+            | "insert"
+    )
+}
+
+/// The line break `r<CR>` inserts: the line's own terminator (on an unterminated
+/// last line, the buffer's first CRLF or else LF), then the line's leading
+/// whitespace, as Vim's autoindent keeps it.
+pub(crate) fn line_break_with_indent(text: &Rope, offset: usize) -> String {
+    let line = Line::containing(text, offset);
+    let content = text.to_string();
+    let after = content
+        .get(line.start + line.content.len()..)
+        .unwrap_or_default();
+    let crlf = if after.is_empty() {
+        content.contains("\r\n")
+    } else {
+        after.starts_with("\r\n")
+    };
+    let indent: String = line
+        .content
+        .chars()
+        .take_while(|character| matches!(character, ' ' | '\t'))
+        .collect();
+
+    format!("{}{indent}", if crlf { "\r\n" } else { "\n" })
 }
 
 pub(crate) fn append_after(text: &Rope, offset: usize) -> usize {
@@ -1153,6 +1199,24 @@ mod tests {
         assert_eq!(character_range(&text, 1), Some(1..4));
         assert_eq!(character_range(&text, 4), Some(4..5));
         assert_eq!(character_range(&text, 5), None, "past the last character");
+    }
+
+    #[test]
+    fn replace_line_break_follows_line_terminator_and_indent() {
+        for (content, offset, expected) in [
+            ("\t x", 2, "\n\t "),
+            ("ab\r\ncd", 0, "\r\n"),
+            ("ab\ncd", 4, "\n"),
+            ("ab\r\ncd", 5, "\r\n"),
+            ("ab", 1, "\n"),
+        ] {
+            let text = Rope::from(content);
+            assert_eq!(
+                line_break_with_indent(&text, offset),
+                expected,
+                "{content:?}"
+            );
+        }
     }
 
     #[test]

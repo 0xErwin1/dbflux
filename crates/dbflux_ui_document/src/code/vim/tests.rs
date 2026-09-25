@@ -349,6 +349,28 @@ impl Fixture<'_> {
 
     /// Delivers text the way an IME does: a marked composition, then a commit,
     /// both straight to the input handler without a key event.
+    fn ime_mark(&mut self, marked: &str) {
+        let document = self.document.clone();
+        self.window.update(|window, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| {
+                state.replace_and_mark_text_in_range(None, marked, None, window, cx);
+            });
+        });
+        self.window.run_until_parked();
+    }
+
+    fn ime_commit(&mut self, committed: &str) {
+        let document = self.document.clone();
+        self.window.update(|window, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, committed, window, cx);
+            });
+        });
+        self.window.run_until_parked();
+    }
+
     fn ime_compose(&mut self, marked: &str, committed: &str) {
         let document = self.document.clone();
         self.window.update(|window, cx| {
@@ -360,6 +382,279 @@ impl Fixture<'_> {
         });
         self.window.run_until_parked();
     }
+}
+
+#[gpui::test]
+fn replace_once_unmark_only(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("r");
+    editor.ime_mark("X");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| state.unmark_text(window, cx));
+    });
+    editor.window.run_until_parked();
+    assert_eq!(editor.text(), "Xbc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(
+        editor
+            .window
+            .update(|_, cx| editor.document.read(cx).editor.is_dirty)
+    );
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
+fn replace_once_marked_escape_tracks_native_text(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("r");
+    editor.ime_mark("中");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "中abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(
+        editor
+            .window
+            .update(|_, cx| editor.document.read(cx).editor.is_dirty)
+    );
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
+fn replace_once_marked_blur_tracks_native_text(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.focus_document(&editor.document.clone());
+    editor.keys("r");
+    editor.ime_mark("中");
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| document.close_change_group_on_blur(cx));
+    });
+    editor.window.run_until_parked();
+    assert_eq!(editor.text(), "中abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(
+        editor
+            .window
+            .update(|_, cx| editor.document.read(cx).editor.is_dirty)
+    );
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
+fn replace_once_waits_for_ime_commit(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "aé中z", true);
+    editor.set_cursor(1);
+    editor.keys("2 r");
+    editor.ime_mark("k");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.ime_commit("🎉");
+    assert_eq!(editor.text(), "a🎉🎉z");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 1);
+    editor.keys("u");
+    assert_eq!(editor.text(), "aé中z");
+}
+
+#[gpui::test]
+fn replace_once_pending_preserves_selection_and_shortcuts(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("r");
+    assert_eq!(editor.selection(), 0..0);
+    assert_eq!(editor.selected_query(), None);
+    editor.keys("ctrl-c");
+    assert_eq!(editor.text(), "abc");
+    editor.keys("escape");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "abc");
+}
+
+#[gpui::test]
+fn replace_once_collapses_existing_selection_before_native_commit(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcd", true);
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| state.set_selected_range(0..2, cx));
+    });
+    assert_eq!(editor.selected_query().as_deref(), Some("ab"));
+    editor.keys("r");
+    assert_eq!(editor.selected_query(), None);
+    editor.ime_commit("X");
+    assert_eq!(editor.text(), "abXd");
+}
+
+#[gpui::test]
+fn replace_once_multichar_or_newline_commit_keeps_native_text_without_deleting_original(
+    cx: &mut TestAppContext,
+) {
+    for inserted in ["xy", "\n", "x\ny"] {
+        let mut editor = open_editor(cx, "abcd", true);
+        editor.set_cursor(1);
+        editor.keys("2 r");
+        editor.ime_commit(inserted);
+        assert_eq!(editor.text(), format!("a{inserted}bcd"));
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        editor.keys("u");
+        assert_eq!(editor.text(), "abcd");
+    }
+}
+
+#[gpui::test]
+fn replace_once_commits_one_unicode_scalar_and_undo_restores_caret(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "aé中z", true);
+    editor.set_cursor(1);
+    assert_eq!(editor.selected_query(), None);
+    editor.keys("r");
+    editor.type_text("🎉");
+    assert_eq!(editor.text(), "a🎉中z");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 1);
+    assert_eq!(editor.selected_query(), None);
+    editor.keys("u");
+    assert_eq!(editor.text(), "aé中z");
+    assert_eq!(editor.cursor(), 1);
+}
+
+#[gpui::test]
+fn replace_once_redo_restores_normal_caret(cx: &mut TestAppContext) {
+    for native_ime in [false, true] {
+        let mut editor = open_editor(cx, "aé中z", true);
+        editor.set_cursor(1);
+        editor.keys("2 r");
+        if native_ime {
+            editor.ime_mark("x");
+            editor.ime_commit("🎉");
+        } else {
+            editor.type_text("🎉");
+        }
+        assert_eq!(editor.text(), "a🎉🎉z");
+        assert_eq!(editor.cursor(), 1);
+        editor.keys("u");
+        assert_eq!(editor.text(), "aé中z");
+        editor.keys("ctrl-y");
+        assert_eq!(editor.text(), "a🎉🎉z");
+        assert_eq!(editor.cursor(), 1, "native_ime={native_ime}");
+        editor.keys("i Q escape u");
+        assert_eq!(editor.text(), "a🎉🎉z", "native_ime={native_ime}");
+    }
+}
+
+#[gpui::test]
+fn replace_once_count_replaces_exactly_three_characters(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcde", true);
+    editor.keys("3 r X");
+    assert_eq!(editor.text(), "XXXde");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.selected_query(), None);
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcde");
+    assert_eq!(editor.cursor(), 0);
+}
+
+#[gpui::test]
+fn replace_once_never_consumes_line_break_or_crosses_eof(cx: &mut TestAppContext) {
+    for content in ["ab\ncd", "ab\r\ncd", "ab"] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(1);
+        editor.keys("3 r X");
+        assert_eq!(editor.text(), content, "{content:?}");
+        editor.keys("escape");
+        editor.set_cursor(content.len());
+        editor.keys("r X");
+        assert_eq!(editor.text(), content, "{content:?}");
+    }
+}
+
+#[gpui::test]
+fn replace_once_escape_and_read_only_preserve_text(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.keys("r escape");
+    assert_eq!(editor.text(), "abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("X");
+    assert_eq!(editor.text(), "abc");
+
+    let mut readonly = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "abc",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    readonly.keys("r X");
+    assert_eq!(readonly.text(), "abc");
+    assert_eq!(readonly.selected_query(), None);
+}
+
+#[gpui::test]
+fn replace_once_non_character_keys_cancel_without_editing(cx: &mut TestAppContext) {
+    for keys in [
+        "r backspace",
+        "r delete",
+        "r left",
+        "r shift-tab",
+        "r ctrl-v",
+    ] {
+        let mut editor = open_editor(cx, "  abcd\nxy", true);
+        editor
+            .window
+            .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("PP".into())));
+        editor.set_cursor(3);
+        editor.keys(keys);
+        assert_eq!(editor.text(), "  abcd\nxy", "{keys}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{keys}");
+        assert_eq!(editor.cursor(), 3, "{keys}");
+        editor.type_text("X");
+        assert_eq!(editor.text(), "  abcd\nxy", "{keys}");
+    }
+}
+
+#[gpui::test]
+fn replace_once_enter_replaces_counted_characters_with_one_line_break(cx: &mut TestAppContext) {
+    for (separator, expected) in [("\n", "  a\n  d\nxy"), ("\r\n", "  a\r\n  d\r\nxy")] {
+        let content = format!("  abcd{separator}xy");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(3);
+        editor.keys("2 r enter");
+        assert_eq!(editor.text(), expected, "{separator:?}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        assert_eq!(editor.cursor(), 3 + separator.len() + 1, "{separator:?}");
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+
+    let mut editor = open_editor(cx, "ab", true);
+    editor.keys("3 r enter");
+    assert_eq!(editor.text(), "ab");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn replace_once_tab_replaces_with_literal_tabs(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcd", true);
+    editor.keys("2 r tab");
+    assert_eq!(editor.text(), "\t\tcd");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("u");
+    assert_eq!(editor.text(), "abcd");
+}
+
+#[gpui::test]
+fn replace_once_on_empty_line_is_a_no_op(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "a\n\nb", true);
+    editor.set_cursor(2);
+    editor.keys("r X");
+    assert_eq!(editor.text(), "a\n\nb");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
 }
 
 #[gpui::test]

@@ -473,6 +473,7 @@ pub struct CodeDocument {
     vim_search_input: Entity<InputState>,
     _vim_search_subscription: Subscription,
     _vim_editor_focus_subscription: Option<Subscription>,
+    _vim_keystroke_interceptor: Option<Subscription>,
 }
 
 struct PendingQueryResult {
@@ -647,6 +648,7 @@ impl CodeDocument {
             window,
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    this.finish_replace_once(_window, cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
                         std::mem::replace(&mut this.editor.last_change_length, current_length);
@@ -1097,6 +1099,7 @@ impl CodeDocument {
             vim_search_input,
             _vim_search_subscription: vim_search_subscription,
             _vim_editor_focus_subscription: None,
+            _vim_keystroke_interceptor: None,
         };
 
         let editor_focus = document.editor.input_state.read(cx).focus_handle(cx);
@@ -1105,6 +1108,7 @@ impl CodeDocument {
             window,
             |document, _, _, cx| document.close_change_group_on_blur(cx),
         ));
+        document._vim_keystroke_interceptor = Some(vim::intercept_vim_keystrokes(cx));
         document.sync_context_dropdowns(cx);
         document.sync_vim_setting(cx);
         document
