@@ -614,6 +614,7 @@ status bar.
 | Normal | `dd` / `yy` | Delete / yank whole logical lines (`yy` copies to the system clipboard) |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Delete / yank a characterwise horizontal or linewise vertical motion (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Delete / yank a characterwise word-motion range (`y` copies to the system clipboard) |
+| Normal | `d` / `y` + `gg` / `G` | Delete / yank whole logical lines through an absolute target (`y` copies to the system clipboard) |
 | Normal | `u` | Undo |
 | Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
@@ -634,7 +635,7 @@ the line; after a nonzero digit it remains part of the count (for example,
 Visual mode, counted motions extend the editor selection. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
-the editor. Operator combinations such as `dgg` / `dG` and `c` are unsupported.
+the editor. In Normal mode, `d` / `y` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard. Visual `c` remains unsupported.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
 otherwise it uses the full buffer. For a Visual Block selection, it joins

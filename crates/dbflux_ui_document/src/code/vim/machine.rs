@@ -472,6 +472,23 @@ pub(crate) fn vertical_operator_range(
     }
 }
 
+/// Inclusive logical lines between the cursor and an absolute, clamped row.
+pub(crate) fn absolute_operator_range(
+    text: &Rope,
+    offset: usize,
+    target_row: usize,
+) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let target = target_row.min(text.lines_len().saturating_sub(1));
+    let first = row.min(target);
+    let end = row.max(target).saturating_add(1);
+    text.line_start_offset(first)..if end < text.lines_len() {
+        text.line_start_offset(end)
+    } else {
+        text.len()
+    }
+}
+
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerticalStep {
@@ -818,6 +835,26 @@ mod tests {
         let empty = Rope::from("");
         assert_eq!(horizontal_operator_range(&empty, 0, true, 1), None);
         assert_eq!(vertical_operator_range(&empty, 0, true, 1), 0..0);
+    }
+
+    #[test]
+    fn absolute_operator_ranges_include_both_logical_lines() {
+        for separator in ["\n", "\r\n"] {
+            let content = format!("é{separator}中{separator}last");
+            let text = Rope::from(content.as_str());
+            let second = text.line_start_offset(1);
+            assert_eq!(
+                absolute_operator_range(&text, second, 0),
+                0..text.line_start_offset(2)
+            );
+            assert_eq!(absolute_operator_range(&text, 0, usize::MAX), 0..text.len());
+            assert_eq!(
+                absolute_operator_range(&text, second, 1),
+                second..text.line_start_offset(2)
+            );
+        }
+        let empty = Rope::from("");
+        assert_eq!(absolute_operator_range(&empty, 0, usize::MAX), 0..0);
     }
 
     #[test]

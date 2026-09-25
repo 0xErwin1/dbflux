@@ -52,7 +52,7 @@ pub(super) struct VimState {
     /// Raw command keys, bounded independently of the saturating numeric count.
     pub(super) pending_keys: String,
     pending_g: bool,
-    pending_operator: Option<(char, usize)>,
+    pending_operator: Option<(char, Option<usize>)>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
 }
@@ -184,13 +184,20 @@ impl CodeDocument {
             self.vim.pending_keys.clear();
             cx.notify();
             if command == VimCommand::PendingG {
-                self.apply_vim_command(VimCommand::FirstLine, window, cx);
+                if let Some((operator, prefix)) = self.vim.pending_operator.take() {
+                    let count = prefix
+                        .unwrap_or(1)
+                        .saturating_mul(self.vim.count.take().unwrap_or(1));
+                    self.apply_absolute_operator(operator, count.saturating_sub(1), window, cx);
+                } else {
+                    self.apply_vim_command(VimCommand::FirstLine, window, cx);
+                }
                 return true;
             }
             self.clear_vim_count_and_notify(cx);
             return true;
         }
-        if command == VimCommand::PendingG && self.vim.pending_operator.is_none() {
+        if command == VimCommand::PendingG {
             self.vim.pending_g = true;
             self.push_pending_key('g', cx);
             return true;
@@ -212,7 +219,17 @@ impl CodeDocument {
         if let Some((operator, prefix)) = self.vim.pending_operator.take() {
             self.vim.pending_keys.clear();
             cx.notify();
-            let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
+            let inner = self.vim.count.take();
+            let count = prefix.unwrap_or(1).saturating_mul(inner.unwrap_or(1));
+            if command == VimCommand::LastLine {
+                let target = if prefix.is_some() || inner.is_some() {
+                    count.saturating_sub(1)
+                } else {
+                    usize::MAX
+                };
+                self.apply_absolute_operator(operator, target, window, cx);
+                return true;
+            }
             if let VimCommand::Operator(repeated) = command
                 && operator == repeated
             {
@@ -356,7 +373,7 @@ impl CodeDocument {
             VimCommand::VisualDelete => {}
             // A read-only document keeps its text: motions work, edits do nothing.
             VimCommand::Operator(operator) => {
-                self.vim.pending_operator = Some((operator, count));
+                self.vim.pending_operator = Some((operator, explicit_count));
                 self.push_pending_key(operator, cx);
             }
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
@@ -365,6 +382,20 @@ impl CodeDocument {
             }
             VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
         }
+    }
+
+    fn apply_absolute_operator(
+        &mut self,
+        operator: char,
+        target_row: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range = {
+            let state = self.editor.input_state.read(cx);
+            machine::absolute_operator_range(state.text(), state.cursor(), target_row)
+        };
+        self.apply_motion_operator(operator, range, true, window, cx);
     }
 
     fn push_pending_key(&mut self, key: char, cx: &mut Context<Self>) {

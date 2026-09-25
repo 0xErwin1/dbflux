@@ -694,6 +694,143 @@ fn line_operators_preserve_crlf_unicode_counts_and_undo(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn absolute_line_operators_respect_explicit_counts_and_interruptions(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = ["é", "二", "three", "four", "five", "six"].join(separator);
+        let first_two = format!("é{separator}二{separator}");
+        for (keys, cursor_row, target_row) in [
+            ("d g g", 3, 0),
+            ("d shift-g", 0, 5),
+            ("1 d shift-g", 3, 0),
+            ("2 d shift-g", 3, 1),
+            ("2 d g g", 3, 1),
+            ("2 d 2 g g", 0, 3),
+            ("3 d 2 shift-g", 0, 5),
+            ("d 2 g g", 3, 1),
+            ("d 2 shift-g", 3, 1),
+        ] {
+            let mut editor = open_editor(cx, &content, true);
+            let starts: Vec<_> = content
+                .match_indices(separator)
+                .map(|(i, _)| i + separator.len())
+                .collect();
+            let cursor = if cursor_row == 0 {
+                0
+            } else {
+                starts[cursor_row - 1]
+            };
+            editor.set_cursor(cursor);
+            let first = cursor_row.min(target_row);
+            let last = cursor_row.max(target_row);
+            let start = if first == 0 { 0 } else { starts[first - 1] };
+            let end = if last == 5 {
+                content.len()
+            } else {
+                starts[last]
+            };
+            editor.keys(&keys.replacen('d', "y", 1));
+            assert_eq!(
+                editor.clipboard_text().as_deref(),
+                Some(&content[start..end]),
+                "{keys}"
+            );
+            editor.keys(keys);
+            assert_eq!(
+                editor.text(),
+                format!("{}{}", &content[..start], &content[end..]),
+                "{keys}"
+            );
+            editor.keys("u");
+            assert_eq!(editor.text(), content);
+        }
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(first_two.len());
+        editor.keys("d g escape g");
+        assert_eq!(editor.text(), content);
+        editor.keys("d g ctrl-s g");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn absolute_operators_handle_empty_and_trailing_lines(cx: &mut TestAppContext) {
+    for (content, cursor, keys, expected_text, expected_yank) in [
+        ("", 0, "d g g", "", None),
+        ("", 0, "y shift-g", "", None),
+        ("a\n", 2, "d g g", "", Some("a\n")),
+        ("a\r\n", 3, "d g g", "", Some("a\r\n")),
+        ("a\n", 2, "y shift-g", "a\n", Some("\n")),
+        ("a\r\n", 3, "y shift-g", "a\r\n", Some("\r\n")),
+        ("a\n", 0, "d shift-g", "", Some("a\n")),
+        ("a\r\n", 0, "d shift-g", "", Some("a\r\n")),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.window.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()));
+        });
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected_text, "{content:?} {keys}");
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            expected_yank,
+            "{content:?} {keys}"
+        );
+        if keys.starts_with('d') && expected_text != content {
+            editor.keys("u");
+            assert_eq!(editor.text(), content);
+        }
+    }
+}
+
+#[gpui::test]
+fn absolute_operators_readonly_and_pending_y_g_interruptions(cx: &mut TestAppContext) {
+    for keys in ["d g g", "d shift-g"] {
+        let mut editor = open_editor_with(
+            cx,
+            EditorSetup {
+                content: "alpha\nbeta",
+                vim_enabled: true,
+                language: QueryLanguage::Lua,
+                read_only: true,
+            },
+        );
+        editor.set_cursor(6);
+        editor.window.update(|_, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()));
+        });
+        editor.keys(keys);
+        assert_eq!(editor.text(), "alpha\nbeta");
+        assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+        editor.keys(&keys.replacen('d', "y", 1));
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            Some(if keys == "d g g" {
+                "alpha\nbeta"
+            } else {
+                "beta"
+            })
+        );
+    }
+
+    for interruption in ["escape", "q", "ctrl-s"] {
+        let mut editor = open_editor(cx, "alpha\nbeta", true);
+        editor.set_cursor(6);
+        editor.keys(&format!("y g {interruption}"));
+        editor.keys("d shift-g");
+        assert_eq!(editor.text(), "alpha", "{interruption}");
+    }
+    let mut editor = open_editor(cx, "alpha\nbeta", true);
+    editor.set_cursor(6);
+    editor.keys("y g");
+    editor.focus_other_input();
+    let document = editor.document.clone();
+    editor.focus_document(&document);
+    editor.keys("d shift-g");
+    assert_eq!(editor.text(), "alpha");
+}
+
+#[gpui::test]
 fn line_delete_at_eof_removes_preceding_separator(cx: &mut TestAppContext) {
     for (content, cursor, keys, expected, yank) in [
         ("a\nb", 2, "d d", "a", "b"),

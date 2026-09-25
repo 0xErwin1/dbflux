@@ -665,6 +665,7 @@ de estado del espacio de trabajo.
 | Normal | `dd` / `yy` | Borrar / copiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
+| Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
 | Normal | `u` | Deshacer |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
@@ -685,8 +686,7 @@ contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
 selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
-se descarta al interrumpir la secuencia o perder el foco. No se admiten
-combinaciones con operadores como `dgg` / `dG`, ni `c`.
+se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema. Visual `c` sigue sin admitirse.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
 texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
