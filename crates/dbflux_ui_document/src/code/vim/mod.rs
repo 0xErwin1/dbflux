@@ -188,14 +188,23 @@ impl CodeDocument {
             }
         }
         if let Some((operator, prefix)) = self.vim.pending_operator.take() {
+            let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
             if let VimCommand::Operator(repeated) = command {
                 if operator == repeated {
-                    let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
                     self.apply_line_operator(operator, count, window, cx);
                     return true;
                 }
             }
-            self.vim.count = None;
+            let motion = match command {
+                VimCommand::WordEnd(big) => Some((machine::WordMotion::End, big)),
+                VimCommand::WordForward(big) => Some((machine::WordMotion::Forward, big)),
+                VimCommand::WordBackward(big) => Some((machine::WordMotion::Backward, big)),
+                _ => None,
+            };
+            if let Some((motion, big)) = motion {
+                self.apply_word_operator(operator, motion, big, count, window, cx);
+                return true;
+            }
             // An interrupted operator does not turn its next key into a command.
             return true;
         }
@@ -539,6 +548,46 @@ impl CodeDocument {
             self.vim.vertical_goal = None;
             self.editor.input_state.update(cx, |state, cx| {
                 state.set_selected_range(delete_range, cx);
+                state.replace("", window, cx);
+            });
+            self.clamp_cursor_for_normal(cx);
+        }
+    }
+
+    fn apply_word_operator(
+        &mut self,
+        operator: char,
+        motion: machine::WordMotion,
+        big: bool,
+        count: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if operator == 'd' && self.read_only {
+            return;
+        }
+        let (range, selected) = {
+            let state = self.editor.input_state.read(cx);
+            let Some(range) = machine::word_operator_range(
+                state.text(),
+                self.editor_cursor(cx),
+                motion,
+                big,
+                count,
+            ) else {
+                return;
+            };
+            let content = state.text().to_string();
+            let Some(selected) = content.get(range.clone()) else {
+                return;
+            };
+            (range, selected.to_string())
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
+        if operator == 'd' {
+            self.vim.vertical_goal = None;
+            self.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(range, cx);
                 state.replace("", window, cx);
             });
             self.clamp_cursor_for_normal(cx);

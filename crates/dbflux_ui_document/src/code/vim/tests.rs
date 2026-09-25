@@ -398,6 +398,144 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
 }
 
 #[gpui::test]
+fn word_operators_cover_classes_directions_counts_and_undo(cx: &mut TestAppContext) {
+    for (keys, expected) in [
+        ("d w", ", bar"),
+        ("d e", ", bar"),
+        ("d shift-w", "bar"),
+        ("d shift-e", " bar"),
+    ] {
+        let mut editor = open_editor(cx, "é_foo, bar", true);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{keys}");
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            Some(&"é_foo, bar"[.."é_foo, bar".len() - expected.len()]),
+            "{keys}"
+        );
+        editor.keys("u");
+        assert_eq!(editor.text(), "é_foo, bar");
+    }
+    let mut editor = open_editor(cx, "one two three four five six seven", true);
+    editor.keys("2 d 3 w");
+    assert_eq!(editor.text(), "seven");
+    editor.keys("u");
+    assert_eq!(editor.text(), "one two three four five six seven");
+    editor.set_cursor(8);
+    editor.keys("d b");
+    assert_eq!(editor.text(), "one three four five six seven");
+    editor.keys("u");
+    editor.set_cursor(8);
+    editor.keys("y shift-b");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("two "));
+    assert_eq!(editor.text(), "one two three four five six seven");
+}
+
+#[gpui::test]
+fn word_operators_preserve_unicode_crlf_eof_and_readonly(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é!\r\n中 x", true);
+    editor.keys("d e");
+    assert_eq!(editor.text(), "\r\n中 x");
+    editor.keys("u");
+    editor.set_cursor(2);
+    editor.keys("d w");
+    assert_eq!(editor.text(), "é中 x");
+    editor.keys("u");
+    editor.set_cursor(9);
+    editor.keys("d w");
+    assert_eq!(editor.text(), "é!\r\n中 ");
+    editor.keys("u");
+    assert_eq!(editor.text(), "é!\r\n中 x");
+
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "one two",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor.keys("d w");
+    assert_eq!(editor.text(), "one two");
+    editor.keys("y e");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("one"));
+}
+
+#[gpui::test]
+fn terminal_word_delete_and_yank_cover_final_scalar(cx: &mut TestAppContext) {
+    for motion in ["w", "shift-w"] {
+        for (content, expected) in [
+            ("abc", "abc"),
+            ("ab中", "ab中"),
+            ("abc   ", "abc   "),
+            ("abc\r\n", "abc"),
+        ] {
+            let mut editor = open_editor(cx, content, true);
+            editor.keys(&format!("y {motion}"));
+            assert_eq!(editor.clipboard_text().as_deref(), Some(expected));
+            assert_eq!(editor.text(), content);
+            editor.keys(&format!("d {motion}"));
+            assert_eq!(editor.clipboard_text().as_deref(), Some(expected));
+            assert_eq!(editor.text(), &content[expected.len()..]);
+            editor.keys("u");
+            assert_eq!(editor.text(), content);
+        }
+        let mut editor = open_editor(cx, "abc", true);
+        editor.keys(&format!("2 d 3 {motion}"));
+        assert_eq!(editor.text(), "");
+        editor.keys("u");
+        assert_eq!(editor.text(), "abc");
+    }
+}
+
+#[gpui::test]
+fn terminal_word_end_delete_and_yank_exclude_lf_and_crlf(cx: &mut TestAppContext) {
+    for terminator in ["\n", "\r\n"] {
+        for final_glyph in ["c", "中"] {
+            let content = format!("ab{final_glyph}{terminator}");
+            let last = "ab".len();
+            for motion in ["e", "shift-e"] {
+                let mut editor = open_editor(cx, &content, true);
+                editor.set_cursor(last);
+                editor.keys(&format!("y {motion}"));
+                assert_eq!(editor.clipboard_text().as_deref(), Some(final_glyph));
+                editor.keys(&format!("d {motion}"));
+                assert_eq!(editor.text(), format!("ab{terminator}"));
+                assert_eq!(editor.clipboard_text().as_deref(), Some(final_glyph));
+                editor.keys("u");
+                assert_eq!(editor.text(), content);
+
+                let mut editor = open_editor(cx, &content, true);
+                editor.keys(&format!("d 2 {motion}"));
+                assert_eq!(editor.text(), terminator);
+                assert_eq!(
+                    editor.clipboard_text().as_deref(),
+                    Some(format!("ab{final_glyph}").as_str())
+                );
+                editor.keys("u");
+                assert_eq!(editor.text(), content);
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn word_operator_interruptions_do_not_carry_or_insert(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two", true);
+    editor.keys("d ctrl-s w");
+    assert_eq!(editor.text(), "one two");
+    assert_eq!(editor.cursor(), 4);
+    editor.keys("y q w");
+    assert_eq!(editor.text(), "one two");
+    editor.keys("d");
+    editor.focus_other_input();
+    editor.focus_document(&editor.document.clone());
+    editor.keys("w");
+    assert_eq!(editor.text(), "one two");
+}
+
+#[gpui::test]
 fn line_operators_preserve_crlf_unicode_counts_and_undo(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "é\r\n中\r\nlast", true);
     editor.keys("2 y y");

@@ -360,6 +360,48 @@ pub(crate) fn step_word(
     }
 }
 
+/// Characterwise operator range. Word starts are exclusive; word ends include
+/// the entire character under the destination cursor.
+pub(crate) fn word_operator_range(
+    text: &Rope,
+    offset: usize,
+    motion: WordMotion,
+    big: bool,
+    count: usize,
+) -> Option<Range<usize>> {
+    let chars = word_offsets(text);
+    let mut target = offset;
+    for _ in 0..count.min(chars.len().saturating_add(1)) {
+        let next = step_word(text, &chars, target, motion, big);
+        if next == target {
+            break;
+        }
+        target = next;
+    }
+    let range = match motion {
+        WordMotion::End => {
+            let end = counted_character_range(text, target, 1)
+                .map(|range| range.end)
+                .or_else(|| {
+                    let content = text.to_string();
+                    let before_eof = content.trim_end_matches(['\r', '\n']);
+                    (target == content.len() && before_eof.len() > offset)
+                        .then_some(before_eof.len())
+                })?;
+            offset..end
+        }
+        WordMotion::Forward
+            if target == clamp_to_character(text, text.len()) && !chars.is_empty() =>
+        {
+            let content = text.to_string();
+            offset..content.trim_end_matches(['\r', '\n']).len()
+        }
+        WordMotion::Forward => offset..target,
+        WordMotion::Backward => target..offset,
+    };
+    (!range.is_empty()).then_some(range)
+}
+
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerticalStep {
@@ -588,6 +630,64 @@ mod tests {
         assert_eq!(step_word(&text, &chars, 2, WordMotion::Forward, false), 7);
         assert_eq!(step_word(&text, &chars, 7, WordMotion::Backward, false), 2);
         assert_eq!(step_word(&text, &chars, 7, WordMotion::End, false), 11);
+    }
+
+    #[test]
+    fn forward_word_operator_covers_terminal_scalar_without_terminal_newline() {
+        for big in [false, true] {
+            for (content, expected) in [
+                ("abc", Some(0..3)),
+                ("ab中", Some(0..5)),
+                ("abc   ", Some(0..6)),
+                ("abc\r\n", Some(0..3)),
+                ("", None),
+            ] {
+                let text = Rope::from(content);
+                assert_eq!(
+                    word_operator_range(&text, 0, WordMotion::Forward, big, 1),
+                    expected
+                );
+            }
+            let text = Rope::from("abc");
+            assert_eq!(
+                word_operator_range(&text, 0, WordMotion::Forward, big, 20),
+                Some(0..3)
+            );
+            assert_eq!(
+                word_operator_range(&text, 2, WordMotion::Forward, big, 1),
+                Some(2..3)
+            );
+        }
+        let text = Rope::from("one two");
+        assert_eq!(
+            word_operator_range(&text, 4, WordMotion::Backward, false, 1),
+            Some(0..4)
+        );
+        assert_eq!(
+            word_operator_range(&text, 4, WordMotion::Backward, true, 1),
+            Some(0..4)
+        );
+    }
+
+    #[test]
+    fn terminal_word_end_operator_excludes_line_terminators() {
+        for content in ["abc\n", "abc\r\n", "ab中\n", "ab中\r\n"] {
+            let text = Rope::from(content);
+            let end = content.trim_end_matches(['\r', '\n']).len();
+            let last = content[..end].char_indices().last().unwrap().0;
+            for big in [false, true] {
+                for count in [1, 2, 20] {
+                    assert_eq!(
+                        word_operator_range(&text, last, WordMotion::End, big, count),
+                        Some(last..end)
+                    );
+                    assert_eq!(
+                        word_operator_range(&text, 0, WordMotion::End, big, count),
+                        Some(0..end)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

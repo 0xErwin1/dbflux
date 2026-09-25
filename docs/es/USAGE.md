@@ -658,6 +658,7 @@ propio modo al cambiar de tab o al mover el focus y volver.
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
 | Normal | `dd` / `yy` | Borrar / copiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
+| Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `u` | Deshacer |
 | Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
 | Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
@@ -667,7 +668,7 @@ propio modo al cambiar de tab o al mover el focus y volver.
 
 Puedes anteponer un contador a un movimiento, a `x` / `u` o a `dd` / `yy` (por
 ejemplo, `3w`, `2x`, `2u`, `3dd`, `2yy`). También se acepta entre las letras
-repetidas (`d2d`); ambos contadores se multiplican (`2d3d` afecta seis líneas). `x` con contador borra hasta el final de la línea sin unir
+repetidas (`d2d`); ambos contadores se multiplican (`2d3d` afecta seis líneas). También en movimientos de palabra: `2d3w` borra hasta completar seis movimientos `w`. `x` con contador borra hasta el final de la línea sin unir
 líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
@@ -706,12 +707,11 @@ modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
 siguiente vuelve al modo Normal.
 
-**Deshacer.** Cada ejecución de `x` o `dd` es un paso de deshacer, también con contador. Todo lo escrito en una misma
+**Deshacer.** Cada ejecución de `x`, `dd` o `d` con movimiento de palabra es un paso de deshacer, también con contador. Todo lo escrito en una misma
 sesión de modo Insertar es un paso, y cada nueva sesión de modo Insertar empieza
 otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
-**Editores de solo lectura** (definiciones de rutinas): aceptan los movimientos y `yy`;
-`x`, `dd` y `u` no hacen nada. `dd` tampoco modifica el portapapeles.
+**Editores de solo lectura** (definiciones de rutinas): aceptan los movimientos, `yy` y `y` con movimiento de palabra; `x`, `dd`, `d` con movimiento de palabra y `u` no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
 
@@ -719,8 +719,7 @@ otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
   completas, con sus terminadores si existen. En el fin del archivo, el contador
   se detiene en la última línea; borrar la última línea quita también el separador
   anterior, pero copiarla no agrega un salto de línea inexistente. No se admiten
-  operadores con movimientos (como `dw` o `yw`) ni `c`, búsqueda, objetos de texto,
-  registros, macros, repetición con `.`, comandos `:` ni una tecla de rehacer.
+  `d` / `y` con movimiento de palabra solo admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen el carácter de destino; `e` / `E` lo incluyen. No se admiten `c` ni movimientos `h` / `j` / `k` / `l` con operadores, ni búsqueda, objetos de texto, registros, macros, repetición con `.`, comandos `:` o una tecla de rehacer.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
   que una letra escrita con un acento combinante separado requiere dos pulsaciones.
 - El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace
