@@ -19,6 +19,9 @@ const MAX_TITLE_CHARS: usize = 110;
 /// Longest one-line summary shown under an entry title.
 const MAX_SUMMARY_CHARS: usize = 140;
 
+/// Longest label accepted as the title of a `Label: details` bullet.
+const MAX_LABEL_CHARS: usize = 48;
+
 /// What a `## [...]` release heading names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseHeading {
@@ -203,9 +206,14 @@ pub fn releases_between<'a>(
     selected
 }
 
-/// The release that describes the running build: the section named after its
-/// exact version, else `[Unreleased]` for a pre-release build, else the newest
-/// release not newer than it.
+/// The released section that describes the running build: the section named
+/// after its exact version, else the newest versioned release not newer than
+/// it.
+///
+/// `[Unreleased]` is never returned: a dev, nightly or rc build whose changes
+/// only live there shows the last release instead, since the welcome dialog
+/// and a manual "What is new" describe what has shipped. The range shown after
+/// an update comes from [`releases_between`], which does include it.
 pub fn release_for_version<'a>(
     releases: &'a [ChangelogRelease],
     current: &Version,
@@ -217,15 +225,6 @@ pub fn release_for_version<'a>(
     });
     if exact.is_some() {
         return exact;
-    }
-
-    if !current.pre.is_empty() {
-        let unreleased = releases
-            .iter()
-            .find(|release| release.heading == ReleaseHeading::Unreleased);
-        if unreleased.is_some() {
-            return unreleased;
-        }
     }
 
     releases
@@ -307,9 +306,12 @@ fn flush_entry(
 
 /// Splits a bullet into a title and a one-line summary.
 ///
-/// A bold lead-in (`**Title** — details`) becomes the title and the first
-/// sentence of the details the summary. A plain bullet uses its first
-/// sentence as the title and has no summary.
+/// - A bold lead-in (`**Title** — details`) becomes the title, without a
+///   trailing ticket reference such as `(DBF-26)` or `(#212)`, and the first
+///   clause of the details the summary.
+/// - A plain bullet with a short label (`Label: details`) splits the same way.
+/// - Any other plain bullet uses its first clause as the title and has no
+///   summary.
 fn entry_from_text(text: &str) -> Option<ChangelogEntry> {
     let text = text.trim();
     if text.is_empty() {
@@ -320,29 +322,122 @@ fn entry_from_text(text: &str) -> Option<ChangelogEntry> {
         && let Some(close) = after_open.find("**")
     {
         let title = plain_text(&after_open[..close]);
-        let title = title.trim().trim_end_matches(['.', ':']).trim().to_string();
+        let title = without_references(title.trim().trim_end_matches(['.', ':']).trim());
         let details = after_open[close + 2..]
             .trim()
             .trim_start_matches(['\u{2014}', '\u{2013}', '-', ':'])
             .trim();
 
         if !title.is_empty() {
-            let summary = Some(truncate(
-                &first_sentence(&plain_text(details)),
-                MAX_SUMMARY_CHARS,
-            ))
-            .filter(|summary| !summary.is_empty());
-
-            return Some(ChangelogEntry { title, summary });
+            return Some(ChangelogEntry {
+                title,
+                summary: summary_from(details),
+            });
         }
     }
 
-    let title = truncate(&first_sentence(&plain_text(text)), MAX_TITLE_CHARS);
+    let plain = plain_text(text);
+
+    if let Some((label, details)) = labeled_lead_in(&plain) {
+        return Some(ChangelogEntry {
+            title: label.to_string(),
+            summary: summary_from(details),
+        });
+    }
 
     Some(ChangelogEntry {
-        title,
+        title: truncate(&first_clause(&plain), MAX_TITLE_CHARS),
         summary: None,
     })
+}
+
+/// The one-line summary of an entry's details: their first clause, cut at a
+/// word when it is still long. `None` when nothing is left.
+fn summary_from(details: &str) -> Option<String> {
+    Some(truncate(
+        &first_clause(&plain_text(details)),
+        MAX_SUMMARY_CHARS,
+    ))
+    .filter(|summary| !summary.is_empty())
+}
+
+/// Splits `Label: details` when the label is short and is not itself a
+/// sentence, so a colon in the middle of prose does not make a title.
+fn labeled_lead_in(text: &str) -> Option<(&str, &str)> {
+    let (label, details) = text.split_once(": ")?;
+    let label = label.trim();
+    let details = details.trim();
+
+    let is_label = !label.is_empty()
+        && label.chars().count() <= MAX_LABEL_CHARS
+        && !label.contains(['.', ';', ','])
+        && !details.is_empty();
+
+    is_label.then_some((label, details))
+}
+
+/// Drops a trailing parenthetical made only of ticket references, such as
+/// `(DBF-26)`, `(#212)` or `(SEC2-3..5, MISC-1..15)`. Other parentheticals,
+/// like `(read-only)`, are part of the title and stay.
+fn without_references(title: &str) -> String {
+    let Some(open) = title.rfind('(') else {
+        return title.to_string();
+    };
+    let Some(inner) = title[open + 1..].strip_suffix(')') else {
+        return title.to_string();
+    };
+
+    if inner
+        .split(',')
+        .all(|part| is_ticket_reference(part.trim()))
+    {
+        title[..open].trim_end().to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+/// `#123`, or an uppercase key followed by a number or range: `DBF-26`,
+/// `MCP-1..6`.
+fn is_ticket_reference(text: &str) -> bool {
+    if let Some(number) = text.strip_prefix('#') {
+        return !number.is_empty() && number.chars().all(|character| character.is_ascii_digit());
+    }
+
+    let Some((key, number)) = text.split_once('-') else {
+        return false;
+    };
+
+    let key_is_valid = key
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_uppercase())
+        && key
+            .chars()
+            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit());
+    let number_is_valid = number
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+        && number
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.');
+
+    key_is_valid && number_is_valid
+}
+
+/// The first sentence, further cut at a clause break: a semicolon or a
+/// spaced em or en dash.
+fn first_clause(text: &str) -> String {
+    let sentence = first_sentence(text);
+
+    let end = [";", " \u{2014} ", " \u{2013} "]
+        .iter()
+        .filter_map(|separator| sentence.find(separator))
+        .min()
+        .unwrap_or(sentence.len());
+
+    sentence[..end].trim().to_string()
 }
 
 /// Strips inline markdown: emphasis markers, code ticks, and link targets.
@@ -664,7 +759,7 @@ Initial words that belong to no entry.
     }
 
     #[test]
-    fn release_for_version_prefers_exact_then_unreleased_then_older() {
+    fn release_for_version_prefers_exact_then_the_newest_older_release() {
         let releases = parse(SAMPLE);
 
         let exact = release_for_version(&releases, &version("0.8.0")).expect("exact");
@@ -672,12 +767,96 @@ Initial words that belong to no entry.
 
         let nightly =
             release_for_version(&releases, &version("0.9.0-nightly+abc")).expect("nightly");
-        assert_eq!(nightly.heading, ReleaseHeading::Unreleased);
+        assert_eq!(nightly.heading, ReleaseHeading::Version(version("0.8.0")));
+
+        let dev = release_for_version(&releases, &version("0.8.0-dev.0")).expect("dev");
+        assert_eq!(dev.heading, ReleaseHeading::Version(version("0.7.1")));
 
         let patch = release_for_version(&releases, &version("0.8.3")).expect("older");
         assert_eq!(patch.heading, ReleaseHeading::Version(version("0.8.0")));
 
         assert!(release_for_version(&releases, &version("0.0.1")).is_none());
+    }
+
+    #[test]
+    fn ticket_references_are_dropped_from_titles() {
+        let entry = entry_from_text(
+            "**Amazon Redshift driver (read-only) (DBF-23)** \u{2014} A first-party \
+             Redshift connection.",
+        )
+        .expect("entry");
+        assert_eq!(entry.title, "Amazon Redshift driver (read-only)");
+
+        for (text, title) in [
+            (
+                "**Export profiles (#214)** \u{2014} Bundles.",
+                "Export profiles",
+            ),
+            (
+                "**Security hardening (SEC2-3..5, MISC-1..15)** \u{2014} Fixes.",
+                "Security hardening",
+            ),
+            (
+                "**Schema diff & apply (DBF-24)** \u{2014} Works.",
+                "Schema diff & apply",
+            ),
+            (
+                "**Row limits (per batch)** \u{2014} Kept.",
+                "Row limits (per batch)",
+            ),
+        ] {
+            assert_eq!(entry_from_text(text).expect("entry").title, title);
+        }
+    }
+
+    #[test]
+    fn the_summary_is_the_first_clause_of_the_details() {
+        let semicolon = entry_from_text(
+            "**Row limits** \u{2014} Retain at most N rows; later statements are skipped.",
+        )
+        .expect("entry");
+        assert_eq!(semicolon.summary.as_deref(), Some("Retain at most N rows"));
+
+        let dash = entry_from_text(
+            "**Data transfer** \u{2014} Export \u{2014} and import \u{2014} for SQL. More.",
+        )
+        .expect("entry");
+        assert_eq!(dash.summary.as_deref(), Some("Export"));
+
+        let long =
+            entry_from_text(&format!("**Long** \u{2014} {}", "word ".repeat(60))).expect("entry");
+        let summary = long.summary.expect("summary");
+        assert!(summary.chars().count() <= MAX_SUMMARY_CHARS + 1);
+        assert!(summary.ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn a_short_label_before_a_colon_becomes_the_title() {
+        let entry = entry_from_text(
+            "UI automation: `set_text` now fills a text input. It also moves the caret.",
+        )
+        .expect("entry");
+        assert_eq!(
+            entry,
+            ChangelogEntry {
+                title: "UI automation".to_string(),
+                summary: Some("set_text now fills a text input".to_string()),
+            }
+        );
+
+        let prose = entry_from_text(
+            "Explicit row limits retain at most N rows across every result set: later sets stop.",
+        )
+        .expect("entry");
+        assert_eq!(prose.summary, None);
+        assert_eq!(
+            prose.title,
+            "Explicit row limits retain at most N rows across every result set: later sets stop"
+        );
+
+        let sentence =
+            entry_from_text("Fixed a crash, again: it no longer panics.").expect("entry");
+        assert_eq!(sentence.summary, None);
     }
 
     #[test]
@@ -723,11 +902,15 @@ Initial words that belong to no entry.
             .iter()
             .find(|section| section.kind == SectionKind::Added)
             .expect("0.7.0 has an Added section");
-        assert!(
-            added
-                .entries
-                .iter()
-                .any(|entry| entry.title.starts_with("Amazon S3 driver"))
+        let s3 = added
+            .entries
+            .iter()
+            .find(|entry| entry.title.starts_with("Amazon S3 driver"))
+            .expect("the S3 driver entry");
+        assert_eq!(s3.title, "Amazon S3 driver");
+        assert_eq!(
+            s3.summary.as_deref(),
+            Some("A first-party object-storage driver for AWS S3 and S3-compatible endpoints")
         );
 
         assert!(

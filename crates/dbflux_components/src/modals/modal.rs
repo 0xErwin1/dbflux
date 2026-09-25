@@ -7,7 +7,7 @@ use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, AnyWindowHandle, App, ElementId, FocusHandle, Hsla, KeyDownEvent, Keystroke,
-    MouseButton, Pixels, SharedString, Window, div,
+    MouseButton, Pixels, ScrollHandle, SharedString, Window, div, point, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
@@ -36,6 +36,9 @@ const MAX_VIEWPORT_HEIGHT: f32 = 0.9;
 /// Share of the viewport width a modal may take.
 const MAX_VIEWPORT_WIDTH: f32 = 0.95;
 
+/// Distance one arrow key press scrolls a [`Modal::scroll_with_keys`] region.
+const KEY_SCROLL_STEP: Pixels = px(40.0);
+
 /// A key the modal answers while focus is inside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ModalKey {
@@ -55,6 +58,54 @@ fn modal_key(keystroke: &Keystroke) -> Option<ModalKey> {
         "enter" => Some(ModalKey::Confirm),
         _ => None,
     }
+}
+
+/// A scroll a key asks of a [`Modal::scroll_with_keys`] region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollKey {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// Maps a bare arrow, Page Up/Down, Home or End keystroke to a scroll.
+fn scroll_key(keystroke: &Keystroke) -> Option<ScrollKey> {
+    if keystroke.modifiers.modified() {
+        return None;
+    }
+
+    match keystroke.key.as_str() {
+        "up" => Some(ScrollKey::LineUp),
+        "down" => Some(ScrollKey::LineDown),
+        "pageup" => Some(ScrollKey::PageUp),
+        "pagedown" => Some(ScrollKey::PageDown),
+        "home" => Some(ScrollKey::Top),
+        "end" => Some(ScrollKey::Bottom),
+        _ => None,
+    }
+}
+
+/// The vertical offset `key` moves a region to, clamped to its content.
+///
+/// Offsets follow gpui: `0` is the top and scrolling down makes the offset
+/// more negative, down to `-max_offset`. A page is the viewport height less
+/// one step, so a line of context stays in view.
+fn scrolled_offset(key: ScrollKey, offset: Pixels, max_offset: Pixels, viewport: Pixels) -> Pixels {
+    let page = (viewport - KEY_SCROLL_STEP).max(KEY_SCROLL_STEP);
+
+    let target = match key {
+        ScrollKey::LineUp => offset + KEY_SCROLL_STEP,
+        ScrollKey::LineDown => offset - KEY_SCROLL_STEP,
+        ScrollKey::PageUp => offset + page,
+        ScrollKey::PageDown => offset - page,
+        ScrollKey::Top => Pixels::ZERO,
+        ScrollKey::Bottom => -max_offset,
+    };
+
+    target.min(Pixels::ZERO).max(-max_offset)
 }
 
 /// Tone of a modal.
@@ -133,7 +184,9 @@ pub struct Modal {
     block_scroll: bool,
     cut: Pixels,
     fill: Option<Hsla>,
+    border: Option<Hsla>,
     show_header: bool,
+    key_scroll: Option<ScrollHandle>,
 }
 
 impl Modal {
@@ -159,7 +212,9 @@ impl Modal {
             block_scroll: false,
             cut: ChamferCut::MODAL,
             fill: None,
+            border: None,
             show_header: true,
+            key_scroll: None,
         }
     }
 
@@ -296,10 +351,25 @@ impl Modal {
         self
     }
 
+    /// Replace the card border (default: the modal surface border), for
+    /// boards whose dialog shows no outline.
+    pub fn border(mut self, border: impl Into<Hsla>) -> Self {
+        self.border = Some(border.into());
+        self
+    }
+
     /// Leave out the header bar, for dialogs whose content brings its own
     /// head. Escape and the backdrop still call `on_close`.
     pub fn without_header(mut self) -> Self {
         self.show_header = false;
+        self
+    }
+
+    /// Scroll the region tracked by `handle` with the arrow keys, Page Up,
+    /// Page Down, Home and End while focus is inside the modal and nothing
+    /// inside it handled the key first. Needs [`Modal::focus_handle`].
+    pub fn scroll_with_keys(mut self, handle: &ScrollHandle) -> Self {
+        self.key_scroll = Some(handle.clone());
         self
     }
 }
@@ -457,7 +527,7 @@ impl RenderOnce for Modal {
 
         let mut shape = Chamfer::new(self.cut)
             .fill(self.fill.unwrap_or_else(|| surface.fill.resolve(theme)))
-            .border(surface.border.resolve(theme));
+            .border(self.border.unwrap_or_else(|| surface.border.resolve(theme)));
 
         if is_danger {
             shape = shape.top_edge(theme.danger, ModalMetrics::DANGER_EDGE);
@@ -525,6 +595,7 @@ impl RenderOnce for Modal {
         let confirm_for_keys = self.on_confirm;
         let confirm_enabled = self.confirm_enabled;
         let keymap_owns_escape = self.key_context.is_some();
+        let key_scroll = self.key_scroll;
 
         let mut backdrop = div()
             .id(self.id)
@@ -549,6 +620,29 @@ impl RenderOnce for Modal {
 
         if let Some(handle) = self.focus_handle {
             backdrop = backdrop.track_focus(&handle);
+
+            if let Some(scroll) = key_scroll {
+                backdrop = backdrop.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let Some(key) = scroll_key(&event.keystroke) else {
+                        return;
+                    };
+
+                    cx.stop_propagation();
+
+                    let offset = scroll.offset();
+                    let target = scrolled_offset(
+                        key,
+                        offset.y,
+                        scroll.max_offset().y,
+                        scroll.bounds().size.height,
+                    );
+
+                    if target != offset.y {
+                        scroll.set_offset(point(offset.x, target));
+                        window.refresh();
+                    }
+                });
+            }
 
             if !keymap_owns_escape {
                 // Bubble phase: a multi-line editor has already consumed its
@@ -604,7 +698,10 @@ mod tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::{MODAL_BACKDROP_ID, MODAL_CLOSE_ID, Modal, ModalFocus, ModalKey, modal_key};
+    use super::{
+        KEY_SCROLL_STEP, MODAL_BACKDROP_ID, MODAL_CLOSE_ID, Modal, ModalFocus, ModalKey, ScrollKey,
+        modal_key, scroll_key, scrolled_offset,
+    };
     use crate::controls::{Input, InputState};
     use gpui::{
         AccessibilityFrame, AppContext as _, Bounds, Context, Entity, FocusHandle, FrameObserver,
@@ -748,6 +845,55 @@ mod tests {
         fn events(&self) -> Vec<&'static str> {
             self.log.lock().expect("log lock").clone()
         }
+    }
+
+    #[test]
+    fn scroll_keys_are_bare_navigation_keys() {
+        let parse = |text: &str| Keystroke::parse(text).expect("valid keystroke");
+
+        assert_eq!(scroll_key(&parse("down")), Some(ScrollKey::LineDown));
+        assert_eq!(scroll_key(&parse("up")), Some(ScrollKey::LineUp));
+        assert_eq!(scroll_key(&parse("pagedown")), Some(ScrollKey::PageDown));
+        assert_eq!(scroll_key(&parse("pageup")), Some(ScrollKey::PageUp));
+        assert_eq!(scroll_key(&parse("home")), Some(ScrollKey::Top));
+        assert_eq!(scroll_key(&parse("end")), Some(ScrollKey::Bottom));
+        assert_eq!(scroll_key(&parse("ctrl-down")), None);
+        assert_eq!(scroll_key(&parse("enter")), None);
+    }
+
+    #[test]
+    fn scrolling_by_key_stays_inside_the_content() {
+        let max = px(500.0);
+        let viewport = px(200.0);
+
+        assert_eq!(
+            scrolled_offset(ScrollKey::LineDown, Pixels::ZERO, max, viewport),
+            -KEY_SCROLL_STEP
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::LineUp, Pixels::ZERO, max, viewport),
+            Pixels::ZERO
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::PageDown, Pixels::ZERO, max, viewport),
+            -(viewport - KEY_SCROLL_STEP)
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::PageDown, px(-450.0), max, viewport),
+            -max
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::Bottom, Pixels::ZERO, max, viewport),
+            -max
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::Top, px(-300.0), max, viewport),
+            Pixels::ZERO
+        );
+        assert_eq!(
+            scrolled_offset(ScrollKey::LineDown, Pixels::ZERO, Pixels::ZERO, viewport),
+            Pixels::ZERO
+        );
     }
 
     #[test]

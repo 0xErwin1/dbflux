@@ -3,22 +3,30 @@ use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Chamfer, Icon, Text};
-use dbflux_components::tokens::{ChamferCut, ModalMetrics, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, ModalMetrics, Spacing};
 use dbflux_core::LogErr;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 
 use super::{
-    UpdatePreference, preference_row, release_header, render_section, set_update_preference,
+    UpdatePreference, preference_row, release_header, render_section, scroll_region,
+    set_update_preference,
 };
 
 const DIALOG_WIDTH: Pixels = px(560.0);
 const CHANGELOG_MAX_HEIGHT: Pixels = px(420.0);
 const CHANGELOG_PADDING_X: Pixels = Spacing::LG;
 const CHANGELOG_PADDING_Y: Pixels = px(14.0);
+const CHANGELOG_GAP: Pixels = px(2.0);
+const RELEASE_DIVIDER_TOP: Pixels = Spacing::MD;
+const RELEASE_DIVIDER_BOTTOM: Pixels = Spacing::SM;
+const RANGE_GAP: Pixels = px(10.0);
+const RANGE_ICON_SIZE: Pixels = px(13.0);
+
+/// Element id of the scrolling changelog list.
+const CHANGELOG_ID: &str = "whats-new-changelog";
 
 /// Every entry of a release is listed; the list scrolls instead.
 const ENTRIES_PER_SECTION: usize = usize::MAX;
@@ -41,6 +49,7 @@ pub struct WhatsNewDialog {
     content: WhatsNewContent,
     releases: Vec<&'static ChangelogRelease>,
     focus: ModalFocus,
+    changelog_scroll: ScrollHandle,
 }
 
 impl WhatsNewDialog {
@@ -51,6 +60,7 @@ impl WhatsNewDialog {
             content: WhatsNewContent::RunningRelease,
             releases: Vec::new(),
             focus: ModalFocus::new(cx),
+            changelog_scroll: ScrollHandle::new(),
         }
     }
 
@@ -65,6 +75,7 @@ impl WhatsNewDialog {
 
         self.content = content;
         self.releases = releases;
+        self.changelog_scroll.set_offset(Point::default());
         self.visible = true;
         self.focus.focus_on_next_render();
         cx.notify();
@@ -82,38 +93,36 @@ impl WhatsNewDialog {
 
     fn render_range(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
+        let muted = theme.muted_foreground;
         let current = updates::display_version(updates::current_version());
 
-        let summary = match &self.content {
-            WhatsNewContent::SinceLastRun { .. } => releases_since_label(self.releases.len()),
-            WhatsNewContent::RunningRelease => dbflux_i18n::t!("updates.whats_new.this_release"),
+        let (since, summary) = match &self.content {
+            WhatsNewContent::SinceLastRun { since } => (
+                Some(since.clone()),
+                releases_since_label(self.releases.len()),
+            ),
+            WhatsNewContent::RunningRelease => {
+                (None, dbflux_i18n::t!("updates.whats_new.this_release"))
+            }
         };
 
         div()
             .flex()
+            .flex_wrap()
             .items_center()
-            .gap(Spacing::MD)
-            .when_some(
-                match &self.content {
-                    WhatsNewContent::SinceLastRun { since } => Some(since.clone()),
-                    WhatsNewContent::RunningRelease => None,
-                },
-                |row, since| {
-                    row.child(
-                        Text::code(updates::display_version(&since))
-                            .text_color(theme.muted_foreground),
-                    )
+            .gap(RANGE_GAP)
+            .when_some(since, |row, since| {
+                row.child(Text::code(updates::display_version(&since)).text_color(muted))
                     .child(
                         Icon::new(AppIcon::ChevronRight)
-                            .size(Spacing::MD)
-                            .color(theme.muted_foreground),
+                            .size(RANGE_ICON_SIZE)
+                            .color(muted),
                     )
-                },
-            )
+            })
             .child(
                 Text::code(current)
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.accent_foreground),
+                    .text_color(ChromeColors::strong(theme)),
             )
             .child(Text::caption(summary))
     }
@@ -121,7 +130,12 @@ impl WhatsNewDialog {
     fn render_changelog(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
 
-        let mut list = div().flex().flex_col().gap(px(2.0));
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .gap(CHANGELOG_GAP)
+            .px(CHANGELOG_PADDING_X)
+            .py(CHANGELOG_PADDING_Y);
 
         if self.releases.is_empty() {
             list = list.child(Text::caption(dbflux_i18n::t!("updates.whats_new.empty")));
@@ -132,8 +146,8 @@ impl WhatsNewDialog {
                 list = list.child(
                     div()
                         .h(px(1.0))
-                        .mt(Spacing::MD)
-                        .mb(Spacing::SM)
+                        .mt(RELEASE_DIVIDER_TOP)
+                        .mb(RELEASE_DIVIDER_BOTTOM)
                         .bg(theme.border),
                 );
             }
@@ -142,7 +156,7 @@ impl WhatsNewDialog {
                 release
                     .sections
                     .iter()
-                    .map(|section| render_section(section, ENTRIES_PER_SECTION, cx)),
+                    .map(|section| render_section(section, ENTRIES_PER_SECTION, Spacing::XXS, cx)),
             );
         }
 
@@ -156,14 +170,7 @@ impl WhatsNewDialog {
                     .fill(theme.background)
                     .border(theme.border),
             )
-            .child(
-                div()
-                    .id("whats-new-changelog")
-                    .overflow_y_scrollbar()
-                    .px(CHANGELOG_PADDING_X)
-                    .py(CHANGELOG_PADDING_Y)
-                    .child(list),
-            )
+            .child(scroll_region(CHANGELOG_ID, &self.changelog_scroll, list).min_h_0())
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -275,6 +282,7 @@ impl Render for WhatsNewDialog {
             .body(body)
             .footer(footer)
             .focus_handle(self.focus.handle())
+            .scroll_with_keys(&self.changelog_scroll)
             .on_close(move |_, cx| {
                 dialog.update(cx, |dialog, cx| dialog.close(cx)).log_err();
             })
@@ -292,8 +300,36 @@ mod tests {
     // Explicit imports: the parent's `gpui::*` glob would make `#[test]`
     // resolve to `gpui::test`, whose expansion recurses without bound.
     use super::super::release_label;
-    use super::{WhatsNewContent, releases_since_label, releases_to_show, updates};
+    use super::super::test_support::{assert_scrolls_by_wheel_and_keys, test_app_state};
+    use super::{
+        CHANGELOG_MAX_HEIGHT, WhatsNewContent, WhatsNewDialog, releases_since_label,
+        releases_to_show, updates,
+    };
     use dbflux_app::updates::ReleaseHeading;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn the_changelog_scrolls_with_the_wheel_and_the_keyboard(cx: &mut TestAppContext) {
+        let app_state = test_app_state(cx);
+        let (dialog, window) = cx.add_window_view(move |_, cx| WhatsNewDialog::new(app_state, cx));
+
+        dialog.update(window, |dialog, cx| dialog.open(None, cx));
+        window.run_until_parked();
+
+        let handle = dialog.read_with(window, |dialog, _| dialog.changelog_scroll.clone());
+        assert!(handle.bounds().size.height <= CHANGELOG_MAX_HEIGHT);
+
+        assert_scrolls_by_wheel_and_keys(&handle, window);
+    }
+
+    #[test]
+    fn a_manual_open_on_a_dev_build_lists_the_last_release() {
+        let (content, releases) = releases_to_show(None, "0.8.0-dev.0");
+
+        assert_eq!(content, WhatsNewContent::RunningRelease);
+        assert_eq!(releases.len(), 1);
+        assert_eq!(release_label(releases[0]), "0.7.0");
+    }
 
     #[test]
     fn a_previous_version_lists_the_releases_after_it() {
