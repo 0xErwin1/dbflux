@@ -128,6 +128,46 @@ pub(crate) fn node_loading_label(name: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.status.database_loading", name = name)
 }
 
+/// Label of the row that folds a connection's empty databases, e.g.
+/// `"14 empty databases"`.
+pub(crate) fn empty_databases_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("sidebar.tree.folder.empty_databases.one", count = count)
+    } else {
+        dbflux_i18n::t!("sidebar.tree.folder.empty_databases.many", count = count)
+    }
+}
+
+/// Key count shown at the right of a key-value database row: grouped digits
+/// up to 9,999, then an approximate `~12k` / `~1.2M` so the column stays
+/// narrow.
+pub(crate) fn compact_key_count(count: u64) -> String {
+    if count < 10_000 {
+        return group_thousands(count);
+    }
+
+    if count < 1_000_000 {
+        return format!("~{}k", (count + 500) / 1_000);
+    }
+
+    let millions = count as f64 / 1_000_000.0;
+    format!("~{millions:.1}M")
+}
+
+fn group_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
+}
+
 /// Translated label for a retryable fetch error sentinel row, e.g.
 /// `"Error: access denied — click to retry"`.
 pub(crate) fn error_retry_label(error: &str) -> String {
@@ -1004,6 +1044,40 @@ mod tests {
             label,
             dbflux_i18n::t!("sidebar.tree.status.profile_connecting", name = "prod-db")
         );
+    }
+
+    #[test]
+    fn compact_key_count_groups_small_counts_and_abbreviates_large_ones() {
+        assert_eq!(super::compact_key_count(0), "0");
+        assert_eq!(super::compact_key_count(88), "88");
+        assert_eq!(super::compact_key_count(1_474), "1,474");
+        assert_eq!(super::compact_key_count(9_999), "9,999");
+        assert_eq!(super::compact_key_count(12_480), "~12k");
+        assert_eq!(super::compact_key_count(2_340_000), "~2.3M");
+    }
+
+    #[test]
+    fn empty_databases_label_resolves_in_every_locale() {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            for key in [
+                "sidebar.tree.folder.empty_databases.one",
+                "sidebar.tree.folder.empty_databases.many",
+            ] {
+                let value = dbflux_i18n::t!(key, locale = locale, count = 14);
+
+                assert!(
+                    value.contains("14") || key.ends_with(".one"),
+                    "{locale}: {value}"
+                );
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+
+        assert_eq!(super::empty_databases_label(14), "14 empty databases");
     }
 
     #[test]

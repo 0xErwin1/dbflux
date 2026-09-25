@@ -36,19 +36,26 @@ impl super::KeyValueDocument {
         };
 
         if pending.index < self.keys.len() {
-            self.keys.remove(pending.index);
+            let removed = self.keys.remove(pending.index);
+            self.loaded_key_names.remove(&removed.key);
+            self.invalidate_key_metadata(&removed.key);
             self.clear_ttl_state();
+            self.selected_index = None;
+            self.selected_value = None;
+            self.zset_pane = None;
+            self.stream_pane = None;
+            self.rebuild_cached_members(cx);
 
-            if self.keys.is_empty() {
-                self.selected_index = None;
-                self.selected_value = None;
-                self.rebuild_cached_members(cx);
-            } else {
-                let new_idx = pending.index.min(self.keys.len() - 1);
-                self.selected_index = Some(new_idx);
-                self.selected_value = None;
-                self.rebuild_cached_members(cx);
-                self.reload_selected_value(cx);
+            let cursor = self.list_cursor;
+            self.rebuild_key_rows();
+
+            let next_key = cursor
+                .map(|row| row.min(self.key_rows.len().saturating_sub(1)))
+                .and_then(|row| self.key_rows.get(row))
+                .and_then(|row| row.key_index());
+
+            if let Some(key_index) = next_key {
+                self.select_index(key_index, cx);
             }
         }
         cx.notify();
@@ -330,6 +337,9 @@ impl super::KeyValueDocument {
         if let Some(entry) = self.keys.get_mut(index) {
             entry.key = new_name.clone();
         }
+        self.loaded_key_names.remove(&old_name);
+        self.loaded_key_names.insert(new_name.clone());
+        self.rebuild_key_rows();
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
@@ -408,9 +418,9 @@ impl super::KeyValueDocument {
         // re-interpretation of it: see `decode::may_edit_value`.
         if !super::decode::may_edit_value(
             key_type,
-            value.repr,
-            self.kv_encoding_choice,
-            self.kv_decode_outcome.as_ref(),
+            value,
+            self.value_view_as,
+            self.value_compression,
         ) {
             return;
         }
@@ -460,12 +470,6 @@ impl super::KeyValueDocument {
         let key = value.entry.key.clone();
         let key_type = value.entry.key_type.unwrap_or(KeyType::String);
 
-        let repr = if key_type == KeyType::Json {
-            ValueRepr::Json
-        } else {
-            ValueRepr::Text
-        };
-
         // Optimistic: update the cached value immediately
         if let Some(val) = &mut self.selected_value {
             val.value = new_text.clone().into_bytes();
@@ -482,7 +486,7 @@ impl super::KeyValueDocument {
             cx,
         );
 
-        let keyspace = self.keyspace_index();
+        let request = string_write_request(key.clone(), new_text, key_type, self.keyspace_index());
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
@@ -492,14 +496,7 @@ impl super::KeyValueDocument {
                     let api = connection.key_value_api().ok_or_else(|| {
                         DbError::NotSupported("Key-value API unavailable".to_string())
                     })?;
-                    api.set_key(&KeySetRequest {
-                        key,
-                        value: new_text.into_bytes(),
-                        repr,
-                        keyspace,
-                        ttl_seconds: None,
-                        condition: SetCondition::Always,
-                    })
+                    api.set_key(&request)
                 })
                 .await;
 
@@ -508,6 +505,7 @@ impl super::KeyValueDocument {
                     Ok(()) => {
                         this.runner.complete_mutation(task_id, cx);
                         this.last_error = None;
+                        this.invalidate_key_metadata(&key);
                         this.reload_selected_value(cx);
                     }
                     Err(error) => {
@@ -641,60 +639,16 @@ impl super::KeyValueDocument {
                         DbError::NotSupported("Key-value API unavailable".to_string())
                     })?;
 
-                    match key_type {
-                        KeyType::Hash => {
-                            if let Some(field_name) = &old_member.field
-                                && new_value != old_member.display
-                            {
-                                api.hash_delete(&HashDeleteRequest {
-                                    key: key.clone(),
-                                    fields: vec![field_name.clone()],
-                                    keyspace,
-                                })?;
-                                api.hash_set(&HashSetRequest {
-                                    key,
-                                    fields: vec![(field_name.clone(), new_value)],
-                                    keyspace,
-                                })?;
-                            }
-                        }
-                        KeyType::List => {
-                            api.list_set(&ListSetRequest {
-                                key,
-                                index: member_index as i64,
-                                value: new_value,
-                                keyspace,
-                            })?;
-                        }
-                        KeyType::Set if new_value != old_member.display => {
-                            api.set_remove(&SetRemoveRequest {
-                                key: key.clone(),
-                                members: vec![old_member.display],
-                                keyspace,
-                            })?;
-                            api.set_add(&SetAddRequest {
-                                key,
-                                members: vec![new_value],
-                                keyspace,
-                            })?;
-                        }
-                        KeyType::SortedSet => {
-                            let score = new_score.unwrap_or(old_member.score.unwrap_or(0.0));
+                    let writes = member_edit_writes(
+                        key_type,
+                        &old_member,
+                        &new_value,
+                        new_score,
+                        member_index as i64,
+                    );
 
-                            if new_value != old_member.display {
-                                api.zset_remove(&ZSetRemoveRequest {
-                                    key: key.clone(),
-                                    members: vec![old_member.display],
-                                    keyspace,
-                                })?;
-                            }
-                            api.zset_add(&ZSetAddRequest {
-                                key,
-                                members: vec![(new_value, score)],
-                                keyspace,
-                            })?;
-                        }
-                        _ => {}
+                    for write in writes {
+                        apply_member_write(api, &key, keyspace, write)?;
                     }
 
                     Ok::<(), DbError>(())
@@ -897,6 +851,7 @@ impl super::KeyValueDocument {
                                 keyspace,
                                 ttl_seconds: event.ttl,
                                 condition: SetCondition::Always,
+                                keep_ttl: false,
                             })?;
                         }
                         NewKeyValue::HashFields(fields) => {
@@ -998,8 +953,256 @@ impl super::KeyValueDocument {
     }
 }
 
+/// `SET` request for an edited string value. The value keeps its expiry:
+/// drivers that support it add `KEEPTTL`, so editing never clears a TTL.
+pub(super) fn string_write_request(
+    key: String,
+    text: String,
+    key_type: KeyType,
+    keyspace: Option<u32>,
+) -> KeySetRequest {
+    let repr = if key_type == KeyType::Json {
+        ValueRepr::Json
+    } else {
+        ValueRepr::Text
+    };
+
+    KeySetRequest {
+        key,
+        value: text.into_bytes(),
+        repr,
+        keyspace,
+        ttl_seconds: None,
+        condition: SetCondition::Always,
+        keep_ttl: true,
+    }
+}
+
+/// One member-level write of an edit.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum MemberWrite {
+    HashSet { field: String, value: String },
+    ListSet { index: i64, value: String },
+    SetAdd(String),
+    SetRemove(String),
+    ZSetAdd { member: String, score: f64 },
+    ZSetRemove(String),
+}
+
+/// Writes that turn `old` into the edited member.
+///
+/// Additions always come before removals: removing the last member first
+/// would delete the key, and the re-created key would lose its expiry.
+/// A hash field is overwritten in place with `HSET`, which keeps the key
+/// and its expiry.
+pub(super) fn member_edit_writes(
+    key_type: KeyType,
+    old: &MemberEntry,
+    new_value: &str,
+    new_score: Option<f64>,
+    index: i64,
+) -> Vec<MemberWrite> {
+    let changed = new_value != old.display;
+
+    match key_type {
+        KeyType::Hash => match &old.field {
+            Some(field) if changed => vec![MemberWrite::HashSet {
+                field: field.clone(),
+                value: new_value.to_string(),
+            }],
+            _ => Vec::new(),
+        },
+        KeyType::List => vec![MemberWrite::ListSet {
+            index,
+            value: new_value.to_string(),
+        }],
+        KeyType::Set if changed => vec![
+            MemberWrite::SetAdd(new_value.to_string()),
+            MemberWrite::SetRemove(old.display.clone()),
+        ],
+        KeyType::SortedSet => {
+            let score = new_score.unwrap_or(old.score.unwrap_or(0.0));
+            let mut writes = vec![MemberWrite::ZSetAdd {
+                member: new_value.to_string(),
+                score,
+            }];
+
+            if changed {
+                writes.push(MemberWrite::ZSetRemove(old.display.clone()));
+            }
+
+            writes
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn apply_member_write(
+    api: &dyn dbflux_core::KeyValueApi,
+    key: &str,
+    keyspace: Option<u32>,
+    write: MemberWrite,
+) -> Result<(), DbError> {
+    let key = key.to_string();
+
+    match write {
+        MemberWrite::HashSet { field, value } => api.hash_set(&HashSetRequest {
+            key,
+            fields: vec![(field, value)],
+            keyspace,
+        }),
+        MemberWrite::ListSet { index, value } => api.list_set(&ListSetRequest {
+            key,
+            index,
+            value,
+            keyspace,
+        }),
+        MemberWrite::SetAdd(member) => api
+            .set_add(&SetAddRequest {
+                key,
+                members: vec![member],
+                keyspace,
+            })
+            .map(|_| ()),
+        MemberWrite::SetRemove(member) => api
+            .set_remove(&SetRemoveRequest {
+                key,
+                members: vec![member],
+                keyspace,
+            })
+            .map(|_| ()),
+        MemberWrite::ZSetAdd { member, score } => api
+            .zset_add(&ZSetAddRequest {
+                key,
+                members: vec![(member, score)],
+                keyspace,
+            })
+            .map(|_| ()),
+        MemberWrite::ZSetRemove(member) => api
+            .zset_remove(&ZSetRemoveRequest {
+                key,
+                members: vec![member],
+                keyspace,
+            })
+            .map(|_| ()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{MemberEntry, MemberWrite, member_edit_writes, string_write_request};
+    use dbflux_core::{KeyType, ValueRepr};
+
+    fn member(display: &str, field: Option<&str>, score: Option<f64>) -> MemberEntry {
+        MemberEntry {
+            display: display.to_string(),
+            field: field.map(str::to_string),
+            score,
+            entry_id: None,
+        }
+    }
+
+    fn position_of(writes: &[MemberWrite], predicate: impl Fn(&MemberWrite) -> bool) -> usize {
+        writes
+            .iter()
+            .position(predicate)
+            .expect("write is part of the plan")
+    }
+
+    #[test]
+    fn string_edits_keep_the_existing_ttl() {
+        let request = string_write_request(
+            "config:flags".to_string(),
+            "{}".to_string(),
+            KeyType::Json,
+            Some(0),
+        );
+
+        assert!(request.keep_ttl, "a value write must keep the key's expiry");
+        assert_eq!(request.ttl_seconds, None);
+        assert_eq!(request.repr, ValueRepr::Json);
+    }
+
+    #[test]
+    fn hash_edits_overwrite_the_field_without_deleting_it() {
+        let writes = member_edit_writes(
+            KeyType::Hash,
+            &member("team", Some("plan"), None),
+            "enterprise",
+            None,
+            0,
+        );
+
+        assert_eq!(
+            writes,
+            vec![MemberWrite::HashSet {
+                field: "plan".to_string(),
+                value: "enterprise".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn set_edits_add_the_new_member_before_removing_the_old_one() {
+        let writes =
+            member_edit_writes(KeyType::Set, &member("admin", None, None), "owner", None, 0);
+
+        let added = position_of(&writes, |write| matches!(write, MemberWrite::SetAdd(_)));
+        let removed = position_of(&writes, |write| matches!(write, MemberWrite::SetRemove(_)));
+        assert!(
+            added < removed,
+            "removing first could delete the key and its TTL"
+        );
+    }
+
+    #[test]
+    fn sorted_set_renames_add_before_removing() {
+        let writes = member_edit_writes(
+            KeyType::SortedSet,
+            &member("player1", None, Some(10.0)),
+            "player9",
+            Some(12.0),
+            0,
+        );
+
+        let added = position_of(&writes, |write| {
+            matches!(write, MemberWrite::ZSetAdd { .. })
+        });
+        let removed = position_of(&writes, |write| matches!(write, MemberWrite::ZSetRemove(_)));
+        assert!(added < removed);
+    }
+
+    #[test]
+    fn a_score_change_only_updates_the_score() {
+        let writes = member_edit_writes(
+            KeyType::SortedSet,
+            &member("player1", None, Some(10.0)),
+            "player1",
+            Some(42.0),
+            0,
+        );
+
+        assert_eq!(
+            writes,
+            vec![MemberWrite::ZSetAdd {
+                member: "player1".to_string(),
+                score: 42.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn unchanged_members_write_nothing() {
+        assert!(
+            member_edit_writes(KeyType::Set, &member("a", None, None), "a", None, 0).is_empty()
+        );
+        assert!(
+            member_edit_writes(KeyType::Hash, &member("v", Some("f"), None), "v", None, 0)
+                .is_empty()
+        );
+    }
+
     #[test]
     fn key_value_mutation_keys_resolve_in_both_locales() {
         let keys = [

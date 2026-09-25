@@ -74,6 +74,7 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::InstanceOverviewLeaf => true,
 
         SchemaNodeKind::Loading
+        | SchemaNodeKind::EmptyDatabasesFolder
         | SchemaNodeKind::Schema
         | SchemaNodeKind::TablesFolder
         | SchemaNodeKind::ViewsFolder
@@ -2237,11 +2238,12 @@ mod menu_availability_tests {
     use uuid::Uuid;
 
     /// Every `SchemaNodeKind`, in declaration order.
-    const ALL_KINDS: [SchemaNodeKind; 62] = [
+    const ALL_KINDS: [SchemaNodeKind; 63] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
         SchemaNodeKind::Database,
+        SchemaNodeKind::EmptyDatabasesFolder,
         SchemaNodeKind::Loading,
         SchemaNodeKind::Schema,
         SchemaNodeKind::TablesFolder,

@@ -219,6 +219,8 @@ event_sink.record(event)?;
 |----------|--------|----------|
 | `QUERY_EXECUTE` | `query_execute` | 查询 |
 | `QUERY_EXECUTE_FAILED` | `query_execute_failed` | 查询 |
+| `KEY_BULK_DELETE` | `key_bulk_delete` | 查询 |
+| `KEY_BULK_DELETE_FAILED` | `key_bulk_delete_failed` | 查询 |
 | `CONNECTION_CONNECT` | `connection_connect` | 连接 |
 | `CONNECTION_DISCONNECT` | `connection_disconnect` | 连接 |
 | `HOOK_EXECUTE` | `hook_execute` | Hook |

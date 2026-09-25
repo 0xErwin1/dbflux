@@ -240,6 +240,8 @@ Usa las constantes en lugar de strings sueltos:
 | ------------------------- | ------------------------- | ---------- |
 | `QUERY_EXECUTE`           | `query_execute`           | Query      |
 | `QUERY_EXECUTE_FAILED`    | `query_execute_failed`    | Query      |
+| `KEY_BULK_DELETE`         | `key_bulk_delete`         | Query      |
+| `KEY_BULK_DELETE_FAILED`  | `key_bulk_delete_failed`  | Query      |
 | `CONNECTION_CONNECT`      | `connection_connect`      | Connection |
 | `CONNECTION_DISCONNECT`   | `connection_disconnect`   | Connection |
 | `HOOK_EXECUTE`            | `hook_execute`            | Hook       |

@@ -1583,6 +1583,179 @@ document:
     empty: 暂无数据。请连接并点击刷新。
     kill_failed_cause: "检查器 %{metric_id} 上的操作 %{action_label} 失败"
   key_value:
+    bulk_delete:
+      menu_item: "删除匹配该模式的键…"
+      title: "删除 %{count} 个键"
+      title_scanning: "删除匹配的键（目前 %{count} 个）"
+      scope: "%{database} 中匹配 %{pattern} 的所有键。"
+      scope_typed: "%{database} 中匹配 %{pattern} 且类型为 %{key_type} 的所有键。"
+      matches_label: "完整扫描的匹配项"
+      more: "…还有 %{count} 个"
+      no_matches: "没有匹配的键。"
+      scanning: "正在扫描整个键空间，目前 %{count} 个匹配"
+      stop: "停止"
+      scan_stopped: "扫描已停止，计数不完整，因此无法删除。"
+      scan_failed: "扫描失败：%{error}"
+      type_prefix: "输入"
+      type_suffix: "以确认"
+      note: "以每批 %{count} 个的 UNLINK 执行，并记录到审计"
+      export: "先导出键"
+      exported: "已导出键"
+      export_dialog_title: "删除前导出键"
+      cancel: "取消"
+      confirm: "删除 %{count} 个键"
+      toast_deleted: "已删除匹配 %{pattern} 的 %{count} 个键"
+      toast_exported: "键已导出到 %{path}"
+    console:
+      title: "命令"
+      subtitle: "在 %{database} 上运行，危险命令会先确认"
+      placeholder: "输入命令并按 Enter"
+      binary: "<%{count} 字节二进制数据>"
+      empty: "（空）"
+      more_lines: "… 还有 %{count} 行"
+      cancelled: "未执行。"
+      run_anyway: "仍然运行"
+      cancel: "取消"
+      destructive_title: "运行破坏性命令？"
+      destructive_body: "此命令可能删除数据，且无法撤销。"
+    expiry:
+      title: "过期"
+      mode:
+        never: "永不"
+        in: "之后"
+        at: "于"
+      duration_placeholder: "7d"
+      never_body: "该键不会过期。"
+      expires: "过期时间"
+      local_command: "本地时间 · %{command}"
+      never_command: "永不过期 · %{command}"
+      preview_pending: "输入时长或日期时间。"
+      apply: "应用"
+      error:
+        empty: "请输入时长，例如 7d 或 90m。"
+        duration: "时长使用 s、m、h、d 和 w，例如 1h30m。"
+        date_time: "请使用本地日期时间，例如 2026-09-30 17:30。"
+        past: "该时间已经过去。"
+    footer:
+      loaded: "已加载"
+      scanned: "已扫描"
+      of_total: "/ %{total}"
+      load_more: "加载更多"
+      hint_tree: "按层级排序，计数不完整"
+      hint_list: "按名称排序"
+      hint_pattern: "模式按输入发送"
+    gate:
+      title: "%{key} 大小为 %{size}，超过 %{limit} 的预览上限"
+      body: "仅显示元数据。加载会将整个值读入内存。"
+      preview: "预览前 %{size}"
+    hint:
+      hash: "Enter 编辑值 · o 添加字段 · x 删除 · y 复制"
+      sorted_set: "Enter 编辑分数 · o 添加成员 · x 移除 · t 设置过期，编辑值时保留"
+      collection: "Enter 编辑值 · o 添加成员 · x 移除 · y 复制"
+      stream: "o 添加条目 · x 删除条目 · t 设置过期"
+    list:
+      column_key: "键"
+      column_ttl: "TTL"
+      column_size: "大小"
+      empty: "此数据库中没有键。"
+      no_matches: "目前没有匹配的键。"
+    meta:
+      ttl: "TTL"
+      no_expiry: "不过期"
+      fields:
+        one: "%{count} 个字段"
+        many: "%{count} 个字段"
+      members:
+        one: "%{count} 个成员"
+        many: "%{count} 个成员"
+      entries:
+        one: "%{count} 个条目"
+        many: "%{count} 个条目"
+      groups:
+        one: "%{count} 个组"
+        many: "%{count} 个组"
+    search:
+      title:
+        one: "正在搜索，目前 1 个匹配"
+        many: "正在搜索，目前 %{count} 个匹配"
+      body: "SCAN 会一直读取，直到页面填满或读完整个键空间。服务器可能返回空批次，因此扫描结束前结果都不是最终的。"
+      stop: "停止"
+      whole_keyspace: "搜索整个键空间"
+    stream:
+      newest_first: "最新优先"
+      oldest_first: "最早优先"
+      start_placeholder: "-（开始）"
+      end_placeholder: "+（结束）"
+      loaded_summary: "%{command} · %{loaded} / %{total}"
+      load_more: "加载更多"
+      column_id: "条目 ID"
+      column_time: "时间"
+      time_today: "今天 %{time}"
+      groups_title: "消费者组"
+      column_group: "组"
+      column_readers: "读取者"
+      column_pending: "待处理"
+      column_last_read: "最后读取"
+      no_groups: "此流没有消费者组。"
+      callout_title: "%{group} 有 %{count} 个待处理"
+      callout_idle: "最早的已闲置 %{idle}。"
+      callout_body: "认领会将它们移给其他读取者。"
+      view_pending: "查看待处理"
+      claim: "认领"
+      claim_confirm: "全部认领"
+      claim_placeholder: "接收条目的读取者"
+      pending_title: "%{group} 中待处理"
+    toolbar:
+      bulk_actions: "批量操作"
+      new_key: "新建键"
+      type_all: "全部"
+      layout_list: "列表"
+      layout_tree: "树"
+      key_total:
+        one: "1 个键"
+        many: "%{count} 个键"
+    tree:
+      folder_count:
+        one: "%{count} 个键"
+        many: "%{count} 个键"
+        partial: "≥ %{count} 个键"
+    value:
+      add_field: "添加字段"
+      add_member: "添加成员"
+      add_entry: "添加条目"
+      reload: "重新加载"
+      view_table: "表格"
+      view_document: "文档"
+      view_entries: "条目"
+      column_field: "字段"
+      column_format: "格式"
+      loaded_summary: "%{command} · 已加载 %{loaded} 个中的 %{shown} 个"
+      edit: "编辑"
+    view_as:
+      label: "查看方式"
+      auto: "自动"
+      text: "文本"
+      compression: "压缩"
+      compression_none: "无"
+      detected:
+        json: "检测到 JSON"
+        msgpack: "检测到 MsgPack"
+        image: "检测到 %{format} 图像"
+      error:
+        decompress: "无法按 %{compression} 解压：%{reason}"
+        too_large: "解压后的值超过 %{limit} 上限。"
+        not_json: "不是有效的 JSON，按文本显示。"
+        not_msgpack: "不是有效的 MessagePack，按十六进制显示。"
+      truncated_lines: "显示前 %{count} 行。"
+    zset:
+      highest_first: "最高优先"
+      lowest_first: "最低优先"
+      loaded_summary: "ZRANGE · 已加载 %{total} 个中的 %{loaded} 个"
+      load_more: "再加载 %{count} 个"
+      column_rank: "排名"
+      column_member: "成员"
+      column_score: "分数"
+      column_relative: "相对最高分"
     add_member_modal:
       cancel: 取消
       error:
@@ -1677,10 +1850,6 @@ document:
       error:
         background_task_limit: 后台任务运行过多，请稍候
     parsing:
-      preview:
-        binary:
-          one: "%{count} 字节（二进制）"
-          many: "%{count} 字节（二进制）"
       type:
         string: 字符串
         bytes: 字节
@@ -1692,7 +1861,6 @@ document:
         stream: 流
         unknown: ？
     render:
-      size_bytes: "%{size} B"
       delete_key:
         title: 删除键？
         message: "确认删除 %{key}？此操作无法撤销。"
@@ -1702,47 +1870,21 @@ document:
       delete_confirm:
         cancel: 取消
         delete: 删除
-      unknown_type: 未知
       value_header: 值
-      id_header: ID
-      fields_header: 字段
-      field_score_header: 字段 / 分值
-      click_to_edit: 点击或按 Enter 编辑
       select_key_prompt: 选择一个键以查看
-      prev: 上一页
-      next: 下一页
-      page: "第 %{page} 页"
-      keys_count:
-        one: "本页 %{count} 个键"
-        many: "本页 %{count} 个键"
-      keys_total: "共 %{count} 个"
       filter:
-        keys_placeholder: 筛选键…
+        keys_placeholder: "模式，例如 user:*"
         members_placeholder: 筛选元素…
       ttl:
         no_limit: 无限制
         missing: 缺失
         expired: 已过期
       gate:
-        too_large: "值大小为 %{size}，超过了 %{limit} 的预览上限"
         load_anyway: 仍要加载
         truncated: "部分值 — 已显示 %{returned}，共 %{total}"
         truncated_unknown_total: "部分值 — 已显示 %{returned}"
       decode:
-        choice:
-          auto: "自动"
-          raw: "原始"
-        preview:
-          image:
-            one: "%{count} 字节（图像：%{format}）"
-            many: "%{count} 字节（图像：%{format}）"
-        failed: 解码失败
-        too_large: 解码后的输出过大
-        edit_locked: 切换到原始视图以编辑
-        kind:
-          text: 文本
-          bytes: 字节
-          image: 图像
+        edit_locked: "要编辑，请将压缩设为“无”，并将查看方式设为自动、JSON 或文本"
   migrate_wizard:
     title: 迁移数据
     task:
@@ -3874,6 +4016,9 @@ sidebar:
       log_stream: "日志组（%{count}）"
       object_storage: "存储桶（%{count}）"
     folder:
+      empty_databases:
+        one: "%{count} 个空数据库"
+        many: "%{count} 个空数据库"
       databases: 数据库
       new_default: 新建文件夹
       fields: "字段（%{count}）"

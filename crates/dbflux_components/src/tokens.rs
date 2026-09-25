@@ -1102,6 +1102,173 @@ impl InspectorMetrics {
     pub const FOOTER_GAP: Pixels = px(8.0);
 }
 
+/// Geometry of the key-value browser (P1KvHash, P1KvString, P2KvZset,
+/// P2KvStream, P2KvFilter): toolbars, the key list, the value pane, the
+/// expiry popover, the bulk-delete confirmation and the command console.
+pub struct KeyValueMetrics;
+
+impl KeyValueMetrics {
+    /// Document toolbar and filter row: 44 px tall, 14 px sides, 8 px gap.
+    pub const TOOLBAR_HEIGHT: Pixels = px(44.0);
+    pub const TOOLBAR_PADDING_X: Pixels = px(14.0);
+    pub const TOOLBAR_GAP: Pixels = px(8.0);
+    /// Divider between the type filter and the layout toggle: 1 x 20 px,
+    /// 4 px each side.
+    pub const TOOLBAR_DIVIDER_HEIGHT: Pixels = px(20.0);
+    pub const TOOLBAR_DIVIDER_MARGIN_X: Pixels = px(4.0);
+    /// Key list column. (540 px)
+    pub const KEY_LIST_WIDTH: Pixels = px(540.0);
+    /// Key list header: 30 px, 11.5 px text.
+    pub const LIST_HEADER_HEIGHT: Pixels = px(30.0);
+    pub const LIST_HEADER_FONT: Pixels = px(11.5);
+    /// Key list rows: 28 px, 14 px left and 12 px right padding, 16 px per
+    /// tree level.
+    pub const LIST_ROW_HEIGHT: Pixels = px(28.0);
+    pub const LIST_PADDING_LEFT: Pixels = px(14.0);
+    pub const LIST_PADDING_RIGHT: Pixels = px(12.0);
+    pub const LIST_INDENT: Pixels = px(16.0);
+    /// Key row: 12.5 px mono name, 8 px gap, 11.5 px TTL and size cells.
+    pub const LIST_ROW_FONT: Pixels = px(12.5);
+    pub const LIST_ROW_GAP: Pixels = px(8.0);
+    pub const LIST_META_FONT: Pixels = px(11.5);
+    /// TTL and size columns. (76 px, 66 px)
+    pub const TTL_COLUMN: Pixels = px(76.0);
+    pub const SIZE_COLUMN: Pixels = px(66.0);
+    /// Folder row: 7 px gap, 12 px chevron, 14 px folder icon, 11 px count
+    /// in a 140 px column.
+    pub const FOLDER_GAP: Pixels = px(7.0);
+    pub const FOLDER_CHEVRON: Pixels = px(12.0);
+    pub const FOLDER_ICON: Pixels = px(14.0);
+    pub const FOLDER_COUNT_FONT: Pixels = px(11.0);
+    pub const FOLDER_COUNT_COLUMN: Pixels = px(140.0);
+    /// Space where a folder row draws its chevron, kept on key rows so names
+    /// line up. (12 px)
+    pub const CHEVRON_SLOT: Pixels = px(12.0);
+    /// Type badge: 26 x 18 px, 10 px bold mono, color at 13 % fill.
+    pub const TYPE_BADGE_WIDTH: Pixels = px(26.0);
+    pub const TYPE_BADGE_HEIGHT: Pixels = px(18.0);
+    pub const TYPE_BADGE_FONT: Pixels = px(10.0);
+    pub const TYPE_BADGE_FILL_ALPHA: f32 = 0.13;
+    /// Selected key row wash. (12 %)
+    pub const SELECTED_ROW_ALPHA: f32 = 0.12;
+    /// Selected member row wash. (7 %)
+    pub const SELECTED_MEMBER_ALPHA: f32 = 0.07;
+    /// Key list footer: 40 px, 14 px sides, 10 px gap, 12 px text, 13 px
+    /// icon, 70 px progress bar (110 px while searching), 4 px tall.
+    pub const FOOTER_HEIGHT: Pixels = px(40.0);
+    pub const FOOTER_PADDING_X: Pixels = px(14.0);
+    pub const FOOTER_GAP: Pixels = px(10.0);
+    pub const FOOTER_FONT: Pixels = px(12.0);
+    pub const FOOTER_ICON: Pixels = px(13.0);
+    pub const PROGRESS_WIDTH: Pixels = px(70.0);
+    pub const PROGRESS_WIDTH_SEARCHING: Pixels = px(110.0);
+    pub const PROGRESS_HEIGHT: Pixels = px(4.0);
+    /// Search-in-progress card: 24 px above and below, 18 px sides, 16 px
+    /// padding, 12 px gap, 12.5 px body at 1.5 line height.
+    pub const SEARCH_CARD_MARGIN_Y: Pixels = px(24.0);
+    pub const SEARCH_CARD_MARGIN_X: Pixels = px(18.0);
+    pub const SEARCH_CARD_PADDING: Pixels = px(16.0);
+    pub const SEARCH_CARD_GAP: Pixels = px(12.0);
+    pub const SEARCH_CARD_FONT: Pixels = px(12.5);
+    pub const SEARCH_CARD_ICON: Pixels = px(15.0);
+    /// Value header: 46 px, 16 px sides, 10 px gap, 14 px bold mono key.
+    pub const VALUE_HEADER_HEIGHT: Pixels = px(46.0);
+    pub const VALUE_PADDING_X: Pixels = px(16.0);
+    pub const VALUE_HEADER_GAP: Pixels = px(10.0);
+    pub const KEY_NAME_FONT: Pixels = px(14.0);
+    /// Metadata row: 36 px, 18 px between items, 6 px inside, 13 px icons,
+    /// 11 px edit glyph, 12 px text.
+    pub const META_ROW_HEIGHT: Pixels = px(36.0);
+    pub const META_GAP: Pixels = px(18.0);
+    pub const META_ITEM_GAP: Pixels = px(6.0);
+    pub const META_ICON: Pixels = px(13.0);
+    pub const META_EDIT_ICON: Pixels = px(11.0);
+    pub const META_FONT: Pixels = px(12.0);
+    /// Value toolbar (filter, order, View as): 42 px.
+    pub const VALUE_TOOLBAR_HEIGHT: Pixels = px(42.0);
+    pub const MEMBER_FILTER_WIDTH: Pixels = px(260.0);
+    pub const COMPRESSION_WIDTH: Pixels = px(110.0);
+    /// Member tables: 32 px header, 32 px hash rows, 30 px ranked rows,
+    /// 12 px sides.
+    pub const MEMBER_HEADER_HEIGHT: Pixels = px(32.0);
+    pub const MEMBER_ROW_HEIGHT: Pixels = px(32.0);
+    pub const RANKED_ROW_HEIGHT: Pixels = px(30.0);
+    pub const MEMBER_PADDING_X: Pixels = px(12.0);
+    pub const INDEX_COLUMN: Pixels = px(40.0);
+    pub const FIELD_COLUMN: Pixels = px(180.0);
+    pub const FORMAT_COLUMN: Pixels = px(90.0);
+    pub const ACTION_COLUMN: Pixels = px(36.0);
+    pub const ACTION_ICON: Pixels = px(13.0);
+    /// Format badge on member rows: 20 px, 7 px sides, 11 px semibold.
+    pub const FORMAT_BADGE_HEIGHT: Pixels = px(20.0);
+    pub const FORMAT_BADGE_PADDING_X: Pixels = px(7.0);
+    pub const FORMAT_BADGE_FONT: Pixels = px(11.0);
+    /// Sorted-set columns: 56 px rank, 120 px score, 260 px bar, 6 px bar.
+    pub const RANK_COLUMN: Pixels = px(56.0);
+    pub const SCORE_COLUMN: Pixels = px(120.0);
+    pub const BAR_COLUMN: Pixels = px(260.0);
+    pub const BAR_HEIGHT: Pixels = px(6.0);
+    /// Stream columns: 210 px ID, 150 px time, 110 px per field.
+    pub const ENTRY_ID_COLUMN: Pixels = px(210.0);
+    pub const ENTRY_TIME_COLUMN: Pixels = px(150.0);
+    pub const ENTRY_FIELD_COLUMN: Pixels = px(110.0);
+    pub const RANGE_INPUT_WIDTH: Pixels = px(170.0);
+    /// Consumer groups panel: 360 px, 42 px header, 34 px rows, 14 px sides,
+    /// 70/70/110 px columns, 14 px callout margin, 12 px callout padding.
+    pub const GROUPS_WIDTH: Pixels = px(360.0);
+    pub const GROUPS_HEADER_HEIGHT: Pixels = px(42.0);
+    pub const GROUPS_TABLE_HEADER_HEIGHT: Pixels = px(30.0);
+    pub const GROUPS_ROW_HEIGHT: Pixels = px(34.0);
+    pub const GROUPS_PADDING_X: Pixels = px(14.0);
+    pub const GROUPS_COUNT_COLUMN: Pixels = px(70.0);
+    pub const GROUPS_ID_COLUMN: Pixels = px(110.0);
+    pub const CALLOUT_MARGIN: Pixels = px(14.0);
+    pub const CALLOUT_PADDING: Pixels = px(12.0);
+    pub const CALLOUT_GAP: Pixels = px(6.0);
+    pub const CALLOUT_STRIPE: Pixels = px(3.0);
+    pub const CALLOUT_FILL_ALPHA: f32 = 0.08;
+    /// Key-hint footer of the value pane. (36 px)
+    pub const HINT_ROW_HEIGHT: Pixels = px(36.0);
+    /// String value: 12 px top padding, 22 px lines, 36 px line-number
+    /// gutter with 14 px right padding, 20 px per JSON level.
+    pub const VALUE_PADDING_TOP: Pixels = px(12.0);
+    pub const VALUE_LINE_HEIGHT: Pixels = px(22.0);
+    pub const LINE_NUMBER_WIDTH: Pixels = px(36.0);
+    pub const LINE_NUMBER_PADDING_RIGHT: Pixels = px(14.0);
+    pub const JSON_INDENT: Pixels = px(20.0);
+    /// Large value gate: 16 px margin, 14 x 16 px padding, 12 px gap,
+    /// 3 gap between the two lines.
+    pub const GATE_MARGIN: Pixels = px(16.0);
+    pub const GATE_PADDING_Y: Pixels = px(14.0);
+    pub const GATE_PADDING_X: Pixels = px(16.0);
+    pub const GATE_GAP: Pixels = px(12.0);
+    pub const GATE_LINE_GAP: Pixels = px(3.0);
+    /// Expiry popover: 380 px, 16 px from the pane's left edge and 84 px
+    /// from its top, 16 px padding, 12 px gap, 110 px duration field, 180 px
+    /// date field.
+    pub const EXPIRY_WIDTH: Pixels = px(380.0);
+    pub const EXPIRY_OFFSET_LEFT: Pixels = px(16.0);
+    pub const EXPIRY_OFFSET_TOP: Pixels = px(84.0);
+    pub const EXPIRY_PADDING: Pixels = px(16.0);
+    pub const EXPIRY_GAP: Pixels = px(12.0);
+    pub const EXPIRY_DURATION_WIDTH: Pixels = px(110.0);
+    pub const EXPIRY_AT_WIDTH: Pixels = px(180.0);
+    /// Bulk delete confirmation: 560 px wide, 30 px match rows.
+    pub const BULK_MODAL_WIDTH: Pixels = px(560.0);
+    pub const BULK_ROW_HEIGHT: Pixels = px(30.0);
+    /// Command console: 32 px header, 14 px sides, 10 px gap, 12 px chevron,
+    /// 14 px icon, 12.5 px mono at 21 px lines, 168 px of transcript.
+    pub const CONSOLE_HEADER_HEIGHT: Pixels = px(32.0);
+    pub const CONSOLE_PADDING_X: Pixels = px(14.0);
+    pub const CONSOLE_PADDING_BOTTOM: Pixels = px(10.0);
+    pub const CONSOLE_GAP: Pixels = px(10.0);
+    pub const CONSOLE_CHEVRON: Pixels = px(12.0);
+    pub const CONSOLE_ICON: Pixels = px(14.0);
+    pub const CONSOLE_FONT: Pixels = px(12.5);
+    pub const CONSOLE_LINE_HEIGHT: Pixels = px(21.0);
+    pub const CONSOLE_TRANSCRIPT_HEIGHT: Pixels = px(168.0);
+}
+
 /// Geometry of the extracted navigation helpers: breadcrumb, empty state and
 /// list rows (AppByzTable header, DSAppPlan).
 pub struct NavigationMetrics;

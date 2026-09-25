@@ -122,6 +122,13 @@ pub use data::{
     ZSetRemoveRequest, decode, decode_as, detect, probe_message_pack,
 };
 
+pub use data::{
+    KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures, KeyValuePrefixRequest,
+    RangeOrder, StreamClaimRequest, StreamConsumerGroup, StreamEntry, StreamGroupsRequest,
+    StreamPendingEntry, StreamPendingRequest, StreamRangePage, StreamRangeRequest, ZSetMember,
+    ZSetRangePage, ZSetRangeRequest,
+};
+
 pub use driver::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile,

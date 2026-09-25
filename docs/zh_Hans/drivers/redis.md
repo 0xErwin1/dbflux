@@ -31,18 +31,26 @@
   - Sentinel 故障转移恢复：在由 Sentinel 支撑的连接上发生连接类失败（连接断开、IO 错误）时，会恰好触发一次通过 Sentinel 的重新解析，以及对失败命令的一次重试，之后才把错误呈现出来。
 - 键浏览与发现：
   - 基于游标的键扫描（`KV_SCAN`、`PaginationStyle::Cursor`）。一次分页请求会持续执行 `SCAN`，直到该页包含所请求数量的键或扫描结束，因此匹配稀疏的 `MATCH` 过滤器不会产生空页。每页最多 1000 次 `SCAN` 往返、耗时最多 500 ms；达到上限时，该页返回目前找到的键以及待处理的游标。`SCAN` 重复返回的键在每页中只列出一次，一页最多可能比请求的大小多出一个 `SCAN` 批次。该页的键类型通过一个管道一次获取。在 Cluster 连接上，单纯的 `SCAN` 没有单节点含义，因此驱动程序在同一分页上限内依次扫描待处理的主节点：每个节点的游标独立跟踪，聚合后的游标以不透明的 JSON 对象往返，把 `"<host>:<port>"` 映射到其待处理的 `SCAN` 游标。当所有主节点都报告游标 0 时，整体扫描才算结束。
-  - 键空间键总数（`key_count`）：对所选数据库执行 `DBSIZE`；在 Cluster 连接上为所有主节点 `DBSIZE` 之和。未设置过滤器时，键浏览器会在本页键数旁显示该总数。
+  - 键空间键总数（`key_count`）：对所选数据库执行 `DBSIZE`；在 Cluster 连接上为所有主节点 `DBSIZE` 之和。键浏览器会在标题栏中显示该总数，并在键列表底栏中显示为“已加载 N / 总数”。
+  - 服务器端类型过滤（`KeyValueFeatures::SCAN_TYPE_FILTER`）：带类型的扫描请求会发送 `SCAN ... TYPE <类型>`，因此过滤覆盖整个键空间，而不只是已加载的键。JSON 键按 `ReJSON-RL` 模块类型过滤。每页都会报告服务器检查过的键数估计值（每次往返的 `COUNT`），键浏览器在过滤搜索进行时显示该数值。
+  - 批量键元数据（`KeyValueFeatures::KEY_METADATA`）：在一个管道中获取多个键的过期时间（`PTTL`）与内存大小（`MEMORY USAGE`）（Cluster 连接上使用集群管道），并为当前打开的键获取 `OBJECT ENCODING`。键浏览器只请求屏幕上可见的行。当服务器拒绝 `MEMORY USAGE` 或 `OBJECT ENCODING` 时，该批次会仅用 `PTTL` 重试。
+  - 命名空间分隔符：按连接设置的驱动程序选项 `key_delimiter`（默认 `:`）决定键浏览器如何把键分组到文件夹中。
   - 按键的类型发现（`KV_KEY_TYPES`），覆盖字符串、哈希、列表、集合、有序集合与流。
   - TTL 检查（`KV_TTL`）与值大小上报（`KV_VALUE_SIZE`）。
   - 存在性检查（`KV_GET`/`KV_EXISTS`）、键重命名（`KV_RENAME`），以及多键的批量获取（`KV_BULK_GET`）。
 - 值类型覆盖：字符串、哈希、列表、集合、有序集合与流，包括流的范围读取、流条目添加与流条目删除（`KV_STREAM_RANGE`、`KV_STREAM_ADD`、`KV_STREAM_DELETE`）。
+- 大型集合的范围读取：有序集合通过 `ZRANGE`/`ZREVRANGE ... WITHSCORES` 加 `ZCARD` 按排名分页（`KeyValueFeatures::SORTED_SET_RANGE`），流通过 `XRANGE`/`XREVRANGE ... COUNT` 加 `XLEN` 在两个条目 ID 之间分页（`KeyValueFeatures::STREAM_RANGE`）；下一页使用排他边界 `(id` 从最后一个条目之后继续。
+- 流消费组（`KeyValueFeatures::STREAM_GROUPS`）：`XINFO GROUPS` 与 `XINFO CONSUMERS` 列出每个组的读取者、待处理数量与最后投递的 ID；`XPENDING` 给出最早待处理条目的空闲时长并列出待处理条目；`XCLAIM ... JUSTID` 把待处理条目转给另一个读取者。
+- 可以通过 `EXPIRE` 与 `PERSIST` 编辑已有键的过期时间，并且写入值时会保留键的过期时间（`KeyValueFeatures::KEEP_TTL_ON_WRITE`）：编辑后的字符串用 `SET ... KEEPTTL` 写入；在不支持 `KEEPTTL` 的 6.0 之前版本服务器上，驱动程序会先读取 `PTTL`，写入后再用 `PEXPIRE` 恢复。
+- 批量删除（`KeyValueFeatures::BULK_DELETE`）：对一批键执行 `UNLINK`，由服务器在后台释放。在 Cluster 连接上，由于一批键会跨越多个哈希槽，每个键都在集群管道中单独解除链接。
+- 值前缀（`KeyValueFeatures::VALUE_PREFIX`）：`GETRANGE` 读取超过预览上限的字符串的前若干字节，并将其报告为被截断的值。
 - 可配置的流预览上限，作为一项连接设置暴露。
 - 变更：插入、更新、删除、批量操作与批量删除。`RedisCommandGenerator` 会为 set/delete、hash set/delete、list push/set/remove、set add/remove、sorted-set add/remove 以及 stream add/delete 生成 Redis 命令，用于预览与「复制为命令」。
 - 结果的 JSON 导出（`EXPORT_JSON`）。
 - 整体负载读取的大小闸门：当请求带有字节预算时，字符串/JSON 值会在 `GET` 之前先用 `STRLEN` 探测，超大的值会返回一个带真实大小的占位符，而不是传输整个负载；集合类型不受影响，触及获取上限的流读取会把自己报告为被截断。
 - 离线 RDB 转储分析（`DumpAnalyzer`）：无需连接服务器即可逐键扫描 `.rdb` 文件，以 I/O 速度流式读取该文件，内存占用平稳（键值从不解码，只取键名与值类型）。报告内容包括键总数、按类型的分布、最大的 500 个键，以及按前缀的大小汇总。所报告的大小是**每个键在磁盘上的序列化大小**，而不是它在 Redis 活动内存中的占用 —— 分配器开销与内存编码方式会让这两个数字不一致。
 
-在 Cluster 连接上，Schema 探查会报告一个聚合后的 `db0` 键空间：键数与平均 TTL 是对每个主节点的 `DBSIZE`/键空间统计做求和/平均，而不是按节点分别上报。
+Schema 探查会为每个逻辑数据库报告键数；`INFO keyspace` 中没有出现的数据库不含任何键，报告为 0，这使侧边栏可以把空数据库折叠成一行。在 Cluster 连接上，Schema 探查会报告一个聚合后的 `db0` 键空间：键数与平均 TTL 是对每个主节点的 `DBSIZE`/键空间统计做求和/平均，而不是按节点分别上报。
 
 ### 实例指标
 
@@ -88,6 +96,9 @@
 - 事务在能力层面被声明为支持（`supports_transactions: true`），但不支持隔离级别、保存点、嵌套事务、只读事务与可延迟（deferrable）事务。
 - 未暴露 Pub/Sub（未设置 `PUBSUB` 能力）。
 - 启用 URI 模式时无法使用 SSH 隧道；隧道路径只为手动连接模式接入。不支持把 SSH 隧道与 Cluster/Sentinel 的额外种子节点组合使用：隧道只转发主主机/端口，因此额外节点无法通过它访问。
-- 未对流消费组建模；只支持范围读取、条目添加与条目删除。
+- 可以列出、检查流消费组并从中认领条目，但不能通过键值 API 创建、删除或重置消费组；请在控制台或编辑器中使用 `XGROUP` 命令。
+- 类型过滤需要 Redis 6.0 或更高版本（`SCAN ... TYPE`）。对流翻到第一页之后需要 Redis 6.2 或更高版本（排他范围边界）；消费组需要 Redis 5.0 或更高版本。
+- 键大小来自 `MEMORY USAGE`，部分托管服务商会禁用该命令；此时大小列保持为空，过期时间列仍会填充。
+- 批量删除在删除任何内容之前，会对数据库执行一次完整的 `SCAN` 来统计匹配项，这会把整个键空间读取一遍。
 - Sentinel 与 Cluster 的额外种子节点始终通过明文 `redis://` 访问；不支持为这些额外节点配置按节点的 TLS。本轮迭代中，解析出的 Sentinel 主节点连接本身也是明文（无 TLS）。
 - Sentinel 的身份认证只作用于解析出的主节点连接（使用配置的用户名/密码）；访问 Sentinel 节点本身时不带认证。

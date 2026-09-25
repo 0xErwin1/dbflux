@@ -76,8 +76,23 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     termina cuando todos los masters reportan cursor 0.
   - Total de claves del keyspace (`key_count`): `DBSIZE` sobre la base de datos
     seleccionada; en una conexión Cluster, la suma de `DBSIZE` de todos los
-    masters. El explorador de claves lo muestra junto al conteo de la página
-    cuando no hay filtro.
+    masters. El explorador de claves lo muestra en su cabecera y como cifra
+    "Cargadas N de total" en el pie de la lista de claves.
+  - Filtro de tipo en el servidor (`KeyValueFeatures::SCAN_TYPE_FILTER`): un
+    escaneo con tipo envía `SCAN ... TYPE <tipo>`, así que el filtro cubre todo
+    el keyspace y no solo las claves ya cargadas. Las claves JSON se filtran por
+    el tipo de módulo `ReJSON-RL`. Cada página informa una estimación de las
+    claves que examinó el servidor (`COUNT` por round trip), que el explorador
+    muestra mientras corre una búsqueda filtrada.
+  - Metadatos de claves en lotes (`KeyValueFeatures::KEY_METADATA`): caducidad
+    (`PTTL`) y tamaño en memoria (`MEMORY USAGE`) de muchas claves en un solo
+    pipeline (un pipeline de cluster en conexiones Cluster), más
+    `OBJECT ENCODING` para la clave abierta. El explorador solo pide las filas
+    visibles. Si el servidor rechaza `MEMORY USAGE` u `OBJECT ENCODING`, el lote
+    se reintenta solo con `PTTL`.
+  - Delimitador de espacios de nombres: el ajuste de driver `key_delimiter` por
+    conexión (por defecto `:`) indica al explorador cómo agrupar las claves en
+    carpetas.
   - Descubrimiento de tipo por clave (`KV_KEY_TYPES`) entre string, hash, list,
     set, sorted set y stream.
   - Inspección de TTL (`KV_TTL`) y reporte de tamaño de valor (`KV_VALUE_SIZE`).
@@ -87,6 +102,29 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   streams, incluyendo lecturas de rango de stream, adición de entradas de stream
   y eliminación de entradas de stream (`KV_STREAM_RANGE`, `KV_STREAM_ADD`,
   `KV_STREAM_DELETE`).
+- Lecturas por rangos para colecciones grandes: los sorted sets se paginan por
+  posición con `ZRANGE`/`ZREVRANGE ... WITHSCORES` más `ZCARD`
+  (`KeyValueFeatures::SORTED_SET_RANGE`), y los streams se paginan entre dos IDs
+  de entrada con `XRANGE`/`XREVRANGE ... COUNT` más `XLEN`
+  (`KeyValueFeatures::STREAM_RANGE`); la página siguiente continúa después de la
+  última entrada con un límite exclusivo `(id`.
+- Grupos de consumidores de stream (`KeyValueFeatures::STREAM_GROUPS`):
+  `XINFO GROUPS` y `XINFO CONSUMERS` listan los lectores de cada grupo, sus
+  pendientes y el último ID entregado; `XPENDING` da el tiempo inactivo de la
+  entrada pendiente más antigua y lista las pendientes; `XCLAIM ... JUSTID`
+  pasa entradas pendientes a otro lector.
+- La caducidad de claves existentes se edita con `EXPIRE` y `PERSIST`, y las
+  escrituras de valores conservan la caducidad de la clave
+  (`KeyValueFeatures::KEEP_TTL_ON_WRITE`): un string editado se escribe con
+  `SET ... KEEPTTL`; en servidores anteriores a 6.0, que rechazan `KEEPTTL`, el
+  driver lee `PTTL` antes y lo restaura con `PEXPIRE` después de escribir.
+- Eliminación masiva (`KeyValueFeatures::BULK_DELETE`): `UNLINK` de un lote de
+  claves, que el servidor libera en segundo plano. En una conexión Cluster cada
+  clave se desvincula por separado dentro de un pipeline de cluster, porque un
+  lote abarca varios hash slots.
+- Prefijo de valor (`KeyValueFeatures::VALUE_PREFIX`): `GETRANGE` lee los
+  primeros bytes de un string que supera el límite de vista previa y lo informa
+  como valor truncado.
 - Límite de vista previa de stream configurable, expuesto como ajuste de
   conexión.
 - Mutaciones: insert, update, delete, operaciones por lotes y eliminación
@@ -110,7 +148,10 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   overhead del allocator y las codificaciones en memoria hacen que ambos
   números diverjan.
 
-La introspección de schema reporta un único keyspace `db0` agregado en una
+La introspección de schema reporta un conteo de claves para cada base de datos
+lógica; una base de datos ausente de `INFO keyspace` no tiene claves y reporta
+0, lo que permite a la barra lateral agrupar las bases de datos vacías en una
+sola fila. Reporta un único keyspace `db0` agregado en una
 conexión Cluster: el conteo de claves y el TTL promedio se suman/promedian a
 partir del `DBSIZE`/estadísticas de keyspace de cada master, en lugar de
 reportarse por nodo.
@@ -183,8 +224,18 @@ evitar exponer direcciones IP y hostnames de clientes.
   túnel SSH con nodos semilla adicionales de Cluster o Sentinel no está
   soportado: el túnel solo reenvía el host/port primario, así que los nodos
   adicionales quedan inalcanzables a través de él.
-- Los grupos de consumidores de stream no están modelados; solo se soportan
-  lecturas de rango, adición de entradas y eliminación de entradas.
+- Los grupos de consumidores de stream se pueden listar, inspeccionar y usar
+  para reclamar entradas, pero no crear, eliminar ni reiniciar mediante la API
+  clave-valor; usa comandos `XGROUP` en la consola o el editor.
+- El filtro de tipo requiere Redis 6.0 o posterior (`SCAN ... TYPE`). Paginar un
+  stream más allá de su primera página requiere Redis 6.2 o posterior (límites
+  de rango exclusivos); los grupos de consumidores requieren Redis 5.0 o
+  posterior.
+- Los tamaños de clave vienen de `MEMORY USAGE`, que algunos proveedores
+  gestionados deshabilitan; en ese caso la columna de tamaño queda vacía y la
+  de caducidad se sigue completando.
+- La eliminación masiva cuenta las coincidencias con un `SCAN` completo de la
+  base de datos antes de borrar nada, lo que lee todo el keyspace una vez.
 - Los nodos semilla adicionales de Sentinel y Cluster siempre se contactan por
   `redis://` plano; la configuración de TLS por nodo para esos nodos extra no
   está soportada. La propia conexión al master resuelto de Sentinel también es

@@ -1583,6 +1583,179 @@ document:
     empty: Sin datos. Conecta y haz clic en Actualizar.
     kill_failed_cause: "La acción '%{action_label}' en el inspector '%{metric_id}' falló"
   key_value:
+    bulk_delete:
+      menu_item: "Eliminar claves que coinciden con el patrón…"
+      title: "Eliminar %{count} claves"
+      title_scanning: "Eliminar claves coincidentes (%{count} hasta ahora)"
+      scope: "Todas las claves de %{database} que coinciden con %{pattern}."
+      scope_typed: "Todas las claves de %{database} que coinciden con %{pattern} y son de tipo %{key_type}."
+      matches_label: "Coincidencias, de un escaneo completo"
+      more: "…%{count} más"
+      no_matches: "Ninguna clave coincide."
+      scanning: "Escaneando todo el keyspace, %{count} coincidencias hasta ahora"
+      stop: "Detener"
+      scan_stopped: "El escaneo se detuvo: el recuento está incompleto y la eliminación está desactivada."
+      scan_failed: "El escaneo falló: %{error}"
+      type_prefix: "Escribe"
+      type_suffix: "para confirmar"
+      note: "Se ejecuta como UNLINK en lotes de %{count} y queda registrado en Auditoría"
+      export: "Exportar claves antes"
+      exported: "Claves exportadas"
+      export_dialog_title: "Exportar claves antes de eliminar"
+      cancel: "Cancelar"
+      confirm: "Eliminar %{count} claves"
+      toast_deleted: "Se eliminaron %{count} claves que coinciden con %{pattern}"
+      toast_exported: "Claves exportadas a %{path}"
+    console:
+      title: "Comando"
+      subtitle: "se ejecuta en %{database}; los comandos peligrosos piden confirmación"
+      placeholder: "Escribe un comando y pulsa Enter"
+      binary: "<%{count} bytes de datos binarios>"
+      empty: "(vacío)"
+      more_lines: "… %{count} líneas más"
+      cancelled: "No se ejecutó."
+      run_anyway: "Ejecutar igualmente"
+      cancel: "Cancelar"
+      destructive_title: "¿Ejecutar un comando destructivo?"
+      destructive_body: "Este comando puede eliminar datos y no se puede deshacer."
+    expiry:
+      title: "Caducidad"
+      mode:
+        never: "Nunca"
+        in: "En"
+        at: "El"
+      duration_placeholder: "7d"
+      never_body: "La clave no caducará."
+      expires: "Caduca el"
+      local_command: "hora local · %{command}"
+      never_command: "No caduca · %{command}"
+      preview_pending: "Introduce una duración o una fecha y hora."
+      apply: "Aplicar"
+      error:
+        empty: "Introduce una duración como 7d o 90m."
+        duration: "Las duraciones usan s, m, h, d y w, por ejemplo 1h30m."
+        date_time: "Usa una fecha y hora local como 2026-09-30 17:30."
+        past: "Esa hora ya pasó."
+    footer:
+      loaded: "Cargadas"
+      scanned: "Escaneadas"
+      of_total: "de %{total}"
+      load_more: "Cargar más"
+      hint_tree: "ordenado por nivel, recuentos parciales"
+      hint_list: "ordenado por nombre"
+      hint_pattern: "patrón enviado tal cual"
+    gate:
+      title: "%{key} ocupa %{size}, más que el límite de vista previa de %{limit}"
+      body: "Solo se muestran los metadatos. Cargar lee el valor completo en memoria."
+      preview: "Ver los primeros %{size}"
+    hint:
+      hash: "Enter edita un valor · o añade un campo · x elimina · y copia"
+      sorted_set: "Enter edita la puntuación · o añade un miembro · x quita · t fija la caducidad, editar valores la conserva"
+      collection: "Enter edita un valor · o añade un miembro · x quita · y copia"
+      stream: "o añade una entrada · x elimina una entrada · t fija la caducidad"
+    list:
+      column_key: "Clave"
+      column_ttl: "TTL"
+      column_size: "Tamaño"
+      empty: "No hay claves en esta base de datos."
+      no_matches: "Ninguna clave coincide por ahora."
+    meta:
+      ttl: "TTL"
+      no_expiry: "Sin caducidad"
+      fields:
+        one: "%{count} campo"
+        many: "%{count} campos"
+      members:
+        one: "%{count} miembro"
+        many: "%{count} miembros"
+      entries:
+        one: "%{count} entrada"
+        many: "%{count} entradas"
+      groups:
+        one: "%{count} grupo"
+        many: "%{count} grupos"
+    search:
+      title:
+        one: "Buscando, 1 coincidencia por ahora"
+        many: "Buscando, %{count} coincidencias por ahora"
+      body: "SCAN sigue leyendo hasta llenar la página o leer todo el keyspace. El servidor puede devolver lotes vacíos, así que ningún resultado es definitivo hasta que termine el escaneo."
+      stop: "Detener"
+      whole_keyspace: "Buscar en todo el keyspace"
+    stream:
+      newest_first: "Más recientes primero"
+      oldest_first: "Más antiguas primero"
+      start_placeholder: "- (inicio)"
+      end_placeholder: "+ (fin)"
+      loaded_summary: "%{command} · %{loaded} de %{total}"
+      load_more: "Cargar más"
+      column_id: "ID de entrada"
+      column_time: "Hora"
+      time_today: "hoy %{time}"
+      groups_title: "Grupos de consumidores"
+      column_group: "Grupo"
+      column_readers: "Lectores"
+      column_pending: "Pendientes"
+      column_last_read: "Última lectura"
+      no_groups: "Este stream no tiene grupos de consumidores."
+      callout_title: "%{group} tiene %{count} pendientes"
+      callout_idle: "La más antigua lleva %{idle} inactiva. "
+      callout_body: "Reclamar las pasa a otro lector."
+      view_pending: "Ver pendientes"
+      claim: "Reclamar"
+      claim_confirm: "Reclamar todas"
+      claim_placeholder: "Lector que recibe las entradas"
+      pending_title: "Pendientes en %{group}"
+    toolbar:
+      bulk_actions: "Acciones masivas"
+      new_key: "Nueva clave"
+      type_all: "Todos"
+      layout_list: "Lista"
+      layout_tree: "Árbol"
+      key_total:
+        one: "1 clave"
+        many: "%{count} claves"
+    tree:
+      folder_count:
+        one: "%{count} clave"
+        many: "%{count} claves"
+        partial: "≥ %{count} claves"
+    value:
+      add_field: "Añadir campo"
+      add_member: "Añadir miembro"
+      add_entry: "Añadir entrada"
+      reload: "Recargar"
+      view_table: "Tabla"
+      view_document: "Documento"
+      view_entries: "Entradas"
+      column_field: "Campo"
+      column_format: "Formato"
+      loaded_summary: "%{command} · %{shown} de %{loaded} cargadas"
+      edit: "Editar"
+    view_as:
+      label: "Ver como"
+      auto: "Auto"
+      text: "Texto"
+      compression: "Compresión"
+      compression_none: "Ninguna"
+      detected:
+        json: "JSON detectado"
+        msgpack: "MsgPack detectado"
+        image: "Imagen %{format} detectada"
+      error:
+        decompress: "No se pudo descomprimir como %{compression}: %{reason}"
+        too_large: "El valor descomprimido supera el límite de %{limit}."
+        not_json: "No es JSON válido; se muestra como texto."
+        not_msgpack: "No es MessagePack válido; se muestra en hexadecimal."
+      truncated_lines: "Se muestran las primeras %{count} líneas."
+    zset:
+      highest_first: "Más altas primero"
+      lowest_first: "Más bajas primero"
+      loaded_summary: "ZRANGE · %{loaded} de %{total} cargados"
+      load_more: "Cargar %{count} más"
+      column_rank: "Posición"
+      column_member: "Miembro"
+      column_score: "Puntuación"
+      column_relative: "Relativo al máximo"
     add_member_modal:
       cancel: Cancelar
       error:
@@ -1677,10 +1850,6 @@ document:
       error:
         background_task_limit: Demasiadas tareas en segundo plano en ejecución, espere por favor
     parsing:
-      preview:
-        binary:
-          one: "%{count} byte (binario)"
-          many: "%{count} bytes (binario)"
       type:
         string: String
         bytes: Bytes
@@ -1692,7 +1861,6 @@ document:
         stream: Stream
         unknown: "?"
     render:
-      size_bytes: "%{size} B"
       delete_key:
         title: ¿Eliminar clave?
         message: '¿Eliminar "%{key}"? Esta acción no se puede deshacer.'
@@ -1702,47 +1870,21 @@ document:
       delete_confirm:
         cancel: Cancelar
         delete: Eliminar
-      unknown_type: Desconocido
       value_header: Valor
-      id_header: ID
-      fields_header: Campos
-      field_score_header: Campo/Puntuación
-      click_to_edit: Clic o presiona Enter para editar
       select_key_prompt: Selecciona una clave para inspeccionar
-      prev: Anterior
-      next: Siguiente
-      page: "Página %{page}"
-      keys_count:
-        one: "%{count} clave en esta página"
-        many: "%{count} claves en esta página"
-      keys_total: "%{count} en total"
       filter:
-        keys_placeholder: "Filtrar claves..."
+        keys_placeholder: "Patrón, por ejemplo user:*"
         members_placeholder: "Filtrar miembros..."
       ttl:
         no_limit: Sin límite
         missing: Ausente
         expired: Expirado
       gate:
-        too_large: "El valor pesa %{size}, por encima del límite de vista previa de %{limit}"
         load_anyway: Cargar de todos modos
         truncated: "Valor parcial — mostrando %{returned} de %{total}"
         truncated_unknown_total: "Valor parcial — mostrando %{returned}"
       decode:
-        choice:
-          auto: "Automático"
-          raw: "Raw"
-        preview:
-          image:
-            one: "%{count} byte (imagen: %{format})"
-            many: "%{count} bytes (imagen: %{format})"
-        failed: no se pudo decodificar
-        too_large: la salida decodificada es demasiado grande
-        edit_locked: Cambia a Raw para editar
-        kind:
-          text: texto
-          bytes: bytes
-          image: imagen
+        edit_locked: "Para editar, pon Compresión en Ninguna y Ver como en Auto, JSON o Texto"
   migrate_wizard:
     title: Migrar datos
     task:
@@ -3876,6 +4018,9 @@ sidebar:
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
     folder:
+      empty_databases:
+        one: "%{count} base de datos vacía"
+        many: "%{count} bases de datos vacías"
       databases: Bases de datos
       new_default: Nueva carpeta
       fields: "Campos (%{count})"

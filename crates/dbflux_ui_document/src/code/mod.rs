@@ -80,6 +80,8 @@ use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub use vim::VimMode;
 
+pub(crate) use execution::evaluate_dangerous_with_effective_settings;
+
 /// A single result tab within the CodeDocument.
 ///
 /// Each tab wraps the `DataGridPanel` in a `ResultPanel` shell so the mode

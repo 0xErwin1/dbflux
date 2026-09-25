@@ -6,6 +6,7 @@ impl SchemaNodeKind {
             self,
             Self::Profile
                 | Self::DatabasesFolder
+                | Self::EmptyDatabasesFolder
                 | Self::Database
                 | Self::Table
                 | Self::View
@@ -55,6 +56,7 @@ impl SchemaNodeKind {
             self,
             Self::ConnectionFolder
                 | Self::DatabasesFolder
+                | Self::EmptyDatabasesFolder
                 | Self::Schema
                 | Self::TablesFolder
                 | Self::ViewsFolder

@@ -16,19 +16,23 @@ use dbflux_core::{
     DdlCapabilities, DefaultSqlDialect, DeploymentClass, DiagnosticSeverity, DocumentConnection,
     DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, EditorDiagnostic,
     ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkGetRequest,
-    KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
-    KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection,
-    KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
-    LogErr, MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities,
-    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
-    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
-    SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition,
-    TextPositionRange, TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege,
-    ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required, field_use_uri,
-    sanitize_uri, ssh_tab, when_checked, when_field_equals, when_unchecked, with_default,
+    FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkDeleteRequest,
+    KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest,
+    KeyGetRequest, KeyGetResult, KeyLoadState, KeyMetadata, KeyMetadataRequest, KeyPersistRequest,
+    KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo, KeyTtlRequest,
+    KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueFeatures,
+    KeyValuePrefixRequest, KeyValueSchema, LanguageService, ListEnd, ListPushRequest,
+    ListRemoveRequest, ListSetRequest, LogErr, MutationCapabilities, OrderByColumn,
+    PaginationStyle, QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle,
+    QueryLanguage, QueryRequest, QueryResult, RangeOrder, RelationalConnection, SchemaDropTarget,
+    SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan, SemanticRequest,
+    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
+    StreamClaimRequest, StreamConsumerGroup, StreamDeleteRequest, StreamEntry, StreamEntryId,
+    StreamGroupsRequest, StreamPendingEntry, StreamPendingRequest, StreamRangePage,
+    StreamRangeRequest, TextPosition, TextPositionRange, TransactionCapabilities, TransferFamily,
+    Value, ValueRepr, WritePrivilege, ZSetAddRequest, ZSetMember, ZSetRangePage, ZSetRangeRequest,
+    ZSetRemoveRequest, field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab,
+    when_checked, when_field_equals, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -644,6 +648,22 @@ impl DbDriver for RedisDriver {
                                 disabled_when_field_set: None,
                                 enabled_when_field_equals: None,
                                 help: None,
+                            },
+                            FormFieldDef {
+                                id: "key_delimiter".into(),
+                                label: "Key namespace delimiter".into(),
+                                kind: FormFieldKind::Text,
+                                placeholder: ":".into(),
+                                required: false,
+                                default_value: ":".into(),
+                                enabled_when_checked: None,
+                                enabled_when_unchecked: None,
+                                disabled_when_field_set: None,
+                                enabled_when_field_equals: None,
+                                help: Some(
+                                    "Groups keys into folders in the key browser's tree view"
+                                        .into(),
+                                ),
                             },
                             FormFieldDef {
                                 id: "stream_preview_limit".into(),
@@ -1281,6 +1301,7 @@ impl RedisConnection {
             return Ok(KeyScanPage {
                 entries: Vec::new(),
                 next_cursor: None,
+                scanned_keys: Some(0),
             });
         }
 
@@ -1289,6 +1310,7 @@ impl RedisConnection {
             .filter
             .as_deref()
             .filter(|filter| !filter.is_empty());
+        let type_name = request.type_filter.and_then(redis_type_name);
 
         let mut budget = ScanBudget::for_key_page();
         let mut page = ScanPageKeys::default();
@@ -1309,7 +1331,10 @@ impl RedisConnection {
                     });
 
                     let value = conn
-                        .route_command(&scan_command(batch_cursor, filter, limit), routing)
+                        .route_command(
+                            &scan_command(batch_cursor, filter, limit, type_name),
+                            routing,
+                        )
                         .map_err(|e| format_redis_query_error(&e))?;
 
                     redis::FromRedisValue::from_redis_value(&value)
@@ -1319,26 +1344,93 @@ impl RedisConnection {
             cursor_state.record_result(&address, next_cursor);
         }
 
-        // The cluster pipeline routes each TYPE to the master that owns the
-        // key's slot and sends one pipeline per node.
+        let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
         let keys = page.into_keys();
-        let type_names = if keys.is_empty() {
-            Vec::new()
-        } else {
-            let mut pipeline = redis::cluster::cluster_pipe();
-            for key in &keys {
-                pipeline.cmd("TYPE").arg(key);
-            }
 
-            pipeline
-                .query::<Vec<String>>(conn)
-                .map_err(|e| format_redis_query_error(&e))?
+        let entries = match request.type_filter.filter(|_| type_name.is_some()) {
+            Some(key_type) => key_entries_of_type(keys, key_type),
+            None => {
+                // The cluster pipeline routes each TYPE to the master that
+                // owns the key's slot and sends one pipeline per node.
+                let type_names = if keys.is_empty() {
+                    Vec::new()
+                } else {
+                    let mut pipeline = redis::cluster::cluster_pipe();
+                    for key in &keys {
+                        pipeline.cmd("TYPE").arg(key);
+                    }
+
+                    pipeline
+                        .query::<Vec<String>>(conn)
+                        .map_err(|e| format_redis_query_error(&e))?
+                };
+
+                key_entries_with_types(keys, type_names)?
+            }
         };
-        let entries = key_entries_with_types(keys, type_names)?;
 
         Ok(KeyScanPage {
             entries,
             next_cursor: cursor_state.encode(),
+            scanned_keys: Some(scanned_keys),
+        })
+    }
+
+    fn is_cluster(&self) -> Result<bool, DbError> {
+        let transport = self
+            .connection
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        Ok(matches!(&*transport, RedisTransport::Cluster(_)))
+    }
+
+    /// Sends `commands` as one pipeline and returns every reply in order.
+    ///
+    /// Against a cluster the commands go through a cluster pipeline, which
+    /// routes each one to the master owning its key.
+    fn query_pipeline(
+        &self,
+        keyspace: Option<u32>,
+        commands: &[redis::Cmd],
+    ) -> Result<Vec<redis::Value>, DbError> {
+        if commands.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if self.is_cluster()? {
+            validate_cluster_database(keyspace)?;
+
+            let mut transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+            let RedisTransport::Cluster(conn) = &mut *transport else {
+                return Err(DbError::query_failed(
+                    "Redis Cluster pipeline requested on a non-cluster connection".to_string(),
+                ));
+            };
+
+            let mut pipeline = redis::cluster::cluster_pipe();
+            for command in commands {
+                pipeline.add_command(command.clone());
+            }
+
+            return pipeline
+                .query::<Vec<redis::Value>>(conn.as_mut())
+                .map_err(|e| format_redis_query_error(&e));
+        }
+
+        self.with_connection(keyspace, |conn| {
+            let mut pipeline = redis::pipe();
+            for command in commands {
+                pipeline.add_command(command.clone());
+            }
+
+            pipeline
+                .query::<Vec<redis::Value>>(conn)
+                .map_err(|e| format_redis_query_error(&e))
         })
     }
 
@@ -1525,9 +1617,11 @@ impl Connection for RedisConnection {
             let keyspaces = (0..db_count)
                 .map(|db_index| {
                     let stats = keyspace_stats.get(&db_index);
+                    // `INFO keyspace` omits empty databases, so a database
+                    // it does not list holds no keys.
                     KeySpaceInfo {
                         db_index,
-                        key_count: stats.map(|s| s.key_count),
+                        key_count: Some(stats.map_or(0, |s| s.key_count)),
                         memory_bytes: None,
                         avg_ttl_seconds: stats.and_then(|s| s.avg_ttl_seconds),
                     }
@@ -1789,6 +1883,7 @@ impl KeyValueApi for RedisConnection {
             .filter
             .as_deref()
             .filter(|filter| !filter.is_empty());
+        let type_name = request.type_filter.and_then(redis_type_name);
 
         // Budget and page are created inside the closure so a Sentinel retry
         // restarts the page from `cursor` with a fresh budget.
@@ -1798,25 +1893,33 @@ impl KeyValueApi for RedisConnection {
 
             let next_cursor =
                 fill_scan_page(cursor, limit, &mut budget, &mut page, |batch_cursor| {
-                    scan_command(batch_cursor, filter, limit)
+                    scan_command(batch_cursor, filter, limit, type_name)
                         .query::<(u64, Vec<String>)>(conn)
                         .map_err(|e| format_redis_query_error(&e))
                 })?;
 
+            let scanned_keys = scanned_key_estimate(budget.round_trips(), limit);
             let keys = page.into_keys();
-            let type_names = if keys.is_empty() {
-                Vec::new()
-            } else {
-                let mut pipeline = redis::pipe();
-                for key in &keys {
-                    pipeline.cmd("TYPE").arg(key);
-                }
 
-                pipeline
-                    .query::<Vec<String>>(conn)
-                    .map_err(|e| format_redis_query_error(&e))?
+            let entries = match request.type_filter.filter(|_| type_name.is_some()) {
+                Some(key_type) => key_entries_of_type(keys, key_type),
+                None => {
+                    let type_names = if keys.is_empty() {
+                        Vec::new()
+                    } else {
+                        let mut pipeline = redis::pipe();
+                        for key in &keys {
+                            pipeline.cmd("TYPE").arg(key);
+                        }
+
+                        pipeline
+                            .query::<Vec<String>>(conn)
+                            .map_err(|e| format_redis_query_error(&e))?
+                    };
+
+                    key_entries_with_types(keys, type_names)?
+                }
             };
-            let entries = key_entries_with_types(keys, type_names)?;
 
             let next_cursor = if next_cursor == 0 {
                 None
@@ -1827,6 +1930,7 @@ impl KeyValueApi for RedisConnection {
             Ok(KeyScanPage {
                 entries,
                 next_cursor,
+                scanned_keys: Some(scanned_keys),
             })
         })
     }
@@ -1895,26 +1999,15 @@ impl KeyValueApi for RedisConnection {
 
     fn set_key(&self, request: &KeySetRequest) -> Result<(), DbError> {
         self.with_connection(request.keyspace, |conn| {
-            let mut command = redis::cmd("SET");
-            command.arg(&request.key).arg(&request.value);
-
-            if let Some(ttl_seconds) = request.ttl_seconds {
-                command.arg("EX").arg(ttl_seconds);
-            }
-
-            match request.condition {
-                SetCondition::Always => {}
-                SetCondition::IfNotExists => {
-                    command.arg("NX");
+            let response = match set_command(request, true).query::<Option<String>>(conn) {
+                Ok(response) => response,
+                Err(error) if wants_keep_ttl(request) && is_syntax_error(&error) => {
+                    // Servers older than 6.0 reject KEEPTTL, so the current
+                    // expiry is read first and re-applied after the write.
+                    set_reapplying_ttl(conn, request)?
                 }
-                SetCondition::IfExists => {
-                    command.arg("XX");
-                }
-            }
-
-            let response = command
-                .query::<Option<String>>(conn)
-                .map_err(|e| format_redis_query_error(&e))?;
+                Err(error) => return Err(format_redis_query_error(&error)),
+            };
 
             if response.is_none() {
                 return Err(DbError::query_failed(
@@ -2270,6 +2363,568 @@ impl KeyValueApi for RedisConnection {
             Ok(deleted)
         })
     }
+
+    // -- Optional browsing operations --
+
+    fn features(&self) -> KeyValueFeatures {
+        KeyValueFeatures::KEY_METADATA
+            | KeyValueFeatures::SCAN_TYPE_FILTER
+            | KeyValueFeatures::KEEP_TTL_ON_WRITE
+            | KeyValueFeatures::SORTED_SET_RANGE
+            | KeyValueFeatures::STREAM_RANGE
+            | KeyValueFeatures::STREAM_GROUPS
+            | KeyValueFeatures::BULK_DELETE
+            | KeyValueFeatures::VALUE_PREFIX
+    }
+
+    fn key_metadata(&self, request: &KeyMetadataRequest) -> Result<Vec<KeyMetadata>, DbError> {
+        if request.keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let with_encoding = request.include_encoding;
+        let commands = metadata_commands(&request.keys, true, with_encoding);
+
+        match self.query_pipeline(request.keyspace, &commands) {
+            Ok(replies) => key_metadata_from_replies(&request.keys, &replies, true, with_encoding),
+            Err(error) => {
+                // MEMORY USAGE and OBJECT ENCODING can be disabled on managed
+                // servers; the expiry alone is still worth showing.
+                log::debug!("Redis key metadata without size or encoding: {error}");
+
+                let commands = metadata_commands(&request.keys, false, false);
+                let replies = self.query_pipeline(request.keyspace, &commands)?;
+                key_metadata_from_replies(&request.keys, &replies, false, false)
+            }
+        }
+    }
+
+    fn delete_keys(&self, request: &KeyBulkDeleteRequest) -> Result<u64, DbError> {
+        if request.keys.is_empty() {
+            return Ok(0);
+        }
+
+        if self.is_cluster()? {
+            // Keys of one batch live in different slots, so each UNLINK is
+            // routed on its own inside a cluster pipeline.
+            let commands: Vec<redis::Cmd> = request
+                .keys
+                .iter()
+                .map(|key| {
+                    let mut command = redis::cmd("UNLINK");
+                    command.arg(key);
+                    command
+                })
+                .collect();
+
+            let replies = self.query_pipeline(request.keyspace, &commands)?;
+
+            return Ok(replies
+                .iter()
+                .filter_map(redis_value_as_i64)
+                .map(|removed| removed.max(0) as u64)
+                .sum());
+        }
+
+        self.with_connection(request.keyspace, |conn| {
+            let mut command = redis::cmd("UNLINK");
+            command.arg(&request.keys);
+
+            command
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+
+    fn get_value_prefix(&self, request: &KeyValuePrefixRequest) -> Result<KeyGetResult, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let type_name = redis::cmd("TYPE")
+                .arg(&request.key)
+                .query::<String>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            if parse_key_type(&type_name) != KeyType::String {
+                return Err(DbError::NotSupported(format!(
+                    "A value prefix can only be read from a string key, not a {type_name}"
+                )));
+            }
+
+            let total_bytes = redis::cmd("STRLEN")
+                .arg(&request.key)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let last_index = request.max_bytes.saturating_sub(1);
+            let value = redis::cmd("GETRANGE")
+                .arg(&request.key)
+                .arg(0)
+                .arg(last_index)
+                .query::<Vec<u8>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let repr = detect_value_repr(&value);
+            let load_state = if (value.len() as u64) < total_bytes {
+                KeyLoadState::Truncated {
+                    returned_bytes: value.len() as u64,
+                    total_bytes: Some(total_bytes),
+                }
+            } else {
+                KeyLoadState::Loaded
+            };
+
+            Ok(KeyGetResult {
+                entry: KeyEntry {
+                    key: request.key.clone(),
+                    key_type: Some(normalize_key_type_for_payload(KeyType::String, repr)),
+                    ttl_seconds: None,
+                    size_bytes: Some(total_bytes),
+                },
+                value,
+                repr,
+                load_state,
+            })
+        })
+    }
+
+    fn zset_range(&self, request: &ZSetRangeRequest) -> Result<ZSetRangePage, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let total = redis::cmd("ZCARD")
+                .arg(&request.key)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            if request.count == 0 || request.offset >= total {
+                return Ok(ZSetRangePage {
+                    members: Vec::new(),
+                    total,
+                });
+            }
+
+            let stop = request.offset.saturating_add(request.count) - 1;
+            let command_name = match request.order {
+                RangeOrder::Ascending => "ZRANGE",
+                RangeOrder::Descending => "ZREVRANGE",
+            };
+
+            let flat = redis::cmd(command_name)
+                .arg(&request.key)
+                .arg(request.offset)
+                .arg(stop)
+                .arg("WITHSCORES")
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            Ok(ZSetRangePage {
+                members: zset_members_from_reply(flat),
+                total,
+            })
+        })
+    }
+
+    fn stream_range(&self, request: &StreamRangeRequest) -> Result<StreamRangePage, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let total = redis::cmd("XLEN")
+                .arg(&request.key)
+                .query::<u64>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let mut command = match request.order {
+                RangeOrder::Ascending => {
+                    let mut command = redis::cmd("XRANGE");
+                    command
+                        .arg(&request.key)
+                        .arg(&request.start)
+                        .arg(&request.end);
+                    command
+                }
+                RangeOrder::Descending => {
+                    let mut command = redis::cmd("XREVRANGE");
+                    command
+                        .arg(&request.key)
+                        .arg(&request.end)
+                        .arg(&request.start);
+                    command
+                }
+            };
+            command.arg("COUNT").arg(request.count);
+
+            let raw: Vec<(String, Vec<String>)> = command
+                .query(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            Ok(StreamRangePage {
+                entries: stream_entries_from_reply(raw),
+                total,
+            })
+        })
+    }
+
+    fn stream_groups(
+        &self,
+        request: &StreamGroupsRequest,
+    ) -> Result<Vec<StreamConsumerGroup>, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let info = redis::cmd("XINFO")
+                .arg("GROUPS")
+                .arg(&request.key)
+                .query::<Vec<redis::Value>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let mut groups: Vec<StreamConsumerGroup> =
+                info.iter().filter_map(consumer_group_from_info).collect();
+
+            for group in &mut groups {
+                let consumers = redis::cmd("XINFO")
+                    .arg("CONSUMERS")
+                    .arg(&request.key)
+                    .arg(&group.name)
+                    .query::<Vec<redis::Value>>(conn)
+                    .map_err(|e| format_redis_query_error(&e))?;
+
+                group.consumers = consumers
+                    .iter()
+                    .filter_map(|consumer| {
+                        redis_value_pairs(consumer)
+                            .into_iter()
+                            .find(|(field, _)| field == "name")
+                            .and_then(|(_, value)| redis_value_as_string(&value))
+                    })
+                    .collect();
+
+                if group.pending > 0 {
+                    let oldest = redis::cmd("XPENDING")
+                        .arg(&request.key)
+                        .arg(&group.name)
+                        .arg("-")
+                        .arg("+")
+                        .arg(1)
+                        .query::<redis::Value>(conn)
+                        .map_err(|e| format_redis_query_error(&e))?;
+
+                    group.oldest_pending_idle_ms = pending_entries_from_reply(&oldest)
+                        .first()
+                        .map(|entry| entry.idle_ms);
+                }
+            }
+
+            Ok(groups)
+        })
+    }
+
+    fn stream_pending(
+        &self,
+        request: &StreamPendingRequest,
+    ) -> Result<Vec<StreamPendingEntry>, DbError> {
+        self.with_connection(request.keyspace, |conn| {
+            let reply = redis::cmd("XPENDING")
+                .arg(&request.key)
+                .arg(&request.group)
+                .arg("-")
+                .arg("+")
+                .arg(request.count)
+                .query::<redis::Value>(conn)
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            Ok(pending_entries_from_reply(&reply))
+        })
+    }
+
+    fn stream_claim(&self, request: &StreamClaimRequest) -> Result<Vec<String>, DbError> {
+        if request.ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.with_connection(request.keyspace, |conn| {
+            let mut command = redis::cmd("XCLAIM");
+            command
+                .arg(&request.key)
+                .arg(&request.group)
+                .arg(&request.consumer)
+                .arg(request.min_idle_ms)
+                .arg(&request.ids)
+                .arg("JUSTID");
+
+            command
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))
+        })
+    }
+}
+
+/// Builds the `SET` for a write. `keep_ttl_supported` adds `KEEPTTL` when
+/// the request asks to keep the expiry and sets none of its own.
+fn set_command(request: &KeySetRequest, keep_ttl_supported: bool) -> redis::Cmd {
+    let mut command = redis::cmd("SET");
+    command.arg(&request.key).arg(&request.value);
+
+    if let Some(ttl_seconds) = request.ttl_seconds {
+        command.arg("EX").arg(ttl_seconds);
+    } else if request.keep_ttl && keep_ttl_supported {
+        command.arg("KEEPTTL");
+    }
+
+    match request.condition {
+        SetCondition::Always => {}
+        SetCondition::IfNotExists => {
+            command.arg("NX");
+        }
+        SetCondition::IfExists => {
+            command.arg("XX");
+        }
+    }
+
+    command
+}
+
+fn wants_keep_ttl(request: &KeySetRequest) -> bool {
+    request.keep_ttl && request.ttl_seconds.is_none()
+}
+
+fn is_syntax_error(error: &redis::RedisError) -> bool {
+    error
+        .to_string()
+        .to_ascii_lowercase()
+        .contains("syntax error")
+}
+
+/// Writes the value without `KEEPTTL`, then restores the expiry the key had
+/// before the write. Used only against servers that predate `KEEPTTL`.
+fn set_reapplying_ttl(
+    conn: &mut dyn redis::ConnectionLike,
+    request: &KeySetRequest,
+) -> Result<Option<String>, DbError> {
+    let remaining_ms = redis::cmd("PTTL")
+        .arg(&request.key)
+        .query::<i64>(conn)
+        .map_err(|e| format_redis_query_error(&e))?;
+
+    let response = set_command(request, false)
+        .query::<Option<String>>(conn)
+        .map_err(|e| format_redis_query_error(&e))?;
+
+    if response.is_some() && remaining_ms > 0 {
+        redis::cmd("PEXPIRE")
+            .arg(&request.key)
+            .arg(remaining_ms)
+            .query::<i64>(conn)
+            .map_err(|e| format_redis_query_error(&e))?;
+    }
+
+    Ok(response)
+}
+
+/// Expiry in whole seconds from a `PTTL` reply: `None` for a key without an
+/// expiry, and a partial second rounds up so a live key never reads as 0.
+fn ttl_seconds_from_pttl(pttl_ms: i64) -> Option<i64> {
+    if pttl_ms < 0 {
+        None
+    } else {
+        Some((pttl_ms + 999) / 1000)
+    }
+}
+
+fn redis_value_as_i64(value: &redis::Value) -> Option<i64> {
+    match value {
+        redis::Value::Int(number) => Some(*number),
+        redis::Value::BulkString(bytes) => std::str::from_utf8(bytes).ok()?.parse().ok(),
+        redis::Value::SimpleString(text) => text.parse().ok(),
+        redis::Value::Double(number) => Some(*number as i64),
+        _ => None,
+    }
+}
+
+fn redis_value_as_string(value: &redis::Value) -> Option<String> {
+    match value {
+        redis::Value::BulkString(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+        redis::Value::SimpleString(text) => Some(text.clone()),
+        redis::Value::VerbatimString { text, .. } => Some(text.clone()),
+        redis::Value::Int(number) => Some(number.to_string()),
+        redis::Value::Okay => Some("OK".to_string()),
+        _ => None,
+    }
+}
+
+/// Pairs the `PTTL`, `MEMORY USAGE` and `OBJECT ENCODING` replies of a
+/// metadata pipeline with their keys.
+///
+/// `replies` holds `commands_per_key` replies per key, in key order: `PTTL`
+/// first, then `MEMORY USAGE` when `with_size`, then `OBJECT ENCODING` when
+/// `with_encoding`. A reply the server refused (older servers, restricted
+/// commands) leaves that field `None` instead of failing the batch.
+fn key_metadata_from_replies(
+    keys: &[String],
+    replies: &[redis::Value],
+    with_size: bool,
+    with_encoding: bool,
+) -> Result<Vec<KeyMetadata>, DbError> {
+    let commands_per_key = 1 + usize::from(with_size) + usize::from(with_encoding);
+
+    if replies.len() != keys.len() * commands_per_key {
+        return Err(DbError::query_failed(format!(
+            "Redis returned {} metadata replies for {} keys",
+            replies.len(),
+            keys.len()
+        )));
+    }
+
+    let metadata = keys
+        .iter()
+        .zip(replies.chunks(commands_per_key))
+        .map(|(key, key_replies)| {
+            let mut replies = key_replies.iter();
+            let pttl = replies.next().and_then(redis_value_as_i64).unwrap_or(-2);
+
+            let size_bytes = if with_size {
+                replies
+                    .next()
+                    .and_then(redis_value_as_i64)
+                    .and_then(|size| u64::try_from(size).ok())
+            } else {
+                None
+            };
+
+            let encoding = if with_encoding {
+                replies.next().and_then(redis_value_as_string)
+            } else {
+                None
+            };
+
+            KeyMetadata {
+                key: key.clone(),
+                exists: pttl != -2,
+                ttl_seconds: ttl_seconds_from_pttl(pttl),
+                size_bytes,
+                encoding,
+            }
+        })
+        .collect();
+
+    Ok(metadata)
+}
+
+fn metadata_commands(keys: &[String], with_size: bool, with_encoding: bool) -> Vec<redis::Cmd> {
+    let mut commands = Vec::new();
+
+    for key in keys {
+        let mut pttl = redis::cmd("PTTL");
+        pttl.arg(key);
+        commands.push(pttl);
+
+        if with_size {
+            let mut memory = redis::cmd("MEMORY");
+            memory.arg("USAGE").arg(key);
+            commands.push(memory);
+        }
+
+        if with_encoding {
+            let mut object = redis::cmd("OBJECT");
+            object.arg("ENCODING").arg(key);
+            commands.push(object);
+        }
+    }
+
+    commands
+}
+
+/// Reads the field/value pairs of one `XINFO GROUPS` entry, which RESP2
+/// sends as a flat array and RESP3 as a map.
+fn redis_value_pairs(value: &redis::Value) -> Vec<(String, redis::Value)> {
+    match value {
+        redis::Value::Map(entries) => entries
+            .iter()
+            .filter_map(|(name, value)| Some((redis_value_as_string(name)?, value.clone())))
+            .collect(),
+        redis::Value::Array(items) => items
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [name, value] => Some((redis_value_as_string(name)?, value.clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A consumer group from one `XINFO GROUPS` entry, without its consumer
+/// names or pending idle time, which need further commands.
+fn consumer_group_from_info(value: &redis::Value) -> Option<StreamConsumerGroup> {
+    let pairs = redis_value_pairs(value);
+    let field = |name: &str| {
+        pairs
+            .iter()
+            .find(|(field_name, _)| field_name == name)
+            .map(|(_, value)| value)
+    };
+
+    Some(StreamConsumerGroup {
+        name: field("name").and_then(redis_value_as_string)?,
+        consumers: Vec::new(),
+        pending: field("pending")
+            .and_then(redis_value_as_i64)
+            .and_then(|pending| u64::try_from(pending).ok())
+            .unwrap_or(0),
+        last_delivered_id: field("last-delivered-id")
+            .and_then(redis_value_as_string)
+            .unwrap_or_default(),
+        oldest_pending_idle_ms: None,
+    })
+}
+
+/// Parses the extended `XPENDING key group - + count` reply.
+fn pending_entries_from_reply(value: &redis::Value) -> Vec<StreamPendingEntry> {
+    let redis::Value::Array(entries) = value else {
+        return Vec::new();
+    };
+
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let redis::Value::Array(fields) = entry else {
+                return None;
+            };
+
+            match fields.as_slice() {
+                [id, consumer, idle, deliveries, ..] => Some(StreamPendingEntry {
+                    id: redis_value_as_string(id)?,
+                    consumer: redis_value_as_string(consumer)?,
+                    idle_ms: redis_value_as_i64(idle)
+                        .and_then(|idle| u64::try_from(idle).ok())
+                        .unwrap_or(0),
+                    delivery_count: redis_value_as_i64(deliveries)
+                        .and_then(|count| u64::try_from(count).ok())
+                        .unwrap_or(0),
+                }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn stream_entries_from_reply(raw: Vec<(String, Vec<String>)>) -> Vec<StreamEntry> {
+    raw.into_iter()
+        .map(|(id, flat_fields)| StreamEntry {
+            id,
+            fields: flat_fields
+                .chunks(2)
+                .filter_map(|pair| match pair {
+                    [field, value] => Some((field.clone(), value.clone())),
+                    _ => None,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn zset_members_from_reply(flat: Vec<String>) -> Vec<ZSetMember> {
+    flat.chunks(2)
+        .filter_map(|pair| match pair {
+            [member, score] => Some(ZSetMember {
+                member: member.clone(),
+                score: score.parse::<f64>().unwrap_or(0.0),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 struct RedisErrorFormatter;
@@ -3266,8 +3921,13 @@ fn key_page_limit(requested: u32) -> usize {
     }
 }
 
-/// Builds `SCAN <cursor> [MATCH <filter>] COUNT <count>`.
-fn scan_command(cursor: u64, filter: Option<&str>, count: usize) -> redis::Cmd {
+/// Builds `SCAN <cursor> [MATCH <filter>] COUNT <count> [TYPE <type>]`.
+fn scan_command(
+    cursor: u64,
+    filter: Option<&str>,
+    count: usize,
+    type_name: Option<&str>,
+) -> redis::Cmd {
     let mut command = redis::cmd("SCAN");
     command.arg(cursor);
 
@@ -3276,7 +3936,46 @@ fn scan_command(cursor: u64, filter: Option<&str>, count: usize) -> redis::Cmd {
     }
 
     command.arg("COUNT").arg(count);
+
+    if let Some(type_name) = type_name {
+        command.arg("TYPE").arg(type_name);
+    }
+
     command
+}
+
+/// Server type name `SCAN ... TYPE` expects for a key type, or `None` when
+/// the type has no server-side filter.
+fn redis_type_name(key_type: KeyType) -> Option<&'static str> {
+    match key_type {
+        KeyType::String | KeyType::Bytes => Some("string"),
+        KeyType::Hash => Some("hash"),
+        KeyType::List => Some("list"),
+        KeyType::Set => Some("set"),
+        KeyType::SortedSet => Some("zset"),
+        KeyType::Stream => Some("stream"),
+        KeyType::Json => Some("ReJSON-RL"),
+        KeyType::Unknown => None,
+    }
+}
+
+/// Keys the server examined for a page: `SCAN` reads about `COUNT` slots per
+/// round trip, matched or not.
+fn scanned_key_estimate(round_trips: usize, count: usize) -> u64 {
+    (round_trips as u64).saturating_mul(count as u64)
+}
+
+/// Entries for keys scanned with a `TYPE` filter, whose type is already known
+/// so no `TYPE` round trip is needed.
+fn key_entries_of_type(keys: Vec<String>, key_type: KeyType) -> Vec<KeyEntry> {
+    keys.into_iter()
+        .map(|key| KeyEntry {
+            key,
+            key_type: Some(key_type),
+            ttl_seconds: None,
+            size_bytes: None,
+        })
+        .collect()
 }
 
 /// Pairs page keys with the `TYPE` replies fetched for them, in order.
@@ -3335,6 +4034,10 @@ impl ScanBudget {
 
     fn has_started(&self) -> bool {
         self.round_trips > 0
+    }
+
+    fn round_trips(&self) -> usize {
+        self.round_trips
     }
 
     fn is_exhausted(&self) -> bool {
@@ -3686,6 +4389,192 @@ mod tests {
         DatabaseCategory, DbDriver, KeySetRequest, MutationRequest, QueryLanguage,
         SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
     };
+
+    fn packed_arguments(command: &redis::Cmd) -> String {
+        String::from_utf8_lossy(&command.get_packed_command()).to_string()
+    }
+
+    #[test]
+    fn set_command_keeps_the_expiry_with_keepttl_when_asked() {
+        let request = KeySetRequest::new("session:1", b"value".to_vec()).keeping_ttl();
+
+        assert!(packed_arguments(&set_command(&request, true)).contains("KEEPTTL"));
+    }
+
+    #[test]
+    fn set_command_omits_keepttl_for_plain_writes_and_explicit_ttls() {
+        let plain = KeySetRequest::new("session:1", b"value".to_vec());
+        let explicit = KeySetRequest::new("session:1", b"value".to_vec())
+            .keeping_ttl()
+            .with_ttl(60);
+
+        assert!(!packed_arguments(&set_command(&plain, true)).contains("KEEPTTL"));
+
+        let explicit_command = packed_arguments(&set_command(&explicit, true));
+        assert!(!explicit_command.contains("KEEPTTL"));
+        assert!(explicit_command.contains("EX"));
+    }
+
+    #[test]
+    fn set_command_without_keepttl_support_relies_on_reapplying_the_ttl() {
+        let request = KeySetRequest::new("session:1", b"value".to_vec()).keeping_ttl();
+
+        assert!(!packed_arguments(&set_command(&request, false)).contains("KEEPTTL"));
+        assert!(wants_keep_ttl(&request));
+    }
+
+    #[test]
+    fn scan_command_sends_the_type_filter_to_the_server() {
+        let command = packed_arguments(&scan_command(0, Some("user:*"), 100, Some("hash")));
+
+        assert!(command.contains("MATCH"));
+        assert!(command.contains("TYPE"));
+        assert!(command.contains("hash"));
+
+        let untyped = packed_arguments(&scan_command(0, None, 100, None));
+        assert!(!untyped.contains("TYPE"));
+    }
+
+    #[test]
+    fn redis_type_name_covers_every_filterable_type() {
+        assert_eq!(redis_type_name(KeyType::String), Some("string"));
+        assert_eq!(redis_type_name(KeyType::Hash), Some("hash"));
+        assert_eq!(redis_type_name(KeyType::List), Some("list"));
+        assert_eq!(redis_type_name(KeyType::Set), Some("set"));
+        assert_eq!(redis_type_name(KeyType::SortedSet), Some("zset"));
+        assert_eq!(redis_type_name(KeyType::Stream), Some("stream"));
+        assert_eq!(redis_type_name(KeyType::Json), Some("ReJSON-RL"));
+        assert_eq!(redis_type_name(KeyType::Unknown), None);
+    }
+
+    #[test]
+    fn scanned_key_estimate_counts_one_batch_per_round_trip() {
+        assert_eq!(scanned_key_estimate(0, 100), 0);
+        assert_eq!(scanned_key_estimate(7, 200), 1_400);
+    }
+
+    #[test]
+    fn ttl_seconds_from_pttl_rounds_partial_seconds_up() {
+        assert_eq!(ttl_seconds_from_pttl(-1), None);
+        assert_eq!(ttl_seconds_from_pttl(-2), None);
+        assert_eq!(ttl_seconds_from_pttl(1), Some(1));
+        assert_eq!(ttl_seconds_from_pttl(59_001), Some(60));
+        assert_eq!(ttl_seconds_from_pttl(60_000), Some(60));
+    }
+
+    #[test]
+    fn key_metadata_from_replies_pairs_each_key_with_its_replies() -> Result<(), DbError> {
+        let keys = vec!["a".to_string(), "b".to_string(), "gone".to_string()];
+        let replies = vec![
+            redis::Value::Int(90_000),
+            redis::Value::Int(512),
+            redis::Value::Int(-1),
+            redis::Value::Int(64),
+            redis::Value::Int(-2),
+            redis::Value::Nil,
+        ];
+
+        let metadata = key_metadata_from_replies(&keys, &replies, true, false)?;
+
+        assert_eq!(metadata[0].ttl_seconds, Some(90));
+        assert_eq!(metadata[0].size_bytes, Some(512));
+        assert_eq!(metadata[1].ttl_seconds, None);
+        assert!(metadata[1].exists);
+        assert!(!metadata[2].exists);
+        assert_eq!(metadata[2].size_bytes, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn key_metadata_from_replies_reads_the_encoding_when_requested() -> Result<(), DbError> {
+        let keys = vec!["hash".to_string()];
+        let replies = vec![
+            redis::Value::Int(-1),
+            redis::Value::Int(2_150),
+            redis::Value::BulkString(b"listpack".to_vec()),
+        ];
+
+        let metadata = key_metadata_from_replies(&keys, &replies, true, true)?;
+
+        assert_eq!(metadata[0].encoding.as_deref(), Some("listpack"));
+        Ok(())
+    }
+
+    #[test]
+    fn key_metadata_from_replies_rejects_a_short_reply() {
+        let keys = vec!["a".to_string(), "b".to_string()];
+        let replies = vec![redis::Value::Int(1)];
+
+        assert!(key_metadata_from_replies(&keys, &replies, false, false).is_err());
+    }
+
+    #[test]
+    fn metadata_commands_send_one_group_of_commands_per_key() {
+        let keys = vec!["a".to_string(), "b".to_string()];
+
+        assert_eq!(metadata_commands(&keys, false, false).len(), 2);
+        assert_eq!(metadata_commands(&keys, true, false).len(), 4);
+        assert_eq!(metadata_commands(&keys, true, true).len(), 6);
+    }
+
+    #[test]
+    fn consumer_group_from_info_reads_resp2_flat_arrays() {
+        let info = redis::Value::Array(vec![
+            redis::Value::BulkString(b"name".to_vec()),
+            redis::Value::BulkString(b"mailer".to_vec()),
+            redis::Value::BulkString(b"consumers".to_vec()),
+            redis::Value::Int(1),
+            redis::Value::BulkString(b"pending".to_vec()),
+            redis::Value::Int(12),
+            redis::Value::BulkString(b"last-delivered-id".to_vec()),
+            redis::Value::BulkString(b"1790194489210-0".to_vec()),
+        ]);
+
+        let group = consumer_group_from_info(&info).expect("group parses");
+
+        assert_eq!(group.name, "mailer");
+        assert_eq!(group.pending, 12);
+        assert_eq!(group.last_delivered_id, "1790194489210-0");
+    }
+
+    #[test]
+    fn pending_entries_from_reply_reads_the_extended_form() {
+        let reply = redis::Value::Array(vec![redis::Value::Array(vec![
+            redis::Value::BulkString(b"1790194489210-0".to_vec()),
+            redis::Value::BulkString(b"worker-1".to_vec()),
+            redis::Value::Int(2_460_000),
+            redis::Value::Int(3),
+        ])]);
+
+        let entries = pending_entries_from_reply(&reply);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].consumer, "worker-1");
+        assert_eq!(entries[0].idle_ms, 2_460_000);
+        assert_eq!(entries[0].delivery_count, 3);
+    }
+
+    #[test]
+    fn zset_members_and_stream_entries_pair_flat_replies() {
+        let members = zset_members_from_reply(vec![
+            "player1".to_string(),
+            "4954".to_string(),
+            "player2".to_string(),
+            "4941.5".to_string(),
+        ]);
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[1].score, 4941.5);
+
+        let entries = stream_entries_from_reply(vec![(
+            "1-0".to_string(),
+            vec!["status".to_string(), "paid".to_string()],
+        )]);
+        assert_eq!(
+            entries[0].fields,
+            vec![("status".to_string(), "paid".to_string())]
+        );
+    }
 
     fn generous_scan_budget() -> ScanBudget {
         ScanBudget::new(1000, Duration::from_secs(60))
@@ -4523,11 +5412,13 @@ mod tests {
 
         let scanning = &schema.tabs[0].sections[0];
         assert_eq!(scanning.title, "Key Scanning");
-        assert_eq!(scanning.fields.len(), 2);
+        assert_eq!(scanning.fields.len(), 3);
         assert_eq!(scanning.fields[0].id, "scan_batch_size");
         assert_eq!(scanning.fields[0].default_value, "100");
-        assert_eq!(scanning.fields[1].id, "stream_preview_limit");
-        assert_eq!(scanning.fields[1].default_value, "50");
+        assert_eq!(scanning.fields[1].id, "key_delimiter");
+        assert_eq!(scanning.fields[1].default_value, ":");
+        assert_eq!(scanning.fields[2].id, "stream_preview_limit");
+        assert_eq!(scanning.fields[2].default_value, "50");
 
         let safety = &schema.tabs[0].sections[1];
         assert_eq!(safety.title, "Safety");

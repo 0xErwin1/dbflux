@@ -16,6 +16,12 @@ pub use key_value::{
     SetAddRequest, SetCondition, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest,
     StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
 };
+pub use key_value::{
+    KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures, KeyValuePrefixRequest,
+    RangeOrder, StreamClaimRequest, StreamConsumerGroup, StreamEntry, StreamGroupsRequest,
+    StreamPendingEntry, StreamPendingRequest, StreamRangePage, StreamRangeRequest, ZSetMember,
+    ZSetRangePage, ZSetRangeRequest,
+};
 pub use value_decoder::{
     DecodeOutcome, DecodedPayload, DecodedValue, Encoding, decode, decode_as, detect,
     probe_message_pack,

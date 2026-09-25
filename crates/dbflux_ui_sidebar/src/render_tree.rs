@@ -93,6 +93,8 @@ pub(super) struct TreeRenderParams {
     pub editing_script_path: Option<std::path::PathBuf>,
     pub rename_input: Entity<InputState>,
     pub gutter_metadata: HashMap<String, GutterInfo>,
+    /// Key count of each key-value database row, by tree item id.
+    pub key_counts: HashMap<String, u64>,
     pub line_color: Hsla,
     pub color_teal: Hsla,
     pub color_yellow: Hsla,
@@ -192,6 +194,7 @@ pub(super) fn render_tree_item(
         && matches!(
             node_kind,
             SchemaNodeKind::DatabasesFolder
+                | SchemaNodeKind::EmptyDatabasesFolder
                 | SchemaNodeKind::ConnectionFolder
                 | SchemaNodeKind::Table
                 | SchemaNodeKind::View
@@ -297,6 +300,12 @@ pub(super) fn render_tree_item(
                 SharedString::from(name.to_string()),
                 count.map(|count| SharedString::from(count.to_string())),
             )
+        } else if node_kind == SchemaNodeKind::Database {
+            let count = params
+                .key_counts
+                .get(item_id.as_ref())
+                .map(|count| SharedString::from(crate::labels::compact_key_count(*count)));
+            (item.label.clone(), count)
         } else {
             (item.label.clone(), None)
         };
@@ -1289,6 +1298,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::Profile => None, // icon comes from the driver's Icon, handled separately
         SchemaNodeKind::DatabasesFolder => Some(AppIcon::Database),
         SchemaNodeKind::Database => Some(AppIcon::Database),
+        SchemaNodeKind::EmptyDatabasesFolder => Some(AppIcon::EyeOff),
         SchemaNodeKind::Schema => Some(AppIcon::Layers),
         SchemaNodeKind::TablesFolder => Some(AppIcon::Table),
         SchemaNodeKind::ViewsFolder => Some(AppIcon::Eye),
@@ -1381,6 +1391,7 @@ fn resolve_node_icon(
             (icon, unicode, color)
         }
         SchemaNodeKind::Database => (Some(AppIcon::Database), "", params.color_orange),
+        SchemaNodeKind::EmptyDatabasesFolder => (Some(AppIcon::EyeOff), "", theme.input),
         SchemaNodeKind::Schema => (Some(AppIcon::Layers), "", params.color_schema),
         SchemaNodeKind::TablesFolder => (Some(AppIcon::Table), "", params.color_teal),
         SchemaNodeKind::ViewsFolder => (Some(AppIcon::Eye), "", params.color_yellow),

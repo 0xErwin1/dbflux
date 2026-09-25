@@ -31,6 +31,11 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         name: String,
     },
+    /// Folds the databases of a connection that hold no keys into one row,
+    /// so a keyspace-per-index server does not list a dozen empty entries.
+    EmptyDatabasesFolder {
+        profile_id: Uuid,
+    },
     Loading {
         profile_id: Uuid,
         database: String,
@@ -377,6 +382,7 @@ pub enum SchemaNodeKind {
     Profile,
     DatabasesFolder,
     Database,
+    EmptyDatabasesFolder,
     Loading,
     Schema,
     TablesFolder,
@@ -445,6 +451,7 @@ impl SchemaNodeId {
             Self::Profile { .. } => SchemaNodeKind::Profile,
             Self::DatabasesFolder { .. } => SchemaNodeKind::DatabasesFolder,
             Self::Database { .. } => SchemaNodeKind::Database,
+            Self::EmptyDatabasesFolder { .. } => SchemaNodeKind::EmptyDatabasesFolder,
             Self::Loading { .. } => SchemaNodeKind::Loading,
             Self::Schema { .. } => SchemaNodeKind::Schema,
             Self::TablesFolder { .. } => SchemaNodeKind::TablesFolder,
@@ -517,6 +524,7 @@ impl SchemaNodeId {
             Self::Profile { profile_id, .. }
             | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
+            | Self::EmptyDatabasesFolder { profile_id }
             | Self::Loading { profile_id, .. }
             | Self::Schema { profile_id, .. }
             | Self::TablesFolder { profile_id, .. }
@@ -584,6 +592,7 @@ const P_CONN_FOLDER: &str = "CF";
 const P_PROFILE: &str = "P";
 const P_DATABASES_FOLDER: &str = "DBSF";
 const P_DATABASE: &str = "DB";
+const P_EMPTY_DATABASES_FOLDER: &str = "EDBF";
 const P_LOADING: &str = "LD";
 const P_SCHEMA: &str = "S";
 const P_TABLES_FOLDER: &str = "TF";
@@ -682,6 +691,7 @@ mod tests {
         roundtrip(SchemaNodeId::ConnectionFolder { node_id: uuid });
         roundtrip(SchemaNodeId::Profile { profile_id: uuid });
         roundtrip(SchemaNodeId::DatabasesFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::EmptyDatabasesFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::Database {
             profile_id: uuid,
             name: "mydb".into(),

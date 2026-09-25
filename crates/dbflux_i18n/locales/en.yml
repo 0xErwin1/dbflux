@@ -1583,6 +1583,179 @@ document:
     empty: No data. Connect and click Refresh.
     kill_failed_cause: "Action '%{action_label}' on inspector '%{metric_id}' failed"
   key_value:
+    bulk_delete:
+      menu_item: "Delete keys matching the pattern…"
+      title: "Delete %{count} keys"
+      title_scanning: "Delete matching keys (%{count} so far)"
+      scope: "Every key in %{database} that matches %{pattern}."
+      scope_typed: "Every key in %{database} that matches %{pattern} and is a %{key_type}."
+      matches_label: "Matches, from a full scan"
+      more: "…%{count} more"
+      no_matches: "No keys match."
+      scanning: "Scanning the whole keyspace, %{count} matches so far"
+      stop: "Stop"
+      scan_stopped: "The scan was stopped, so the count is incomplete and deleting is off."
+      scan_failed: "The scan failed: %{error}"
+      type_prefix: "Type"
+      type_suffix: "to confirm"
+      note: "Runs as UNLINK in batches of %{count} and is recorded in Audit"
+      export: "Export keys first"
+      exported: "Keys exported"
+      export_dialog_title: "Export keys before deleting"
+      cancel: "Cancel"
+      confirm: "Delete %{count} keys"
+      toast_deleted: "Deleted %{count} keys matching %{pattern}"
+      toast_exported: "Keys exported to %{path}"
+    console:
+      title: "Command"
+      subtitle: "runs against %{database}, dangerous commands ask first"
+      placeholder: "Type a command and press Enter"
+      binary: "<%{count} bytes of binary data>"
+      empty: "(empty)"
+      more_lines: "… %{count} more lines"
+      cancelled: "Not run."
+      run_anyway: "Run anyway"
+      cancel: "Cancel"
+      destructive_title: "Run a destructive command?"
+      destructive_body: "This command can delete data and cannot be undone."
+    expiry:
+      title: "Expiry"
+      mode:
+        never: "Never"
+        in: "In"
+        at: "At"
+      duration_placeholder: "7d"
+      never_body: "The key will not expire."
+      expires: "Expires"
+      local_command: "local · %{command}"
+      never_command: "Never expires · %{command}"
+      preview_pending: "Enter a duration or a date and time."
+      apply: "Apply"
+      error:
+        empty: "Enter a duration such as 7d or 90m."
+        duration: "Durations use s, m, h, d and w, for example 1h30m."
+        date_time: "Use a local date and time such as 2026-09-30 17:30."
+        past: "That time has already passed."
+    footer:
+      loaded: "Loaded"
+      scanned: "Scanned"
+      of_total: "of %{total}"
+      load_more: "Load more"
+      hint_tree: "sorted per level, counts are partial"
+      hint_list: "sorted by name"
+      hint_pattern: "pattern sent as typed"
+    gate:
+      title: "%{key} is %{size}, over the %{limit} preview limit"
+      body: "Showing metadata only. Loading reads the whole value into memory."
+      preview: "Preview first %{size}"
+    hint:
+      hash: "Enter edits a value · o adds a field · x deletes · y copies"
+      sorted_set: "Enter edits a score · o adds a member · x removes · t sets expiry, value edits keep it"
+      collection: "Enter edits a value · o adds a member · x removes · y copies"
+      stream: "o adds an entry · x deletes an entry · t sets expiry"
+    list:
+      column_key: "Key"
+      column_ttl: "TTL"
+      column_size: "Size"
+      empty: "No keys in this database."
+      no_matches: "No keys match so far."
+    meta:
+      ttl: "TTL"
+      no_expiry: "No expiry"
+      fields:
+        one: "%{count} field"
+        many: "%{count} fields"
+      members:
+        one: "%{count} member"
+        many: "%{count} members"
+      entries:
+        one: "%{count} entry"
+        many: "%{count} entries"
+      groups:
+        one: "%{count} group"
+        many: "%{count} groups"
+    search:
+      title:
+        one: "Searching, 1 match so far"
+        many: "Searching, %{count} matches so far"
+      body: "SCAN keeps reading until the page is full or the whole keyspace is read. The server can return empty batches, so no result is final until the scan ends."
+      stop: "Stop"
+      whole_keyspace: "Search whole keyspace"
+    stream:
+      newest_first: "Newest first"
+      oldest_first: "Oldest first"
+      start_placeholder: "- (start)"
+      end_placeholder: "+ (end)"
+      loaded_summary: "%{command} · %{loaded} of %{total}"
+      load_more: "Load more"
+      column_id: "Entry ID"
+      column_time: "Time"
+      time_today: "today %{time}"
+      groups_title: "Consumer groups"
+      column_group: "Group"
+      column_readers: "Readers"
+      column_pending: "Pending"
+      column_last_read: "Last read"
+      no_groups: "This stream has no consumer groups."
+      callout_title: "%{group} has %{count} pending"
+      callout_idle: "Oldest idle %{idle}. "
+      callout_body: "Claim moves them to another reader."
+      view_pending: "View pending"
+      claim: "Claim"
+      claim_confirm: "Claim all"
+      claim_placeholder: "Reader to receive the entries"
+      pending_title: "Pending in %{group}"
+    toolbar:
+      bulk_actions: "Bulk actions"
+      new_key: "New key"
+      type_all: "All"
+      layout_list: "List"
+      layout_tree: "Tree"
+      key_total:
+        one: "1 key"
+        many: "%{count} keys"
+    tree:
+      folder_count:
+        one: "%{count} key"
+        many: "%{count} keys"
+        partial: "≥ %{count} keys"
+    value:
+      add_field: "Add field"
+      add_member: "Add member"
+      add_entry: "Add entry"
+      reload: "Reload"
+      view_table: "Table"
+      view_document: "Document"
+      view_entries: "Entries"
+      column_field: "Field"
+      column_format: "Format"
+      loaded_summary: "%{command} · %{shown} of %{loaded} loaded"
+      edit: "Edit"
+    view_as:
+      label: "View as"
+      auto: "Auto"
+      text: "Text"
+      compression: "Compression"
+      compression_none: "None"
+      detected:
+        json: "JSON detected"
+        msgpack: "MsgPack detected"
+        image: "%{format} image detected"
+      error:
+        decompress: "Could not decompress as %{compression}: %{reason}"
+        too_large: "The decompressed value is over the %{limit} limit."
+        not_json: "Not valid JSON; shown as text."
+        not_msgpack: "Not valid MessagePack; shown as hex."
+      truncated_lines: "Showing the first %{count} lines."
+    zset:
+      highest_first: "Highest first"
+      lowest_first: "Lowest first"
+      loaded_summary: "ZRANGE · %{loaded} of %{total} loaded"
+      load_more: "Load %{count} more"
+      column_rank: "Rank"
+      column_member: "Member"
+      column_score: "Score"
+      column_relative: "Relative to top"
     add_member_modal:
       cancel: Cancel
       error:
@@ -1677,10 +1850,6 @@ document:
       error:
         background_task_limit: Too many background tasks running, please wait
     parsing:
-      preview:
-        binary:
-          one: "%{count} byte (binary)"
-          many: "%{count} bytes (binary)"
       type:
         string: String
         bytes: Bytes
@@ -1692,7 +1861,6 @@ document:
         stream: Stream
         unknown: "?"
     render:
-      size_bytes: "%{size} B"
       delete_key:
         title: Delete key?
         message: 'Delete "%{key}"? This action cannot be undone.'
@@ -1702,47 +1870,21 @@ document:
       delete_confirm:
         cancel: Cancel
         delete: Delete
-      unknown_type: Unknown
       value_header: Value
-      id_header: ID
-      fields_header: Fields
-      field_score_header: Field/Score
-      click_to_edit: Click or press Enter to edit
       select_key_prompt: Select a key to inspect
-      prev: Prev
-      next: Next
-      page: "Page %{page}"
-      keys_count:
-        one: "%{count} key on this page"
-        many: "%{count} keys on this page"
-      keys_total: "%{count} total"
       filter:
-        keys_placeholder: "Filter keys..."
+        keys_placeholder: "Pattern, for example user:*"
         members_placeholder: "Filter members..."
       ttl:
         no_limit: No limit
         missing: Missing
         expired: Expired
       gate:
-        too_large: "Value is %{size}, over the %{limit} preview limit"
         load_anyway: Load anyway
         truncated: "Partial value — showing %{returned} of %{total}"
         truncated_unknown_total: "Partial value — showing %{returned}"
       decode:
-        choice:
-          auto: "Auto"
-          raw: "Raw"
-        preview:
-          image:
-            one: "%{count} byte (image: %{format})"
-            many: "%{count} bytes (image: %{format})"
-        failed: failed to decode
-        too_large: decoded output too large
-        edit_locked: Switch to Raw to edit
-        kind:
-          text: text
-          bytes: bytes
-          image: image
+        edit_locked: "Set Compression to None and View as to Auto, JSON or Text to edit"
   migrate_wizard:
     title: Migrate data
     task:
@@ -3876,6 +4018,9 @@ sidebar:
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
     folder:
+      empty_databases:
+        one: "%{count} empty database"
+        many: "%{count} empty databases"
       databases: Databases
       new_default: New Folder
       fields: "Fields (%{count})"

@@ -28,7 +28,10 @@ fn resolve_source_context(
     fallback
 }
 
-fn evaluate_dangerous_with_effective_settings(
+/// Decides whether a dangerous query runs, asks first or is refused, from the
+/// connection's effective settings. Shared by the code editor and the
+/// key-value console so both apply the same rules.
+pub(crate) fn evaluate_dangerous_with_effective_settings(
     kind: dbflux_core::DangerousQueryKind,
     is_suppressed: bool,
     effective: &dbflux_core::EffectiveSettings,

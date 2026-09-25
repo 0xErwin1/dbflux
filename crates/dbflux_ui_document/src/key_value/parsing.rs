@@ -1,6 +1,5 @@
-use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::BadgeTone;
 use dbflux_core::{KeyGetResult, KeyType, Value, ValueRepr};
-use gpui::Hsla;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
@@ -10,21 +9,6 @@ pub(super) struct MemberEntry {
     pub score: Option<f64>,
     /// Stream entry ID, used for XDEL targeting.
     pub entry_id: Option<String>,
-}
-
-pub(super) fn key_type_icon(key_type: Option<KeyType>) -> (AppIcon, Hsla) {
-    match key_type {
-        Some(KeyType::String) | Some(KeyType::Bytes) => {
-            (AppIcon::CaseSensitive, gpui::hsla(0.5, 0.6, 0.6, 1.0))
-        }
-        Some(KeyType::Hash) => (AppIcon::Hash, gpui::hsla(0.75, 0.6, 0.6, 1.0)),
-        Some(KeyType::List) => (AppIcon::Rows3, gpui::hsla(0.6, 0.6, 0.6, 1.0)),
-        Some(KeyType::Set) => (AppIcon::Box, gpui::hsla(0.08, 0.7, 0.6, 1.0)),
-        Some(KeyType::SortedSet) => (AppIcon::ArrowUp, gpui::hsla(0.08, 0.7, 0.6, 1.0)),
-        Some(KeyType::Json) => (AppIcon::Braces, gpui::hsla(0.35, 0.6, 0.6, 1.0)),
-        Some(KeyType::Stream) => (AppIcon::Zap, gpui::hsla(0.15, 0.7, 0.6, 1.0)),
-        _ => (AppIcon::KeyRound, gpui::hsla(0.0, 0.0, 0.5, 1.0)),
-    }
 }
 
 pub(super) fn key_type_label(key_type: KeyType) -> String {
@@ -41,40 +25,35 @@ pub(super) fn key_type_label(key_type: KeyType) -> String {
     }
 }
 
-/// Truncates a text preview at a fixed character budget so a huge decoded or
-/// raw text value never renders unbounded into the value panel.
-pub(super) fn truncate_preview_text(text: &str) -> String {
-    let max_chars = 4000;
-
-    if text.chars().count() > max_chars {
-        let truncated: String = text.chars().take(max_chars).collect();
-        format!("{}\n... (truncated)", truncated)
-    } else {
-        text.to_string()
+/// Short badge text and color role for a key type (`HASH`, `ZSET`, ...).
+pub(super) fn type_badge(key_type: Option<KeyType>) -> (&'static str, BadgeTone) {
+    match key_type {
+        Some(KeyType::String) | Some(KeyType::Bytes) => ("STR", BadgeTone::Info),
+        Some(KeyType::Hash) => ("HASH", BadgeTone::Violet),
+        Some(KeyType::List) => ("LIST", BadgeTone::Info),
+        Some(KeyType::Set) => ("SET", BadgeTone::Warning),
+        Some(KeyType::SortedSet) => ("ZSET", BadgeTone::Warning),
+        Some(KeyType::Stream) => ("STRM", BadgeTone::Accent),
+        Some(KeyType::Json) => ("JSON", BadgeTone::Success),
+        Some(KeyType::Unknown) | None => ("KEY", BadgeTone::Neutral),
     }
 }
 
-pub(super) fn render_value_preview(value: &KeyGetResult) -> String {
-    match value.repr {
-        ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured | ValueRepr::Stream => {
-            truncate_preview_text(&String::from_utf8_lossy(&value.value))
-        }
-        ValueRepr::Binary => binary_size_label(value.value.len()),
+/// Database name as shown to people: `db0` reads `db 0`; other names are
+/// left as they are.
+pub(super) fn database_label(database: &str) -> String {
+    match parse_database_name(database) {
+        Some(index) if database.trim().starts_with("db") => format!("db {index}"),
+        _ => database.to_string(),
     }
 }
 
-/// Preview text standing in for a binary value, such as "42 bytes (binary)".
-pub(super) fn binary_size_label(byte_len: usize) -> String {
-    if byte_len == 1 {
-        dbflux_i18n::t!(
-            "document.key_value.parsing.preview.binary.one",
-            count = byte_len
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.key_value.parsing.preview.binary.many",
-            count = byte_len
-        )
+/// Tab title of a key-value document: `cache-redis · db 0`, or the
+/// database alone when the profile name is unknown.
+pub(super) fn document_title(profile_name: Option<&str>, database: &str) -> String {
+    match profile_name {
+        Some(name) => format!("{name} · {}", database_label(database)),
+        None => database_label(database),
     }
 }
 
@@ -244,10 +223,9 @@ pub(super) fn serde_json_to_value(jv: &serde_json::Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        MemberEntry, key_type_icon, key_type_label, parse_database_name, parse_json_to_value,
-        parse_members, parse_stream_entries, render_value_preview, serde_json_to_value,
+        MemberEntry, key_type_label, parse_database_name, parse_json_to_value, parse_members,
+        parse_stream_entries, serde_json_to_value,
     };
-    use dbflux_components::icons::AppIcon;
     use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, KeyType, Value, ValueRepr};
 
     fn make_result(value: Vec<u8>, repr: ValueRepr) -> KeyGetResult {
@@ -284,6 +262,32 @@ mod tests {
         assert_eq!(parse_database_name("db"), None);
     }
 
+    #[test]
+    fn database_labels_and_titles_read_naturally() {
+        use super::{database_label, document_title};
+
+        assert_eq!(database_label("db0"), "db 0");
+        assert_eq!(database_label("db15"), "db 15");
+        assert_eq!(database_label("analytics"), "analytics");
+        assert_eq!(
+            document_title(Some("cache-redis"), "db0"),
+            "cache-redis · db 0"
+        );
+        assert_eq!(document_title(None, "db3"), "db 3");
+    }
+
+    #[test]
+    fn type_badges_use_the_short_names_of_the_design() {
+        use super::type_badge;
+        use dbflux_components::primitives::BadgeTone;
+
+        assert_eq!(type_badge(Some(KeyType::Hash)), ("HASH", BadgeTone::Violet));
+        assert_eq!(type_badge(Some(KeyType::SortedSet)).0, "ZSET");
+        assert_eq!(type_badge(Some(KeyType::Stream)).0, "STRM");
+        assert_eq!(type_badge(Some(KeyType::String)).0, "STR");
+        assert_eq!(type_badge(None).0, "KEY");
+    }
+
     // --- key_type_label ---
 
     #[test]
@@ -311,13 +315,6 @@ mod tests {
             "document.key_value.parsing.type.json",
             "document.key_value.parsing.type.stream",
             "document.key_value.parsing.type.unknown",
-            "document.key_value.parsing.preview.binary.one",
-            "document.key_value.parsing.preview.binary.many",
-            "document.key_value.render.decode.choice.auto",
-            "document.key_value.render.decode.choice.raw",
-            "document.key_value.render.decode.preview.image.one",
-            "document.key_value.render.decode.preview.image.many",
-            "document.key_value.render.size_bytes",
         ];
 
         for key in keys {
@@ -333,97 +330,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    // --- key_type_icon ---
-
-    #[test]
-    fn key_type_icon_none_returns_default() {
-        let (icon, _) = key_type_icon(None);
-        assert!(matches!(icon, AppIcon::KeyRound));
-    }
-
-    #[test]
-    fn key_type_icon_string_returns_case_sensitive() {
-        let (icon, _) = key_type_icon(Some(KeyType::String));
-        assert!(matches!(icon, AppIcon::CaseSensitive));
-    }
-
-    #[test]
-    fn key_type_icon_hash() {
-        let (icon, _) = key_type_icon(Some(KeyType::Hash));
-        assert!(matches!(icon, AppIcon::Hash));
-    }
-
-    #[test]
-    fn key_type_icon_list() {
-        let (icon, _) = key_type_icon(Some(KeyType::List));
-        assert!(matches!(icon, AppIcon::Rows3));
-    }
-
-    #[test]
-    fn key_type_icon_set() {
-        let (icon, _) = key_type_icon(Some(KeyType::Set));
-        assert!(matches!(icon, AppIcon::Box));
-    }
-
-    #[test]
-    fn key_type_icon_sorted_set() {
-        let (icon, _) = key_type_icon(Some(KeyType::SortedSet));
-        assert!(matches!(icon, AppIcon::ArrowUp));
-    }
-
-    #[test]
-    fn key_type_icon_json() {
-        let (icon, _) = key_type_icon(Some(KeyType::Json));
-        assert!(matches!(icon, AppIcon::Braces));
-    }
-
-    #[test]
-    fn key_type_icon_stream() {
-        let (icon, _) = key_type_icon(Some(KeyType::Stream));
-        assert!(matches!(icon, AppIcon::Zap));
-    }
-
-    // --- render_value_preview ---
-
-    #[test]
-    fn render_value_preview_text_short() {
-        let result = make_result(b"hello world".to_vec(), ValueRepr::Text);
-        assert_eq!(render_value_preview(&result), "hello world");
-    }
-
-    #[test]
-    fn render_value_preview_text_truncates_at_4000_chars() {
-        let long_text = "x".repeat(5000);
-        let result = make_result(long_text.into_bytes(), ValueRepr::Text);
-        let preview = render_value_preview(&result);
-        assert!(preview.ends_with("... (truncated)"));
-        assert!(preview.len() < 4100);
-    }
-
-    #[test]
-    fn render_value_preview_binary() {
-        let result = make_result(vec![0xFF; 42], ValueRepr::Binary);
-        assert_eq!(render_value_preview(&result), "42 bytes (binary)");
-    }
-
-    #[test]
-    fn render_value_preview_json() {
-        let result = make_result(br#"{"key":"value"}"#.to_vec(), ValueRepr::Json);
-        assert_eq!(render_value_preview(&result), r#"{"key":"value"}"#);
-    }
-
-    #[test]
-    fn render_value_preview_structured() {
-        let result = make_result(b"structured data".to_vec(), ValueRepr::Structured);
-        assert_eq!(render_value_preview(&result), "structured data");
-    }
-
-    #[test]
-    fn render_value_preview_stream() {
-        let result = make_result(b"stream data".to_vec(), ValueRepr::Stream);
-        assert_eq!(render_value_preview(&result), "stream data");
     }
 
     // --- parse_members ---

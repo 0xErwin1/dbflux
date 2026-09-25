@@ -10,9 +10,10 @@ use gpui::*;
 
 impl super::KeyValueDocument {
     pub(super) fn rebuild_cached_members(&mut self, cx: &mut Context<Self>) {
-        self.cached_members = match &self.selected_value {
-            Some(value) => parse_members(value),
-            None => Vec::new(),
+        self.cached_members = match (self.ranged_member_rows(), &self.selected_value) {
+            (Some(rows), _) => rows,
+            (None, Some(value)) => parse_members(value),
+            (None, None) => Vec::new(),
         };
 
         if self.value_view_mode == KvValueViewMode::Document && self.supports_document_view() {
@@ -31,13 +32,6 @@ impl super::KeyValueDocument {
 
     pub(super) fn is_stream_type(&self) -> bool {
         matches!(self.selected_key_type(), Some(KeyType::Stream))
-    }
-
-    pub(super) fn needs_value_column(&self) -> bool {
-        matches!(
-            self.selected_key_type(),
-            Some(KeyType::Hash | KeyType::SortedSet | KeyType::Stream)
-        )
     }
 
     pub(super) fn supports_document_view(&self) -> bool {

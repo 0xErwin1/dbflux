@@ -6,10 +6,10 @@ use super::{
     P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
     P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
     P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
-    P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX,
-    P_INDEXES_FOLDER, P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF,
-    P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER,
-    P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM,
+    P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK,
+    P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER, P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER,
+    P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF,
+    P_METRIC_NS_FOLDER, P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM,
     P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
     P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
     P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
@@ -24,6 +24,7 @@ impl fmt::Display for SchemaNodeId {
             | Self::Profile { .. }
             | Self::DatabasesFolder { .. }
             | Self::Database { .. }
+            | Self::EmptyDatabasesFolder { .. }
             | Self::Loading { .. }
             | Self::Schema { .. } => fmt_connection_scope(self, f),
 
@@ -111,6 +112,9 @@ fn fmt_connection_scope(id: &SchemaNodeId, f: &mut fmt::Formatter<'_>) -> fmt::R
         }
         SchemaNodeId::Database { profile_id, name } => {
             write!(f, "{}|{}|{}", P_DATABASE, profile_id, name)
+        }
+        SchemaNodeId::EmptyDatabasesFolder { profile_id } => {
+            write!(f, "{}|{}", P_EMPTY_DATABASES_FOLDER, profile_id)
         }
         SchemaNodeId::Loading {
             profile_id,

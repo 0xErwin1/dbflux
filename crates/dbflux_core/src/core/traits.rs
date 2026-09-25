@@ -23,6 +23,12 @@ use crate::{
         ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
+    data::key_value::{
+        KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures,
+        KeyValuePrefixRequest, StreamClaimRequest, StreamConsumerGroup, StreamGroupsRequest,
+        StreamPendingEntry, StreamPendingRequest, StreamRangePage, StreamRangeRequest,
+        ZSetRangePage, ZSetRangeRequest,
+    },
     query::generator::QueryGenerator,
     query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
@@ -658,6 +664,79 @@ pub trait KeyValueApi: Send + Sync {
     fn stream_delete(&self, _request: &StreamDeleteRequest) -> Result<u64, DbError> {
         Err(DbError::NotSupported(
             "Stream DELETE not supported by this driver".to_string(),
+        ))
+    }
+
+    // -- Optional browsing operations, advertised through `features` --
+
+    /// Optional operations this implementation supports. Each flag names the
+    /// methods below that return something other than `NotSupported`.
+    fn features(&self) -> KeyValueFeatures {
+        KeyValueFeatures::empty()
+    }
+
+    /// Expiry and size of every requested key, in request order, fetched in
+    /// as few round trips as the server allows.
+    fn key_metadata(&self, _request: &KeyMetadataRequest) -> Result<Vec<KeyMetadata>, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value metadata batch not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Deletes every requested key without blocking the server. Returns the
+    /// number of keys that existed and were removed.
+    fn delete_keys(&self, _request: &KeyBulkDeleteRequest) -> Result<u64, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value bulk delete not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The first `max_bytes` of a string value, reported as
+    /// `KeyLoadState::Truncated` when the value is longer.
+    fn get_value_prefix(&self, _request: &KeyValuePrefixRequest) -> Result<KeyGetResult, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value value prefix not supported by this driver".to_string(),
+        ))
+    }
+
+    /// A page of a sorted set by rank, with the set's total size.
+    fn zset_range(&self, _request: &ZSetRangeRequest) -> Result<ZSetRangePage, DbError> {
+        Err(DbError::NotSupported(
+            "Sorted Set RANGE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// A page of stream entries between two IDs, with the stream's length.
+    fn stream_range(&self, _request: &StreamRangeRequest) -> Result<StreamRangePage, DbError> {
+        Err(DbError::NotSupported(
+            "Stream RANGE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The consumer groups of a stream.
+    fn stream_groups(
+        &self,
+        _request: &StreamGroupsRequest,
+    ) -> Result<Vec<StreamConsumerGroup>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream consumer groups not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The oldest pending entries of one consumer group.
+    fn stream_pending(
+        &self,
+        _request: &StreamPendingRequest,
+    ) -> Result<Vec<StreamPendingEntry>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream pending entries not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Moves pending entries to another consumer. Returns the IDs claimed.
+    fn stream_claim(&self, _request: &StreamClaimRequest) -> Result<Vec<String>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream CLAIM not supported by this driver".to_string(),
         ))
     }
 }

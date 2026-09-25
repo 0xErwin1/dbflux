@@ -61,3 +61,9 @@ did not advertise the capability are discarded rather than trusted.
 - Audit emission needs protocol v1.2 or later and `AuditEmit` in the handshake.
   Older drivers emit nothing, and their operations appear in the log only through
   the events DBFlux records on their behalf.
+- The optional key-value operations (`KeyValueFeatures`: server-side type
+  filter, batched key metadata, ranged sorted-set and stream reads, consumer
+  groups, bulk delete, value prefix and expiry-keeping writes) are not carried by
+  the protocol. The bridge reports none of them, so the key browser hides those
+  controls for an external key-value driver, and a value write through it does
+  not keep the key's expiry.

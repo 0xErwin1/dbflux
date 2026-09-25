@@ -8,12 +8,14 @@
 
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbError, ExecutionContext, ExecutionSourceContext,
-    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
-    KeyExpireRequest, KeyGetRequest, KeyPersistRequest, KeyRenameRequest, KeyScanRequest,
-    KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd, ListPushRequest,
-    ListRemoveRequest, ListSetRequest, QueryRequest, SchemaLoadingStrategy, SetAddRequest,
-    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, ValueRepr,
-    ZSetAddRequest, ZSetRemoveRequest,
+    HashDeleteRequest, HashSetRequest, KeyBulkDeleteRequest, KeyBulkGetRequest, KeyDeleteRequest,
+    KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyLoadState, KeyMetadataRequest,
+    KeyPersistRequest, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
+    KeyTypeRequest, KeyValuePrefixRequest, ListEnd, ListPushRequest, ListRemoveRequest,
+    ListSetRequest, QueryRequest, RangeOrder, SchemaLoadingStrategy, SetAddRequest,
+    SetRemoveRequest, StreamAddRequest, StreamClaimRequest, StreamDeleteRequest, StreamEntryId,
+    StreamGroupsRequest, StreamPendingRequest, StreamRangeRequest, ValueRepr, ZSetAddRequest,
+    ZSetRangeRequest, ZSetRemoveRequest,
 };
 use dbflux_driver_redis::RedisDriver;
 use dbflux_test_support::containers;
@@ -620,6 +622,305 @@ fn redis_cancel_not_supported() -> Result<(), DbError> {
         let cancel = connection.cancel(&handle);
         assert!(matches!(cancel, Err(DbError::NotSupported(_))));
 
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Key browser operations (type filter, metadata, expiry-preserving writes,
+// ranged reads, consumer groups, bulk delete)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_value_writes_keep_the_existing_expiry() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        kv.set_key(&KeySetRequest::new("keep:ttl", b"before".to_vec()).with_ttl(600))?;
+
+        kv.set_key(
+            &KeySetRequest::new("keep:ttl", b"after".to_vec())
+                .with_repr(ValueRepr::Text)
+                .keeping_ttl(),
+        )?;
+
+        let ttl = kv
+            .key_ttl(&KeyTtlRequest::new("keep:ttl"))?
+            .expect("the expiry must survive a KEEPTTL write");
+        assert!(ttl > 0 && ttl <= 600);
+        assert_eq!(kv.get_key(&KeyGetRequest::new("keep:ttl"))?.value, b"after");
+
+        kv.set_key(&KeySetRequest::new("keep:ttl", b"plain".to_vec()))?;
+        assert_eq!(kv.key_ttl(&KeyTtlRequest::new("keep:ttl"))?, None);
+
+        kv.delete_key(&KeyDeleteRequest::new("keep:ttl"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_scan_type_filter_runs_on_the_server() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        kv.set_key(&KeySetRequest::new("typed:string", b"v".to_vec()))?;
+        kv.hash_set(&HashSetRequest {
+            key: "typed:hash".to_string(),
+            fields: vec![("f".to_string(), "v".to_string())],
+            keyspace: None,
+        })?;
+
+        let page = kv.scan_keys(
+            &KeyScanRequest::new(100)
+                .with_filter("typed:*")
+                .with_type_filter(KeyType::Hash),
+        )?;
+
+        let keys: Vec<&str> = page.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, vec!["typed:hash"]);
+        assert_eq!(page.entries[0].key_type, Some(KeyType::Hash));
+        assert!(page.scanned_keys.is_some());
+
+        kv.delete_keys(&KeyBulkDeleteRequest {
+            keys: vec!["typed:string".to_string(), "typed:hash".to_string()],
+            keyspace: None,
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_key_metadata_reports_expiry_size_and_encoding() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        kv.set_key(&KeySetRequest::new("meta:ttl", b"value".to_vec()).with_ttl(120))?;
+        kv.set_key(&KeySetRequest::new("meta:plain", b"value".to_vec()))?;
+
+        let metadata = kv.key_metadata(&KeyMetadataRequest {
+            keys: vec![
+                "meta:ttl".to_string(),
+                "meta:plain".to_string(),
+                "meta:missing".to_string(),
+            ],
+            keyspace: None,
+            include_encoding: true,
+        })?;
+
+        assert_eq!(metadata.len(), 3);
+        assert!(
+            metadata[0]
+                .ttl_seconds
+                .is_some_and(|ttl| ttl > 0 && ttl <= 120)
+        );
+        assert!(metadata[0].size_bytes.is_some_and(|size| size > 0));
+        assert!(metadata[0].encoding.is_some());
+        assert_eq!(metadata[1].ttl_seconds, None);
+        assert!(!metadata[2].exists);
+
+        kv.delete_keys(&KeyBulkDeleteRequest {
+            keys: vec!["meta:ttl".to_string(), "meta:plain".to_string()],
+            keyspace: None,
+        })?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_bulk_delete_unlinks_every_key_in_the_batch() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        let keys: Vec<String> = (0..5).map(|index| format!("bulk:del:{index}")).collect();
+        for key in &keys {
+            kv.set_key(&KeySetRequest::new(key.clone(), b"v".to_vec()))?;
+        }
+
+        let removed = kv.delete_keys(&KeyBulkDeleteRequest {
+            keys: keys.clone(),
+            keyspace: None,
+        })?;
+
+        assert_eq!(removed, 5);
+        assert!(!kv.exists_key(&KeyExistsRequest::new("bulk:del:0"))?);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_value_prefix_reads_only_the_first_bytes() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        kv.set_key(&KeySetRequest::new("prefix:big", vec![b'x'; 1_000]))?;
+
+        let prefix = kv.get_value_prefix(&KeyValuePrefixRequest {
+            key: "prefix:big".to_string(),
+            keyspace: None,
+            max_bytes: 64,
+        })?;
+
+        assert_eq!(prefix.value.len(), 64);
+        assert_eq!(
+            prefix.load_state,
+            KeyLoadState::Truncated {
+                returned_bytes: 64,
+                total_bytes: Some(1_000),
+            }
+        );
+
+        kv.delete_key(&KeyDeleteRequest::new("prefix:big"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_zset_range_pages_in_both_orders() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        kv.zset_add(&ZSetAddRequest {
+            key: "board".to_string(),
+            members: (1..=5)
+                .map(|score| (format!("player{score}"), f64::from(score)))
+                .collect(),
+            keyspace: None,
+        })?;
+
+        let highest = kv.zset_range(&ZSetRangeRequest {
+            key: "board".to_string(),
+            keyspace: None,
+            offset: 0,
+            count: 2,
+            order: RangeOrder::Descending,
+        })?;
+        assert_eq!(highest.total, 5);
+        assert_eq!(highest.members[0].member, "player5");
+        assert_eq!(highest.members[1].score, 4.0);
+
+        let next = kv.zset_range(&ZSetRangeRequest {
+            key: "board".to_string(),
+            keyspace: None,
+            offset: 2,
+            count: 2,
+            order: RangeOrder::Descending,
+        })?;
+        assert_eq!(next.members[0].member, "player3");
+
+        let lowest = kv.zset_range(&ZSetRangeRequest {
+            key: "board".to_string(),
+            keyspace: None,
+            offset: 0,
+            count: 1,
+            order: RangeOrder::Ascending,
+        })?;
+        assert_eq!(lowest.members[0].member, "player1");
+
+        kv.delete_key(&KeyDeleteRequest::new("board"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_stream_range_groups_pending_and_claim() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        for order in 1..=3 {
+            kv.stream_add(&StreamAddRequest {
+                key: "orders".to_string(),
+                id: StreamEntryId::Auto,
+                fields: vec![("order_id".to_string(), order.to_string())],
+                maxlen: None,
+                keyspace: None,
+            })?;
+        }
+
+        let newest = kv.stream_range(&StreamRangeRequest {
+            key: "orders".to_string(),
+            keyspace: None,
+            start: "-".to_string(),
+            end: "+".to_string(),
+            count: 2,
+            order: RangeOrder::Descending,
+        })?;
+        assert_eq!(newest.total, 3);
+        assert_eq!(newest.entries.len(), 2);
+        assert_eq!(
+            newest.entries[0].fields,
+            vec![("order_id".to_string(), "3".to_string())]
+        );
+
+        connection.execute(&QueryRequest::new("XGROUP CREATE orders mailer 0"))?;
+        connection.execute(&QueryRequest::new(
+            "XREADGROUP GROUP mailer worker-1 COUNT 2 STREAMS orders >",
+        ))?;
+
+        let groups = kv.stream_groups(&StreamGroupsRequest {
+            key: "orders".to_string(),
+            keyspace: None,
+        })?;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "mailer");
+        assert_eq!(groups[0].pending, 2);
+        assert_eq!(groups[0].consumers, vec!["worker-1".to_string()]);
+        assert!(groups[0].oldest_pending_idle_ms.is_some());
+
+        let pending = kv.stream_pending(&StreamPendingRequest {
+            key: "orders".to_string(),
+            group: "mailer".to_string(),
+            keyspace: None,
+            count: 10,
+        })?;
+        assert_eq!(pending.len(), 2);
+
+        let claimed = kv.stream_claim(&StreamClaimRequest {
+            key: "orders".to_string(),
+            group: "mailer".to_string(),
+            consumer: "worker-2".to_string(),
+            min_idle_ms: 0,
+            ids: pending.iter().map(|entry| entry.id.clone()).collect(),
+            keyspace: None,
+        })?;
+        assert_eq!(claimed.len(), 2);
+
+        let after = kv.stream_pending(&StreamPendingRequest {
+            key: "orders".to_string(),
+            group: "mailer".to_string(),
+            keyspace: None,
+            count: 10,
+        })?;
+        assert!(after.iter().all(|entry| entry.consumer == "worker-2"));
+
+        kv.delete_key(&KeyDeleteRequest::new("orders"))?;
         Ok(())
     })
 }

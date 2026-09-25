@@ -1769,31 +1769,40 @@ fn build_kv_database_children(
         return Vec::new();
     };
 
-    let mut database_names: Vec<String> = schema
+    let mut keyspaces: Vec<KeyspaceRow> = schema
         .keyspaces()
         .iter()
-        .map(|space| format!("db{}", space.db_index))
+        .map(|space| KeyspaceRow {
+            name: keyspace_name(space.db_index),
+            label: format!("db {}", space.db_index),
+            key_count: space.key_count,
+        })
         .collect();
 
-    if database_names.is_empty() {
-        if let Some(active_database) = connected.active_database.as_ref() {
-            database_names.push(active_database.clone());
-        } else {
-            database_names.push("db0".to_string());
-        }
+    if keyspaces.is_empty() {
+        let name = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "db0".to_string());
+
+        keyspaces.push(KeyspaceRow {
+            label: name.clone(),
+            name,
+            key_count: None,
+        });
     }
 
-    let mut kv_db_items: Vec<TreeItem> = Vec::new();
+    let plan = plan_keyspace_rows(keyspaces, connected.active_database.as_deref());
 
-    for database_name in database_names {
-        let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
-        let is_active_db = connected.active_database.as_deref() == Some(&database_name);
+    let database_item = |row: KeyspaceRow| -> TreeItem {
+        let is_pending = state.is_operation_pending(profile_id, Some(&row.name));
+        let is_active_db = connected.active_database.as_deref() == Some(&row.name);
 
         let db_children = if is_pending {
             vec![TreeItem::new(
                 SchemaNodeId::Loading {
                     profile_id,
-                    database: database_name.clone(),
+                    database: row.name.clone(),
                 }
                 .to_string(),
                 dbflux_i18n::t!("sidebar.tree.status.loading"),
@@ -1803,26 +1812,204 @@ fn build_kv_database_children(
         };
 
         let db_label = if is_pending {
-            crate::labels::node_loading_label(&database_name)
+            crate::labels::node_loading_label(&row.label)
         } else {
-            database_name.clone()
+            row.label.clone()
         };
+
+        TreeItem::new(
+            SchemaNodeId::Database {
+                profile_id,
+                name: row.name,
+            }
+            .to_string(),
+            db_label,
+        )
+        .expanded(uses_lazy_loading && is_active_db)
+        .children(db_children)
+    };
+
+    let folded_count = plan.folded.len();
+    let mut kv_db_items: Vec<TreeItem> = plan.listed.into_iter().map(database_item).collect();
+
+    if folded_count > 0 {
+        let folded_items: Vec<TreeItem> = plan.folded.into_iter().map(database_item).collect();
 
         kv_db_items.push(
             TreeItem::new(
-                SchemaNodeId::Database {
-                    profile_id,
-                    name: database_name,
-                }
-                .to_string(),
-                db_label,
+                SchemaNodeId::EmptyDatabasesFolder { profile_id }.to_string(),
+                crate::labels::empty_databases_label(folded_count),
             )
-            .expanded(uses_lazy_loading && is_active_db)
-            .children(db_children),
+            .expanded(false)
+            .children(folded_items),
         );
     }
 
     kv_db_items
+}
+
+/// Database name of a numbered keyspace, as used in node ids (`db3`).
+fn keyspace_name(db_index: u32) -> String {
+    format!("db{db_index}")
+}
+
+/// Key count of every keyspace row of a key-value connection, keyed by the
+/// row's tree item id, for the count drawn at the right of the row.
+fn keyspace_key_count_entries(
+    profile_id: Uuid,
+    keyspaces: &[dbflux_core::KeySpaceInfo],
+) -> Vec<(String, u64)> {
+    keyspaces
+        .iter()
+        .filter_map(|space| {
+            let count = space.key_count?;
+            let item_id = SchemaNodeId::Database {
+                profile_id,
+                name: keyspace_name(space.db_index),
+            }
+            .to_string();
+
+            Some((item_id, count))
+        })
+        .collect()
+}
+
+/// Key counts of the keyspace rows of every connected key-value profile,
+/// keyed by tree item id. Counts travel beside the tree items, never inside
+/// their labels.
+pub(crate) fn keyspace_key_counts(state: &AppStateEntity) -> HashMap<String, u64> {
+    state
+        .connections()
+        .iter()
+        .filter_map(|(profile_id, connected)| {
+            let schema = connected.schema.as_ref()?;
+            schema
+                .is_key_value()
+                .then(|| keyspace_key_count_entries(*profile_id, schema.keyspaces()))
+        })
+        .flatten()
+        .collect()
+}
+
+/// One keyspace of a key-value connection as the sidebar lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyspaceRow {
+    /// Database name used in node ids and by the driver (`db3`).
+    name: String,
+    /// Label shown in the tree (`db 3`).
+    label: String,
+    key_count: Option<u64>,
+}
+
+/// Keyspaces listed on their own and the empty ones folded into a single
+/// "N empty databases" row.
+#[derive(Debug, PartialEq, Eq)]
+struct KeyspacePlan {
+    listed: Vec<KeyspaceRow>,
+    folded: Vec<KeyspaceRow>,
+}
+
+/// Splits keyspaces into listed and folded rows.
+///
+/// A keyspace is folded only when it reports zero keys and is not the active
+/// database; a keyspace with an unknown count always stays listed. Folding
+/// only happens for two or more empty keyspaces, since a folder holding a
+/// single row saves nothing.
+fn plan_keyspace_rows(rows: Vec<KeyspaceRow>, active_database: Option<&str>) -> KeyspacePlan {
+    let is_foldable =
+        |row: &KeyspaceRow| row.key_count == Some(0) && Some(row.name.as_str()) != active_database;
+
+    let foldable_count = rows.iter().filter(|row| is_foldable(row)).count();
+
+    if foldable_count < 2 {
+        return KeyspacePlan {
+            listed: rows,
+            folded: Vec::new(),
+        };
+    }
+
+    let (folded, listed) = rows.into_iter().partition(is_foldable);
+
+    KeyspacePlan { listed, folded }
+}
+
+#[cfg(test)]
+mod keyspace_plan_tests {
+    use super::{KeyspaceRow, keyspace_key_count_entries, plan_keyspace_rows};
+    use dbflux_core::{KeySpaceInfo, SchemaNodeId};
+    use uuid::Uuid;
+
+    #[test]
+    fn key_counts_are_keyed_by_the_database_row_id() {
+        let profile_id = Uuid::new_v4();
+        let space = |db_index: u32, key_count: Option<u64>| KeySpaceInfo {
+            db_index,
+            key_count,
+            memory_bytes: None,
+            avg_ttl_seconds: None,
+        };
+
+        let entries =
+            keyspace_key_count_entries(profile_id, &[space(0, Some(1474)), space(1, None)]);
+
+        let expected_id = SchemaNodeId::Database {
+            profile_id,
+            name: "db0".to_string(),
+        }
+        .to_string();
+        assert_eq!(entries, vec![(expected_id, 1474)]);
+    }
+
+    fn row(index: u32, key_count: Option<u64>) -> KeyspaceRow {
+        KeyspaceRow {
+            name: format!("db{index}"),
+            label: format!("db {index}"),
+            key_count,
+        }
+    }
+
+    #[test]
+    fn empty_keyspaces_fold_into_one_row() {
+        let rows = vec![row(0, Some(1474)), row(1, Some(60))]
+            .into_iter()
+            .chain((2..16).map(|index| row(index, Some(0))))
+            .collect();
+
+        let plan = plan_keyspace_rows(rows, Some("db0"));
+
+        assert_eq!(plan.listed.len(), 2);
+        assert_eq!(plan.folded.len(), 14);
+        assert_eq!(plan.folded[0].name, "db2");
+    }
+
+    #[test]
+    fn the_active_database_stays_listed_even_when_empty() {
+        let rows = vec![row(0, Some(0)), row(1, Some(0)), row(2, Some(0))];
+
+        let plan = plan_keyspace_rows(rows, Some("db0"));
+
+        assert_eq!(plan.listed, vec![row(0, Some(0))]);
+        assert_eq!(plan.folded.len(), 2);
+    }
+
+    #[test]
+    fn a_single_empty_keyspace_is_not_folded() {
+        let rows = vec![row(0, Some(12_480)), row(1, Some(88)), row(2, Some(0))];
+
+        let plan = plan_keyspace_rows(rows.clone(), Some("db0"));
+
+        assert_eq!(plan.listed, rows);
+        assert!(plan.folded.is_empty());
+    }
+
+    #[test]
+    fn keyspaces_with_an_unknown_count_are_never_folded() {
+        let rows = vec![row(0, None), row(1, None), row(2, None)];
+
+        let plan = plan_keyspace_rows(rows.clone(), None);
+
+        assert_eq!(plan.listed, rows);
+    }
 }
 
 /// Render shared relational identity with sidebar-local chrome and details.
