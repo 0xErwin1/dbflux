@@ -6,6 +6,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim absolute-line motions** — Normal and Visual `gg` / `G` move to the
+  first / last logical line; `Ngg` / `NG` target a clamped 1-based absolute
+  line. Visual selection extends; interrupted or unfocused pending `g` clears.
+  Operator `dgg` / `dG` and `c` are not supported.
+
 * **Vim Visual selection operators** — Visual character, line, and block
   selections support `d` / `x` deletion and `y` yank to the system clipboard.
   Block deletion uses disjoint row ranges in one undo step. An empty selection

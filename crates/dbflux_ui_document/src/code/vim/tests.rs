@@ -108,6 +108,17 @@ impl Fixture<'_> {
             .update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
     }
 
+    fn motion_offset(&mut self) -> usize {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            let document = document.read(cx);
+            document
+                .vim
+                .visual_cursor
+                .unwrap_or_else(|| document.editor.input_state.read(cx).cursor())
+        })
+    }
+
     fn visual_caret(&mut self) -> Option<usize> {
         let document = self.document.clone();
         self.window.update(|_, cx| {
@@ -318,6 +329,125 @@ impl Fixture<'_> {
             });
         });
         self.window.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn absolute_jumps_clamp_counts_and_preserve_buffer(cx: &mut TestAppContext) {
+    for (content, last) in [("", 0), ("a\n", 2), ("a\r\n", 3), ("é\n  中\n z", 10)] {
+        let mut editor = open_editor(cx, content, true);
+        editor.keys("g g");
+        assert_eq!(editor.cursor(), 0);
+        editor.keys("shift-g");
+        assert_eq!(editor.cursor(), last);
+        editor.keys("0 g g");
+        assert_eq!(editor.cursor(), 0);
+        editor.keys("9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 g g");
+        assert_eq!(editor.cursor(), last);
+        editor.keys("1 shift-g");
+        assert_eq!(editor.cursor(), 0);
+        editor.keys("0 shift-g");
+        assert_eq!(editor.cursor(), last);
+        editor.keys("9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 shift-g");
+        assert_eq!(editor.cursor(), last);
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn pending_absolute_jump_is_discarded_at_dispatch_boundaries(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha\nbeta\ngamma", true);
+    editor.keys("shift-g g escape g");
+    assert_eq!(editor.cursor(), 11);
+    editor.keys("g");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-g g z g");
+    assert_eq!(editor.cursor(), 11);
+    editor.keys("g");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-g g ctrl-z g");
+    assert_eq!(editor.cursor(), 11);
+    editor.keys("g");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-g g");
+    editor.focus_other_input();
+    editor.focus_document(&editor.document.clone());
+    editor.keys("g");
+    assert_eq!(editor.cursor(), 11);
+    editor.keys("g");
+    assert_eq!(editor.cursor(), 0);
+    assert_eq!(editor.text(), "alpha\nbeta\ngamma");
+    assert_eq!(editor.other_input_text(), "");
+}
+
+#[gpui::test]
+fn absolute_line_motions_and_visual_payload(cx: &mut TestAppContext) {
+    for mode_key in ["", "v", "shift-v", "ctrl-v"] {
+        let mut editor = open_editor(cx, "  é\r\n  中\r\n  last", true);
+        editor.keys("shift-g");
+        assert_eq!(editor.cursor(), 15);
+        editor.keys(mode_key);
+        editor.keys("g g");
+        assert_eq!(editor.motion_offset(), 2);
+        match mode_key {
+            "v" => {
+                assert_eq!(editor.selection(), 2..16);
+                assert_eq!(editor.selected_query().as_deref(), Some("é\r\n  中\r\n  l"));
+                assert_eq!(editor.visual_caret(), Some(2));
+            }
+            "shift-v" => {
+                assert_eq!(editor.selection(), 0..19);
+                assert_eq!(
+                    editor.selected_query().as_deref(),
+                    Some("é\r\n  中\r\n  last")
+                );
+                assert_eq!(editor.visual_caret(), Some(2));
+            }
+            "ctrl-v" => {
+                assert_eq!(editor.selection(), 2..4);
+                assert_eq!(editor.selected_query().as_deref(), Some("é\n中\nl"));
+                assert_eq!(editor.visual_caret(), None);
+            }
+            _ => assert_eq!(editor.selected_query(), None),
+        }
+        editor.keys("2 shift-g");
+        assert_eq!(editor.motion_offset(), 8);
+        match mode_key {
+            "v" => {
+                assert_eq!(editor.selection(), 8..16);
+                assert_eq!(editor.selected_query().as_deref(), Some("中\r\n  l"));
+                assert_eq!(editor.visual_caret(), Some(8));
+            }
+            "shift-v" => {
+                assert_eq!(editor.selection(), 6..19);
+                assert_eq!(editor.selected_query().as_deref(), Some("中\r\n  last"));
+                assert_eq!(editor.visual_caret(), Some(8));
+            }
+            "ctrl-v" => {
+                assert_eq!(editor.selection(), 8..11);
+                assert_eq!(editor.selected_query().as_deref(), Some("中\nl"));
+                assert_eq!(editor.visual_caret(), None);
+            }
+            _ => assert_eq!(editor.selected_query(), None),
+        }
+        editor.keys("escape");
+    }
+}
+
+#[gpui::test]
+fn pending_g_escape_exits_visual_and_resets_prefix(cx: &mut TestAppContext) {
+    for mode_key in ["v", "shift-v", "ctrl-v"] {
+        let mut editor = open_editor(cx, "first\nsecond\nlast", true);
+        editor.keys("shift-g");
+        editor.keys(mode_key);
+        editor.keys("g escape");
+        assert_eq!(editor.mode(), Some(VimMode::Normal));
+        assert_eq!(editor.visual_caret(), None);
+        editor.keys("g");
+        assert_eq!(editor.cursor(), 13);
+        editor.keys("g");
+        assert_eq!(editor.cursor(), 0);
+        assert_eq!(editor.text(), "first\nsecond\nlast");
     }
 }
 

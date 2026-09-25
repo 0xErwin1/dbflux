@@ -49,6 +49,7 @@ pub(super) struct VimState {
     /// any other cursor change (a click, an arrow key, an edit) resets it.
     vertical_goal: Option<(usize, usize)>,
     count: Option<usize>,
+    pending_g: bool,
     pending_operator: Option<(char, usize)>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
@@ -141,6 +142,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
+            self.clear_vim_count();
             return false;
         }
 
@@ -174,6 +176,20 @@ impl CodeDocument {
             self.clear_vim_count();
             return false;
         };
+
+        if self.vim.pending_g {
+            self.vim.pending_g = false;
+            if command == VimCommand::PendingG {
+                self.apply_vim_command(VimCommand::FirstLine, window, cx);
+                return true;
+            }
+            self.clear_vim_count();
+            return true;
+        }
+        if command == VimCommand::PendingG && self.vim.pending_operator.is_none() {
+            self.vim.pending_g = true;
+            return true;
+        }
 
         if let VimCommand::Digit(digit) = command
             && (digit != 0 || self.vim.count.is_some() || self.vim.pending_operator.is_some())
@@ -246,10 +262,24 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let count = self.vim.count.take().unwrap_or(1);
+        let explicit_count = self.vim.count.take();
+        let count = explicit_count.unwrap_or(1);
         match command {
             VimCommand::Digit(0) => self.move_cursor_with(machine::line_start, cx),
-            VimCommand::Digit(_) => {}
+            VimCommand::Digit(_) | VimCommand::PendingG => {}
+            VimCommand::FirstLine | VimCommand::LastLine => {
+                let target = {
+                    let state = self.editor.input_state.read(cx);
+                    let row = if command == VimCommand::FirstLine || explicit_count.is_some() {
+                        count.saturating_sub(1)
+                    } else {
+                        state.text().lines_len().saturating_sub(1)
+                    };
+                    machine::absolute_line(state.text(), row)
+                };
+                self.vim.vertical_goal = None;
+                self.set_editor_cursor(target, cx);
+            }
             VimCommand::MoveLeft => self.repeat_cursor(machine::step_left, count, cx),
             VimCommand::MoveRight => self.repeat_cursor(machine::step_right, count, cx),
             VimCommand::MoveUp => self.repeat_vertical(-1, count, cx),
@@ -324,6 +354,7 @@ impl CodeDocument {
 
     pub(super) fn clear_vim_count(&mut self) {
         self.vim.count = None;
+        self.vim.pending_g = false;
         self.vim.pending_operator = None;
     }
 

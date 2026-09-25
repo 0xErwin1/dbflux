@@ -28,6 +28,9 @@ pub(crate) enum VimCommand {
     MoveRight,
     MoveUp,
     MoveDown,
+    PendingG,
+    FirstLine,
+    LastLine,
     EnterInsert,
     EnterVisual,
     EnterVisualLine,
@@ -104,11 +107,13 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     "e" => Some(VimCommand::WordEnd(true)),
                     "w" => Some(VimCommand::WordForward(true)),
                     "b" => Some(VimCommand::WordBackward(true)),
+                    "g" => Some(VimCommand::LastLine),
                     _ => None,
                 };
             }
 
             match key.key {
+                "g" => Some(VimCommand::PendingG),
                 "h" => Some(VimCommand::MoveLeft),
                 "l" => Some(VimCommand::MoveRight),
                 "j" | "enter" => Some(VimCommand::MoveDown),
@@ -235,6 +240,17 @@ pub(crate) fn step_right(text: &Rope, offset: usize) -> usize {
         .unwrap_or(column);
 
     line.start + target.min(line.last_column())
+}
+
+/// Absolute logical line motion, using Vim's first nonblank column.
+pub(crate) fn absolute_line(text: &Rope, row: usize) -> usize {
+    let line = Line::at_row(text, row.min(text.lines_len().saturating_sub(1)));
+    line.start
+        + line
+            .content
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map_or(0, |(column, _)| column)
 }
 
 pub(crate) fn line_start(text: &Rope, offset: usize) -> usize {
@@ -597,6 +613,36 @@ mod tests {
         VimKey {
             command_modifier: true,
             ..key(name)
+        }
+    }
+
+    #[test]
+    fn absolute_lines_use_logical_rows_and_first_nonblank() {
+        for content in ["", "  é\n\t中\n", "  é\r\n\t中\r\n"] {
+            let text = Rope::from(content);
+            assert_eq!(
+                absolute_line(&text, 0),
+                if content.is_empty() { 0 } else { 2 }
+            );
+            assert_eq!(
+                absolute_line(&text, 1),
+                if content.is_empty() {
+                    0
+                } else {
+                    content.find('中').unwrap()
+                }
+            );
+            assert_eq!(absolute_line(&text, usize::MAX), text.len());
+        }
+        for mode in [
+            VimMode::Normal,
+            VimMode::Visual,
+            VimMode::VisualLine,
+            VimMode::VisualBlock,
+        ] {
+            assert_eq!(command_for(mode, key("g")), Some(VimCommand::PendingG));
+            assert_eq!(command_for(mode, shifted("g")), Some(VimCommand::LastLine));
+            assert_eq!(command_for(mode, with_command_modifier("g")), None);
         }
     }
 

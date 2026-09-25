@@ -652,6 +652,7 @@ propio modo al cambiar de tab o al mover el focus y volver.
 | Normal | `h` / `l` | Mover un carácter a la izquierda / derecha dentro de la línea |
 | Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
 | Normal | `Enter` | Mover una línea abajo |
+| Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
 | Normal | `i` | Insertar antes del cursor |
 | Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
 | Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
@@ -678,7 +679,10 @@ hasta el final de la línea sin unir líneas; `u` con contador deshace esa canti
 al inicio de la línea; después de un dígito distinto de cero forma parte del
 contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
-selección del editor.
+selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
+de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
+se descarta al interrumpir la secuencia o perder el foco. No se admiten
+combinaciones con operadores como `dgg` / `dG`, ni `c`.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
 texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de

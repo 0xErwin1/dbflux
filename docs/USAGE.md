@@ -601,6 +601,7 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `h` / `l` | Move one character left / right within the line |
 | Normal | `j` / `k` | Move one line down / up, keeping the column across shorter lines |
 | Normal | `Enter` | Move one line down |
+| Normal / Visual / Visual Line / Visual Block | `gg` / `G` / `Ngg` / `NG` | Go to the first / last / 1-based absolute logical line (clamped to the buffer); Visual extends the selection |
 | Normal | `i` | Insert before the cursor |
 | Normal | `a` / `A` / `I` | Insert after the cursor / at the end of the line / at the first non-blank character of the line |
 | Normal | `e` / `w` / `b` | Move to the end of a word / start of the next word / start of the previous word |
@@ -626,7 +627,10 @@ of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of
 the line; after a nonzero digit it remains part of the count (for example,
 `20w`). An interrupted count does not carry over to the next command. In
-Visual mode, counted motions extend the editor selection.
+Visual mode, counted motions extend the editor selection. `gg` and `G` place the
+cursor at the first non-blank character of the destination logical line; `G`
+is a single uppercase key. A pending `g` clears if interrupted or focus leaves
+the editor. Operator combinations such as `dgg` / `dG` and `c` are unsupported.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
 otherwise it uses the full buffer. For a Visual Block selection, it joins
