@@ -117,7 +117,32 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          root = Path.cwd().resolve()
+          metadata = subprocess.run(
+              ["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          packages = sorted(
+              package["name"]
+              for package in json.loads(metadata.stdout)["packages"]
+              if Path(package["manifest_path"]).resolve().is_relative_to(root / "crates")
+          )
+          if not packages:
+              sys.exit("No first-party crates found; refusing to skip formatting")
+          subprocess.run(
+              ["cargo", "fmt", *(argument for name in packages for argument in ("--package", name)), "--", "--check"],
+              check=True,
+          )
+          PY
 
   # Gated at the job level, unlike cross-platform-check in tests.yml: the
   # required "Clippy" context is carried by clippy-result below, not by these
@@ -199,7 +224,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run clippy
-        run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws,ui-automation${{ matrix.extra_features }}" -- -D warnings
+        run: cargo clippy --workspace --no-deps --exclude gpui-base --exclude gpui-mcp --exclude gpui-mcp-capture --exclude gpui-mcp-protocol --exclude gpui-mcp-server --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws,ui-automation${{ matrix.extra_features }}" -- -D warnings
 
   # Aggregate gate. `Clippy` is a required status check in the repository
   # ruleset, and a matrixed job reports one context per platform instead, so

@@ -175,25 +175,25 @@ impl CodeDocument {
             return false;
         };
 
-        if let VimCommand::Digit(digit) = command {
-            if digit != 0 || self.vim.count.is_some() || self.vim.pending_operator.is_some() {
-                self.vim.count = Some(
-                    self.vim
-                        .count
-                        .unwrap_or(0)
-                        .saturating_mul(10)
-                        .saturating_add(digit as usize),
-                );
-                return true;
-            }
+        if let VimCommand::Digit(digit) = command
+            && (digit != 0 || self.vim.count.is_some() || self.vim.pending_operator.is_some())
+        {
+            self.vim.count = Some(
+                self.vim
+                    .count
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add(digit as usize),
+            );
+            return true;
         }
         if let Some((operator, prefix)) = self.vim.pending_operator.take() {
             let count = prefix.saturating_mul(self.vim.count.take().unwrap_or(1));
-            if let VimCommand::Operator(repeated) = command {
-                if operator == repeated {
-                    self.apply_line_operator(operator, count, window, cx);
-                    return true;
-                }
+            if let VimCommand::Operator(repeated) = command
+                && operator == repeated
+            {
+                self.apply_line_operator(operator, count, window, cx);
+                return true;
             }
             let motion = match command {
                 VimCommand::WordEnd(big) => Some((machine::WordMotion::End, big)),
