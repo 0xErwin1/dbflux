@@ -3,6 +3,8 @@ use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::SegmentedItem;
 use dbflux_core::{AppStyle, GeneralSettings, RefreshPolicySetting, StartupFocus, ThemeSetting};
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
@@ -42,10 +44,7 @@ pub(super) struct GeneralSection {
     /// Nightly-only: whether this build is opted into the stable database.
     /// Backed by a pre-database marker file, applied on the next launch.
     pub(super) gen_share_stable_db: bool,
-    pub(super) dropdown_theme: Entity<Dropdown>,
-    pub(super) dropdown_style: Entity<Dropdown>,
     pub(super) dropdown_language: Entity<Dropdown>,
-    pub(super) dropdown_default_focus: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) input_max_history: Entity<InputState>,
     pub(super) input_auto_save: Entity<InputState>,
@@ -68,10 +67,7 @@ impl GeneralSection {
         cx: &mut Context<Self>,
     ) -> Self {
         let settings = app_state.read(cx).general_settings().clone();
-        let theme_index = Self::theme_index(settings.theme);
-        let style_index = Self::style_index(settings.style);
         let language_index = Self::language_index(&settings.language);
-        let startup_focus_index = Self::startup_focus_index(settings.default_focus_on_startup);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let max_history = settings.max_history_entries.to_string();
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
@@ -81,29 +77,11 @@ impl GeneralSection {
         let object_preview_limit = settings.object_preview_size_limit_mib.to_string();
         let key_value_size_limit = settings.key_value_size_limit_mib.to_string();
 
-        let dropdown_theme = cx.new(move |_cx| {
-            Dropdown::new("general-theme")
-                .placeholder(dbflux_i18n::t!("settings.general.theme.label"))
-                .items(Self::theme_items())
-                .selected_index(Some(theme_index))
-        });
-        let dropdown_style = cx.new(move |_cx| {
-            Dropdown::new("general-style")
-                .placeholder(dbflux_i18n::t!("settings.general.style.label"))
-                .items(Self::style_items())
-                .selected_index(Some(style_index))
-        });
         let dropdown_language = cx.new(move |_cx| {
             Dropdown::new("general-language")
                 .placeholder(dbflux_i18n::t!("settings.general.language.label"))
                 .items(Self::language_items())
                 .selected_index(Some(language_index))
-        });
-        let dropdown_default_focus = cx.new(move |_cx| {
-            Dropdown::new("general-default-focus")
-                .placeholder(dbflux_i18n::t!("settings.general.default_focus.label"))
-                .items(Self::startup_focus_items())
-                .selected_index(Some(startup_focus_index))
         });
         let dropdown_refresh_policy = cx.new(move |_cx| {
             Dropdown::new("general-refresh-policy")
@@ -153,35 +131,10 @@ impl GeneralSection {
                 .default_value(key_value_size_limit.clone())
         });
 
-        let theme_subscription = cx.subscribe(
-            &dropdown_theme,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.gen_settings.theme = Self::theme_for_index(event.index);
-                cx.notify();
-            },
-        );
-
-        let style_subscription = cx.subscribe(
-            &dropdown_style,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.gen_settings.style = Self::style_for_index(event.index);
-                cx.notify();
-            },
-        );
-
         let language_subscription = cx.subscribe(
             &dropdown_language,
             |this, _, event: &DropdownSelectionChanged, cx| {
                 this.gen_settings.language = Self::language_for_index(event.index).to_string();
-                cx.notify();
-            },
-        );
-
-        let focus_subscription = cx.subscribe(
-            &dropdown_default_focus,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                this.gen_settings.default_focus_on_startup =
-                    Self::startup_focus_for_index(event.index);
                 cx.notify();
             },
         );
@@ -285,10 +238,7 @@ impl GeneralSection {
             gen_form_cursor: 0,
             gen_editing_field: false,
             gen_share_stable_db: dbflux_storage::paths::nightly_shares_stable_db(),
-            dropdown_theme,
-            dropdown_style,
             dropdown_language,
-            dropdown_default_focus,
             dropdown_refresh_policy,
             input_max_history,
             input_auto_save,
@@ -300,10 +250,7 @@ impl GeneralSection {
             content_focused: false,
             switching_input: false,
             _subscriptions: vec![
-                theme_subscription,
-                style_subscription,
                 language_subscription,
-                focus_subscription,
                 refresh_policy_subscription,
                 blur_max_history,
                 blur_auto_save,
@@ -316,20 +263,26 @@ impl GeneralSection {
         }
     }
 
-    fn theme_items() -> Vec<DropdownItem> {
+    /// Theme segments, in index order (see [`Self::theme_index`]).
+    pub(super) fn theme_items() -> Vec<SegmentedItem> {
         vec![
-            DropdownItem::new(dbflux_i18n::t!(
-                "settings.general.theme.option.follow_system"
-            )),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.dark")),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.light")),
+            SegmentedItem::new(
+                "0",
+                dbflux_i18n::t!("settings.general.theme.option.follow_system"),
+            )
+            .icon(AppIcon::Layers),
+            SegmentedItem::new("1", dbflux_i18n::t!("settings.general.theme.option.dark"))
+                .icon(AppIcon::Eye),
+            SegmentedItem::new("2", dbflux_i18n::t!("settings.general.theme.option.light"))
+                .icon(AppIcon::Eye),
         ]
     }
 
-    fn style_items() -> Vec<DropdownItem> {
+    /// Density segments, in index order (see [`Self::style_index`]).
+    pub(super) fn style_items() -> Vec<SegmentedItem> {
         vec![
-            DropdownItem::new(Self::style_label(AppStyle::Default)),
-            DropdownItem::new(Self::style_label(AppStyle::Compact)),
+            SegmentedItem::new("0", Self::style_label(AppStyle::Default)),
+            SegmentedItem::new("1", Self::style_label(AppStyle::Compact)),
         ]
     }
 
@@ -352,14 +305,18 @@ impl GeneralSection {
         .collect()
     }
 
-    fn startup_focus_items() -> Vec<DropdownItem> {
+    /// Focus-on-launch segments, in index order (see
+    /// [`Self::startup_focus_index`]).
+    pub(super) fn startup_focus_items() -> Vec<SegmentedItem> {
         vec![
-            DropdownItem::new(dbflux_i18n::t!(
-                "settings.general.default_focus.option.sidebar"
-            )),
-            DropdownItem::new(dbflux_i18n::t!(
-                "settings.general.default_focus.option.last_tab"
-            )),
+            SegmentedItem::new(
+                "0",
+                dbflux_i18n::t!("settings.general.default_focus.option.sidebar"),
+            ),
+            SegmentedItem::new(
+                "1",
+                dbflux_i18n::t!("settings.general.default_focus.option.last_tab"),
+            ),
         ]
     }
 
@@ -374,7 +331,7 @@ impl GeneralSection {
         ]
     }
 
-    fn theme_index(theme: ThemeSetting) -> usize {
+    pub(super) fn theme_index(theme: ThemeSetting) -> usize {
         match theme {
             ThemeSetting::System => 0,
             ThemeSetting::Dark => 1,
@@ -382,7 +339,7 @@ impl GeneralSection {
         }
     }
 
-    fn theme_for_index(index: usize) -> ThemeSetting {
+    pub(super) fn theme_for_index(index: usize) -> ThemeSetting {
         match index {
             0 => ThemeSetting::System,
             2 => ThemeSetting::Light,
@@ -428,14 +385,14 @@ impl GeneralSection {
         preference.as_storage_str()
     }
 
-    fn startup_focus_index(focus: StartupFocus) -> usize {
+    pub(super) fn startup_focus_index(focus: StartupFocus) -> usize {
         match focus {
             StartupFocus::Sidebar => 0,
             StartupFocus::LastTab => 1,
         }
     }
 
-    fn startup_focus_for_index(index: usize) -> StartupFocus {
+    pub(super) fn startup_focus_for_index(index: usize) -> StartupFocus {
         match index {
             1 => StartupFocus::LastTab,
             _ => StartupFocus::Sidebar,
@@ -485,6 +442,14 @@ impl SettingsSection for GeneralSection {
 
     fn is_dirty(&self, cx: &App) -> bool {
         self.has_unsaved_general_changes(cx)
+    }
+
+    fn unsaved_change_count(&self, cx: &App) -> usize {
+        self.general_change_count(cx)
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_general_settings(window, cx);
     }
 
     fn render_footer_actions(
@@ -641,6 +606,24 @@ mod tests {
     }
 
     #[test]
+    fn unsaved_change_count_counts_each_changed_setting() {
+        with_general_section(|section, _, window, cx| {
+            assert_eq!(section.general_change_count(cx), 0);
+
+            section.gen_settings.vim_mode = !section.gen_settings.vim_mode;
+            section.gen_settings.theme = GeneralSection::theme_for_index(
+                (GeneralSection::theme_index(section.gen_settings.theme) + 1) % 3,
+            );
+            section
+                .input_max_history
+                .update(cx, |input, cx| input.set_value("42", window, cx));
+
+            assert_eq!(section.general_change_count(cx), 3);
+            assert!(section.has_unsaved_general_changes(cx));
+        });
+    }
+
+    #[test]
     fn invalid_editor_row_limit_shows_an_error_and_saves_nothing() {
         with_general_section(|section, toast_host, window, cx| {
             let stored_before = stored_editor_row_limit(section, cx);
@@ -695,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_dropdown_lists_follow_system_then_dark_then_light() {
+    fn theme_segments_list_follow_system_then_dark_then_light() {
         let labels: Vec<_> = GeneralSection::theme_items()
             .into_iter()
             .map(|item| item.label)
@@ -740,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn style_dropdown_exposes_exactly_two_labels() {
+    fn density_segments_expose_exactly_two_labels() {
         let labels: Vec<_> = GeneralSection::style_items()
             .into_iter()
             .map(|item| item.label)
@@ -941,14 +924,14 @@ mod tests {
     #[test]
     fn dropdown_placeholders_reuse_or_extend_settings_general_catalog_keys() {
         assert_eq!(dbflux_i18n::t!("settings.general.theme.label"), "Theme");
-        assert_eq!(dbflux_i18n::t!("settings.general.style.label"), "Style");
+        assert_eq!(dbflux_i18n::t!("settings.general.style.label"), "Density");
         assert_eq!(
             dbflux_i18n::t!("settings.general.language.label"),
             "Language"
         );
         assert_eq!(
             dbflux_i18n::t!("settings.general.default_focus.label"),
-            "Default focus"
+            "Focus on launch"
         );
         assert_eq!(
             dbflux_i18n::t!("settings.general.placeholder.refresh_policy"),

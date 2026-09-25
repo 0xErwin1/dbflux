@@ -11,7 +11,7 @@ mod hooks;
 mod hooks_section;
 mod keybindings;
 mod keybindings_section;
-mod layout;
+pub(crate) mod layout;
 mod lifecycle;
 mod open_window;
 
@@ -56,7 +56,7 @@ use updates_section::UpdatesSection;
 pub use self::open_window::open_or_focus_settings;
 pub use self::section_trait::{SettingsSection, SettingsSectionId};
 
-const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = px(220.0);
+const SETTINGS_SIDEBAR_DEFAULT_WIDTH: Pixels = crate::tokens::SettingsMetrics::NAV_WIDTH;
 const SETTINGS_SIDEBAR_MIN_WIDTH: Pixels = px(180.0);
 const SETTINGS_SIDEBAR_MAX_WIDTH: Pixels = px(420.0);
 const SETTINGS_SIDEBAR_GRIP_WIDTH: Pixels = Spacing::XS;
@@ -328,11 +328,123 @@ impl ActiveSettingsSection {
             }
         }
     }
+
+    fn unsaved_change_count(&self, cx: &App) -> usize {
+        match self {
+            Self::About(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Audit(section) => section.read(cx).unsaved_change_count(cx),
+            Self::AuthProfiles(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Drivers(section) => section.read(cx).unsaved_change_count(cx),
+            Self::General(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Hooks(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Keybindings(section) => section.read(cx).unsaved_change_count(cx),
+            #[cfg(feature = "mcp")]
+            Self::McpClients(section) | Self::McpRoles(section) | Self::McpPolicies(section) => {
+                section.read(cx).unsaved_change_count(cx)
+            }
+            Self::Proxies(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Services(section) => section.read(cx).unsaved_change_count(cx),
+            Self::SshTunnels(section) => section.read(cx).unsaved_change_count(cx),
+            Self::Updates(section) => section.read(cx).unsaved_change_count(cx),
+        }
+    }
+
+    fn render_footer_leading_actions(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<SettingsCoordinator>,
+    ) -> Option<AnyElement> {
+        match self {
+            Self::About(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Audit(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::AuthProfiles(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Drivers(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::General(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Hooks(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Keybindings(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            #[cfg(feature = "mcp")]
+            Self::McpClients(section) | Self::McpRoles(section) | Self::McpPolicies(section) => {
+                section.update(cx, |section, cx| {
+                    section.render_footer_leading_actions(window, cx)
+                })
+            }
+            Self::Proxies(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Services(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::SshTunnels(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+            Self::Updates(section) => section.update(cx, |section, cx| {
+                section.render_footer_leading_actions(window, cx)
+            }),
+        }
+    }
+
+    fn save_from_shortcut(&self, window: &mut Window, cx: &mut Context<SettingsCoordinator>) {
+        match self {
+            Self::About(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Audit(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::AuthProfiles(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Drivers(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::General(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Hooks(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Keybindings(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            #[cfg(feature = "mcp")]
+            Self::McpClients(section) | Self::McpRoles(section) | Self::McpPolicies(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Proxies(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Services(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::SshTunnels(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+            Self::Updates(section) => {
+                section.update(cx, |section, cx| section.save_from_shortcut(window, cx));
+            }
+        }
+    }
 }
 
 pub struct SettingsCoordinator {
     app_state: Entity<AppStateEntity>,
     sidebar_tree: TreeNav,
+    /// Search field above the navigation; its text filters the tree.
+    nav_search: Entity<dbflux_components::controls::InputState>,
     focus_area: SettingsFocus,
     focus_handle: FocusHandle,
     active_section: SettingsSectionId,

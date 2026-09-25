@@ -134,6 +134,14 @@ charts:
     error:
       create_editable_failed: "Failed to create editable dashboard: %{error}"
 components:
+  environment:
+    development: "Development"
+    staging: "Staging"
+    production: "Production"
+  env_tag:
+    development: "Dev"
+    staging: "Staging"
+    production: "Prod"
   value_panel:
     empty: No cell selected
     error:
@@ -176,6 +184,23 @@ controls:
       one: "+%{count} more"
       many: "+%{count} more"
 connection_manager:
+  tab_badge:
+    mcp_clients:
+      many: "%{count} clients"
+      one: "1 client"
+    ssm: "SSM"
+    proxy: "Proxy"
+    ssh: "SSH"
+  environment:
+    none: "None"
+    help: "Marks which environment this connection points at."
+    label: "Environment"
+  enter_as:
+    uri: "Connection URI"
+    fields: "Fields"
+    label: "Enter as"
+  form:
+    required_hint: "Fields marked in red are required"
   placeholder:
     seconds: seconds
     connection_name: Connection name
@@ -214,8 +239,8 @@ connection_manager:
     on: "On"
     off: "Off"
   form_title:
-    edit: "Edit %{driver} Connection"
-    new: "New %{driver} Connection"
+    edit: "Edit %{driver} connection"
+    new: "New %{driver} connection"
   connection_overrides_title: Connection Overrides
   connection_hooks_title: Connection Hooks
   new_auth_profile: "New Auth Profile..."
@@ -291,14 +316,14 @@ connection_manager:
   action:
     copy: Copy
     back: Back
-    test_connection: Test Connection
+    test_connection: "Test connection"
     save: Save
     browse: Browse
   window_title: Connection Manager
   driver_select:
-    search_placeholder: "Filter by name, driver, port…"
-    title: New Connection
-    subtitle: choose a database type
+    search_placeholder: "Filter by name, driver or port"
+    title: "New connection"
+    subtitle: "Pick what you are connecting to."
     empty_state: No drivers match your filter
     import_from_file: "Import from file…"
     import_from_client: "Import from another client…"
@@ -2366,6 +2391,7 @@ form:
     pipeline_stage_failed: "Pipeline stage '%{stage}': %{source}"
 hooks:
   kind:
+    lua: "Lua"
     command: Command
     script: Script
   source:
@@ -2717,6 +2743,13 @@ scripts:
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"
 settings:
+  field:
+    hide_secret: "Hide value"
+    show_secret: "Show value"
+  footer:
+    unsaved:
+      many: "%{count} unsaved changes"
+      one: "1 unsaved change"
   action:
     default_connection_name: connection
     close: Close
@@ -2730,29 +2763,35 @@ settings:
   mcp_governance:
     persist_error: "Failed to persist MCP governance: %{error}"
   general:
+    unit:
+      mebibytes: "MiB"
+      seconds: "s"
+      milliseconds: "ms"
     header:
       title: General
-      subtitle: Configure startup, session, refresh, and safety behavior
+      subtitle: "Appearance, startup, refresh and the safety net for dangerous statements."
     appearance:
       group: Appearance
     startup:
-      group: Startup & Session
+      group: "Startup and session"
     refresh:
-      group: Refresh & Background
+      group: "Refresh and background"
     safety:
-      group: Execution Safety
+      group: "Execution safety"
     object_storage:
-      group: Object Storage
+      group: "Object storage"
     storage:
       group: Storage
     theme:
+      help: "Byzantium in both. Follow system switches with the OS."
       option:
         follow_system: "Follow system"
         dark: "Dark"
         light: "Light"
       label: Theme
     style:
-      label: Style
+      help: "Compact lowers row height to 24 and text by 1 px."
+      label: "Density"
       option:
         default: "Default"
         compact: "Compact"
@@ -2760,26 +2799,26 @@ settings:
       label: Language
       option:
         system: System
-      notice: Language changes apply after restarting DBFlux.
+      notice: "Applies after restarting DBFlux."
     editor:
       group: "Editor"
     vim_mode:
       label: "Vim mode in code editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
     restore_session:
-      label: Restore session on startup
+      label: "Restore open tabs on startup"
     reopen_connections:
-      label: Reopen last connections
+      label: "Reconnect to the connections that were open"
     default_focus:
-      label: Default focus
+      label: "Focus on launch"
       option:
         sidebar: Sidebar
-        last_tab: Last Tab
+        last_tab: "Last tab"
     max_history:
-      label: Max history entries
+      label: "History entries"
       error: Max history entries must be a number >= 10
     auto_save_interval:
-      label: Auto-save interval (ms)
+      label: "Auto-save every"
       error: Auto-save interval must be >= 500 ms
     refresh_policy:
       label: Default refresh policy
@@ -2787,7 +2826,7 @@ settings:
         manual: Manual
         interval: Interval
     refresh_interval:
-      label: Default refresh interval (seconds)
+      label: "Default refresh interval"
       error: Refresh interval must be >= 1 second
     max_background_tasks:
       label: Max concurrent background tasks
@@ -2797,23 +2836,24 @@ settings:
     refresh_only_if_visible:
       label: Auto-refresh only if tab is visible
     confirm_dangerous:
-      label: Confirm dangerous queries
+      hint: "DELETE or UPDATE without WHERE, DROP, TRUNCATE, FLUSHALL and the like."
+      label: "Confirm dangerous statements"
     requires_where:
-      label: Require WHERE for DELETE/UPDATE
+      label: "Require WHERE for DELETE and UPDATE"
     requires_preview:
-      label: Always require preview (ignore suppressions)
+      label: "Always preview, even when a statement was dismissed before"
     editor_row_limit:
       label: Editor row limit
       error: Editor row limit must be a whole number from 1 to 9223372036854775807
     object_preview_limit:
-      label: Object preview size limit (MiB)
+      label: "Object preview size limit"
       error: Object preview size limit must be >= 1 MiB
     object_preview_hint:
       label: "Objects larger than this are never downloaded for preview; the browser shows their metadata only."
     key_value:
-      group: Key-Value Preview
+      group: "Key-value preview"
     key_value_size_limit:
-      label: Key-value preview size limit (MiB)
+      label: "Key-value preview size limit"
       error: Key-value preview size limit must be >= 1 MiB
     key_value_size_limit_hint:
       label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
@@ -2841,12 +2881,13 @@ settings:
     lucide: UI icons from Lucide (ISC License)
     simple_icons: Brand icons from Simple Icons (CC0 1.0)
   keybindings:
-    title: Keyboard Shortcuts
-    subtitle: View all keyboard shortcuts by context
-    filter_placeholder: Filter keybindings...
+    filter_label: "Filter shortcuts"
+    title: "Keyboard shortcuts"
+    subtitle: "Every command and its keys, by context."
+    filter_placeholder: "Filter by command or key"
     binding_count:
-      one: (1 binding)
-      many: "(%{count} bindings)"
+      one: "1 binding"
+      many: "%{count} bindings"
     inherits_from: "inherits from %{parent}"
     inherited: inherited
     conflict:
@@ -2995,14 +3036,16 @@ settings:
   hooks:
     header:
       title: Hooks
-      subtitle: Create reusable hooks and associate them from connection settings
+      subtitle: "Commands, scripts and Lua that run around connect and disconnect. Connections pick them in their Settings tab."
     list:
-      new: New Hook
+      new: "New hook"
       empty: No hooks defined
       unreadable:
         title: Unreadable hook rows
         hint: Unreadable — cannot be edited
     form:
+      group:
+        hook: "Hook"
       title:
         edit: Edit Hook
         new: New Hook
@@ -3010,12 +3053,12 @@ settings:
       kind: Type
       command: Command
       args: Arguments
-      args_hint: Arguments separated by spaces
+      args_hint: "Separated by spaces"
       language: Language
-      file_path: File Path
+      file_path: "File path"
       file_path_hint: Scripts are edited in the app editor and stored under hooks/ by default
-      open_in_app: Open in App
-      open_in_editor: Open in Editor
+      open_in_app: "Open in app"
+      open_in_editor: "Open in editor"
       interpreter: Interpreter
       interpreter_hint: "Leave empty for %{default_interpreter}"
       interpreter_auto: "auto (%{value})"
@@ -3027,20 +3070,20 @@ settings:
         connection_metadata: Connection metadata
         process_run: Controlled process run
         process_run_hint: "Enables `dbflux.process.run(...)` without exposing the Lua `os` library"
-      execution_mode: Execution Mode
+      execution_mode: "Run as"
       execution_mode_hint: Detached runs in background and does not block connect/disconnect
-      ready_signal: Ready Signal
+      ready_signal: "Ready signal"
       ready_signal_hint: DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks.
-      cwd: Working Directory
+      cwd: "Working directory"
       env: Environment
       env_hint: Comma-separated KEY=value pairs
-      env_denylist: Env Denylist
+      env_denylist: "Env denylist"
       env_denylist_hint: Comma-separated variable names to strip from inherited env
-      timeout: Timeout (ms)
-      resolved_command: Resolved Command
+      timeout: "Timeout"
+      resolved_command: "Resolved command"
       enabled: Enabled
       inherit_env: Inherit parent environment
-      on_failure: On Failure
+      on_failure: "On failure"
       preview_placeholder: "<enter a command>"
     status:
       unsupported_platform: Unsupported on this platform
@@ -3070,9 +3113,15 @@ settings:
       deleted: Hook deleted
       unreadable_deleted: Unreadable hook row deleted
   auth_profiles:
+    session_unknown: "Not logged in from this window"
+    session_attention: "Session needs attention"
+    session_valid: "Session valid"
+    disabled_badge: "off"
+    group:
+      profile: "Profile"
     profiles_label: Profiles
-    new_profile: New Auth Profile
-    import: "Import…"
+    new_profile: "New profile"
+    import: "Import"
     source_label: Source
     leave_blank_hint: Leave blank to keep the current value.
     auth_profile_label: Auth Profile
@@ -3106,13 +3155,13 @@ settings:
     login_url_panel_description: Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.
     open_browser: Open Browser
     copy_url: Copy URL
-    login_action: Login
+    login_action: "Log in"
     logging_in: "Logging in..."
     runs_interactive_login_hint: Runs interactive login for this auth profile
     update: Update
     create: Create
-    section_title: Auth Profiles
-    section_description: Manage reusable authentication profiles for connection access
+    section_title: "Auth profiles"
+    section_description: "Reusable sign-ins for secrets, parameters and SSO. Connections reference them by name."
     delete_dialog_title: Delete Auth Profile
     delete_dialog:
       body_none: 'Are you sure you want to delete "%{name}"?'
@@ -3224,6 +3273,9 @@ settings:
         label: Admin
         description: Approving executions, exporting audit logs, and privileged actions
     group:
+      policy: "Policy"
+      role: "Role"
+      client: "Client"
       discovery: Discovery
       schema: Schema
       query: Query
@@ -3247,6 +3299,7 @@ settings:
       roles: No roles configured.
       policies: No policies configured.
     field:
+      allowed_tools_count: "Allowed tools · %{selected} of %{total}"
       client_id: Client ID
       name: Name
       issuer_optional: Issuer (optional)
@@ -3299,18 +3352,18 @@ settings:
       create_policy: Create Policy
   drivers:
     section_title: Drivers
-    section_description: Configure per-driver overrides and driver-defined settings
+    section_description: "Per-driver overrides and settings the driver declares."
     empty: No registered drivers
     select_hint: Select a driver to configure settings
     action:
       save: Save
     field:
       capabilities: Capabilities
-      global_overrides: Global Overrides
-      driver_settings: Driver Settings
+      global_overrides: "Overrides for this driver"
+      driver_settings: "Driver settings"
     global_overrides_hint: Enable override to replace the global default for this driver.
     no_custom_settings: No custom settings for this driver.
-    use_global: Use Global
+    use_global: "use global"
     error:
       refresh_interval_empty: Refresh interval override must not be empty
       refresh_interval_invalid: Refresh interval override must be a number greater than 0
@@ -3360,8 +3413,10 @@ settings:
       graph_traversal: Graph Traversal
       edge_properties: Edge Properties
   rpc_services:
-    section_title: RPC Services
-    section_description: Manage configured RPC services. Changes require restart.
+    group:
+      service: "Service"
+    section_title: "RPC services"
+    section_description: "External drivers and auth providers DBFlux starts over RPC. Changes apply after a restart."
     empty: No RPC services configured
     edit_title: Edit RPC Service
     new_title: New RPC Service
@@ -3377,56 +3432,79 @@ settings:
       saved: RPC service saved. Restart required to apply changes.
       deleted: RPC service deleted. Restart required to apply changes.
     field:
-      disabled: Disabled
+      env_value: "Variable value"
+      env_key: "Variable name"
+      disabled: "off"
       socket_id: Socket ID
       command: Command
-      startup_timeout: Startup Timeout (ms)
+      startup_timeout: "Startup timeout"
       enable: Enable this service
-      service_type: Service Type
+      service_type: "Service type"
       arguments: Arguments
-      env_vars: Environment Variables
+      env_vars: "Environment"
       default_command: (default)
     kind:
       driver: Driver
       auth_provider: Auth Provider
     action:
+      add_variable: "Add variable"
+      add_argument: "Add argument"
+      remove: "Remove"
       delete: Delete
       update: Update
       create: Create
   ssh_tunnels:
+    list:
+      password: "password"
+      key: "key"
+    group:
+      authentication: "Authentication"
+      tunnel: "Tunnel"
     placeholder_name: SSH tunnel
     placeholder_password: password
     placeholder_passphrase: passphrase
-    section_title: SSH Tunnels
-    section_description: Manage reusable SSH tunnels for bastion and jump-host access
+    section_title: "SSH tunnels"
+    section_description: "Reusable bastion and jump-host tunnels. Connections pick one in their Access tab."
     empty: No saved SSH tunnels
-    new: New Tunnel
+    new: "New tunnel"
     field:
+      keep_in_keyring: "Keep in the OS keyring"
+      password: "Password"
+      passphrase: "Passphrase"
+      key_file: "Key file"
+      method: "Method"
+      user: "User"
+      host_port: "Host and port"
       name: Name
     delete_dialog_title: Delete SSH Tunnel
     delete_dialog:
       body: 'Are you sure you want to delete "%{name}"?'
     action:
-      import: "Import…"
+      test: "Test tunnel"
+      import: "Import"
       export: Export
       delete: Delete
     error:
       host_and_user_required: Host and user are required
       save_failed: "Failed to save SSH tunnel profiles: %{error}"
   proxies:
+    group:
+      authentication: "Authentication"
+      proxy: "Proxy"
     placeholder_name: Proxy name
     placeholder_username: username
     placeholder_password: password
-    section_title: Proxy Profiles
-    section_description: Manage proxy configurations for database connections
+    section_title: "Proxies"
+    section_description: "HTTP and SOCKS proxies. Connections pick one in their Access tab."
     empty: No saved proxies
-    new: New Proxy
+    new: "New proxy"
     panel_title: Proxy
     kind:
       http: HTTP
       https: HTTPS
       socks5: SOCKS5
     field:
+      host_port: "Host and port"
       name: Name
       protocol: Protocol
       authentication: Authentication
@@ -3434,10 +3512,10 @@ settings:
       password: Password
       host: Host
       port: Port
-      no_proxy: No Proxy
-      enabled: Enabled
+      no_proxy: "Bypass for"
+      enabled: "Enabled"
     hint:
-      no_proxy_list: Comma-separated hosts/CIDRs to bypass the proxy
+      no_proxy_list: "Comma-separated hosts and CIDRs that skip the proxy."
     auth:
       none: None
       basic: Basic
@@ -3447,7 +3525,7 @@ settings:
       save_failed: "Failed to save proxy profiles: %{error}"
     action:
       save: Save
-      import: "Import…"
+      import: "Import"
       export: Export
       delete: Delete
       update: Update
@@ -3509,6 +3587,8 @@ settings:
     toast:
       saved: Audit settings saved.
   nav:
+    no_results: "No settings match"
+    search_placeholder: "Search settings"
     general_group: General
     general: General
     keybindings: Keybindings
@@ -3516,14 +3596,14 @@ settings:
     audit: Audit
     about: About
     network: Network
-    ssh_tunnels: SSH Tunnels
-    proxies: Proxy
-    auth_profiles: Access Providers
-    connection: Connection
+    ssh_tunnels: "SSH tunnels"
+    proxies: "Proxies"
+    auth_profiles: "Auth profiles"
+    connection: "Connections"
     hooks: Hooks
     drivers: Drivers
-    services: RPC Services
-    mcp_governance: MCP Governance
+    services: "RPC services"
+    mcp_governance: "MCP governance"
     mcp_clients: Clients
     mcp_roles: Roles
     mcp_policies: Policies

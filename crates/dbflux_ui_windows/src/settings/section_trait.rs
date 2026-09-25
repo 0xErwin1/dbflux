@@ -62,6 +62,16 @@ pub trait SettingsSection: 'static {
         false
     }
 
+    /// Number of unsaved changes shown in the footer. Sections that can
+    /// only tell whether anything changed report one.
+    fn unsaved_change_count(&self, cx: &App) -> usize
+    where
+        Self: Sized,
+    {
+        usize::from(self.is_dirty(cx))
+    }
+
+    /// Actions on the right side of the footer (test, save).
     fn render_footer_actions(
         &self,
         _window: &mut Window,
@@ -71,6 +81,26 @@ pub trait SettingsSection: 'static {
         Self: Sized,
     {
         None
+    }
+
+    /// Actions on the left side of the footer (export, delete).
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<AnyElement>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
+    /// Runs the section's save action for the Ctrl+S shortcut. Sections
+    /// without a save action ignore it.
+    fn save_from_shortcut(&mut self, _window: &mut Window, _cx: &mut Context<Self>)
+    where
+        Self: Sized,
+    {
     }
 }
 

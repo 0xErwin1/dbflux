@@ -1380,6 +1380,42 @@ pub fn strip_password_from_uri(uri: &str) -> (String, Option<String>) {
     )
 }
 
+/// Deployment environment a connection points at.
+///
+/// Purely descriptive: it drives the environment tag shown next to the
+/// connection and never changes execution safety on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionEnvironment {
+    Development,
+    Staging,
+    Production,
+}
+
+impl ConnectionEnvironment {
+    pub const ALL: [ConnectionEnvironment; 3] = [
+        ConnectionEnvironment::Development,
+        ConnectionEnvironment::Staging,
+        ConnectionEnvironment::Production,
+    ];
+
+    /// Stable identifier used for persistence and element ids.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Development => "development",
+            Self::Staging => "staging",
+            Self::Production => "production",
+        }
+    }
+
+    /// Parses the identifier written by [`ConnectionEnvironment::as_str`].
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|environment| environment.as_str() == id)
+    }
+}
+
 /// Saved connection profile.
 ///
 /// Persisted to disk as JSON. Passwords are stored separately in the
@@ -1465,6 +1501,10 @@ pub struct ConnectionProfile {
     /// Defaults to `false`.
     #[serde(default)]
     pub read_only_flag: bool,
+
+    /// Deployment environment this connection belongs to, if the user set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<ConnectionEnvironment>,
 }
 
 impl ConnectionProfile {
@@ -1487,6 +1527,7 @@ impl ConnectionProfile {
             access_kind: None,
             mcp_governance: None,
             read_only_flag: false,
+            environment: None,
         }
     }
 
@@ -1511,6 +1552,7 @@ impl ConnectionProfile {
             value_refs: HashMap::new(),
             access_kind: None,
             read_only_flag: false,
+            environment: None,
             mcp_governance: None,
         }
     }
@@ -1539,6 +1581,7 @@ impl ConnectionProfile {
             access_kind: None,
             mcp_governance: None,
             read_only_flag: false,
+            environment: None,
         }
     }
 
@@ -1572,6 +1615,7 @@ impl ConnectionProfile {
             access_kind: None,
             mcp_governance: None,
             read_only_flag: false,
+            environment: None,
         }
     }
 
@@ -1607,6 +1651,11 @@ impl ConnectionProfile {
     /// Sets the runtime driver identifier explicitly.
     pub fn set_driver_id(&mut self, driver_id: impl Into<String>) {
         self.driver_id = Some(driver_id.into());
+    }
+
+    /// Deployment environment of this connection, `None` when unset.
+    pub fn environment(&self) -> Option<ConnectionEnvironment> {
+        self.environment
     }
 
     pub fn builtin_driver_id_for_kind(kind: DbKind) -> &'static str {
@@ -2449,5 +2498,39 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(result.format_body(), "SSL");
+    }
+
+    #[test]
+    fn connection_environment_ids_round_trip() {
+        for environment in super::ConnectionEnvironment::ALL {
+            assert_eq!(
+                super::ConnectionEnvironment::from_id(environment.as_str()),
+                Some(environment)
+            );
+        }
+
+        assert_eq!(super::ConnectionEnvironment::from_id("qa"), None);
+    }
+
+    #[test]
+    fn profile_without_environment_deserializes_to_none_and_omits_it() {
+        let profile = super::ConnectionProfile::new("local", super::DbConfig::default_postgres());
+        let json = serde_json::to_value(&profile).expect("serialize profile");
+
+        assert!(json.get("environment").is_none());
+
+        let restored: super::ConnectionProfile =
+            serde_json::from_value(json).expect("deserialize profile");
+        assert_eq!(restored.environment(), None);
+    }
+
+    #[test]
+    fn profile_environment_serializes_as_snake_case() {
+        let mut profile =
+            super::ConnectionProfile::new("prod", super::DbConfig::default_postgres());
+        profile.environment = Some(super::ConnectionEnvironment::Production);
+
+        let json = serde_json::to_value(&profile).expect("serialize profile");
+        assert_eq!(json["environment"], "production");
     }
 }

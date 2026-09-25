@@ -118,7 +118,7 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at
+                       created_at, updated_at, environment
                 FROM cfg_connection_profiles
                 ORDER BY name ASC
                 "#,
@@ -147,6 +147,7 @@ impl ConnectionProfileRepository {
                     ssh_tunnel_profile_id: row.get(13)?,
                     created_at: row.get(14)?,
                     updated_at: row.get(15)?,
+                    environment: row.get(16)?,
                 })
             })
             .map_err(|source| StorageError::Sqlite {
@@ -183,7 +184,7 @@ impl ConnectionProfileRepository {
                        save_password, kind, access_kind, access_provider,
                        auth_profile_id, proxy_profile_id,
                        ssh_tunnel_profile_id,
-                       created_at, updated_at
+                       created_at, updated_at, environment
                 FROM cfg_connection_profiles
                 WHERE id = ?1
                 "#,
@@ -211,6 +212,7 @@ impl ConnectionProfileRepository {
                 ssh_tunnel_profile_id: row.get(13)?,
                 created_at: row.get(14)?,
                 updated_at: row.get(15)?,
+                environment: row.get(16)?,
             })
         });
 
@@ -233,10 +235,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id,
+                    ssh_tunnel_profile_id, environment,
                     created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     datetime('now'), datetime('now')
                 )
                 "#,
@@ -255,6 +257,7 @@ impl ConnectionProfileRepository {
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
+                    profile.environment,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -286,6 +289,7 @@ impl ConnectionProfileRepository {
                     auth_profile_id = ?12,
                     proxy_profile_id = ?13,
                     ssh_tunnel_profile_id = ?14,
+                    environment = ?15,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -304,6 +308,7 @@ impl ConnectionProfileRepository {
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
+                    profile.environment,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -329,10 +334,10 @@ impl ConnectionProfileRepository {
                     id, name, driver_id, description, favorite, color, icon,
                     save_password, kind, access_kind, access_provider,
                     auth_profile_id, proxy_profile_id,
-                    ssh_tunnel_profile_id,
+                    ssh_tunnel_profile_id, environment,
                     created_at, updated_at
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
                     datetime('now'), datetime('now')
                 )
                 ON CONFLICT(id) DO UPDATE SET
@@ -349,6 +354,7 @@ impl ConnectionProfileRepository {
                     auth_profile_id = excluded.auth_profile_id,
                     proxy_profile_id = excluded.proxy_profile_id,
                     ssh_tunnel_profile_id = excluded.ssh_tunnel_profile_id,
+                    environment = excluded.environment,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -366,6 +372,7 @@ impl ConnectionProfileRepository {
                     profile.auth_profile_id,
                     profile.proxy_profile_id,
                     profile.ssh_tunnel_profile_id,
+                    profile.environment,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -425,6 +432,9 @@ pub struct ConnectionProfileDto {
     pub ssh_tunnel_profile_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Deployment environment identifier (`development`, `staging`,
+    /// `production`), `None` when the user set none.
+    pub environment: Option<String>,
 }
 
 impl ConnectionProfileDto {
@@ -447,6 +457,7 @@ impl ConnectionProfileDto {
             ssh_tunnel_profile_id: None,
             created_at: String::new(),
             updated_at: String::new(),
+            environment: None,
         }
     }
 }
@@ -528,6 +539,41 @@ mod tests {
         // Verify deletion
         let after_delete = repo.get(&id.to_string()).expect("should fetch");
         assert!(after_delete.is_none());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn environment_round_trips_through_insert_and_update() {
+        let path = temp_db("environment");
+        let _ = std::fs::remove_file(&path);
+
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        let id = Uuid::new_v4();
+        let mut dto = ConnectionProfileDto::new(id, "Env".to_string());
+        dto.environment = Some("production".to_string());
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = ConnectionProfileRepository::new(Arc::new(conn));
+        repo.insert(&dto).expect("should insert");
+
+        let fetched = repo
+            .get(&id.to_string())
+            .expect("should fetch")
+            .expect("should exist");
+        assert_eq!(fetched.environment.as_deref(), Some("production"));
+
+        dto.environment = None;
+        repo.upsert(&dto).expect("should upsert");
+
+        let cleared = repo.all().expect("should fetch");
+        assert_eq!(cleared[0].environment, None);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

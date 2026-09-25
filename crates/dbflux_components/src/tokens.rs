@@ -194,6 +194,8 @@ impl HeaderMetrics {
     pub const BAR_FONT: Pixels = px(12.0);
     /// Top padding of a settings page head.
     pub const SECTION_PADDING_TOP: Pixels = px(22.0);
+    /// Horizontal padding of a settings page head, the page margin. (28 px)
+    pub const SECTION_PADDING_X: Pixels = px(28.0);
     /// Bottom padding of a settings page head.
     pub const SECTION_PADDING_BOTTOM: Pixels = px(8.0);
     /// Gap between the title and the description of a settings page head.
@@ -202,6 +204,10 @@ impl HeaderMetrics {
     pub const LABEL_PADDING_TOP: Pixels = px(18.0);
     /// Bottom padding and bottom margin of a section label row.
     pub const LABEL_PADDING_BOTTOM: Pixels = px(6.0);
+    /// Icon of a section label row, drawn in the tint. (15 px)
+    pub const LABEL_ICON: Pixels = px(15.0);
+    /// Text size of a section label row. (10 px)
+    pub const LABEL_FONT: Pixels = px(10.0);
 }
 
 /// Geometry of `controls::Button` and `composites::SplitButton`, taken from
@@ -1162,6 +1168,23 @@ impl ShellMetrics {
     pub const ROW_STATUS_GAP: Pixels = px(5.0);
 }
 
+/// Geometry of the master list of a master-detail page (P1SettingsMcp,
+/// P1SettingsSsh): a 12 px toolbar with 8 px between its buttons, rows with
+/// 10 by 14 px padding, 3 px between their lines, a 14 px icon 8 px before
+/// the name and an 11.5 px mono detail line.
+pub struct MasterListMetrics;
+
+impl MasterListMetrics {
+    pub const TOOLBAR_PADDING: Pixels = px(12.0);
+    pub const TOOLBAR_GAP: Pixels = px(8.0);
+    pub const ROW_PADDING_Y: Pixels = px(10.0);
+    pub const ROW_PADDING_X: Pixels = px(14.0);
+    pub const ROW_LINE_GAP: Pixels = px(3.0);
+    pub const ROW_ICON: Pixels = px(14.0);
+    pub const ROW_ICON_GAP: Pixels = px(8.0);
+    pub const ROW_DETAIL_FONT: Pixels = px(11.5);
+}
+
 /// Shared animation timing constants.
 pub struct Anim;
 
@@ -1239,8 +1262,8 @@ impl Widths {
     /// Left list-panel width in settings sections with a master/detail layout.
     ///
     /// Applied to the left panel (`border_r_1`) listing selectable items in
-    /// MCP (clients, roles, policies) and driver settings sections. (300 px)
-    pub const SETTINGS_LIST_PANEL: Pixels = px(300.0);
+    /// the MCP (clients, roles, policies) settings sections. (280 px)
+    pub const SETTINGS_LIST_PANEL: Pixels = px(280.0);
 
     /// Left list-panel width for the Connection Manager MCP tab's trusted
     /// client list.

@@ -368,6 +368,7 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
             access_kind,
             mcp_governance,
             read_only_flag: false,
+            environment: None,
         });
     }
 

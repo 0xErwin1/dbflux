@@ -14,7 +14,7 @@ mod surface;
 mod text;
 mod type_to_confirm;
 
-pub use badge::{Badge, BadgeTone, EnvTag};
+pub use badge::{Badge, BadgeTone, EnvTag, environment_label, environment_short_label};
 pub use banner::{BannerBlock, BannerVariant};
 pub use chamfer::{
     Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing,
@@ -30,7 +30,7 @@ pub use kbd::{Kbd, KbdTone};
 pub use label::Label;
 pub use loading_state::{LoadingState, Spinner};
 pub use segmented_control::{SegmentedControl, SegmentedItem, new_active_id};
-pub use status::{Status, StatusIndicator, format_latency};
+pub use status::{Status, StatusIndicator, format_latency, status_diamond};
 pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_bg, surface};
 pub use text::{
     Text, TextColorSelection, TextDefaultColor, TextInspection, TextRoleContract, TextVariant,

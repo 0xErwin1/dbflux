@@ -1,18 +1,16 @@
+use crate::tokens::SettingsMetrics;
 use dbflux_app::keymap::{KeyChord, Modifiers};
 use dbflux_components::controls::Button as FluxButton;
-use dbflux_components::controls::Dropdown;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, Radii};
+use dbflux_components::controls::{Checkbox, Dropdown, Input, InputState};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
+use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::checkbox::Checkbox;
 
 use super::general_section::{GeneralFormRow, GeneralSection};
 use super::layout;
@@ -20,57 +18,69 @@ use super::section_trait::SectionFocusEvent;
 
 impl GeneralSection {
     pub(super) fn has_unsaved_general_changes(&self, cx: &App) -> bool {
+        self.general_change_count(cx) > 0
+    }
+
+    /// Number of settings that differ from the saved ones.
+    pub(super) fn general_change_count(&self, cx: &App) -> usize {
         let saved = self.app_state.read(cx).general_settings();
+        let current = &self.gen_settings;
 
-        if self.gen_settings.theme != saved.theme
-            || self.gen_settings.style != saved.style
-            || self.gen_settings.restore_session_on_startup != saved.restore_session_on_startup
-            || self.gen_settings.reopen_last_connections != saved.reopen_last_connections
-            || self.gen_settings.default_focus_on_startup != saved.default_focus_on_startup
-            || self.gen_settings.default_refresh_policy != saved.default_refresh_policy
-            || self.gen_settings.auto_refresh_pause_on_error != saved.auto_refresh_pause_on_error
-            || self.gen_settings.auto_refresh_only_if_visible != saved.auto_refresh_only_if_visible
-            || self.gen_settings.confirm_dangerous_queries != saved.confirm_dangerous_queries
-            || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
-            || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
-            || self.gen_settings.vim_mode != saved.vim_mode
-        {
-            return true;
-        }
+        let setting_changes = [
+            current.theme != saved.theme,
+            current.style != saved.style,
+            current.language != saved.language,
+            current.restore_session_on_startup != saved.restore_session_on_startup,
+            current.reopen_last_connections != saved.reopen_last_connections,
+            current.default_focus_on_startup != saved.default_focus_on_startup,
+            current.default_refresh_policy != saved.default_refresh_policy,
+            current.auto_refresh_pause_on_error != saved.auto_refresh_pause_on_error,
+            current.auto_refresh_only_if_visible != saved.auto_refresh_only_if_visible,
+            current.confirm_dangerous_queries != saved.confirm_dangerous_queries,
+            current.dangerous_requires_where != saved.dangerous_requires_where,
+            current.dangerous_requires_preview != saved.dangerous_requires_preview,
+            current.vim_mode != saved.vim_mode,
+        ];
 
-        if self.input_max_history.read(cx).value().trim() != saved.max_history_entries.to_string() {
-            return true;
-        }
+        let input_changes = [
+            (
+                &self.input_max_history,
+                saved.max_history_entries.to_string(),
+            ),
+            (
+                &self.input_auto_save,
+                saved.auto_save_interval_ms.to_string(),
+            ),
+            (
+                &self.input_refresh_interval,
+                saved.default_refresh_interval_secs.to_string(),
+            ),
+            (
+                &self.input_max_bg_tasks,
+                saved.max_concurrent_background_tasks.to_string(),
+            ),
+            (
+                &self.input_editor_row_limit,
+                saved.editor_row_limit.to_string(),
+            ),
+            (
+                &self.input_object_preview_limit,
+                saved.object_preview_size_limit_mib.to_string(),
+            ),
+            (
+                &self.input_key_value_size_limit,
+                saved.key_value_size_limit_mib.to_string(),
+            ),
+        ]
+        .into_iter()
+        .filter(|(input, saved_value)| input.read(cx).value().trim() != saved_value.as_str())
+        .count();
 
-        if self.input_auto_save.read(cx).value().trim() != saved.auto_save_interval_ms.to_string() {
-            return true;
-        }
-
-        if self.input_refresh_interval.read(cx).value().trim()
-            != saved.default_refresh_interval_secs.to_string()
-        {
-            return true;
-        }
-
-        if self.input_max_bg_tasks.read(cx).value().trim()
-            != saved.max_concurrent_background_tasks.to_string()
-        {
-            return true;
-        }
-
-        if self.input_editor_row_limit.read(cx).value().trim() != saved.editor_row_limit.to_string()
-        {
-            return true;
-        }
-
-        if self.input_object_preview_limit.read(cx).value().trim()
-            != saved.object_preview_size_limit_mib.to_string()
-        {
-            return true;
-        }
-
-        self.input_key_value_size_limit.read(cx).value().trim()
-            != saved.key_value_size_limit_mib.to_string()
+        setting_changes
+            .into_iter()
+            .filter(|changed| *changed)
+            .count()
+            + input_changes
     }
 
     /// Parses the editor row limit input. Accepts a whole number of at least 1
@@ -171,13 +181,13 @@ impl GeneralSection {
     ) {
         match self.gen_current_row() {
             Some(GeneralFormRow::Theme) => {
-                self.dropdown_theme
-                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                let next = (Self::theme_index(self.gen_settings.theme) + 1) % 3;
+                self.gen_settings.theme = Self::theme_for_index(next);
                 cx.notify();
             }
             Some(GeneralFormRow::Style) => {
-                self.dropdown_style
-                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                let next = (Self::style_index(self.gen_settings.style) + 1) % 2;
+                self.gen_settings.style = Self::style_for_index(next);
                 cx.notify();
             }
             Some(GeneralFormRow::Language) => {
@@ -200,8 +210,9 @@ impl GeneralSection {
                 cx.notify();
             }
             Some(GeneralFormRow::DefaultFocus) => {
-                self.dropdown_default_focus
-                    .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                let next =
+                    (Self::startup_focus_index(self.gen_settings.default_focus_on_startup) + 1) % 2;
+                self.gen_settings.default_focus_on_startup = Self::startup_focus_for_index(next);
                 cx.notify();
             }
             Some(GeneralFormRow::DefaultRefreshPolicy) => {
@@ -304,10 +315,7 @@ impl GeneralSection {
 
     fn current_dropdown(&self) -> Option<&Entity<Dropdown>> {
         match self.gen_current_row() {
-            Some(GeneralFormRow::Theme) => Some(&self.dropdown_theme),
-            Some(GeneralFormRow::Style) => Some(&self.dropdown_style),
             Some(GeneralFormRow::Language) => Some(&self.dropdown_language),
-            Some(GeneralFormRow::DefaultFocus) => Some(&self.dropdown_default_focus),
             Some(GeneralFormRow::DefaultRefreshPolicy) => Some(&self.dropdown_refresh_policy),
             _ => None,
         }
@@ -581,15 +589,267 @@ impl GeneralSection {
     }
 
     pub(super) fn render_general_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let tint = ChromeColors::tint(theme);
-        let muted_fg = theme.muted_foreground;
-        let is_focused = self.content_focused;
-        let cursor = self.gen_form_cursor;
-        let rows = self.gen_form_rows();
+        let theme_index = Self::theme_index(self.gen_settings.theme);
+        let style_index = Self::style_index(self.gen_settings.style);
+        let focus_index = Self::startup_focus_index(self.gen_settings.default_focus_on_startup);
 
-        let is_at =
-            |row: GeneralFormRow| -> bool { is_focused && rows.get(cursor).copied() == Some(row) };
+        let appearance = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.appearance.group"),
+                Some(AppIcon::Eye.into()),
+                cx,
+            ))
+            .child(self.render_gen_segmented(
+                dbflux_i18n::t!("settings.general.theme.label"),
+                Some(dbflux_i18n::t!("settings.general.theme.help")),
+                Self::theme_items(),
+                theme_index,
+                GeneralFormRow::Theme,
+                |this, index| this.gen_settings.theme = Self::theme_for_index(index),
+                cx,
+            ))
+            .child(self.render_gen_segmented(
+                dbflux_i18n::t!("settings.general.style.label"),
+                Some(dbflux_i18n::t!("settings.general.style.help")),
+                Self::style_items(),
+                style_index,
+                GeneralFormRow::Style,
+                |this, index| this.gen_settings.style = Self::style_for_index(index),
+                cx,
+            ))
+            .child(self.render_gen_dropdown(
+                dbflux_i18n::t!("settings.general.language.label"),
+                Some(dbflux_i18n::t!("settings.general.language.notice")),
+                &self.dropdown_language,
+                GeneralFormRow::Language,
+                cx,
+            ));
+
+        let editor = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.editor.group"),
+                Some(AppIcon::Code.into()),
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "vim-mode",
+                dbflux_i18n::t!("settings.general.vim_mode.label"),
+                Some(dbflux_i18n::t!("settings.general.vim_mode.hint")),
+                self.gen_settings.vim_mode,
+                GeneralFormRow::VimMode,
+                |this, value, _cx| this.gen_settings.vim_mode = value,
+                cx,
+            ));
+
+        let startup = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.startup.group"),
+                Some(AppIcon::Play.into()),
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "restore-session",
+                dbflux_i18n::t!("settings.general.restore_session.label"),
+                None,
+                self.gen_settings.restore_session_on_startup,
+                GeneralFormRow::RestoreSession,
+                |this, value, _cx| this.gen_settings.restore_session_on_startup = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "reopen-conns",
+                dbflux_i18n::t!("settings.general.reopen_connections.label"),
+                None,
+                self.gen_settings.reopen_last_connections,
+                GeneralFormRow::ReopenConnections,
+                |this, value, _cx| this.gen_settings.reopen_last_connections = value,
+                cx,
+            ))
+            .child(self.render_gen_segmented(
+                dbflux_i18n::t!("settings.general.default_focus.label"),
+                None,
+                Self::startup_focus_items(),
+                focus_index,
+                GeneralFormRow::DefaultFocus,
+                |this, index| {
+                    this.gen_settings.default_focus_on_startup =
+                        Self::startup_focus_for_index(index)
+                },
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.max_history.label"),
+                &self.input_max_history,
+                None,
+                GeneralFormRow::MaxHistory,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.auto_save_interval.label"),
+                &self.input_auto_save,
+                Some(dbflux_i18n::t!("settings.general.unit.milliseconds")),
+                GeneralFormRow::AutoSaveInterval,
+                cx,
+            ));
+
+        let refresh = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.refresh.group"),
+                Some(AppIcon::RefreshCcw.into()),
+                cx,
+            ))
+            .child(self.render_gen_dropdown(
+                dbflux_i18n::t!("settings.general.refresh_policy.label"),
+                None,
+                &self.dropdown_refresh_policy,
+                GeneralFormRow::DefaultRefreshPolicy,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.refresh_interval.label"),
+                &self.input_refresh_interval,
+                Some(dbflux_i18n::t!("settings.general.unit.seconds")),
+                GeneralFormRow::DefaultRefreshInterval,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.max_background_tasks.label"),
+                &self.input_max_bg_tasks,
+                None,
+                GeneralFormRow::MaxBackgroundTasks,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "pause-on-error",
+                dbflux_i18n::t!("settings.general.pause_refresh_on_error.label"),
+                None,
+                self.gen_settings.auto_refresh_pause_on_error,
+                GeneralFormRow::PauseRefreshOnError,
+                |this, value, _cx| this.gen_settings.auto_refresh_pause_on_error = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "refresh-visible",
+                dbflux_i18n::t!("settings.general.refresh_only_if_visible.label"),
+                None,
+                self.gen_settings.auto_refresh_only_if_visible,
+                GeneralFormRow::RefreshOnlyIfVisible,
+                |this, value, _cx| this.gen_settings.auto_refresh_only_if_visible = value,
+                cx,
+            ));
+
+        let safety = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.safety.group"),
+                Some(AppIcon::TriangleAlert.into()),
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "confirm-dangerous",
+                dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
+                Some(dbflux_i18n::t!("settings.general.confirm_dangerous.hint")),
+                self.gen_settings.confirm_dangerous_queries,
+                GeneralFormRow::ConfirmDangerous,
+                |this, value, _cx| this.gen_settings.confirm_dangerous_queries = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "requires-where",
+                dbflux_i18n::t!("settings.general.requires_where.label"),
+                None,
+                self.gen_settings.dangerous_requires_where,
+                GeneralFormRow::RequiresWhere,
+                |this, value, _cx| this.gen_settings.dangerous_requires_where = value,
+                cx,
+            ))
+            .child(self.render_gen_checkbox(
+                "requires-preview",
+                dbflux_i18n::t!("settings.general.requires_preview.label"),
+                None,
+                self.gen_settings.dangerous_requires_preview,
+                GeneralFormRow::RequiresPreview,
+                |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
+                cx,
+            ))
+            .child(self.render_gen_input_field(
+                dbflux_i18n::t!("settings.general.editor_row_limit.label"),
+                &self.input_editor_row_limit,
+                None,
+                GeneralFormRow::EditorRowLimit,
+                cx,
+            ));
+
+        let object_storage = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.object_storage.group"),
+                Some(AppIcon::Boxes.into()),
+                cx,
+            ))
+            .child(
+                self.render_gen_input_field(
+                    dbflux_i18n::t!("settings.general.object_preview_limit.label"),
+                    &self.input_object_preview_limit,
+                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                    GeneralFormRow::ObjectPreviewLimit,
+                    cx,
+                )
+                .child(layout::help_text(dbflux_i18n::t!(
+                    "settings.general.object_preview_hint.label"
+                ))),
+            );
+
+        let key_value = div()
+            .flex()
+            .flex_col()
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.general.key_value.group"),
+                Some(AppIcon::KeyRound.into()),
+                cx,
+            ))
+            .child(
+                self.render_gen_input_field(
+                    dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
+                    &self.input_key_value_size_limit,
+                    Some(dbflux_i18n::t!("settings.general.unit.mebibytes")),
+                    GeneralFormRow::KeyValueSizeLimit,
+                    cx,
+                )
+                .child(layout::help_text(dbflux_i18n::t!(
+                    "settings.general.key_value_size_limit_hint.label"
+                ))),
+            );
+
+        let nightly_storage = Self::is_nightly().then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .child(dbflux_components::composites::section_header(
+                    dbflux_i18n::t!("settings.general.storage.group"),
+                    Some(AppIcon::HardDrive.into()),
+                    cx,
+                ))
+                .child(self.render_gen_checkbox(
+                    "share-stable-db",
+                    dbflux_i18n::t!("settings.general.share_stable_db.label"),
+                    Some(dbflux_i18n::t!("settings.general.share_stable_db.hint")),
+                    self.gen_share_stable_db,
+                    GeneralFormRow::ShareStableDb,
+                    |this, value, cx| this.set_share_stable_db(value, cx),
+                    cx,
+                ))
+        });
 
         layout::single_form_section_shell(
             dbflux_components::composites::page_header(
@@ -600,451 +860,204 @@ impl GeneralSection {
             div()
                 .flex()
                 .flex_col()
-                .gap_6()
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.appearance.group"),
-                    cx,
-                ))
-                .child(self.render_gen_dropdown(
-                    dbflux_i18n::t!("settings.general.theme.label"),
-                    &self.dropdown_theme,
-                    is_at(GeneralFormRow::Theme),
-                    tint,
-                    GeneralFormRow::Theme,
-                    cx,
-                ))
-                .child(self.render_gen_dropdown(
-                    dbflux_i18n::t!("settings.general.style.label"),
-                    &self.dropdown_style,
-                    is_at(GeneralFormRow::Style),
-                    tint,
-                    GeneralFormRow::Style,
-                    cx,
-                ))
-                .child(self.render_gen_dropdown(
-                    dbflux_i18n::t!("settings.general.language.label"),
-                    &self.dropdown_language,
-                    is_at(GeneralFormRow::Language),
-                    tint,
-                    GeneralFormRow::Language,
-                    cx,
-                ))
-                .child(div().px_2().child(
-                    Text::body(dbflux_i18n::t!("settings.general.language.notice")).color(muted_fg),
-                ))
-                .child(
-                    self.render_gen_group_header(
-                        dbflux_i18n::t!("settings.general.editor.group"),
-                        cx,
-                    ),
-                )
-                .child(self.render_gen_checkbox(
-                    "vim-mode",
-                    dbflux_i18n::t!("settings.general.vim_mode.label"),
-                    self.gen_settings.vim_mode,
-                    is_at(GeneralFormRow::VimMode),
-                    GeneralFormRow::VimMode,
-                    |this, value, _cx| this.gen_settings.vim_mode = value,
-                    cx,
-                ))
-                .child(div().px_2().child(
-                    Text::body(dbflux_i18n::t!("settings.general.vim_mode.hint")).color(muted_fg),
-                ))
-                .child(
-                    self.render_gen_group_header(
-                        dbflux_i18n::t!("settings.general.startup.group"),
-                        cx,
-                    ),
-                )
-                .child(self.render_gen_checkbox(
-                    "restore-session",
-                    dbflux_i18n::t!("settings.general.restore_session.label"),
-                    self.gen_settings.restore_session_on_startup,
-                    is_at(GeneralFormRow::RestoreSession),
-                    GeneralFormRow::RestoreSession,
-                    |this, value, _cx| this.gen_settings.restore_session_on_startup = value,
-                    cx,
-                ))
-                .child(self.render_gen_checkbox(
-                    "reopen-conns",
-                    dbflux_i18n::t!("settings.general.reopen_connections.label"),
-                    self.gen_settings.reopen_last_connections,
-                    is_at(GeneralFormRow::ReopenConnections),
-                    GeneralFormRow::ReopenConnections,
-                    |this, value, _cx| this.gen_settings.reopen_last_connections = value,
-                    cx,
-                ))
-                .child(self.render_gen_dropdown(
-                    dbflux_i18n::t!("settings.general.default_focus.label"),
-                    &self.dropdown_default_focus,
-                    is_at(GeneralFormRow::DefaultFocus),
-                    tint,
-                    GeneralFormRow::DefaultFocus,
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.max_history.label"),
-                    &self.input_max_history,
-                    is_at(GeneralFormRow::MaxHistory),
-                    tint,
-                    GeneralFormRow::MaxHistory,
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.auto_save_interval.label"),
-                    &self.input_auto_save,
-                    is_at(GeneralFormRow::AutoSaveInterval),
-                    tint,
-                    GeneralFormRow::AutoSaveInterval,
-                    cx,
-                ))
-                .child(
-                    self.render_gen_group_header(
-                        dbflux_i18n::t!("settings.general.refresh.group"),
-                        cx,
-                    ),
-                )
-                .child(self.render_gen_dropdown(
-                    dbflux_i18n::t!("settings.general.refresh_policy.label"),
-                    &self.dropdown_refresh_policy,
-                    is_at(GeneralFormRow::DefaultRefreshPolicy),
-                    tint,
-                    GeneralFormRow::DefaultRefreshPolicy,
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.refresh_interval.label"),
-                    &self.input_refresh_interval,
-                    is_at(GeneralFormRow::DefaultRefreshInterval),
-                    tint,
-                    GeneralFormRow::DefaultRefreshInterval,
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.max_background_tasks.label"),
-                    &self.input_max_bg_tasks,
-                    is_at(GeneralFormRow::MaxBackgroundTasks),
-                    tint,
-                    GeneralFormRow::MaxBackgroundTasks,
-                    cx,
-                ))
-                .child(self.render_gen_checkbox(
-                    "pause-on-error",
-                    dbflux_i18n::t!("settings.general.pause_refresh_on_error.label"),
-                    self.gen_settings.auto_refresh_pause_on_error,
-                    is_at(GeneralFormRow::PauseRefreshOnError),
-                    GeneralFormRow::PauseRefreshOnError,
-                    |this, value, _cx| this.gen_settings.auto_refresh_pause_on_error = value,
-                    cx,
-                ))
-                .child(self.render_gen_checkbox(
-                    "refresh-visible",
-                    dbflux_i18n::t!("settings.general.refresh_only_if_visible.label"),
-                    self.gen_settings.auto_refresh_only_if_visible,
-                    is_at(GeneralFormRow::RefreshOnlyIfVisible),
-                    GeneralFormRow::RefreshOnlyIfVisible,
-                    |this, value, _cx| this.gen_settings.auto_refresh_only_if_visible = value,
-                    cx,
-                ))
-                .child(
-                    self.render_gen_group_header(
-                        dbflux_i18n::t!("settings.general.safety.group"),
-                        cx,
-                    ),
-                )
-                .child(self.render_gen_checkbox(
-                    "confirm-dangerous",
-                    dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
-                    self.gen_settings.confirm_dangerous_queries,
-                    is_at(GeneralFormRow::ConfirmDangerous),
-                    GeneralFormRow::ConfirmDangerous,
-                    |this, value, _cx| this.gen_settings.confirm_dangerous_queries = value,
-                    cx,
-                ))
-                .child(self.render_gen_checkbox(
-                    "requires-where",
-                    dbflux_i18n::t!("settings.general.requires_where.label"),
-                    self.gen_settings.dangerous_requires_where,
-                    is_at(GeneralFormRow::RequiresWhere),
-                    GeneralFormRow::RequiresWhere,
-                    |this, value, _cx| this.gen_settings.dangerous_requires_where = value,
-                    cx,
-                ))
-                .child(self.render_gen_checkbox(
-                    "requires-preview",
-                    dbflux_i18n::t!("settings.general.requires_preview.label"),
-                    self.gen_settings.dangerous_requires_preview,
-                    is_at(GeneralFormRow::RequiresPreview),
-                    GeneralFormRow::RequiresPreview,
-                    |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.editor_row_limit.label"),
-                    &self.input_editor_row_limit,
-                    is_at(GeneralFormRow::EditorRowLimit),
-                    tint,
-                    GeneralFormRow::EditorRowLimit,
-                    cx,
-                ))
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.object_storage.group"),
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.object_preview_limit.label"),
-                    &self.input_object_preview_limit,
-                    is_at(GeneralFormRow::ObjectPreviewLimit),
-                    tint,
-                    GeneralFormRow::ObjectPreviewLimit,
-                    cx,
-                ))
-                .child(
-                    div().px_2().child(
-                        Text::body(dbflux_i18n::t!(
-                            "settings.general.object_preview_hint.label"
-                        ))
-                        .color(muted_fg),
-                    ),
-                )
-                .child(self.render_gen_group_header(
-                    dbflux_i18n::t!("settings.general.key_value.group"),
-                    cx,
-                ))
-                .child(self.render_gen_input_field(
-                    dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
-                    &self.input_key_value_size_limit,
-                    is_at(GeneralFormRow::KeyValueSizeLimit),
-                    tint,
-                    GeneralFormRow::KeyValueSizeLimit,
-                    cx,
-                ))
-                .child(
-                    div().px_2().child(
-                        Text::body(dbflux_i18n::t!(
-                            "settings.general.key_value_size_limit_hint.label"
-                        ))
-                        .color(muted_fg),
-                    ),
-                )
-                .when(Self::is_nightly(), |column| {
-                    column
-                        .child(self.render_gen_group_header(
-                            dbflux_i18n::t!("settings.general.storage.group"),
-                            cx,
-                        ))
-                        .child(self.render_gen_checkbox(
-                            "share-stable-db",
-                            dbflux_i18n::t!("settings.general.share_stable_db.label"),
-                            self.gen_share_stable_db,
-                            is_at(GeneralFormRow::ShareStableDb),
-                            GeneralFormRow::ShareStableDb,
-                            |this, value, cx| this.set_share_stable_db(value, cx),
-                            cx,
-                        ))
-                        .child(
-                            div().px_2().child(
-                                Text::body(dbflux_i18n::t!(
-                                    "settings.general.share_stable_db.hint"
-                                ))
-                                .color(muted_fg),
-                            ),
-                        )
-                }),
+                .child(appearance)
+                .child(editor)
+                .child(startup)
+                .child(refresh)
+                .child(safety)
+                .child(object_storage)
+                .child(key_value)
+                .children(nightly_storage),
         )
     }
 
     pub(super) fn render_general_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let is_save_focused = self.content_focused
-            && self.gen_form_rows().get(self.gen_form_cursor).copied()
-                == Some(GeneralFormRow::SaveButton);
+        let is_save_focused = self.is_at(GeneralFormRow::SaveButton);
 
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(layout::footer_action_frame(
-                is_save_focused,
-                ChromeColors::tint(cx.theme()),
-                FluxButton::new(
-                    "save-general",
-                    dbflux_i18n::t!("settings.general.save.button"),
-                )
-                .small()
-                .primary()
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.content_focused = true;
-                    this.gen_form_cursor = this
-                        .gen_form_rows()
-                        .iter()
-                        .position(|row| *row == GeneralFormRow::SaveButton)
-                        .unwrap_or_default();
-                    this.save_general_settings(window, cx);
-                })),
-            ))
-            .into_any_element()
+        FluxButton::new(
+            "save-general",
+            dbflux_i18n::t!("settings.general.save.button"),
+        )
+        .small()
+        .primary()
+        .icon(AppIcon::Save)
+        .kbd("Ctrl S")
+        .focused(is_save_focused)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.select_row(GeneralFormRow::SaveButton);
+            this.save_general_settings(window, cx);
+        }))
+        .into_any_element()
     }
 
-    fn render_gen_group_header(
-        &self,
-        label: impl Into<SharedString>,
-        cx: &App,
-    ) -> impl IntoElement {
-        dbflux_components::composites::section_header(label, None, cx)
+    /// Whether the keyboard cursor is on `row` while the page holds focus.
+    fn is_at(&self, row: GeneralFormRow) -> bool {
+        self.content_focused && self.gen_form_rows().get(self.gen_form_cursor).copied() == Some(row)
+    }
+
+    /// Moves the keyboard cursor to `row` and gives the page focus.
+    fn select_row(&mut self, row: GeneralFormRow) {
+        self.content_focused = true;
+
+        if let Some(position) = self
+            .gen_form_rows()
+            .iter()
+            .position(|candidate| *candidate == row)
+        {
+            self.gen_form_cursor = position;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
     fn render_gen_checkbox(
         &self,
         id: &'static str,
-        label: impl Into<SharedString>,
+        label: String,
+        description: Option<String>,
         checked: bool,
-        is_focused: bool,
         row: GeneralFormRow,
         setter: fn(&mut Self, bool, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let tint = ChromeColors::tint(cx.theme());
-        let label = label.into();
+        let checkbox = Checkbox::new(id)
+            .checked(checked)
+            .label(label)
+            .on_click(cx.listener(move |this, value: &bool, _, cx| {
+                this.select_row(row);
+                setter(this, *value, cx);
+                cx.notify();
+            }));
 
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                tint
-            } else {
-                gpui::transparent_black()
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.content_focused = true;
-                    if let Some(position) = this
-                        .gen_form_rows()
-                        .iter()
-                        .position(|candidate| *candidate == row)
-                    {
-                        this.gen_form_cursor = position;
-                    }
+        layout::cursor_ring(
+            self.is_at(row),
+            layout::check_row(checkbox, description.map(SharedString::from)),
+            cx,
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.select_row(row);
+                cx.notify();
+            }),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_gen_segmented(
+        &self,
+        label: String,
+        help: Option<String>,
+        items: Vec<SegmentedItem>,
+        active_index: usize,
+        row: GeneralFormRow,
+        setter: fn(&mut Self, usize),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let entity = cx.entity();
+        let control = SegmentedControl::new(
+            items,
+            SharedString::from(active_index.to_string()),
+            move |selected: &SharedString, _window, cx| {
+                let Ok(index) = selected.parse::<usize>() else {
+                    return;
+                };
+
+                entity.update(cx, |this, cx| {
+                    this.select_row(row);
+                    setter(this, index);
                     cx.notify();
-                }),
-            )
-            .child(
-                Checkbox::new(id)
-                    .checked(checked)
-                    .aria_label(label.clone())
-                    .on_click(cx.listener(move |this, value: &bool, _, cx| {
-                        setter(this, *value, cx);
-                        cx.notify();
-                    })),
-            )
-            .child(Text::body(label))
+                });
+            },
+        );
+
+        layout::form_row(
+            label,
+            div()
+                .flex()
+                .child(layout::cursor_ring(self.is_at(row), control, cx)),
+            help.map(SharedString::from),
+        )
     }
 
     fn render_gen_dropdown(
         &self,
-        label: impl Into<SharedString>,
+        label: String,
+        help: Option<String>,
         dropdown: &Entity<Dropdown>,
-        is_focused: bool,
-        tint: Hsla,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                tint
-            } else {
-                gpui::transparent_black()
-            })
+        layout::form_row(
+            label,
+            layout::cursor_ring(
+                self.is_at(row),
+                div()
+                    .w(SettingsMetrics::SELECT_WIDTH)
+                    .child(dropdown.clone()),
+                cx,
+            )
+            .w(SettingsMetrics::SELECT_WIDTH)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.content_focused = true;
-                    if let Some(position) = this
-                        .gen_form_rows()
-                        .iter()
-                        .position(|candidate| *candidate == row)
-                    {
-                        this.gen_form_cursor = position;
-                    }
+                    this.select_row(row);
                     cx.notify();
                 }),
-            )
-            .child(Text::body(label))
-            .child(div().min_w(px(140.0)).child(dropdown.clone()))
+            ),
+            help.map(SharedString::from),
+        )
     }
 
     /// Stable element id for inputs that UI automation addresses by name.
-    fn input_element_id(row: GeneralFormRow) -> Option<&'static str> {
+    fn input_element_id(row: GeneralFormRow) -> &'static str {
         match row {
-            GeneralFormRow::EditorRowLimit => Some("editor-row-limit"),
-            _ => None,
+            GeneralFormRow::MaxHistory => "general-max-history",
+            GeneralFormRow::AutoSaveInterval => "general-auto-save",
+            GeneralFormRow::DefaultRefreshInterval => "general-refresh-interval",
+            GeneralFormRow::MaxBackgroundTasks => "general-max-background-tasks",
+            GeneralFormRow::ObjectPreviewLimit => "general-object-preview-limit",
+            GeneralFormRow::KeyValueSizeLimit => "general-key-value-size-limit",
+            _ => "editor-row-limit",
         }
     }
 
+    /// Numeric form row: a short mono field with an optional unit inside it.
     fn render_gen_input_field(
         &self,
-        label: impl Into<SharedString>,
+        label: String,
         input: &Entity<InputState>,
-        is_focused: bool,
-        tint: Hsla,
+        unit: Option<String>,
         row: GeneralFormRow,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div().flex().child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(Text::body(label))
-                .child(
-                    div()
-                        .w_full()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_focused {
-                            tint
-                        } else {
-                            gpui::transparent_black()
-                        })
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                this.switching_input = true;
-                                this.content_focused = true;
-                                if let Some(position) = this
-                                    .gen_form_rows()
-                                    .iter()
-                                    .position(|candidate| *candidate == row)
-                                {
-                                    this.gen_form_cursor = position;
-                                }
-                                this.gen_focus_current_input(window, cx);
-                                cx.notify();
-                            }),
-                        )
-                        .child(
-                            Input::new(input)
-                                .small()
-                                .w_full()
-                                .when_some(Self::input_element_id(row), |input, id| input.id(id)),
-                        ),
-                ),
+    ) -> Div {
+        let field = Input::new(input)
+            .id(Self::input_element_id(row))
+            .aria_label(label.clone())
+            .when_some(unit, |field, unit| {
+                field.suffix(Text::code(unit).muted_foreground())
+            });
+
+        layout::form_row(
+            label,
+            layout::cursor_ring(
+                self.is_at(row) && !self.gen_editing_field,
+                div()
+                    .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+                    .font_family(AppFonts::MONO)
+                    .child(field),
+                cx,
+            )
+            .w(SettingsMetrics::NUMBER_FIELD_WIDTH)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.switching_input = true;
+                    this.select_row(row);
+                    this.gen_focus_current_input(window, cx);
+                    cx.notify();
+                }),
+            ),
+            None,
         )
     }
 }

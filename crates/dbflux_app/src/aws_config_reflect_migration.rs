@@ -422,6 +422,7 @@ mod tests {
             ssh_tunnel_profile_id: None,
             created_at: String::new(),
             updated_at: String::new(),
+            environment: None,
         })
         .expect("insert connection");
     }

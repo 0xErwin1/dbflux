@@ -11,6 +11,21 @@ use super::{
     FormFocus, View,
 };
 
+/// Environment after `current` in the order None, Development, Staging,
+/// Production, None.
+pub(super) fn next_environment(
+    current: Option<dbflux_core::ConnectionEnvironment>,
+) -> Option<dbflux_core::ConnectionEnvironment> {
+    use dbflux_core::ConnectionEnvironment::{Development, Production, Staging};
+
+    match current {
+        None => Some(Development),
+        Some(Development) => Some(Staging),
+        Some(Staging) => Some(Production),
+        Some(Production) => None,
+    }
+}
+
 fn next_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
     match current {
         ActiveTab::Main if has_access_tab => ActiveTab::Access,
@@ -95,7 +110,8 @@ impl FormFocus {
 
         if state.uses_file_form {
             return match self {
-                Name => Database,
+                Name => Environment,
+                Environment => Database,
                 Database | FileBrowse => TestConnection,
                 TestConnection => Save,
                 Save => Name,
@@ -105,7 +121,8 @@ impl FormFocus {
 
         if state.has_uri_option && state.uri_mode_active {
             return match self {
-                Name => UseUri,
+                Name => Environment,
+                Environment => UseUri,
                 UseUri => HostValueSource,
                 HostValueSource | Host | Port => PasswordValueSource,
                 DatabaseValueSource | Database | UserValueSource | User => PasswordValueSource,
@@ -118,7 +135,8 @@ impl FormFocus {
 
         if state.has_uri_option {
             return match self {
-                Name => UseUri,
+                Name => Environment,
+                Environment => UseUri,
                 UseUri => HostValueSource,
                 HostValueSource | Host | Port => DatabaseValueSource,
                 DatabaseValueSource | Database => UserValueSource,
@@ -131,7 +149,8 @@ impl FormFocus {
         }
 
         match self {
-            Name => HostValueSource,
+            Name => Environment,
+            Environment => HostValueSource,
             HostValueSource | Host | Port => DatabaseValueSource,
             DatabaseValueSource | Database => UserValueSource,
             UserValueSource | User => PasswordValueSource,
@@ -148,7 +167,8 @@ impl FormFocus {
         if state.uses_file_form {
             return match self {
                 Name => Save,
-                Database | FileBrowse => Name,
+                Environment => Name,
+                Database | FileBrowse => Environment,
                 TestConnection => Database,
                 Save => TestConnection,
                 _ => Save,
@@ -158,7 +178,8 @@ impl FormFocus {
         if state.has_uri_option && state.uri_mode_active {
             return match self {
                 Name => Save,
-                UseUri => Name,
+                Environment => Name,
+                UseUri => Environment,
                 HostValueSource | Host | Port => UseUri,
                 DatabaseValueSource | Database | UserValueSource | User => HostValueSource,
                 PasswordValueSource | Password | PasswordToggle | PasswordSave => HostValueSource,
@@ -171,7 +192,8 @@ impl FormFocus {
         if state.has_uri_option {
             return match self {
                 Name => Save,
-                UseUri => Name,
+                Environment => Name,
+                UseUri => Environment,
                 HostValueSource | Host | Port => UseUri,
                 DatabaseValueSource | Database => HostValueSource,
                 UserValueSource | User => DatabaseValueSource,
@@ -184,7 +206,8 @@ impl FormFocus {
 
         match self {
             Name => Save,
-            HostValueSource | Host | Port => Name,
+            Environment => Name,
+            HostValueSource | Host | Port => Environment,
             DatabaseValueSource | Database => HostValueSource,
             UserValueSource | User => DatabaseValueSource,
             PasswordValueSource | Password | PasswordToggle | PasswordSave => UserValueSource,
@@ -880,7 +903,7 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::render_driver_select::{
-            GRID_COLUMNS, GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
+            GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
         };
 
         let query = self.current_driver_filter(cx);
@@ -889,7 +912,8 @@ impl ConnectionManagerWindow {
 
         let section_sizes = visible_section_sizes(&visible);
         let current = self.driver_focus.index();
-        let step = |direction| move_grid_focus(&section_sizes, GRID_COLUMNS, current, direction);
+        let columns = self.driver_grid_columns;
+        let step = |direction| move_grid_focus(&section_sizes, columns, current, direction);
 
         match command {
             Command::FocusSearch => {
@@ -1973,6 +1997,10 @@ impl ConnectionManagerWindow {
                 self.browse_ssh_key(window, cx);
             }
 
+            FormFocus::Environment => {
+                self.form.environment = next_environment(self.form.environment);
+            }
+
             FormFocus::UseUri => {
                 let current = self
                     .form
@@ -2201,6 +2229,9 @@ mod tests {
 
         let mut focus = FormFocus::Name;
         focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::Environment);
+
+        focus = focus.down_main(state);
         assert_eq!(focus, FormFocus::UseUri);
 
         focus = focus.down_main(state);
@@ -2224,6 +2255,9 @@ mod tests {
         let state = main_state(true, true, true, true);
 
         let mut focus = FormFocus::Name;
+        focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::Environment);
+
         focus = focus.down_main(state);
         assert_eq!(focus, FormFocus::UseUri);
 

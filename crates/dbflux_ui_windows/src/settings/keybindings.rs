@@ -1,15 +1,26 @@
+use super::layout;
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::{ContextId, KeyChord};
+use dbflux_components::composites::ListRow;
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon as FluxIcon, Kbd};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{
+    Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, ChamferRing, Icon as FluxIcon, Kbd,
+};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, Spacing};
 use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
 use super::keybindings_section::{KeybindingsListItem, KeybindingsSection, KeybindingsSelection};
+
+/// Height of a binding row. (37 px)
+const KEYBINDING_ROW_HEIGHT: Pixels = px(37.0);
+
+/// Chevron of a context header. (14 px)
+const KEYBINDING_CHEVRON: Pixels = px(14.0);
 
 impl KeybindingsSection {
     pub(super) fn render_keybindings_section(
@@ -20,6 +31,8 @@ impl KeybindingsSection {
         let keymap = default_keymap();
         let filter_text = self.keybindings_filter.read(cx).value().to_lowercase();
         let has_filter = !filter_text.is_empty();
+        let filter_is_empty = self.keybindings_filter.read(cx).value().is_empty();
+        let filter_focused = self.keybindings_editing_filter;
 
         // Validate selection when filter is active
         if has_filter {
@@ -30,6 +43,7 @@ impl KeybindingsSection {
         let border = theme.border;
         let muted_foreground = theme.muted_foreground;
         let secondary = theme.secondary;
+        let strong = ChromeColors::strong(theme);
 
         let current_selection = self.keybindings_selection;
         let is_content_focused = self.content_focused && !self.keybindings_editing_filter;
@@ -143,28 +157,25 @@ impl KeybindingsSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::page_header(
-                dbflux_i18n::t!("settings.keybindings.title"),
-                dbflux_i18n::t!("settings.keybindings.subtitle"),
-                cx,
-            ))
             .child(
-                div().p_4().border_b_1().border_color(border).child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            FluxIcon::new(AppIcon::Search)
-                                .size(Heights::ICON_SM)
-                                .color(muted_foreground),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(Input::new(&self.keybindings_filter).small()),
-                        ),
-                ),
+                div()
+                    .flex_shrink_0()
+                    .pb(SettingsMetrics::PAGE_HEAD_PADDING_BOTTOM - Spacing::SM)
+                    .border_b_1()
+                    .border_color(border)
+                    .child(dbflux_components::composites::page_header(
+                        dbflux_i18n::t!("settings.keybindings.title"),
+                        dbflux_i18n::t!("settings.keybindings.subtitle"),
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(SettingsMetrics::BODY_PADDING_X)
+                    .pt(SettingsMetrics::PAGE_HEAD_PADDING_BOTTOM)
+                    .pb(Spacing::SM)
+                    .child(self.render_filter_field(filter_is_empty, filter_focused, cx)),
             )
             .child(
                 div()
@@ -173,10 +184,10 @@ impl KeybindingsSection {
                     .min_h_0()
                     .overflow_scroll()
                     .track_scroll(&self.keybindings_scroll_handle)
-                    .p_4()
+                    .px(SettingsMetrics::BODY_PADDING_X)
+                    .pb(Spacing::XL)
                     .flex()
                     .flex_col()
-                    .gap_0()
                     .children(flat_items.into_iter().map(|item| {
                         match item {
                             KeybindingsListItem::ContextHeader {
@@ -192,79 +203,65 @@ impl KeybindingsSection {
                                     .map(|p| crate::labels::keybinding_context_name(&p))
                                     .unwrap_or_default();
 
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "context-{}",
-                                        context.as_gpui_context()
-                                    )))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .py_2()
-                                    .mt_1()
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(if is_selected {
-                                        secondary
-                                    } else {
-                                        gpui::transparent_black()
-                                    })
-                                    .hover(|d| d.bg(secondary))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.keybindings_selection =
-                                            KeybindingsSelection::Context(ctx_idx);
+                                ListRow::new(SharedString::from(format!(
+                                    "context-{}",
+                                    context.as_gpui_context()
+                                )))
+                                .focused(is_selected)
+                                .build(cx)
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .pt(FormMetrics::ROW_GAP)
+                                .pb(Spacing::SM)
+                                .border_b_1()
+                                .border_color(border)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.keybindings_selection =
+                                        KeybindingsSelection::Context(ctx_idx);
 
-                                        if this.keybindings_expanded.contains(&context) {
-                                            this.keybindings_expanded.remove(&context);
-                                        } else {
-                                            this.keybindings_expanded.insert(context);
-                                        }
-                                        cx.notify();
-                                    }))
-                                    // Chevron icon
-                                    .child(
-                                        div()
-                                            .w(Heights::ICON_SM)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                FluxIcon::new(if is_expanded {
-                                                    AppIcon::ChevronDown
-                                                } else {
-                                                    AppIcon::ChevronRight
-                                                })
-                                                .size(Heights::ICON_SM)
-                                                .color(muted_foreground),
-                                            ),
-                                    )
-                                    // Context name and bindings count
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(Text::body(
-                                                crate::labels::keybinding_context_name(&context),
-                                            ))
-                                            .child(
-                                                Text::body(
-                                                    crate::labels::keybindings_binding_count(
-                                                        binding_count,
-                                                    ),
-                                                )
-                                                .color(muted_foreground),
-                                            ),
-                                    )
-                                    // Inherits info
-                                    .when(has_parent, |d| {
-                                        d.child(Text::caption(
-                                            crate::labels::keybindings_inherits_from(&parent_name),
-                                        ))
+                                    if this.keybindings_expanded.contains(&context) {
+                                        this.keybindings_expanded.remove(&context);
+                                    } else {
+                                        this.keybindings_expanded.insert(context);
+                                    }
+                                    cx.notify();
+                                }))
+                                // Chevron icon
+                                .child(
+                                    FluxIcon::new(if is_expanded {
+                                        AppIcon::ChevronDown
+                                    } else {
+                                        AppIcon::ChevronRight
                                     })
-                                    .into_any_element()
+                                    .size(KEYBINDING_CHEVRON)
+                                    .color(muted_foreground),
+                                )
+                                // Context name and bindings count
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            Text::body(crate::labels::keybinding_context_name(
+                                                &context,
+                                            ))
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(strong),
+                                        )
+                                        .child(layout::help_text(
+                                            crate::labels::keybindings_binding_count(binding_count),
+                                        )),
+                                )
+                                // Inherits info
+                                .when(has_parent, |d| {
+                                    d.child(layout::help_text(
+                                        crate::labels::keybindings_inherits_from(&parent_name),
+                                    ))
+                                })
+                                .into_any_element()
                             }
 
                             KeybindingsListItem::Binding {
@@ -315,57 +312,88 @@ impl KeybindingsSection {
         ctx_idx: usize,
         binding_idx: usize,
         muted_foreground: Hsla,
-        secondary: Hsla,
-        border: Hsla,
+        _secondary: Hsla,
+        _border: Hsla,
         inherited_label: &str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        let row_divider = cx.theme().table_row_border;
+
+        ListRow::new(SharedString::from(format!(
+            "binding-{}-{}",
+            ctx_idx, binding_idx
+        )))
+        .selected(is_selected)
+        .build(cx)
+        .flex()
+        .items_center()
+        .gap(FormMetrics::ROW_GAP)
+        .h(KEYBINDING_ROW_HEIGHT)
+        .px(Spacing::LG + Spacing::XS)
+        .border_b_1()
+        .border_color(row_divider)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, binding_idx);
+            cx.notify();
+        }))
+        .child(
+            div()
+                .w(SettingsMetrics::FORM_LABEL_WIDTH)
+                .flex_shrink_0()
+                .child(Kbd::chord(chord_display_parts(chord))),
+        )
+        .child(div().flex_1().child(if is_inherited {
+            Text::body(cmd_name.to_string()).color(muted_foreground)
+        } else {
+            Text::body(cmd_name.to_string())
+        }))
+        .when(is_inherited, |row| {
+            row.child(Badge::new(inherited_label.to_string(), BadgeTone::Neutral))
+        })
+    }
+
+    /// Filter field of the page: a 30 px chamfered field with the search
+    /// icon, the frameless input and the `/` keycap while it is empty.
+    fn render_filter_field(
+        &self,
+        filter_is_empty: bool,
+        focused: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+
+        let mut shape = Chamfer::new(ChamferCut::CONTROL)
+            .fill(theme.background)
+            .border(theme.border);
+
+        if focused {
+            shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
+        }
+
         div()
-            .id(SharedString::from(format!(
-                "binding-{}-{}",
-                ctx_idx, binding_idx
-            )))
-            .ml(px(28.0))
-            .pl_4()
-            .border_l_2()
-            .border_color(border)
+            .relative()
             .flex()
             .items_center()
-            .py_1()
-            .px_2()
-            .rounded_r(Spacing::XS)
-            .gap_4()
-            .cursor_pointer()
-            .bg(if is_selected {
-                secondary
-            } else {
-                gpui::transparent_black()
-            })
-            .hover(|d| d.bg(secondary))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.keybindings_selection = KeybindingsSelection::Binding(ctx_idx, binding_idx);
-                cx.notify();
-            }))
+            .gap(Fields::GAP)
+            .h(Fields::HEIGHT)
+            .px(Fields::PADDING_X)
+            .text_size(Fields::TEXT)
+            .child(shape)
             .child(
-                div()
-                    .w(px(140.0))
-                    .child(Kbd::chord(chord_display_parts(chord))),
+                FluxIcon::new(AppIcon::Search)
+                    .size(SettingsMetrics::NAV_SEARCH_ICON)
+                    .color(theme.muted_foreground),
             )
-            .child(div().flex_1().child(if is_inherited {
-                Text::body(cmd_name.to_string()).color(muted_foreground)
-            } else {
-                Text::body(cmd_name.to_string())
-            }))
-            .when(is_inherited, |d| {
-                d.child(
-                    div()
-                        .px_2()
-                        .py(px(2.0))
-                        .rounded(Radii::SM)
-                        .bg(secondary)
-                        .child(Text::caption(inherited_label.to_string())),
-                )
-            })
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.keybindings_filter)
+                        .id("keybindings-filter")
+                        .aria_label(dbflux_i18n::t!("settings.keybindings.filter_label"))
+                        .small()
+                        .appearance(false),
+                ),
+            )
+            .when(filter_is_empty, |field| field.child(Kbd::new("/")))
     }
 
     fn render_conflict_warning(
@@ -625,7 +653,7 @@ mod tests {
         let english = dbflux_i18n::t!("settings.keybindings.title", locale = "en");
         let spanish = dbflux_i18n::t!("settings.keybindings.title", locale = "es");
 
-        assert_eq!(english, "Keyboard Shortcuts");
+        assert_eq!(english, "Keyboard shortcuts");
         assert_eq!(spanish, "Atajos de teclado");
         assert_ne!(english, spanish);
     }

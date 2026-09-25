@@ -10,6 +10,21 @@ mod render_driver_select;
 mod render_tabs;
 
 pub use export_modal::{ExportBundleModal, ExportBundleModalEvent, ExportTarget};
+
+/// Initial Connection Manager window size: the driver picker board is 1180 px
+/// wide and the connection form board 1000 px tall, so one size fits both
+/// views. Shrunk to the display when it does not fit.
+pub const WINDOW_WIDTH: f32 = 1180.0;
+pub const WINDOW_HEIGHT: f32 = 1000.0;
+
+/// Smallest Connection Manager window; the views scroll below the initial size.
+pub const WINDOW_MIN_WIDTH: f32 = 600.0;
+pub const WINDOW_MIN_HEIGHT: f32 = 500.0;
+
+/// Bounds of a new Connection Manager window, fitted to the primary display.
+pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
+    dbflux_ui_base::platform::fitted_window_bounds(WINDOW_WIDTH, WINDOW_HEIGHT, cx)
+}
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
 use crate::ssh_shared::SshAuthSelection;
@@ -122,6 +137,7 @@ impl DriverFocus {
 enum FormFocus {
     // Main tab fields
     Name,
+    Environment,
     AccessMethod,
     UseUri,
     HostValueSource,
@@ -243,6 +259,8 @@ struct DriverInfo {
 struct FormState {
     selected_driver_id: Option<String>,
     selected_driver: Option<Arc<dyn DbDriver>>,
+    /// Deployment environment chosen in the Main tab; saved on the profile.
+    environment: Option<dbflux_core::ConnectionEnvironment>,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -392,6 +410,9 @@ pub struct ConnectionManagerWindow {
     import_panel: Entity<ImportConnectionsPanel>,
     active_tab: ActiveTab,
     available_drivers: Vec<DriverInfo>,
+    /// Card columns of the driver picker at its last layout; the keyboard
+    /// grid navigation steps by it.
+    driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
 
     validation_errors: Vec<String>,
@@ -843,6 +864,7 @@ impl ConnectionManagerWindow {
             import_panel,
             active_tab: ActiveTab::Main,
             available_drivers,
+            driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
@@ -861,6 +883,7 @@ impl ConnectionManagerWindow {
             form: FormState {
                 selected_driver_id: None,
                 selected_driver: None,
+                environment: None,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1009,6 +1032,7 @@ impl ConnectionManagerWindow {
         instance.form.selected_driver = driver.clone();
         instance.form.selected_driver_id = Some(profile.driver_id());
         instance.form.form_save_password = profile.save_password;
+        instance.form.environment = profile.environment();
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {

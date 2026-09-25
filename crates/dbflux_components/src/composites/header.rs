@@ -116,15 +116,15 @@ fn panel_header_row(cx: &App) -> gpui::Div {
         .border_color(cx.theme().border)
 }
 
-/// Section header, as used between groups of settings: an optional icon and
-/// the title as an uppercase `Label`, over a line.
+/// Section header, as used between groups of settings: an optional tint
+/// icon and the title as a 10 px uppercase `Label`, over a line.
 pub fn section_header(
     title: impl Into<SharedString>,
     icon: Option<IconSource>,
     cx: &App,
 ) -> gpui::Div {
     let theme = cx.theme();
-    let muted = theme.muted_foreground;
+    let tint = ChromeColors::tint(theme);
 
     div()
         .flex()
@@ -136,9 +136,9 @@ pub fn section_header(
         .border_b_1()
         .border_color(theme.border)
         .when_some(icon, |row, icon| {
-            row.child(Icon::new(icon).size(Heights::ICON_SM).color(muted))
+            row.child(Icon::new(icon).size(HeaderMetrics::LABEL_ICON).color(tint))
         })
-        .child(Text::label(title))
+        .child(Text::label(title).font_size(HeaderMetrics::LABEL_FONT))
 }
 
 /// Page head of a settings page: the page title and a one-line description.
@@ -183,7 +183,7 @@ fn page_header_layout(
         .items_center()
         .justify_between()
         .gap(Spacing::MD)
-        .px(Spacing::LG)
+        .px(HeaderMetrics::SECTION_PADDING_X)
         .pt(HeaderMetrics::SECTION_PADDING_TOP)
         .pb(HeaderMetrics::SECTION_PADDING_BOTTOM)
         .child(text_block)

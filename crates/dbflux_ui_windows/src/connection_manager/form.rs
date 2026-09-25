@@ -391,6 +391,7 @@ impl ConnectionManagerWindow {
         };
 
         profile.save_password = self.form.form_save_password;
+        profile.environment = self.form.environment;
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);

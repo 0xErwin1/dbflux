@@ -1,10 +1,9 @@
-use dbflux_components::components::tree_nav::{self, FlatRow};
-use dbflux_components::controls::Button;
-use dbflux_components::primitives::Icon;
-use dbflux_components::primitives::Text;
-use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::theme::ghost_border_color;
-use dbflux_components::tokens::{ChromeColors, Heights, Radii};
+use crate::tokens::SettingsMetrics;
+use dbflux_components::components::tree_nav::FlatRow;
+use dbflux_components::composites::ListRow;
+use dbflux_components::controls::{Button, Input};
+use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ShellMetrics};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
@@ -16,13 +15,7 @@ use super::{
     SettingsCoordinator, SettingsFocus, layout,
 };
 
-const INDENT_PX: f32 = 16.0;
-
 impl SettingsCoordinator {
-    fn settings_nav_row_label(label: SharedString, text_color: Hsla) -> AnyElement {
-        Text::body(label).color(text_color).into_any_element()
-    }
-
     fn section_display_name(section: super::SettingsSectionId) -> String {
         match section {
             super::SettingsSectionId::General => dbflux_i18n::t!("settings.nav.general"),
@@ -47,94 +40,136 @@ impl SettingsCoordinator {
         }
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let sidebar_bg = cx.theme().sidebar;
-        let theme = cx.theme().clone();
+    /// Navigation column (P1Settings*): the search field, then each group's
+    /// label over its entries.
+    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_area == SettingsFocus::Sidebar;
-        let row_height = Heights::ROW;
-        let line_color = tree_nav::tree_line_color(&theme);
-
-        let rows = self.sidebar_tree.rows();
         let cursor_pos = self.sidebar_tree.cursor();
+        let rows = self.sidebar_tree.rows();
 
         let mut row_elements: Vec<AnyElement> = Vec::with_capacity(rows.len());
 
         for (idx, row) in rows.iter().enumerate() {
-            let is_cursor = focused && idx == cursor_pos;
-            let gutter =
-                tree_nav::render_gutter(row.depth, INDENT_PX, row_height, line_color, true);
             let is_group = row.has_children && !row.selectable;
 
-            let content: AnyElement = if is_group {
-                self.render_group_row(row, is_cursor, &theme, cx)
-            } else {
-                self.render_item_row(row, is_cursor, focused, &theme, cx)
-            };
-
-            let mut outer = div()
-                .flex()
-                .items_center()
-                .h(row_height)
-                .child(gutter)
-                .child(content);
-
             if is_group {
-                outer = outer.mt_2();
+                row_elements.push(Self::render_group_row(row));
+            } else {
+                let is_cursor = focused && idx == cursor_pos;
+                row_elements.push(self.render_item_row(row, is_cursor, cx));
             }
-
-            row_elements.push(outer.into_any_element());
         }
+
+        let no_results = rows.is_empty();
+        let theme = cx.theme();
 
         div()
             .w_full()
             .h_full()
-            .bg(sidebar_bg)
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.border)
             .flex()
             .flex_col()
-            .p_2()
-            .gap_0()
-            .children(row_elements)
-            .child(div().flex_1())
+            .child(self.render_nav_search(window, cx))
+            .child(
+                div()
+                    .id("settings-nav")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .children(row_elements)
+                    .when(no_results, |list| {
+                        list.child(
+                            div()
+                                .px(SettingsMetrics::NAV_ROW_PADDING_X)
+                                .py(SettingsMetrics::NAV_GROUP_PADDING_TOP)
+                                .child(
+                                    Text::body(dbflux_i18n::t!("settings.nav.no_results"))
+                                        .muted_foreground(),
+                                ),
+                        )
+                    }),
+            )
     }
 
-    fn render_group_row(
-        &self,
-        row: &FlatRow,
-        _is_cursor: bool,
-        _theme: &gpui_component::Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let row_id = row.id.clone();
+    /// Search field of the navigation: a 30 px chamfered field with the
+    /// search icon, the frameless input and the `/` keycap that focuses it.
+    fn render_nav_search(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let search = self.nav_search.read(cx);
+        let query_is_empty = search.value().is_empty();
+        let focused = search.focus_handle(cx).contains_focused(window, cx);
 
-        // Group rows render as uppercase section labels — felt-not-seen dividers
+        let mut shape = Chamfer::new(ChamferCut::CONTROL)
+            .fill(theme.background)
+            .border(theme.border);
+
+        if focused {
+            shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
+        }
+
+        div()
+            .flex_shrink_0()
+            .p(SettingsMetrics::NAV_SEARCH_PADDING)
+            .child(
+                div()
+                    .id("settings-nav-search")
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(Fields::GAP)
+                    .h(Fields::HEIGHT)
+                    .px(Fields::PADDING_X)
+                    .text_size(Fields::TEXT)
+                    .child(shape)
+                    .child(
+                        Icon::new(dbflux_components::icons::AppIcon::Search)
+                            .size(SettingsMetrics::NAV_SEARCH_ICON)
+                            .color(theme.muted_foreground),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.nav_search)
+                                .id("settings-nav-search-input")
+                                .aria_label(dbflux_i18n::t!("settings.nav.search_placeholder"))
+                                .small()
+                                .appearance(false)
+                                .cleanable(true),
+                        ),
+                    )
+                    .when(query_is_empty, |field| field.child(Kbd::new("/"))),
+            )
+    }
+
+    /// Group label of the navigation: an uppercase label, not selectable.
+    fn render_group_row(row: &FlatRow) -> AnyElement {
         div()
             .id(SharedString::from(format!("cat-{}", row.id)))
-            .flex_1()
-            .h_full()
-            .px_2()
             .flex()
             .items_center()
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.sidebar_tree.select_by_id(row_id.as_ref());
-                let _ = this.sidebar_tree.activate();
-                cx.notify();
-            }))
-            .child(Text::label(row.label.clone()))
+            .pt(SettingsMetrics::NAV_GROUP_PADDING_TOP)
+            .px(SettingsMetrics::NAV_GROUP_PADDING_X)
+            .pb(SettingsMetrics::NAV_GROUP_PADDING_BOTTOM)
+            .child(Text::label(row.label.clone()).font_size(ShellMetrics::SECTION_LABEL_FONT))
             .into_any_element()
     }
 
+    /// Entry of the navigation: icon and label on a 32 px row. The active
+    /// section gets the tint wash and the left bar; the keyboard cursor
+    /// draws the focus ring on any other row while the navigation holds
+    /// focus.
     fn render_item_row(
         &self,
         row: &FlatRow,
         is_cursor: bool,
-        sidebar_focused: bool,
-        theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let theme = cx.theme();
         let row_id = row.id.clone();
         let is_active = Self::section_for_tree_id(row.id.as_ref()) == Some(self.active_section);
-        let show_active = is_active && !sidebar_focused;
 
         let icon_color = if is_active {
             ChromeColors::tint(theme)
@@ -142,57 +177,44 @@ impl SettingsCoordinator {
             theme.muted_foreground
         };
         let text_color = if is_active {
-            ChromeColors::tint(theme)
+            ChromeColors::strong(theme)
         } else {
             theme.foreground
         };
 
-        let content_inner = div()
+        ListRow::new(SharedString::from(format!("settings-nav-{}", row.id)))
+            .selected(is_active)
+            .selection_bar(true)
+            .focused(is_cursor && !is_active)
+            .build(cx)
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap_2()
-            .when_some(row.icon, |div, icon| {
-                div.child(Icon::new(icon).small().color(icon_color))
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis()
-                    .child(Self::settings_nav_row_label(row.label.clone(), text_color)),
-            );
-
-        div()
-            .id(row.id.clone())
-            .flex_1()
-            .h_full()
-            .px_2()
-            .flex()
-            .items_center()
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .border_1()
-            .border_color(if is_cursor {
-                ChromeColors::tint(theme)
-            } else {
-                transparent_black()
-            })
-            .when(show_active, |div| {
-                div.bg(SemBannerColors::for_current(cx).warning_bg)
-                    .border_l_2()
-                    .border_color(ChromeColors::tint(theme))
-            })
-            .when(!is_active, |div| {
-                div.hover(|hover| hover.bg(theme.secondary))
-            })
+            .gap(SettingsMetrics::NAV_ROW_GAP)
+            .h(SettingsMetrics::NAV_ROW_HEIGHT)
+            .px(SettingsMetrics::NAV_ROW_PADDING_X)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(section) = Self::section_for_tree_id(row_id.as_ref()) {
                     this.sidebar_tree.select_by_id(row_id.as_ref());
                     this.request_section_transition(section, window, cx);
                 }
             }))
-            .child(content_inner)
+            .when_some(row.icon, |row, icon| {
+                row.child(
+                    Icon::new(icon)
+                        .size(SettingsMetrics::NAV_ICON)
+                        .color(icon_color),
+                )
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(Text::body(row.label.clone()).color(text_color)),
+            )
             .into_any_element()
     }
 }
@@ -234,6 +256,7 @@ impl Render for SettingsCoordinator {
             .size_full()
             .relative()
             .bg(cx.theme().background)
+            .text_size(dbflux_components::tokens::FontSizes::BASE)
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
@@ -252,13 +275,18 @@ impl Render for SettingsCoordinator {
                             .w(self.sidebar_width)
                             .flex()
                             .flex_row()
-                            .child(div().h_full().flex_1().child(self.render_sidebar(cx)))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .flex_1()
+                                    .child(self.render_sidebar(_window, cx)),
+                            )
                             .child(self.render_sidebar_grip(cx)),
                     )
                     .child(
                         layout::section_container(self.active_section_view.clone())
                             .h_full()
-                            .bg(cx.theme().tab_bar),
+                            .bg(cx.theme().popover),
                     ),
             )
             // Settings status footer
@@ -348,52 +376,72 @@ impl SettingsCoordinator {
             )
     }
 
+    /// Footer (P1Settings*): the unsaved-changes count and the section's
+    /// leading actions on the left; Close and the section's actions on the
+    /// right.
     fn render_settings_footer(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let leading_actions = self
+            .active_section_entity
+            .render_footer_leading_actions(window, cx);
         let section_actions = self.active_section_entity.render_footer_actions(window, cx);
+        let unsaved = self.active_section_entity.unsaved_change_count(cx);
+        let theme = cx.theme();
 
         div()
             .flex_shrink_0()
-            .min_h(px(56.0))
-            .px_4()
-            .py_2()
+            .h(SettingsMetrics::FOOTER_HEIGHT)
+            .px(SettingsMetrics::FOOTER_PADDING_X)
             .flex()
             .items_center()
-            .justify_between()
-            .gap_4()
+            .gap(SettingsMetrics::FOOTER_GAP)
             .border_t_1()
-            .border_color(ghost_border_color(cx.theme()))
-            .bg(cx.theme().background)
+            .border_color(theme.border)
+            .bg(theme.background)
+            .when(unsaved > 0, |footer| {
+                footer.child(unsaved_changes_marker(unsaved, theme.warning))
+            })
+            .when_some(leading_actions, |footer, actions| footer.child(actions))
+            .child(div().flex_1())
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(layout::footer_action_frame(
-                        false,
-                        ChromeColors::tint(cx.theme()),
-                        Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
-                            .small()
-                            .ghost()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, window, _cx| {
-                                this.try_close(window);
-                            })),
-                    )),
+                Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
+                    .small()
+                    .secondary()
+                    .kbd("Ctrl W")
+                    .on_click(cx.listener(|this, _, window, _cx| {
+                        this.try_close(window);
+                    })),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_3()
-                    .min_w(px(120.0))
-                    .when_some(section_actions, |div, actions| div.child(actions)),
-            )
+            .when_some(section_actions, |footer, actions| footer.child(actions))
     }
+}
+
+/// Text of the footer's unsaved-changes marker.
+pub(super) fn unsaved_changes_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.footer.unsaved.one")
+    } else {
+        dbflux_i18n::t!("settings.footer.unsaved.many", count = count)
+    }
+}
+
+/// Warning diamond and "N unsaved changes" in the warning color.
+fn unsaved_changes_marker(count: usize, color: Hsla) -> impl IntoElement {
+    div()
+        .id("settings-unsaved-changes")
+        .flex()
+        .items_center()
+        .gap(SettingsMetrics::FOOTER_GAP)
+        .text_size(SettingsMetrics::DIRTY_FONT)
+        .text_color(color)
+        .child(dbflux_components::primitives::status_diamond(
+            color,
+            SettingsMetrics::DIRTY_MARKER,
+        ))
+        .child(unsaved_changes_label(count))
 }
 
 #[cfg(test)]
@@ -444,6 +492,12 @@ mod section_title_i18n_tests {
             SettingsCoordinator::section_display_name(SettingsSectionId::AuthProfiles),
             dbflux_i18n::t!("settings.auth_profiles.section_title")
         );
+    }
+
+    #[test]
+    fn unsaved_changes_label_uses_singular_and_plural_forms() {
+        assert_eq!(super::unsaved_changes_label(1), "1 unsaved change");
+        assert_eq!(super::unsaved_changes_label(3), "3 unsaved changes");
     }
 
     #[test]

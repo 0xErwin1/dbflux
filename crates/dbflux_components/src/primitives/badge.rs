@@ -1,3 +1,4 @@
+use dbflux_core::ConnectionEnvironment;
 use gpui::prelude::*;
 use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
@@ -27,6 +28,16 @@ impl BadgeTone {
             Self::Success => theme.success,
             Self::Warning => theme.warning,
             Self::Danger => theme.danger,
+        }
+    }
+
+    /// Tone of a connection environment: Production reads as danger, Staging
+    /// as warning and Development as info.
+    pub fn for_environment(environment: ConnectionEnvironment) -> Self {
+        match environment {
+            ConnectionEnvironment::Production => Self::Danger,
+            ConnectionEnvironment::Staging => Self::Warning,
+            ConnectionEnvironment::Development => Self::Info,
         }
     }
 
@@ -99,9 +110,36 @@ impl EnvTag {
         }
     }
 
+    /// The tag of a connection environment: its short label (PROD, STAGING,
+    /// DEV) in the environment's tone.
+    pub fn for_environment(environment: ConnectionEnvironment) -> Self {
+        Self::new(environment_short_label(environment))
+            .tone(BadgeTone::for_environment(environment))
+    }
+
     pub fn tone(mut self, tone: BadgeTone) -> Self {
         self.tone = tone;
         self
+    }
+}
+
+/// Short tag text of a connection environment (PROD, STAGING, DEV).
+pub fn environment_short_label(environment: ConnectionEnvironment) -> String {
+    match environment {
+        ConnectionEnvironment::Production => dbflux_i18n::t!("components.env_tag.production"),
+        ConnectionEnvironment::Staging => dbflux_i18n::t!("components.env_tag.staging"),
+        ConnectionEnvironment::Development => dbflux_i18n::t!("components.env_tag.development"),
+    }
+}
+
+/// Full name of a connection environment (Production, Staging, Development).
+pub fn environment_label(environment: ConnectionEnvironment) -> String {
+    match environment {
+        ConnectionEnvironment::Production => dbflux_i18n::t!("components.environment.production"),
+        ConnectionEnvironment::Staging => dbflux_i18n::t!("components.environment.staging"),
+        ConnectionEnvironment::Development => {
+            dbflux_i18n::t!("components.environment.development")
+        }
     }
 }
 
@@ -161,6 +199,26 @@ mod tests {
             let text = tone.text_color(&theme);
             assert_eq!(tone.fill(&theme, 0.14), text.opacity(0.14));
         }
+    }
+
+    #[test]
+    fn environments_map_to_their_tones() {
+        assert_eq!(
+            BadgeTone::for_environment(ConnectionEnvironment::Production),
+            BadgeTone::Danger
+        );
+        assert_eq!(
+            BadgeTone::for_environment(ConnectionEnvironment::Staging),
+            BadgeTone::Warning
+        );
+        assert_eq!(
+            BadgeTone::for_environment(ConnectionEnvironment::Development),
+            BadgeTone::Info
+        );
+        assert_eq!(
+            EnvTag::for_environment(ConnectionEnvironment::Staging).tone,
+            BadgeTone::Warning
+        );
     }
 
     #[test]

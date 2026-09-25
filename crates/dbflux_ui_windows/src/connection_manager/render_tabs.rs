@@ -1,20 +1,25 @@
+use crate::settings::layout;
+use crate::tokens::ConnectionFormMetrics;
 use dbflux_components::components::form_renderer;
 use dbflux_components::composites::{inline_tab, inline_tab_bar};
+use dbflux_components::controls::Checkbox;
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 #[cfg(feature = "mcp")]
 use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
-    FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem, Text,
+    Badge, BadgeTone, Chamfer, ChamferRing, FilePicker, Icon as AppIconElement, SegmentedControl,
+    SegmentedItem, Text, environment_label, status_diamond,
 };
+use dbflux_components::tokens::ChamferCut;
 #[cfg(feature = "mcp")]
 use dbflux_components::tokens::Spacing;
-use dbflux_components::tokens::{ChromeColors, Radii, Widths};
+use dbflux_components::tokens::{ChromeColors, Widths};
+use dbflux_core::ConnectionEnvironment;
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::checkbox::Checkbox;
 #[cfg(feature = "mcp")]
 use gpui_component::scroll::ScrollableElement;
 
@@ -25,6 +30,25 @@ impl ConnectionManagerWindow {
         let active_tab = self.active_tab;
         let show_access_tab = !self.uses_file_form();
 
+        let access_badge = match self.access.access_tab_mode {
+            super::AccessTabMode::Direct => None,
+            super::AccessTabMode::Ssh => Some(dbflux_i18n::t!("connection_manager.tab_badge.ssh")),
+            super::AccessTabMode::Proxy => {
+                Some(dbflux_i18n::t!("connection_manager.tab_badge.proxy"))
+            }
+            super::AccessTabMode::ManagedSsm => {
+                Some(dbflux_i18n::t!("connection_manager.tab_badge.ssm"))
+            }
+        }
+        .map(|label| (label, BadgeTone::Neutral));
+
+        let mcp_badge = self.mcp_tab.conn_mcp_enabled.then(|| {
+            (
+                crate::labels::connection_manager_mcp_client_count(self.mcp_tab.bindings.len()),
+                BadgeTone::Accent,
+            )
+        });
+
         inline_tab_bar(cx)
             .id("cm-tab-list")
             .role(Role::TabList)
@@ -34,15 +58,17 @@ impl ConnectionManagerWindow {
                 AppIcon::Plug,
                 ActiveTab::Main,
                 active_tab == ActiveTab::Main,
+                None,
                 cx,
             ))
             .when(show_access_tab, |d| {
                 d.child(self.render_tab_trigger(
                     "tab-access",
                     dbflux_i18n::t!("access.tab_label"),
-                    AppIcon::FingerprintPattern,
+                    AppIcon::Lock,
                     ActiveTab::Access,
                     active_tab == ActiveTab::Access,
+                    access_badge,
                     cx,
                 ))
             })
@@ -52,18 +78,21 @@ impl ConnectionManagerWindow {
                 AppIcon::Settings,
                 ActiveTab::Settings,
                 active_tab == ActiveTab::Settings,
+                None,
                 cx,
             ))
             .child(self.render_tab_trigger(
                 "tab-mcp",
                 dbflux_i18n::t!("connection_manager.tab.mcp"),
-                AppIcon::Lock,
+                AppIcon::Bot,
                 ActiveTab::Mcp,
                 active_tab == ActiveTab::Mcp,
+                mcp_badge,
                 cx,
             ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_tab_trigger(
         &self,
         id: &'static str,
@@ -71,6 +100,7 @@ impl ConnectionManagerWindow {
         icon: AppIcon,
         tab: ActiveTab,
         is_active: bool,
+        badge: Option<(String, BadgeTone)>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -89,6 +119,9 @@ impl ConnectionManagerWindow {
             }))
             .child(AppIconElement::new(icon).small().color(color))
             .child(Text::body(label).color(color))
+            .when_some(badge, |tab, (label, tone)| {
+                tab.child(Badge::new(label, tone))
+            })
     }
 
     pub(super) fn render_main_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -135,7 +168,7 @@ impl ConnectionManagerWindow {
             )
         });
 
-        let mut sections = Vec::new();
+        let mut sections = vec![self.render_environment_row(show_focus, cx)];
 
         // Driver-specific form fields. The secret input takes the position of the
         // driver's `password` field when the form declares one.
@@ -159,6 +192,116 @@ impl ConnectionManagerWindow {
         }
 
         sections
+    }
+
+    /// Environment row of the Main tab (P1ConnForm): one chip per
+    /// environment, the selected one washed and ringed in its tone, plus a
+    /// chip that clears it.
+    fn render_environment_row(&self, show_focus: bool, cx: &mut Context<Self>) -> AnyElement {
+        let focused = show_focus && self.form_focus == FormFocus::Environment;
+        let current = self.form.environment;
+
+        let mut chips: Vec<AnyElement> = [
+            ConnectionEnvironment::Production,
+            ConnectionEnvironment::Staging,
+            ConnectionEnvironment::Development,
+        ]
+        .into_iter()
+        .map(|environment| {
+            self.render_environment_chip(Some(environment), current == Some(environment), cx)
+        })
+        .collect();
+
+        chips.push(self.render_environment_chip(None, current.is_none(), cx));
+
+        let control = div().flex().child(layout::cursor_ring(
+            focused,
+            div()
+                .id("cm-environment")
+                .flex()
+                .items_center()
+                .gap(ConnectionFormMetrics::ENV_CHIPS_GAP)
+                .children(chips),
+            cx,
+        ));
+
+        Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.environment.label"),
+            false,
+            control,
+            Some(dbflux_i18n::t!("connection_manager.environment.help")),
+            cx,
+        )
+        .into_any_element()
+    }
+
+    fn render_environment_chip(
+        &self,
+        environment: Option<ConnectionEnvironment>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let (label, id, tone_color) = match environment {
+            Some(environment) => (
+                environment_label(environment),
+                environment.as_str(),
+                BadgeTone::for_environment(environment).text_color(theme),
+            ),
+            None => (
+                dbflux_i18n::t!("connection_manager.environment.none"),
+                "none",
+                theme.muted_foreground,
+            ),
+        };
+
+        let shape = if selected {
+            Chamfer::new(ChamferCut::KEYCAP)
+                .fill(tone_color.opacity(ConnectionFormMetrics::ENV_CHIP_WASH_ALPHA))
+                .ring(ChamferRing {
+                    color: tone_color,
+                    thickness: ConnectionFormMetrics::ENV_CHIP_RING,
+                    offset: -ConnectionFormMetrics::ENV_CHIP_RING,
+                })
+        } else {
+            Chamfer::new(ChamferCut::KEYCAP)
+                .fill(theme.secondary)
+                .fill_hover(theme.border)
+                .interactive(SharedString::from(format!("cm-environment-{id}-shape")))
+        };
+
+        let text_color = if selected {
+            tone_color
+        } else {
+            theme.muted_foreground
+        };
+
+        div()
+            .id(SharedString::from(format!("cm-environment-{id}")))
+            .role(Role::RadioButton)
+            .aria_label(label.clone())
+            .relative()
+            .flex()
+            .items_center()
+            .gap(ConnectionFormMetrics::ENV_CHIP_GAP)
+            .h(ConnectionFormMetrics::ENV_CHIP_HEIGHT)
+            .px(ConnectionFormMetrics::ENV_CHIP_PADDING_X)
+            .cursor_pointer()
+            .text_size(ConnectionFormMetrics::ENV_CHIP_FONT)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(text_color)
+            .child(shape)
+            .child(status_diamond(
+                tone_color,
+                ConnectionFormMetrics::ENV_CHIP_DIAMOND,
+            ))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.form.environment = environment;
+                this.form_focus = FormFocus::Environment;
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     fn render_transport_section(
@@ -206,10 +349,11 @@ impl ConnectionManagerWindow {
         let mut section = div()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(Text::label(dbflux_i18n::t!(
-                "connection_manager.section.transport"
-            )))
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("connection_manager.section.transport"),
+                Some(AppIcon::Lock.into()),
+                cx,
+            ))
             .child(ssl_row);
 
         // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
@@ -319,7 +463,6 @@ impl ConnectionManagerWindow {
             self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Settings;
         let focus = self.form_focus;
 
-        let ring_color = theme.ring;
         let muted = theme.muted_foreground;
 
         let mut sections: Vec<AnyElement> = Vec::new();
@@ -352,22 +495,12 @@ impl ConnectionManagerWindow {
                     )))),
             )
             // Refresh policy row
-            .child(
+            .child(layout::cursor_ring(
+                show_focus && focus == FormFocus::SettingsRefreshPolicy,
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(
-                        show_focus && focus == FormFocus::SettingsRefreshPolicy,
-                        |d| d.border_color(ring_color),
-                    )
-                    .when(
-                        !(show_focus && focus == FormFocus::SettingsRefreshPolicy),
-                        |d| d.border_color(gpui::transparent_black()),
-                    )
-                    .p(px(2.0))
                     .child(
                         Checkbox::new("conn-override-refresh-policy")
                             .checked(self.settings_tab.conn_override_refresh_policy)
@@ -379,9 +512,14 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
-                        "connection_manager.overrides.refresh_policy"
-                    )))
+                    .child(
+                        div()
+                            .w(px(180.0))
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
+                            .child(dbflux_i18n::t!(
+                                "connection_manager.overrides.refresh_policy"
+                            )),
+                    )
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -406,24 +544,15 @@ impl ConnectionManagerWindow {
                     .child(Text::caption(crate::labels::override_default_caption(
                         &policy_label,
                     ))),
-            )
+                cx,
+            ))
             // Refresh interval row
-            .child(
+            .child(layout::cursor_ring(
+                show_focus && focus == FormFocus::SettingsRefreshInterval,
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(
-                        show_focus && focus == FormFocus::SettingsRefreshInterval,
-                        |d| d.border_color(ring_color),
-                    )
-                    .when(
-                        !(show_focus && focus == FormFocus::SettingsRefreshInterval),
-                        |d| d.border_color(gpui::transparent_black()),
-                    )
-                    .p(px(2.0))
                     .child(
                         Checkbox::new("conn-override-refresh-interval")
                             .checked(self.settings_tab.conn_override_refresh_interval)
@@ -436,7 +565,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(180.0))
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(refresh_interval_label.clone()),
                     )
                     .child(
@@ -460,27 +589,23 @@ impl ConnectionManagerWindow {
                             effective.refresh_interval_secs,
                         ),
                     )),
-            )
+                cx,
+            ))
             // Confirm dangerous queries
-            .child(
+            .child(layout::cursor_ring(
+                show_focus && focus == FormFocus::SettingsConfirmDangerous,
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(
-                        show_focus && focus == FormFocus::SettingsConfirmDangerous,
-                        |d| d.border_color(ring_color),
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
+                            .child(dbflux_i18n::t!(
+                                "connection_manager.overrides.confirm_dangerous"
+                            )),
                     )
-                    .when(
-                        !(show_focus && focus == FormFocus::SettingsConfirmDangerous),
-                        |d| d.border_color(gpui::transparent_black()),
-                    )
-                    .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
-                        "connection_manager.overrides.confirm_dangerous"
-                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -493,27 +618,23 @@ impl ConnectionManagerWindow {
                             dbflux_i18n::t!("connection_manager.overrides.off")
                         },
                     ))),
-            )
+                cx,
+            ))
             // Requires WHERE clause
-            .child(
+            .child(layout::cursor_ring(
+                show_focus && focus == FormFocus::SettingsRequiresWhere,
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(
-                        show_focus && focus == FormFocus::SettingsRequiresWhere,
-                        |d| d.border_color(ring_color),
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
+                            .child(dbflux_i18n::t!(
+                                "connection_manager.overrides.requires_where"
+                            )),
                     )
-                    .when(
-                        !(show_focus && focus == FormFocus::SettingsRequiresWhere),
-                        |d| d.border_color(gpui::transparent_black()),
-                    )
-                    .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
-                        "connection_manager.overrides.requires_where"
-                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -526,27 +647,23 @@ impl ConnectionManagerWindow {
                             dbflux_i18n::t!("connection_manager.overrides.off")
                         },
                     ))),
-            )
+                cx,
+            ))
             // Requires preview
-            .child(
+            .child(layout::cursor_ring(
+                show_focus && focus == FormFocus::SettingsRequiresPreview,
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(
-                        show_focus && focus == FormFocus::SettingsRequiresPreview,
-                        |d| d.border_color(ring_color),
+                    .child(
+                        div()
+                            .w(px(200.0))
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
+                            .child(dbflux_i18n::t!(
+                                "connection_manager.overrides.requires_preview"
+                            )),
                     )
-                    .when(
-                        !(show_focus && focus == FormFocus::SettingsRequiresPreview),
-                        |d| d.border_color(gpui::transparent_black()),
-                    )
-                    .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
-                        "connection_manager.overrides.requires_preview"
-                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -559,13 +676,15 @@ impl ConnectionManagerWindow {
                             dbflux_i18n::t!("connection_manager.overrides.off")
                         },
                     ))),
-            );
+                cx,
+            ));
 
         sections.push(
             self.render_section(
                 dbflux_i18n::t!("connection_manager.connection_overrides_title").as_str(),
                 override_rows,
                 &theme,
+                cx,
             )
             .into_any_element(),
         );
@@ -577,6 +696,7 @@ impl ConnectionManagerWindow {
                 dbflux_i18n::t!("connection_manager.connection_hooks_title").as_str(),
                 hooks_rows,
                 &theme,
+                cx,
             )
             .into_any_element(),
         );
@@ -628,18 +748,12 @@ impl ConnectionManagerWindow {
                                         dbflux_i18n::t!("connection_manager.overrides.off")
                                     });
 
-                                Some(
+                                Some(layout::cursor_ring(
+                                    field_focused,
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_3()
-                                        .rounded(Radii::SM)
-                                        .border_2()
-                                        .when(field_focused, |d| d.border_color(ring_color))
-                                        .when(!field_focused, |d| {
-                                            d.border_color(gpui::transparent_black())
-                                        })
-                                        .p(px(2.0))
                                         .opacity(if enabled { 1.0 } else { 0.6 })
                                         .child(
                                             Checkbox::new(SharedString::from(format!(
@@ -665,7 +779,8 @@ impl ConnectionManagerWindow {
                                             crate::labels::override_default_caption(&default_val),
                                         ))
                                         .into_any_element(),
-                                )
+                                    cx,
+                                ))
                             }
 
                             FormFieldKind::Select { .. } => {
@@ -681,25 +796,19 @@ impl ConnectionManagerWindow {
                                     .cloned()
                                     .unwrap_or_else(|| field.default_value.clone());
 
-                                Some(
+                                Some(layout::cursor_ring(
+                                    field_focused,
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(Radii::SM)
-                                        .border_2()
-                                        .when(field_focused, |d| d.border_color(ring_color))
-                                        .when(!field_focused, |d| {
-                                            d.border_color(gpui::transparent_black())
-                                        })
-                                        .p(px(2.0))
                                         .opacity(if enabled { 1.0 } else { 0.6 })
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
-                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(div().text_size(dbflux_components::tokens::FontSizes::BASE).child(field.label.clone()))
                                                 .child(Text::caption(
                                                     crate::labels::override_default_caption(
                                                         &default_val,
@@ -708,7 +817,8 @@ impl ConnectionManagerWindow {
                                         )
                                         .child(div().w(Widths::CM_FORM_DROPDOWN).child(dropdown))
                                         .into_any_element(),
-                                )
+                                    cx,
+                                ))
                             }
 
                             _ => {
@@ -724,24 +834,18 @@ impl ConnectionManagerWindow {
                                     .cloned()
                                     .unwrap_or_else(|| field.default_value.clone());
 
-                                Some(
+                                Some(layout::cursor_ring(
+                                    field_focused,
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
-                                        .rounded(Radii::SM)
-                                        .border_2()
-                                        .when(field_focused, |d| d.border_color(ring_color))
-                                        .when(!field_focused, |d| {
-                                            d.border_color(gpui::transparent_black())
-                                        })
-                                        .p(px(2.0))
                                         .child(
                                             div()
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
-                                                .child(div().text_sm().child(field.label.clone()))
+                                                .child(div().text_size(dbflux_components::tokens::FontSizes::BASE).child(field.label.clone()))
                                                 .child(Text::caption(
                                                     crate::labels::override_default_caption(
                                                         &default_val,
@@ -759,7 +863,8 @@ impl ConnectionManagerWindow {
                                                 )),
                                         )
                                         .into_any_element(),
-                                )
+                                    cx,
+                                ))
                             }
                         }
                     }),
@@ -770,6 +875,7 @@ impl ConnectionManagerWindow {
                     &dbflux_i18n::t!("connection_manager.driver_settings_title"),
                     schema_fields,
                     &theme,
+                    cx,
                 )
                 .into_any_element(),
             );
@@ -803,7 +909,7 @@ impl ConnectionManagerWindow {
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_size(dbflux_components::tokens::FontSizes::BASE)
                     .child(dbflux_i18n::t!("connection_manager.enable_mcp")),
             )
     }
@@ -849,6 +955,7 @@ impl ConnectionManagerWindow {
 
                 dbflux_components::composites::MasterDetailItem {
                     id: SharedString::from(client.id.clone()),
+                    icon: Some(AppIcon::Bot),
                     label: SharedString::from(client.name.clone()),
                     detail: Some(SharedString::from(client.id.clone())),
                     badge: Some(if has_binding {
@@ -955,6 +1062,7 @@ impl ConnectionManagerWindow {
                 &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
                 content,
                 &theme,
+                cx,
             )
             .into_any_element(),
         ]
@@ -1017,7 +1125,7 @@ impl ConnectionManagerWindow {
                     )
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("connection_manager.mcp_allow_client")),
                     ),
             );
@@ -1101,6 +1209,7 @@ impl ConnectionManagerWindow {
                 &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
                 content,
                 &theme,
+                cx,
             )
             .into_any_element(),
         ]

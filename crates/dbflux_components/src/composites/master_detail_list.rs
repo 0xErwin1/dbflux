@@ -9,13 +9,17 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
+use crate::composites::ListRow;
 use crate::controls::Button;
-use crate::primitives::{Badge, BadgeTone, FocusShape, Text, focus_ring};
-use crate::tokens::{ChromeColors, Radii, Spacing, Widths};
+use crate::icons::AppIcon;
+use crate::primitives::{Badge, BadgeTone, Icon, Text};
+use crate::tokens::{ChromeColors, MasterListMetrics, Widths};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MasterDetailItem {
     pub id: SharedString,
+    /// Icon before the label, drawn in the tint while the row is selected.
+    pub icon: Option<AppIcon>,
     pub label: SharedString,
     pub detail: Option<SharedString>,
     pub badge: Option<(SharedString, BadgeTone)>,
@@ -79,84 +83,102 @@ pub fn master_detail_row_kind(selected: bool, focused: bool) -> RowKind {
     }
 }
 
-struct RowColors {
-    tint: Hsla,
-    secondary: Hsla,
-    list_even: Hsla,
-    muted_foreground: Hsla,
-    border: Hsla,
-}
-
+/// Toolbar button: the New action is the primary button, the secondary
+/// action a secondary one.
 fn render_action_button(
     kind: MasterDetailActionKind,
     action: MasterDetailAction,
     on_action: impl Fn(MasterDetailActionKind, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let element_id = match kind {
-        MasterDetailActionKind::New => "master-detail-list-new-action",
-        MasterDetailActionKind::Secondary => "master-detail-list-secondary-action",
+    let (element_id, button) = match kind {
+        MasterDetailActionKind::New => (
+            "master-detail-list-new-action",
+            Button::new("master-detail-list-new-action", action.label).primary(),
+        ),
+        MasterDetailActionKind::Secondary => (
+            "master-detail-list-secondary-action",
+            Button::new("master-detail-list-secondary-action", action.label).secondary(),
+        ),
     };
 
-    Button::new(element_id, action.label)
-        .ghost()
-        .small()
-        .icon(crate::icons::AppIcon::Plus)
-        .focused(action.focused)
-        .disabled(!action.enabled)
-        .on_click(move |_event, window, cx| on_action(kind, window, cx))
+    div().id(element_id).child(
+        button
+            .small()
+            .icon(AppIcon::Plus)
+            .focused(action.focused)
+            .disabled(!action.enabled)
+            .on_click(move |_event, window, cx| on_action(kind, window, cx)),
+    )
 }
 
-fn render_row<S>(
-    item: MasterDetailItem,
-    index: usize,
-    colors: &RowColors,
-    cx: &App,
-    on_select: S,
-) -> Div
+/// A row: `ListRow` with the selection bar; the icon and the semibold label
+/// on the first line with the badge on its right, the mono detail under it.
+fn render_row<S>(item: MasterDetailItem, index: usize, cx: &App, on_select: S) -> Stateful<Div>
 where
     S: Fn(usize, &mut Window, &mut App) + 'static,
 {
-    let kind = master_detail_row_kind(item.selected, item.focused);
-
-    let ring_color = match kind {
-        RowKind::Selected | RowKind::Focused => Some(colors.tint),
-        RowKind::Plain => None,
+    let theme = cx.theme();
+    let icon_color = if item.selected {
+        ChromeColors::tint(theme)
+    } else {
+        theme.muted_foreground
     };
 
-    let row = div()
-        .id(SharedString::from(format!("master-detail-row-{}", item.id)))
-        .rounded(Radii::SM)
-        .bg(colors.list_even)
-        .cursor_pointer()
-        .when(kind == RowKind::Selected, |el| el.bg(colors.secondary))
-        .hover({
-            let secondary = colors.secondary;
-            move |style| style.bg(secondary)
-        })
+    ListRow::new(SharedString::from(format!("master-detail-row-{}", item.id)))
+        .selected(item.selected)
+        .selection_bar(true)
+        .focused(item.focused && !item.selected)
+        .build(cx)
+        .flex()
+        .flex_col()
+        .gap(MasterListMetrics::ROW_LINE_GAP)
+        .py(MasterListMetrics::ROW_PADDING_Y)
+        .px(MasterListMetrics::ROW_PADDING_X)
+        .border_b_1()
+        .border_color(theme.table_row_border)
         .on_click(move |_event, window, cx| on_select(index, window, cx))
         .child(
             div()
                 .flex()
-                .items_start()
-                .justify_between()
-                .gap(Spacing::SM)
-                .px(Spacing::SM)
-                .py(Spacing::XS)
+                .items_center()
+                .gap(MasterListMetrics::ROW_ICON_GAP)
+                .when_some(item.icon, |line, icon| {
+                    line.child(
+                        Icon::new(icon)
+                            .size(MasterListMetrics::ROW_ICON)
+                            .color(icon_color),
+                    )
+                })
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
+                        .flex_1()
                         .min_w_0()
-                        .gap(Spacing::XXS)
-                        .child(Text::body(item.label))
-                        .when_some(item.detail, |el, detail| el.child(Text::caption(detail))),
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(
+                            Text::body(item.label)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(ChromeColors::strong(theme)),
+                        ),
                 )
-                .when_some(item.badge, |el, (label, tone)| {
-                    el.child(Badge::new(label, tone))
+                .when_some(item.badge, |line, (label, tone)| {
+                    line.child(Badge::new(label, tone))
                 }),
-        );
-
-    focus_ring(ring_color.is_some(), FocusShape::Rect, ring_color, row, cx)
+        )
+        .when_some(item.detail, |row, detail| {
+            row.child(
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(
+                        Text::code(detail)
+                            .font_size(MasterListMetrics::ROW_DETAIL_FONT)
+                            .muted_foreground(),
+                    ),
+            )
+        })
 }
 
 pub fn render_master_detail_list<S, A>(
@@ -172,43 +194,31 @@ where
     A: Fn(MasterDetailActionKind, &mut Window, &mut App) + Clone + 'static,
 {
     let theme = cx.theme();
-    let colors = RowColors {
-        tint: ChromeColors::tint(theme),
-        secondary: theme.secondary,
-        list_even: theme.list_even,
-        muted_foreground: theme.muted_foreground,
-        border: theme.border,
-    };
 
-    let header = if config.new_action.is_some() || config.secondary_action.is_some() {
-        Some(
-            div()
-                .p(Spacing::SM)
-                .border_b_1()
-                .border_color(colors.border)
-                .flex()
-                .flex_col()
-                .gap(Spacing::SM)
-                .when_some(config.new_action.clone(), |el, action| {
-                    let on_action = on_action.clone();
-                    el.child(render_action_button(
-                        MasterDetailActionKind::New,
-                        action,
-                        move |kind, window, cx| on_action(kind, window, cx),
-                    ))
-                })
-                .when_some(config.secondary_action.clone(), |el, action| {
-                    let on_action = on_action.clone();
-                    el.child(render_action_button(
-                        MasterDetailActionKind::Secondary,
-                        action,
-                        move |kind, window, cx| on_action(kind, window, cx),
-                    ))
-                }),
-        )
-    } else {
-        None
-    };
+    let header = (config.new_action.is_some() || config.secondary_action.is_some()).then(|| {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(MasterListMetrics::TOOLBAR_GAP)
+            .p(MasterListMetrics::TOOLBAR_PADDING)
+            .when_some(config.new_action.clone(), |el, action| {
+                let on_action = on_action.clone();
+                el.child(render_action_button(
+                    MasterDetailActionKind::New,
+                    action,
+                    move |kind, window, cx| on_action(kind, window, cx),
+                ))
+            })
+            .when_some(config.secondary_action.clone(), |el, action| {
+                let on_action = on_action.clone();
+                el.child(render_action_button(
+                    MasterDetailActionKind::Secondary,
+                    action,
+                    move |kind, window, cx| on_action(kind, window, cx),
+                ))
+            })
+    });
 
     let body = div()
         .id(SharedString::from(format!("{}-body", config.id)))
@@ -216,16 +226,15 @@ where
         .flex_1()
         .min_h_0()
         .overflow_y_scrollbar()
-        .p(Spacing::SM)
         .flex()
         .flex_col()
-        .gap(Spacing::XS)
         .when(items.is_empty(), |el| {
             if let Some(message) = config.empty_message.clone() {
                 el.child(
                     div()
-                        .p(Spacing::LG)
-                        .child(Text::body(message).color(colors.muted_foreground)),
+                        .px(MasterListMetrics::ROW_PADDING_X)
+                        .py(MasterListMetrics::ROW_PADDING_Y)
+                        .child(Text::body(message).muted_foreground()),
                 )
             } else {
                 el
@@ -233,7 +242,7 @@ where
         })
         .children(items.iter().cloned().enumerate().map(|(index, item)| {
             let on_select = on_select.clone();
-            render_row(item, index, &colors, cx, move |idx, window, cx| {
+            render_row(item, index, cx, move |idx, window, cx| {
                 on_select(idx, window, cx)
             })
         }));
@@ -242,8 +251,9 @@ where
         .id(config.id.clone())
         .w(config.width)
         .h_full()
+        .flex_shrink_0()
         .border_r_1()
-        .border_color(colors.border)
+        .border_color(theme.border)
         .flex()
         .flex_col()
         .when_some(header, |el, header| el.child(header))

@@ -134,6 +134,14 @@ charts:
     error:
       create_editable_failed: "No se pudo crear el dashboard editable: %{error}"
 components:
+  environment:
+    development: "Desarrollo"
+    staging: "Staging"
+    production: "Producción"
+  env_tag:
+    development: "Dev"
+    staging: "Staging"
+    production: "Prod"
   value_panel:
     empty: Ninguna celda seleccionada
     error:
@@ -176,6 +184,23 @@ controls:
       one: "+%{count} más"
       many: "+%{count} más"
 connection_manager:
+  tab_badge:
+    mcp_clients:
+      many: "%{count} clientes"
+      one: "1 cliente"
+    ssm: "SSM"
+    proxy: "Proxy"
+    ssh: "SSH"
+  environment:
+    none: "Ninguno"
+    help: "Indica a qué entorno apunta esta conexión."
+    label: "Entorno"
+  enter_as:
+    uri: "URI de conexión"
+    fields: "Campos"
+    label: "Introducir como"
+  form:
+    required_hint: "Los campos marcados en rojo son obligatorios"
   placeholder:
     seconds: segundos
     connection_name: Nombre de la conexión
@@ -291,14 +316,14 @@ connection_manager:
   action:
     copy: Copiar
     back: Atrás
-    test_connection: Probar conexión
+    test_connection: "Probar conexión"
     save: Guardar
     browse: Examinar
   window_title: Administrador de conexiones
   driver_select:
-    search_placeholder: "Filtrar por nombre, driver, puerto…"
-    title: Nueva conexión
-    subtitle: elige un tipo de base de datos
+    search_placeholder: "Filtrar por nombre, driver o puerto"
+    title: "Nueva conexión"
+    subtitle: "Elige a qué te vas a conectar."
     empty_state: Ningún driver coincide con tu filtro
     import_from_file: "Importar desde archivo…"
     import_from_client: "Importar desde otro cliente…"
@@ -2366,6 +2391,7 @@ form:
     pipeline_stage_failed: "Etapa de la canalización '%{stage}': %{source}"
 hooks:
   kind:
+    lua: "Lua"
     command: Comando
     script: Script
   source:
@@ -2717,6 +2743,13 @@ scripts:
   error:
     read_file_failed: "No se pudo leer el archivo %{path}: %{error}"
 settings:
+  field:
+    hide_secret: "Ocultar valor"
+    show_secret: "Mostrar valor"
+  footer:
+    unsaved:
+      many: "%{count} cambios sin guardar"
+      one: "1 cambio sin guardar"
   action:
     default_connection_name: conexión
     close: Cerrar
@@ -2730,29 +2763,35 @@ settings:
   mcp_governance:
     persist_error: "No se pudo persistir la gobernanza de MCP: %{error}"
   general:
+    unit:
+      mebibytes: "MiB"
+      seconds: "s"
+      milliseconds: "ms"
     header:
       title: General
-      subtitle: Configura el inicio, la sesión, la actualización y el comportamiento de seguridad
+      subtitle: "Apariencia, inicio, actualización y la red de seguridad para sentencias peligrosas."
     appearance:
       group: Apariencia
     startup:
-      group: Inicio y sesión
+      group: "Inicio y sesión"
     refresh:
-      group: Actualización y tareas en segundo plano
+      group: "Actualización y segundo plano"
     safety:
-      group: Seguridad de ejecución
+      group: "Seguridad de ejecución"
     object_storage:
-      group: Almacenamiento de objetos
+      group: "Almacenamiento de objetos"
     storage:
       group: Almacenamiento
     theme:
+      help: "Bizancio en ambos. Seguir el sistema cambia junto con el SO."
       option:
         follow_system: "Seguir al sistema"
         dark: "Oscuro"
         light: "Claro"
       label: Tema
     style:
-      label: Estilo
+      help: "Compacta reduce la altura de fila a 24 y el texto en 1 px."
+      label: "Densidad"
       option:
         default: "Predeterminado"
         compact: "Compacto"
@@ -2760,26 +2799,26 @@ settings:
       label: Idioma
       option:
         system: Sistema
-      notice: Los cambios de idioma se aplican al reiniciar DBFlux.
+      notice: "Se aplica al reiniciar DBFlux."
     editor:
       group: "Editor"
     vim_mode:
       label: "Modo Vim en los editores de código"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
     restore_session:
-      label: Restaurar la sesión al iniciar
+      label: "Restaurar las pestañas abiertas al iniciar"
     reopen_connections:
-      label: Reabrir las últimas conexiones
+      label: "Reconectar las conexiones que estaban abiertas"
     default_focus:
-      label: Foco predeterminado
+      label: "Foco al iniciar"
       option:
         sidebar: Barra lateral
-        last_tab: Última pestaña
+        last_tab: "Última pestaña"
     max_history:
-      label: Máximo de entradas de historial
+      label: "Entradas de historial"
       error: El máximo de entradas de historial debe ser un número >= 10
     auto_save_interval:
-      label: Intervalo de guardado automático (ms)
+      label: "Autoguardar cada"
       error: El intervalo de guardado automático debe ser >= 500 ms
     refresh_policy:
       label: Política de actualización predeterminada
@@ -2787,7 +2826,7 @@ settings:
         manual: Manual
         interval: Intervalo
     refresh_interval:
-      label: Intervalo de actualización predeterminado (segundos)
+      label: "Intervalo de actualización predeterminado"
       error: El intervalo de actualización debe ser >= 1 segundo
     max_background_tasks:
       label: Máximo de tareas en segundo plano simultáneas
@@ -2797,23 +2836,24 @@ settings:
     refresh_only_if_visible:
       label: Actualizar automáticamente solo si la pestaña está visible
     confirm_dangerous:
-      label: Confirmar queries peligrosas
+      hint: "DELETE o UPDATE sin WHERE, DROP, TRUNCATE, FLUSHALL y similares."
+      label: "Confirmar sentencias peligrosas"
     requires_where:
-      label: Exigir WHERE en DELETE/UPDATE
+      label: "Exigir WHERE en DELETE y UPDATE"
     requires_preview:
-      label: Exigir siempre la vista previa (ignorar supresiones)
+      label: "Previsualizar siempre, aunque la sentencia se haya descartado antes"
     editor_row_limit:
       label: Límite de filas del editor
       error: El límite de filas del editor debe ser un número entero entre 1 y 9223372036854775807
     object_preview_limit:
-      label: Límite de tamaño para la vista previa de objetos (MiB)
+      label: "Límite de tamaño de vista previa de objetos"
       error: El límite de tamaño para la vista previa de objetos debe ser >= 1 MiB
     object_preview_hint:
       label: "Los objetos más grandes que este límite nunca se descargan para la vista previa; el navegador solo muestra sus metadatos."
     key_value:
-      group: Vista previa de clave-valor
+      group: "Vista previa clave-valor"
     key_value_size_limit:
-      label: Límite de tamaño para la vista previa de clave-valor (MiB)
+      label: "Límite de tamaño de vista previa clave-valor"
       error: El límite de tamaño para la vista previa de clave-valor debe ser >= 1 MiB
     key_value_size_limit_hint:
       label: "Los valores más grandes que este límite no se descargan automáticamente; usa \"Cargar de todos modos\" para obtener el valor completo."
@@ -2841,12 +2881,13 @@ settings:
     lucide: Iconos de interfaz de Lucide (Licencia ISC)
     simple_icons: Iconos de marca de Simple Icons (CC0 1.0)
   keybindings:
-    title: Atajos de teclado
-    subtitle: Ver todos los atajos de teclado por contexto
-    filter_placeholder: Filtrar atajos de teclado...
+    filter_label: "Filtrar atajos"
+    title: "Atajos de teclado"
+    subtitle: "Cada comando y sus teclas, por contexto."
+    filter_placeholder: "Filtrar por comando o tecla"
     binding_count:
-      one: (1 atajo)
-      many: "(%{count} atajos)"
+      one: "1 atajo"
+      many: "%{count} atajos"
     inherits_from: "hereda de %{parent}"
     inherited: heredado
     conflict:
@@ -2995,14 +3036,16 @@ settings:
   hooks:
     header:
       title: Hooks
-      subtitle: Crea hooks reutilizables y asócialos desde la configuración de conexión
+      subtitle: "Comandos, scripts y Lua que se ejecutan al conectar y desconectar. Las conexiones los eligen en su pestaña Ajustes."
     list:
-      new: Nuevo hook
+      new: "Nuevo hook"
       empty: No hay hooks definidos
       unreadable:
         title: Filas de hooks ilegibles
         hint: Ilegible — no se puede editar
     form:
+      group:
+        hook: "Hook"
       title:
         edit: Editar hook
         new: Nuevo hook
@@ -3010,12 +3053,12 @@ settings:
       kind: Tipo
       command: Comando
       args: Argumentos
-      args_hint: Argumentos separados por espacios
+      args_hint: "Separados por espacios"
       language: Lenguaje
-      file_path: Ruta del archivo
+      file_path: "Ruta del archivo"
       file_path_hint: Los scripts se editan en el editor de la app y se guardan en hooks/ de forma predeterminada
-      open_in_app: Abrir en la app
-      open_in_editor: Abrir en el editor
+      open_in_app: "Abrir en la app"
+      open_in_editor: "Abrir en el editor"
       interpreter: Intérprete
       interpreter_hint: "Déjalo vacío para %{default_interpreter}"
       interpreter_auto: "automático (%{value})"
@@ -3027,20 +3070,20 @@ settings:
         connection_metadata: Metadatos de conexión
         process_run: Ejecución de procesos controlada
         process_run_hint: "Habilita `dbflux.process.run(...)` sin exponer la biblioteca `os` de Lua"
-      execution_mode: Modo de ejecución
+      execution_mode: "Ejecutar como"
       execution_mode_hint: El modo desacoplado se ejecuta en segundo plano y no bloquea la conexión ni la desconexión
-      ready_signal: Señal de listo
+      ready_signal: "Señal de listo"
       ready_signal_hint: DBFlux espera este texto en la salida del hook antes de continuar. Obligatorio para hooks de preconexión desacoplados.
-      cwd: Directorio de trabajo
+      cwd: "Directorio de trabajo"
       env: Entorno
       env_hint: Pares CLAVE=valor separados por comas
-      env_denylist: Lista de exclusión de entorno
+      env_denylist: "Variables excluidas"
       env_denylist_hint: Nombres de variables separados por comas a excluir del entorno heredado
-      timeout: Tiempo de espera (ms)
-      resolved_command: Comando resuelto
+      timeout: "Tiempo límite"
+      resolved_command: "Comando resuelto"
       enabled: Habilitado
       inherit_env: Heredar entorno del proceso padre
-      on_failure: Ante un error
+      on_failure: "Si falla"
       preview_placeholder: "<ingresa un comando>"
     status:
       unsupported_platform: No compatible en esta plataforma
@@ -3070,9 +3113,15 @@ settings:
       deleted: Hook eliminado
       unreadable_deleted: Fila de hook ilegible eliminada
   auth_profiles:
+    session_unknown: "Sin sesión iniciada desde esta ventana"
+    session_attention: "La sesión requiere atención"
+    session_valid: "Sesión válida"
+    disabled_badge: "apagado"
+    group:
+      profile: "Perfil"
     profiles_label: Perfiles
     new_profile: "Nuevo perfil de autenticación"
-    import: "Importar…"
+    import: "Importar"
     source_label: Origen
     leave_blank_hint: Déjalo en blanco para conservar el valor actual.
     auth_profile_label: "Perfil de autenticación"
@@ -3106,13 +3155,13 @@ settings:
     login_url_panel_description: Abre esta URL en tu navegador para terminar el inicio de sesión. DBFlux continuará automáticamente cuando completes la autenticación.
     open_browser: Abrir navegador
     copy_url: Copiar URL
-    login_action: Iniciar sesión
+    login_action: "Iniciar sesión"
     logging_in: "Iniciando sesión..."
     runs_interactive_login_hint: Ejecuta el inicio de sesión interactivo de este perfil
     update: Actualizar
     create: Crear
     section_title: "Perfiles de autenticación"
-    section_description: Gestiona perfiles de autenticación reutilizables para el acceso a conexiones
+    section_description: "Inicios de sesión reutilizables para secretos, parámetros y SSO. Las conexiones los referencian por nombre."
     delete_dialog_title: "Eliminar perfil de autenticación"
     delete_dialog:
       body_none: '¿Seguro que quieres eliminar "%{name}"?'
@@ -3224,6 +3273,9 @@ settings:
         label: Administración
         description: Aprobar ejecuciones, exportar registros de auditoría y acciones privilegiadas
     group:
+      policy: "Política"
+      role: "Rol"
+      client: "Cliente"
       discovery: Descubrimiento
       schema: Esquema
       query: Consulta
@@ -3247,6 +3299,7 @@ settings:
       roles: No hay roles configurados.
       policies: No hay políticas configuradas.
     field:
+      allowed_tools_count: "Herramientas permitidas · %{selected} de %{total}"
       client_id: ID de cliente
       name: Nombre
       issuer_optional: Emisor (opcional)
@@ -3299,18 +3352,18 @@ settings:
       create_policy: Crear política
   drivers:
     section_title: Drivers
-    section_description: Configura anulaciones por driver y ajustes definidos por el driver
+    section_description: "Reemplazos por driver y ajustes que declara el driver."
     empty: No hay drivers registrados
     select_hint: Selecciona un driver para configurar sus ajustes
     action:
       save: Guardar
     field:
       capabilities: Capacidades
-      global_overrides: Anulaciones globales
-      driver_settings: Ajustes del driver
+      global_overrides: "Reemplazos para este driver"
+      driver_settings: "Ajustes del driver"
     global_overrides_hint: Habilita la anulación para reemplazar el valor global predeterminado de este driver.
     no_custom_settings: Este driver no tiene ajustes personalizados.
-    use_global: Usar global
+    use_global: "usar global"
     error:
       refresh_interval_empty: El intervalo de actualización no puede estar vacío
       refresh_interval_invalid: El intervalo de actualización debe ser un número mayor que 0
@@ -3360,8 +3413,10 @@ settings:
       graph_traversal: Recorrido de grafo
       edge_properties: Propiedades de arista
   rpc_services:
-    section_title: Servicios RPC
-    section_description: Gestiona los servicios RPC configurados. Los cambios requieren reiniciar.
+    group:
+      service: "Servicio"
+    section_title: "Servicios RPC"
+    section_description: "Drivers externos y proveedores de autenticación que DBFlux inicia por RPC. Los cambios se aplican al reiniciar."
     empty: No hay servicios RPC configurados
     edit_title: Editar servicio RPC
     new_title: Nuevo servicio RPC
@@ -3377,56 +3432,79 @@ settings:
       saved: Servicio RPC guardado. Es necesario reiniciar para aplicar los cambios.
       deleted: Servicio RPC eliminado. Es necesario reiniciar para aplicar los cambios.
     field:
-      disabled: Deshabilitado
+      env_value: "Valor de la variable"
+      env_key: "Nombre de la variable"
+      disabled: "apagado"
       socket_id: ID de socket
       command: Comando
-      startup_timeout: Tiempo de espera de inicio (ms)
+      startup_timeout: "Tiempo de arranque"
       enable: Habilitar este servicio
-      service_type: Tipo de servicio
+      service_type: "Tipo de servicio"
       arguments: Argumentos
-      env_vars: Variables de entorno
+      env_vars: "Entorno"
       default_command: (predeterminado)
     kind:
       driver: Driver
       auth_provider: Proveedor de autenticación
     action:
+      add_variable: "Añadir variable"
+      add_argument: "Añadir argumento"
+      remove: "Quitar"
       delete: Eliminar
       update: Actualizar
       create: Crear
   ssh_tunnels:
+    list:
+      password: "contraseña"
+      key: "clave"
+    group:
+      authentication: "Autenticación"
+      tunnel: "Túnel"
     placeholder_name: Túnel SSH
     placeholder_password: contraseña
     placeholder_passphrase: frase
-    section_title: Túneles SSH
-    section_description: Gestiona túneles SSH reutilizables para acceso a bastiones y saltos
+    section_title: "Túneles SSH"
+    section_description: "Túneles reutilizables para bastiones y hosts de salto. Las conexiones eligen uno en su pestaña Acceso."
     empty: No hay túneles SSH guardados
-    new: Nuevo túnel
+    new: "Nuevo túnel"
     field:
+      keep_in_keyring: "Guardar en el llavero del sistema"
+      password: "Contraseña"
+      passphrase: "Frase de contraseña"
+      key_file: "Archivo de clave"
+      method: "Método"
+      user: "Usuario"
+      host_port: "Host y puerto"
       name: Nombre
     delete_dialog_title: Eliminar túnel SSH
     delete_dialog:
       body: '¿Seguro que quieres eliminar "%{name}"?'
     action:
-      import: "Importar…"
+      test: "Probar túnel"
+      import: "Importar"
       export: Exportar
       delete: Eliminar
     error:
       host_and_user_required: El host y el usuario son obligatorios
       save_failed: "No se pudieron guardar los perfiles de túnel SSH: %{error}"
   proxies:
+    group:
+      authentication: "Autenticación"
+      proxy: "Proxy"
     placeholder_name: Nombre del proxy
     placeholder_username: usuario
     placeholder_password: contraseña
-    section_title: Perfiles de proxy
-    section_description: Gestiona las configuraciones de proxy para conexiones de base de datos
+    section_title: "Perfiles de proxy"
+    section_description: "Proxies HTTP y SOCKS. Las conexiones eligen uno en su pestaña Acceso."
     empty: No hay proxies guardados
-    new: Nuevo proxy
+    new: "Nuevo proxy"
     panel_title: Proxy
     kind:
       http: HTTP
       https: HTTPS
       socks5: SOCKS5
     field:
+      host_port: "Host y puerto"
       name: Nombre
       protocol: Protocolo
       authentication: Autenticación
@@ -3434,10 +3512,10 @@ settings:
       password: Contraseña
       host: Host
       port: Puerto
-      no_proxy: Sin proxy
-      enabled: Habilitado
+      no_proxy: "Omitir para"
+      enabled: "Habilitado"
     hint:
-      no_proxy_list: Hosts/CIDR separados por comas que omiten el proxy
+      no_proxy_list: "Hosts y CIDR separados por comas que no usan el proxy."
     auth:
       none: Ninguna
       basic: Básica
@@ -3447,7 +3525,7 @@ settings:
       save_failed: "No se pudieron guardar los perfiles de proxy: %{error}"
     action:
       save: Guardar
-      import: "Importar…"
+      import: "Importar"
       export: Exportar
       delete: Eliminar
       update: Actualizar
@@ -3509,6 +3587,8 @@ settings:
     toast:
       saved: Ajustes de auditoría guardados.
   nav:
+    no_results: "Ningún ajuste coincide"
+    search_placeholder: "Buscar en ajustes"
     general_group: General
     general: General
     keybindings: Atajos de teclado
@@ -3516,14 +3596,14 @@ settings:
     audit: Auditoría
     about: Acerca de
     network: Red
-    ssh_tunnels: Túneles SSH
-    proxies: Proxy
-    auth_profiles: Proveedores de acceso
-    connection: Conexión
+    ssh_tunnels: "Túneles SSH"
+    proxies: "Proxies"
+    auth_profiles: "Perfiles de autenticación"
+    connection: "Conexiones"
     hooks: Hooks
     drivers: Drivers
-    services: Servicios RPC
-    mcp_governance: Gobernanza MCP
+    services: "Servicios RPC"
+    mcp_governance: "Gobernanza MCP"
     mcp_clients: Clientes
     mcp_roles: Roles
     mcp_policies: Políticas

@@ -72,6 +72,8 @@ pub struct Input {
     appearance: bool,
     cleanable: bool,
     secret: bool,
+    prefix: Option<AnyElement>,
+    suffix: Option<AnyElement>,
 }
 
 impl Input {
@@ -87,6 +89,8 @@ impl Input {
             appearance: true,
             cleanable: false,
             secret: false,
+            prefix: None,
+            suffix: None,
         }
     }
 
@@ -134,6 +138,19 @@ impl Input {
 
     pub fn cleanable(mut self, cleanable: bool) -> Self {
         self.cleanable = cleanable;
+        self
+    }
+
+    /// Draws `prefix` inside the field, before the text (a leading icon).
+    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
+        self.prefix = Some(prefix.into_any_element());
+        self
+    }
+
+    /// Draws `suffix` inside the field, after the text (a unit such as `ms`,
+    /// or a show-password toggle).
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
         self
     }
 
@@ -201,6 +218,14 @@ impl RenderOnce for Input {
 
         if let Some(label) = self.aria_label {
             input = input.aria_label(label);
+        }
+
+        if let Some(prefix) = self.prefix {
+            input = input.prefix(prefix);
+        }
+
+        if let Some(suffix) = self.suffix {
+            input = input.suffix(suffix);
         }
 
         if !chamfered {

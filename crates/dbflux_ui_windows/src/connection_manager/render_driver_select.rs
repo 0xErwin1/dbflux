@@ -1,12 +1,12 @@
-use dbflux_components::controls::{Button, GpuiInput, InputState};
+use crate::tokens::ConnectionFormMetrics;
+use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Kbd, Text, hdivider};
-use dbflux_components::tokens::{ChromeColors, FontSizes};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ShellMetrics};
 use dbflux_core::DatabaseCategory;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::{ActiveTheme, Sizable};
+use gpui_component::ActiveTheme;
 
 use super::{ConnectionManagerWindow, DismissEvent, DriverInfo};
 
@@ -22,29 +22,36 @@ const CATEGORY_ORDER: &[DatabaseCategory] = &[
     DatabaseCategory::ObjectStorage,
 ];
 
-/// Column count of every category section's card grid. The layout
-/// (`driver_section_grid`) and the keyboard navigator (`move_grid_focus`) both
-/// read it, so the rendered rows and the vertical step cannot disagree.
-///
-/// Two columns fit the Connection Manager's 600 px minimum window width:
-/// `2 * CARD_WIDTH + CARD_GAP + 2 * PICKER_PADDING_X = 540 px`. A third
-/// column needs 800 px, wider than the 700 px the window opens at.
-pub(super) const GRID_COLUMNS: usize = 2;
+/// Column count used before the picker has been laid out once.
+pub(super) const DEFAULT_GRID_COLUMNS: usize = 2;
 
-const CARD_WIDTH: f32 = 248.0;
+/// Number of card columns that fit `available` width: as many cards of at
+/// least `ConnectionFormMetrics::CARD_MIN_WIDTH` as fit with their gaps,
+/// between one and `ConnectionFormMetrics::CARD_MAX_COLUMNS`. The layout
+/// (`driver_section_grid`) and the keyboard navigator (`move_grid_focus`)
+/// both use this count, so the rendered rows and the vertical step agree.
+pub(super) fn grid_columns_for_width(available: Pixels) -> usize {
+    let gap = f32::from(ConnectionFormMetrics::CARD_GAP);
+    let card = f32::from(ConnectionFormMetrics::CARD_MIN_WIDTH);
+    let fitting = ((f32::from(available) + gap) / (card + gap)).floor();
 
-/// Horizontal and vertical gap between cards in a section grid.
-const CARD_GAP: Pixels = Spacing::MD;
+    if fitting.is_nan() || fitting < 1.0 {
+        return 1;
+    }
 
-/// Horizontal padding of the scrollable picker body.
-const PICKER_PADDING_X: Pixels = Spacing::LG;
+    (fitting as usize).min(ConnectionFormMetrics::CARD_MAX_COLUMNS)
+}
 
 impl ConnectionManagerWindow {
     pub(super) fn render_driver_select(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let available =
+            window.viewport_size().width - ConnectionFormMetrics::PICKER_PADDING_X * 2.0;
+        self.driver_grid_columns = grid_columns_for_width(available);
+
         let query = self.current_driver_filter(cx);
         let visible = visible_drivers(&self.available_drivers, &query);
 
@@ -58,7 +65,8 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .size_full()
-            .child(self.render_picker_header(cx))
+            .bg(cx.theme().popover)
+            .child(self.render_picker_header(window, cx))
             .child(self.render_picker_body(&visible, focused_idx, cx))
             .child(self.render_picker_footer(focused_driver, cx))
     }
@@ -73,64 +81,80 @@ impl ConnectionManagerWindow {
             .to_lowercase()
     }
 
-    fn render_picker_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Header (P1DriverPicker): title and subtitle on the left, the filter
+    /// field on the right.
+    fn render_picker_header(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let filter = self.form.driver_filter_input.read(cx);
+        let query_is_empty = filter.value().is_empty();
+        let focused = filter.focus_handle(cx).contains_focused(window, cx);
         let theme = cx.theme();
-        let muted = theme.muted_foreground;
+
+        let mut shape = Chamfer::new(ChamferCut::CONTROL)
+            .fill(theme.background)
+            .border(theme.border);
+
+        if focused {
+            shape = shape.ring(ChamferRing::focus(ChromeColors::tint(theme)));
+        }
+
+        let filter_field = div()
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(Fields::GAP)
+            .w(ConnectionFormMetrics::PICKER_FILTER_WIDTH)
+            .h(Fields::HEIGHT)
+            .px(Fields::PADDING_X)
+            .text_size(Fields::TEXT)
+            .child(shape)
+            .child(
+                Icon::new(AppIcon::Search)
+                    .size(ShellMetrics::SIDEBAR_FILTER_ICON)
+                    .color(theme.muted_foreground),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.form.driver_filter_input)
+                        .id("cm-driver-filter")
+                        .aria_label(dbflux_i18n::t!(
+                            "connection_manager.driver_select.search_placeholder"
+                        ))
+                        .small()
+                        .appearance(false)
+                        .cleanable(true),
+                ),
+            )
+            .when(query_is_empty, |field| field.child(Kbd::new("/")));
 
         div()
             .flex()
-            .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .gap_3()
-            .px_4()
-            .py_3()
+            .gap(ConnectionFormMetrics::PICKER_HEADER_GAP)
+            .py(ConnectionFormMetrics::PICKER_HEADER_PADDING_Y)
+            .px(ConnectionFormMetrics::PICKER_PADDING_X)
             .border_b_1()
             .border_color(theme.border)
             .child(
                 div()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
+                    .flex_col()
+                    .gap(ConnectionFormMetrics::PICKER_TITLE_GAP)
+                    .child(Text::title(dbflux_i18n::t!(
+                        "connection_manager.driver_select.title"
+                    )))
                     .child(
-                        Button::new(
-                            "cm-driver-back",
-                            dbflux_i18n::t!("connection_manager.action.back"),
-                        )
-                        .ghost()
-                        .small()
-                        .icon(AppIcon::ChevronLeft)
-                        .icon_only()
-                        .on_click(|_, window, _cx| {
-                            window.remove_window();
-                        }),
-                    )
-                    .child(
-                        Icon::new(AppIcon::Database)
-                            .size(Heights::ICON_MD)
-                            .color(muted),
-                    )
-                    .child(
-                        Text::heading(dbflux_i18n::t!("connection_manager.driver_select.title"))
-                            .font_size(FontSizes::LG),
-                    )
-                    .child(div().text_size(FontSizes::SM).text_color(muted).child("·"))
-                    .child(
-                        Text::caption(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
-                            .font_size(FontSizes::SM),
+                        Text::body(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
+                            .muted_foreground(),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .w(px(360.0))
-                    .child(render_filter_input(&self.form.driver_filter_input))
-                    .child(Kbd::new("/")),
-            )
+            .child(div().flex_1())
+            .child(filter_field)
     }
 
     fn render_picker_body(
@@ -139,30 +163,24 @@ impl ConnectionManagerWindow {
         focused_idx: usize,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
-
         let mut body = div()
             .id("cm-driver-grid")
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
-            .gap_4()
-            .px(PICKER_PADDING_X)
-            .py_3()
-            .overflow_scroll();
+            .px(ConnectionFormMetrics::PICKER_PADDING_X)
+            .pb(ConnectionFormMetrics::PICKER_BODY_PADDING_BOTTOM)
+            .overflow_y_scroll();
 
         let mut cursor_index: usize = 0;
         for section in visible_sections(visible) {
             let Some(first_driver) = section.first() else {
                 continue;
             };
-            body = body.child(render_section_header(
-                first_driver.category,
-                section.len(),
-                muted,
-            ));
+            body = body.child(render_section_header(first_driver.category));
 
-            let mut grid = driver_section_grid();
+            let mut grid = driver_section_grid(self.driver_grid_columns);
             for driver in section {
                 let is_focused = cursor_index == focused_idx;
                 grid = grid.child(self.render_driver_card(driver, is_focused, cx));
@@ -173,68 +191,107 @@ impl ConnectionManagerWindow {
         }
 
         if visible.is_empty() {
-            body = body.child(div().flex().items_center().justify_center().py_8().child(
-                Text::caption(dbflux_i18n::t!(
-                    "connection_manager.driver_select.empty_state"
-                )),
-            ));
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .py(ConnectionFormMetrics::PICKER_CATEGORY_PADDING_TOP * 2.0)
+                    .child(
+                        Text::body(dbflux_i18n::t!(
+                            "connection_manager.driver_select.empty_state"
+                        ))
+                        .muted_foreground(),
+                    ),
+            );
         }
 
         body
     }
 
+    /// One driver card: logo, name and the default port (or the driver's
+    /// description when it has no port) in a chamfered card; the selected
+    /// card gets the tint ring, an 8% tint wash and a check mark.
     fn render_driver_card(
         &self,
         driver: &DriverInfo,
-        is_focused: bool,
+        is_selected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let border_color = if is_focused {
-            ChromeColors::tint(theme)
-        } else {
-            theme.border
-        };
-
+        let tint = ChromeColors::tint(theme);
         let driver_id_click = driver.id.clone();
-        let port_hint = driver.default_port.map(|p| format!(":{}", p));
+        let detail = driver
+            .default_port
+            .map(|port| format!(":{port}"))
+            .unwrap_or_else(|| driver.description.clone());
+
+        let shape = if is_selected {
+            Chamfer::new(ChamferCut::INPUT)
+                .fill(tint.opacity(ConnectionFormMetrics::CARD_SELECTED_ALPHA))
+                .ring(ChamferRing {
+                    color: tint,
+                    thickness: ConnectionFormMetrics::CARD_SELECTED_RING,
+                    offset: -ConnectionFormMetrics::CARD_SELECTED_RING,
+                })
+        } else {
+            Chamfer::new(ChamferCut::INPUT)
+                .fill(theme.background)
+                .fill_hover(theme.secondary)
+                .border(theme.border)
+                .interactive(SharedString::from(format!(
+                    "cm-driver-card-{}-shape",
+                    driver.id
+                )))
+        };
 
         div()
             .id(SharedString::from(format!("cm-driver-card-{}", driver.id)))
-            .w(px(CARD_WIDTH))
+            .relative()
+            .min_w_0()
             .flex()
-            .flex_col()
-            .gap_3()
-            .p_3()
-            .rounded(Radii::MD)
-            .border_1()
-            .border_color(border_color)
-            .bg(theme.secondary)
+            .items_center()
+            .gap(ConnectionFormMetrics::CARD_INNER_GAP)
+            .p(ConnectionFormMetrics::CARD_PADDING)
             .cursor_pointer()
-            .hover(|s| s.border_color(ChromeColors::tint(theme).opacity(0.6)))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.select_driver(&driver_id_click, window, cx);
             }))
+            .child(shape)
             .child(
                 Icon::new(AppIcon::for_driver(driver.icon, driver.category))
-                    .size(px(32.0))
+                    .size(ConnectionFormMetrics::CARD_LOGO)
                     .color(theme.foreground),
             )
             .child(
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .child(Text::heading(driver.name.clone()).font_size(FontSizes::BASE))
-                    .child(Text::caption(driver.description.clone()).font_size(FontSizes::XS)),
+                    .gap(ConnectionFormMetrics::CARD_LINE_GAP)
+                    .child(
+                        Text::body(driver.name.clone())
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(ChromeColors::strong(theme)),
+                    )
+                    .child(
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(
+                                Text::code(detail)
+                                    .font_size(ConnectionFormMetrics::CARD_DETAIL_FONT)
+                                    .muted_foreground(),
+                            ),
+                    ),
             )
-            .when_some(port_hint, |card, hint| {
-                card.child(hdivider(cx)).child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .child(Text::caption(hint).font_size(FontSizes::XS)),
+            .when(is_selected, |card| {
+                card.child(
+                    Icon::new(AppIcon::Check)
+                        .size(ConnectionFormMetrics::CARD_CHECK)
+                        .color(tint),
                 )
             })
     }
@@ -255,79 +312,69 @@ impl ConnectionManagerWindow {
             .unwrap_or_default();
         let cta_disabled = focused_driver.is_none();
 
+        let mut cta = Button::new("cm-driver-configure", cta_label)
+            .primary()
+            .small()
+            .icon(AppIcon::ChevronRight)
+            .kbd("↵");
+        if cta_disabled {
+            cta = cta.disabled(true);
+        } else {
+            cta = cta.on_click(cx.listener(move |this, _, window, cx| {
+                this.select_driver(&cta_id, window, cx);
+            }));
+        }
+
         div()
             .flex()
-            .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .px_4()
-            .py_3()
+            .gap(Fields::GAP)
+            .h(crate::tokens::SettingsMetrics::FOOTER_HEIGHT)
+            .px(crate::tokens::SettingsMetrics::FOOTER_PADDING_X)
             .border_t_1()
             .border_color(theme.border)
-            .justify_end()
+            .bg(theme.background)
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Button::new(
-                            "cm-driver-import",
-                            dbflux_i18n::t!("connection_manager.driver_select.import_from_file"),
-                        )
-                        .small()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_import(window, cx);
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "cm-driver-import-external",
-                            dbflux_i18n::t!("connection_manager.driver_select.import_from_client"),
-                        )
-                        .small()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_import_external(window, cx);
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "cm-driver-cancel",
-                            dbflux_i18n::t!("connection_manager.driver_select.cancel"),
-                        )
-                        .small()
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            cx.emit(DismissEvent);
-                            window.remove_window();
-                        })),
-                    )
-                    .child({
-                        let mut cta = Button::new("cm-driver-configure", cta_label)
-                            .primary()
-                            .small();
-                        if cta_disabled {
-                            cta = cta.disabled(true);
-                        } else {
-                            cta = cta.on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_driver(&cta_id, window, cx);
-                            }));
-                        }
-                        cta
-                    }),
+                Button::new(
+                    "cm-driver-import",
+                    dbflux_i18n::t!("connection_manager.driver_select.import_from_file"),
+                )
+                .small()
+                .secondary()
+                .icon(AppIcon::Download)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_import(window, cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "cm-driver-import-external",
+                    dbflux_i18n::t!("connection_manager.driver_select.import_from_client"),
+                )
+                .small()
+                .secondary()
+                .icon(AppIcon::ArrowLeftRight)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_import_external(window, cx);
+                })),
+            )
+            .child(div().flex_1())
+            .child(
+                Button::new(
+                    "cm-driver-cancel",
+                    dbflux_i18n::t!("connection_manager.driver_select.cancel"),
+                )
+                .small()
+                .secondary()
+                .kbd("Esc")
+                .on_click(cx.listener(|_, _, window, cx| {
+                    cx.emit(DismissEvent);
+                    window.remove_window();
+                })),
+            )
+            .child(cta)
     }
-}
-
-fn render_filter_input(state: &Entity<InputState>) -> impl IntoElement {
-    // `Icon::new` defaults the color to `theme.muted_foreground` so the
-    // magnifier renders in the same muted tone as in the screenshot without
-    // requiring a theme lookup at this call site.
-    GpuiInput::new(state)
-        .id("cm-driver-filter")
-        .small()
-        .cleanable(true)
-        .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM))
 }
 
 fn driver_matches_query(driver: &DriverInfo, query: &str) -> bool {
@@ -345,30 +392,14 @@ fn driver_matches_query(driver: &DriverInfo, query: &str) -> bool {
         || driver.description.to_lowercase().contains(query)
 }
 
-fn render_section_header(
-    category: DatabaseCategory,
-    count: usize,
-    muted: gpui::Hsla,
-) -> impl IntoElement {
+/// Category label above a section of cards: 16 px above, 8 px below.
+fn render_section_header(category: DatabaseCategory) -> impl IntoElement {
     div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .pt_2()
+        .pt(ConnectionFormMetrics::PICKER_CATEGORY_PADDING_TOP)
+        .pb(ConnectionFormMetrics::PICKER_CATEGORY_PADDING_BOTTOM)
         .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(muted)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(SharedString::from(category.display_name().to_uppercase())),
-        )
-        .child(
-            div()
-                .px(Spacing::XS)
-                .text_size(FontSizes::XS)
-                .text_color(muted)
-                .child(SharedString::from(count.to_string())),
+            Text::label(category.display_name().to_string())
+                .font_size(ShellMetrics::SECTION_LABEL_FONT),
         )
 }
 
@@ -402,13 +433,13 @@ pub(super) fn visible_section_sizes(visible: &[DriverInfo]) -> Vec<usize> {
     visible_sections(visible).map(<[DriverInfo]>::len).collect()
 }
 
-/// Container that lays out one category section's cards in exactly
-/// `GRID_COLUMNS` columns, each as wide as its card.
-fn driver_section_grid() -> Div {
+/// Container that lays out one category section's cards in `columns`
+/// equal columns.
+fn driver_section_grid(columns: usize) -> Div {
     div()
         .grid()
-        .grid_cols_max_content(GRID_COLUMNS as u16)
-        .gap(CARD_GAP)
+        .grid_cols(columns as u16)
+        .gap(ConnectionFormMetrics::CARD_GAP)
 }
 
 /// Direction of a single 2D grid move.
@@ -576,15 +607,15 @@ mod grid_navigation_tests {
     };
 
     use super::{
-        CARD_GAP, CARD_WIDTH, DriverInfo, GRID_COLUMNS, GridDirection, PICKER_PADDING_X,
-        driver_section_grid, move_grid_focus, visible_drivers, visible_section_sizes,
+        ConnectionFormMetrics, DriverInfo, GridDirection, driver_section_grid,
+        grid_columns_for_width, move_grid_focus, visible_drivers, visible_section_sizes,
     };
 
-    use GridDirection::{Down, Left, Right, Up};
+    /// Column count and card width the section-grid harness lays out.
+    const GRID_COLUMNS: usize = 3;
+    const CARD_WIDTH: f32 = 240.0;
 
-    /// Minimum width `open_connection_manager` gives the Connection Manager
-    /// window; the picker grid must fit it without clipping a column.
-    const MIN_WINDOW_WIDTH: f32 = 600.0;
+    use GridDirection::{Down, Left, Right, Up};
 
     fn driver(id: &str, category: DatabaseCategory) -> DriverInfo {
         DriverInfo {
@@ -721,16 +752,25 @@ mod grid_navigation_tests {
     }
 
     #[test]
-    fn grid_columns_fit_the_minimum_window_width() {
-        let columns = GRID_COLUMNS as f32;
-        let required = columns * CARD_WIDTH
-            + (columns - 1.0) * f32::from(CARD_GAP)
-            + 2.0 * f32::from(PICKER_PADDING_X);
+    fn grid_columns_follow_the_available_width() {
+        assert_eq!(grid_columns_for_width(px(100.0)), 1);
+        assert_eq!(grid_columns_for_width(px(450.0)), 2);
+        assert_eq!(grid_columns_for_width(px(700.0)), 3);
+        assert_eq!(grid_columns_for_width(px(992.0)), 4);
+    }
 
-        assert!(
-            required <= MIN_WINDOW_WIDTH,
-            "{GRID_COLUMNS} columns need {required} px, wider than the {MIN_WINDOW_WIDTH} px minimum window"
+    #[test]
+    fn grid_columns_never_exceed_the_design_maximum() {
+        assert_eq!(
+            grid_columns_for_width(px(4000.0)),
+            ConnectionFormMetrics::CARD_MAX_COLUMNS
         );
+    }
+
+    #[test]
+    fn a_zero_or_negative_width_still_lays_out_one_column() {
+        assert_eq!(grid_columns_for_width(px(0.0)), 1);
+        assert_eq!(grid_columns_for_width(px(-50.0)), 1);
     }
 
     struct SectionGridHarness;
@@ -744,14 +784,18 @@ mod grid_navigation_tests {
                     .h(px(40.0))
             });
 
+            let columns = GRID_COLUMNS as f32;
+            let width =
+                px(CARD_WIDTH) * columns + ConnectionFormMetrics::CARD_GAP * (columns - 1.0);
+
             div()
-                .w(px(1600.0))
-                .child(driver_section_grid().children(cards))
+                .w(width)
+                .child(driver_section_grid(GRID_COLUMNS).children(cards))
         }
     }
 
-    /// Even with room for many more cards per row, a section grid renders
-    /// exactly `GRID_COLUMNS` columns, which is what `move_grid_focus` steps by.
+    /// A section grid renders exactly the columns it is given, which is what
+    /// `move_grid_focus` steps by.
     #[gpui::test]
     fn section_grid_renders_grid_columns_cards_per_row(cx: &mut TestAppContext) {
         let (_, window) = cx.add_window_view(|_, _| SectionGridHarness);
@@ -772,7 +816,7 @@ mod grid_navigation_tests {
             );
             assert_eq!(
                 card.origin.x,
-                first.origin.x + (px(CARD_WIDTH) + CARD_GAP) * index as f32,
+                first.origin.x + (px(CARD_WIDTH) + ConnectionFormMetrics::CARD_GAP) * index as f32,
                 "card {index} is not in column {index}"
             );
         }

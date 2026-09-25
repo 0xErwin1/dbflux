@@ -101,6 +101,8 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Clipboard,
     AppIcon::Pin,
     AppIcon::DbFlux,
+    AppIcon::Scale,
+    AppIcon::ArrowLeftRight,
 ];
 
 /// Returns the embedded bytes for the given icon.

@@ -23,9 +23,6 @@ use gpui_component::scroll::ScrollableElement;
 /// Width of the label column in a settings row.
 const ROW_LABEL_WIDTH: Pixels = px(200.0);
 
-/// Horizontal padding of the section body.
-const BODY_PADDING_X: Pixels = px(28.0);
-
 /// Vertical padding of a settings row.
 const ROW_PADDING_Y: Pixels = px(7.0);
 
@@ -164,13 +161,7 @@ impl UpdatesSection {
     }
 
     fn focus_frame(&self, row: UpdatesRow, cx: &App, child: impl IntoElement) -> Div {
-        let border = if self.is_at(row) {
-            ChromeColors::tint(cx.theme())
-        } else {
-            gpui::transparent_black()
-        };
-
-        div().border_1().border_color(border).child(child)
+        super::layout::cursor_ring(self.is_at(row), child, cx)
     }
 
     fn render_group_header(&self, cx: &App) -> AnyElement {
@@ -475,36 +466,42 @@ impl SettingsSection for UpdatesSection {
         self.has_unsaved_changes(cx)
     }
 
+    fn save_from_shortcut(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.save(cx);
+    }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_button(
+            "updates-reset",
+            UpdatesRow::Reset,
+            dbflux_i18n::t!("updates.settings.reset"),
+            AppIcon::RotateCcw,
+            cx,
+        ))
+    }
+
     fn render_footer_actions(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let footer = div()
-            .flex()
-            .items_center()
-            .gap(Spacing::MD)
-            .child(self.render_button(
-                "updates-reset",
-                UpdatesRow::Reset,
-                dbflux_i18n::t!("updates.settings.reset"),
-                AppIcon::RotateCcw,
-                cx,
-            ))
-            .child(
-                Button::new("updates-save", dbflux_i18n::t!("updates.settings.save"))
-                    .small()
-                    .primary()
-                    .icon(AppIcon::Save)
-                    .kbd("Ctrl S")
-                    .focused(self.is_at(UpdatesRow::Save))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.select(UpdatesRow::Save);
-                        this.save(cx);
-                    })),
-            );
-
-        Some(footer.into_any_element())
+        Some(
+            Button::new("updates-save", dbflux_i18n::t!("updates.settings.save"))
+                .small()
+                .primary()
+                .icon(AppIcon::Save)
+                .kbd("Ctrl S")
+                .focused(self.is_at(UpdatesRow::Save))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.select(UpdatesRow::Save);
+                    this.save(cx);
+                }))
+                .into_any_element(),
+        )
     }
 }
 
@@ -518,18 +515,25 @@ impl Render for UpdatesSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::page_header(
-                dbflux_i18n::t!("updates.settings.title"),
-                dbflux_i18n::t!("updates.settings.subtitle"),
-                cx,
-            ))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .pb(crate::tokens::SettingsMetrics::PAGE_HEAD_PADDING_BOTTOM - Spacing::SM)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(dbflux_components::composites::page_header(
+                        dbflux_i18n::t!("updates.settings.title"),
+                        dbflux_i18n::t!("updates.settings.subtitle"),
+                        cx,
+                    )),
+            )
             .child(
                 div()
                     .id("updates-settings-body")
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
-                    .px(BODY_PADDING_X)
+                    .px(crate::tokens::SettingsMetrics::BODY_PADDING_X)
                     .pb(Spacing::XL)
                     .child(body),
             )

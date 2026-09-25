@@ -134,6 +134,14 @@ charts:
     error:
       create_editable_failed: "创建可编辑仪表盘失败：%{error}"
 components:
+  environment:
+    development: "开发"
+    staging: "预发布"
+    production: "生产"
+  env_tag:
+    development: "开发"
+    staging: "预发"
+    production: "生产"
   value_panel:
     empty: 未选择单元格
     error:
@@ -176,6 +184,23 @@ controls:
       one: "+%{count} 项"
       many: "+%{count} 项"
 connection_manager:
+  tab_badge:
+    mcp_clients:
+      many: "%{count} 个客户端"
+      one: "1 个客户端"
+    ssm: "SSM"
+    proxy: "代理"
+    ssh: "SSH"
+  environment:
+    none: "无"
+    help: "标明此连接指向的环境。"
+    label: "环境"
+  enter_as:
+    uri: "连接 URI"
+    fields: "字段"
+    label: "输入方式"
+  form:
+    required_hint: "标红的字段为必填项"
   placeholder:
     seconds: 秒
     connection_name: 连接名称
@@ -291,14 +316,14 @@ connection_manager:
   action:
     copy: 复制
     back: 返回
-    test_connection: 测试连接
+    test_connection: "测试连接"
     save: 保存
     browse: 浏览
   window_title: 连接管理器
   driver_select:
-    search_placeholder: 按名称、驱动、端口筛选…
-    title: 新建连接
-    subtitle: 选择数据库类型
+    search_placeholder: "按名称、驱动或端口筛选"
+    title: "新建连接"
+    subtitle: "选择要连接的目标。"
     empty_state: 没有符合筛选条件的驱动
     import_from_file: 从文件导入…
     import_from_client: 从另一个客户端导入…
@@ -2366,6 +2391,7 @@ form:
     pipeline_stage_failed: "流水线阶段 %{stage}：%{source}"
 hooks:
   kind:
+    lua: "Lua"
     command: 命令
     script: 脚本
   source:
@@ -2717,6 +2743,13 @@ scripts:
   error:
     read_file_failed: "读取文件 %{path} 失败：%{error}"
 settings:
+  field:
+    hide_secret: "隐藏值"
+    show_secret: "显示值"
+  footer:
+    unsaved:
+      many: "%{count} 项未保存的更改"
+      one: "1 项未保存的更改"
   action:
     default_connection_name: 连接
     close: 关闭
@@ -2730,29 +2763,35 @@ settings:
   mcp_governance:
     persist_error: "持久化 MCP 治理失败：%{error}"
   general:
+    unit:
+      mebibytes: "MiB"
+      seconds: "秒"
+      milliseconds: "毫秒"
     header:
       title: 常规
-      subtitle: 配置启动、会话、刷新和安全行为
+      subtitle: "外观、启动、刷新以及危险语句的安全保护。"
     appearance:
       group: 外观
     startup:
-      group: 启动与会话
+      group: "启动与会话"
     refresh:
-      group: 刷新与后台
+      group: "刷新与后台"
     safety:
-      group: 执行安全
+      group: "执行安全"
     object_storage:
-      group: 对象存储
+      group: "对象存储"
     storage:
       group: 存储
     theme:
+      help: "两者均为拜占庭配色。跟随系统会随操作系统切换。"
       option:
         follow_system: "跟随系统"
         dark: "深色"
         light: "浅色"
       label: 主题
     style:
-      label: 样式
+      help: "紧凑模式将行高降为 24，文字缩小 1 px。"
+      label: "密度"
       option:
         default: "默认"
         compact: "紧凑"
@@ -2760,26 +2799,26 @@ settings:
       label: 语言
       option:
         system: 跟随系统
-      notice: 语言更改将在重启 DBFlux 后生效。
+      notice: "重启 DBFlux 后生效。"
     editor:
       group: "编辑器"
     vim_mode:
       label: "在代码编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
     restore_session:
-      label: 启动时恢复会话
+      label: "启动时恢复打开的标签页"
     reopen_connections:
-      label: 重新打开上次的连接
+      label: "重新连接之前打开的连接"
     default_focus:
-      label: 默认聚焦
+      label: "启动时焦点"
       option:
         sidebar: 侧边栏
-        last_tab: 上一个标签页
+        last_tab: "上一个标签页"
     max_history:
-      label: 最大历史条目数
+      label: "历史记录条数"
       error: 最大历史条目数必须是大于等于 10 的数字
     auto_save_interval:
-      label: 自动保存间隔（ms）
+      label: "自动保存间隔"
       error: 自动保存间隔必须大于等于 500 ms
     refresh_policy:
       label: 默认刷新策略
@@ -2787,7 +2826,7 @@ settings:
         manual: 手动
         interval: 间隔
     refresh_interval:
-      label: 默认刷新间隔（秒）
+      label: "默认刷新间隔"
       error: 刷新间隔必须大于等于 1 秒
     max_background_tasks:
       label: 最大并发后台任务数
@@ -2797,23 +2836,24 @@ settings:
     refresh_only_if_visible:
       label: 仅当标签页可见时自动刷新
     confirm_dangerous:
-      label: 确认危险查询
+      hint: "不带 WHERE 的 DELETE 或 UPDATE、DROP、TRUNCATE、FLUSHALL 等。"
+      label: "确认危险语句"
     requires_where:
-      label: DELETE / UPDATE 需要 WHERE
+      label: "DELETE 和 UPDATE 必须带 WHERE"
     requires_preview:
-      label: 始终要求预览（忽略抑制）
+      label: "始终预览，即使该语句之前已忽略"
     editor_row_limit:
       label: 编辑器行数上限
       error: 编辑器行数上限必须是介于 1 和 9223372036854775807 之间的整数
     object_preview_limit:
-      label: 对象预览大小上限（MiB）
+      label: "对象预览大小上限"
       error: 对象预览大小上限必须大于等于 1 MiB
     object_preview_hint:
       label: "超过此大小的对象绝不会下载用于预览；浏览器仅显示其元数据。"
     key_value:
-      group: 键值预览
+      group: "键值预览"
     key_value_size_limit:
-      label: 键值预览大小上限（MiB）
+      label: "键值预览大小上限"
       error: 键值预览大小上限必须大于等于 1 MiB
     key_value_size_limit_hint:
       label: "超过此大小的值不会自动下载；请点击 仍要加载 获取完整值。"
@@ -2841,12 +2881,13 @@ settings:
     lucide: UI 图标来自 Lucide（ISC 许可证）
     simple_icons: 品牌图标来自 Simple Icons（CC0 1.0）
   keybindings:
-    title: 键盘快捷键
-    subtitle: 按上下文查看所有键盘快捷键
-    filter_placeholder: 筛选快捷键…
+    filter_label: "筛选快捷键"
+    title: "键盘快捷键"
+    subtitle: "按上下文列出的所有命令及其按键。"
+    filter_placeholder: "按命令或按键筛选"
     binding_count:
-      one: （1 个绑定）
-      many: "（%{count} 个绑定）"
+      one: "1 个绑定"
+      many: "%{count} 个绑定"
     inherits_from: "继承自 %{parent}"
     inherited: 继承的
     conflict:
@@ -2995,14 +3036,16 @@ settings:
   hooks:
     header:
       title: Hooks
-      subtitle: 创建可复用的 Hook 并从连接设置中关联它们
+      subtitle: "在连接和断开前后运行的命令、脚本和 Lua。连接在其“设置”标签页中选择它们。"
     list:
-      new: 新建 Hook
+      new: "新建 Hook"
       empty: 未定义 Hook
       unreadable:
         title: 无法读取的 Hook
         hint: 无法读取 — 无法编辑
     form:
+      group:
+        hook: "Hook"
       title:
         edit: 编辑 Hook
         new: 新建 Hook
@@ -3010,12 +3053,12 @@ settings:
       kind: 类型
       command: 命令
       args: 参数
-      args_hint: 参数以空格分隔
+      args_hint: "以空格分隔"
       language: 语言
-      file_path: 文件路径
+      file_path: "文件路径"
       file_path_hint: 脚本在应用编辑器中编辑，默认存储在 hooks/ 目录下
-      open_in_app: 在应用中打开
-      open_in_editor: 在编辑器中打开
+      open_in_app: "在应用中打开"
+      open_in_editor: "在编辑器中打开"
       interpreter: 解释器
       interpreter_hint: "留空使用 %{default_interpreter}"
       interpreter_auto: "自动（%{value}）"
@@ -3027,20 +3070,20 @@ settings:
         connection_metadata: 连接元数据
         process_run: 受控的进程运行
         process_run_hint: "启用 `dbflux.process.run(...)` 而不暴露 Lua `os` 库"
-      execution_mode: 执行模式
+      execution_mode: "运行方式"
       execution_mode_hint: 分离模式在后台运行，不会阻塞连接 / 断开
-      ready_signal: 就绪信号
+      ready_signal: "就绪信号"
       ready_signal_hint: DBFlux 会等待 Hook 输出中出现此文本后再继续。分离式连接前 Hook 必需。
-      cwd: 工作目录
+      cwd: "工作目录"
       env: 环境变量
       env_hint: 逗号分隔的 KEY=value 对
-      env_denylist: 环境变量黑名单
+      env_denylist: "环境变量黑名单"
       env_denylist_hint: 逗号分隔的、要从继承环境中剥离的变量名
-      timeout: 超时（ms）
-      resolved_command: 解析后的命令
+      timeout: "超时"
+      resolved_command: "解析后的命令"
       enabled: 已启用
       inherit_env: 继承父级环境
-      on_failure: 失败时
+      on_failure: "失败时"
       preview_placeholder: "<输入命令>"
     status:
       unsupported_platform: 此平台不支持
@@ -3070,9 +3113,15 @@ settings:
       deleted: Hook 已删除
       unreadable_deleted: 无法读取的 Hook 已删除
   auth_profiles:
+    session_unknown: "尚未在此窗口登录"
+    session_attention: "会话需要处理"
+    session_valid: "会话有效"
+    disabled_badge: "关闭"
+    group:
+      profile: "配置"
     profiles_label: 配置文件
-    new_profile: 新建认证配置文件
-    import: 导入…
+    new_profile: "新建配置"
+    import: "导入"
     source_label: 来源
     leave_blank_hint: 留空以保留当前值。
     auth_profile_label: 认证配置文件
@@ -3106,13 +3155,13 @@ settings:
     login_url_panel_description: 在浏览器中打开此 URL 以完成登录。完成认证后 DBFlux 将自动继续。
     open_browser: 打开浏览器
     copy_url: 复制 URL
-    login_action: 登录
+    login_action: "登录"
     logging_in: 正在登录…
     runs_interactive_login_hint: 为此认证配置文件执行交互式登录
     update: 更新
     create: 创建
-    section_title: 认证配置文件
-    section_description: 管理用于连接访问的可复用认证配置文件
+    section_title: "认证配置"
+    section_description: "可复用的登录，用于密钥、参数和 SSO。连接按名称引用它们。"
     delete_dialog_title: 删除认证配置文件
     delete_dialog:
       body_none: "确定要删除 %{name} 吗？"
@@ -3224,6 +3273,9 @@ settings:
         label: 管理
         description: 批准执行、导出审计日志及特权操作
     group:
+      policy: "策略"
+      role: "角色"
+      client: "客户端"
       discovery: 发现
       schema: Schema
       query: 查询
@@ -3247,6 +3299,7 @@ settings:
       roles: 未配置角色。
       policies: 未配置策略。
     field:
+      allowed_tools_count: "允许的工具 · %{selected}/%{total}"
       client_id: 客户端 ID
       name: 名称
       issuer_optional: 签发者（可选）
@@ -3299,18 +3352,18 @@ settings:
       create_policy: 创建策略
   drivers:
     section_title: 驱动
-    section_description: 配置各驱动的覆盖项和驱动定义的设置
+    section_description: "按驱动的覆盖项以及驱动声明的设置。"
     empty: 没有已注册的驱动
     select_hint: 选择一个驱动以配置设置
     action:
       save: 保存
     field:
       capabilities: 能力
-      global_overrides: 全局覆盖项
-      driver_settings: 驱动设置
+      global_overrides: "此驱动的覆盖项"
+      driver_settings: "驱动设置"
     global_overrides_hint: 启用覆盖以替换此驱动的全局默认值。
     no_custom_settings: 此驱动没有自定义设置。
-    use_global: 使用全局
+    use_global: "使用全局"
     error:
       refresh_interval_empty: 刷新间隔覆盖项不能为空
       refresh_interval_invalid: 刷新间隔覆盖项必须是大于 0 的数字
@@ -3360,8 +3413,10 @@ settings:
       graph_traversal: 图遍历
       edge_properties: 边属性
   rpc_services:
-    section_title: RPC 服务
-    section_description: 管理已配置的 RPC 服务。更改需要重启。
+    group:
+      service: "服务"
+    section_title: "RPC 服务"
+    section_description: "DBFlux 通过 RPC 启动的外部驱动和认证提供程序。更改在重启后生效。"
     empty: 未配置 RPC 服务
     edit_title: 编辑 RPC 服务
     new_title: 新建 RPC 服务
@@ -3377,56 +3432,79 @@ settings:
       saved: RPC 服务已保存。需要重启以应用更改。
       deleted: RPC 服务已删除。需要重启以应用更改。
     field:
-      disabled: 已禁用
+      env_value: "变量值"
+      env_key: "变量名"
+      disabled: "关闭"
       socket_id: Socket ID
       command: 命令
-      startup_timeout: 启动超时（ms）
+      startup_timeout: "启动超时"
       enable: 启用此服务
-      service_type: 服务类型
+      service_type: "服务类型"
       arguments: 参数
-      env_vars: 环境变量
+      env_vars: "环境变量"
       default_command: （默认）
     kind:
       driver: 驱动
       auth_provider: 认证提供程序
     action:
+      add_variable: "添加变量"
+      add_argument: "添加参数"
+      remove: "移除"
       delete: 删除
       update: 更新
       create: 创建
   ssh_tunnels:
+    list:
+      password: "密码"
+      key: "密钥"
+    group:
+      authentication: "认证"
+      tunnel: "隧道"
     placeholder_name: SSH 隧道
     placeholder_password: 密码
     placeholder_passphrase: 口令
-    section_title: SSH 隧道
-    section_description: 管理用于堡垒机和跳板机访问的可复用 SSH 隧道
+    section_title: "SSH 隧道"
+    section_description: "可复用的堡垒机与跳板机隧道。连接在其“访问”标签页中选择一个。"
     empty: 没有已保存的 SSH 隧道
-    new: 新建隧道
+    new: "新建隧道"
     field:
+      keep_in_keyring: "保存在系统密钥环中"
+      password: "密码"
+      passphrase: "密码短语"
+      key_file: "密钥文件"
+      method: "方式"
+      user: "用户"
+      host_port: "主机和端口"
       name: 名称
     delete_dialog_title: 删除 SSH 隧道
     delete_dialog:
       body: "确定要删除 %{name} 吗？"
     action:
-      import: 导入…
+      test: "测试隧道"
+      import: "导入"
       export: 导出
       delete: 删除
     error:
       host_and_user_required: 主机和用户为必填项
       save_failed: "保存 SSH 隧道配置失败：%{error}"
   proxies:
+    group:
+      authentication: "认证"
+      proxy: "代理"
     placeholder_name: 代理名称
     placeholder_username: 用户名
     placeholder_password: 密码
-    section_title: 代理配置
-    section_description: 管理用于数据库连接的代理配置
+    section_title: "代理"
+    section_description: "HTTP 和 SOCKS 代理。连接在其“访问”标签页中选择一个。"
     empty: 没有已保存的代理
-    new: 新建代理
+    new: "新建代理"
     panel_title: 代理
     kind:
       http: HTTP
       https: HTTPS
       socks5: SOCKS5
     field:
+      host_port: "主机和端口"
       name: 名称
       protocol: 协议
       authentication: 认证
@@ -3434,10 +3512,10 @@ settings:
       password: 密码
       host: 主机
       port: 端口
-      no_proxy: 不使用代理
-      enabled: 已启用
+      no_proxy: "绕过"
+      enabled: "启用"
     hint:
-      no_proxy_list: 逗号分隔的绕过代理的主机 / CIDR
+      no_proxy_list: "不经过代理的主机和 CIDR，用逗号分隔。"
     auth:
       none: 无
       basic: 基本认证
@@ -3447,7 +3525,7 @@ settings:
       save_failed: "保存代理配置失败：%{error}"
     action:
       save: 保存
-      import: 导入…
+      import: "导入"
       export: 导出
       delete: 删除
       update: 更新
@@ -3509,6 +3587,8 @@ settings:
     toast:
       saved: 审计设置已保存。
   nav:
+    no_results: "没有匹配的设置"
+    search_placeholder: "搜索设置"
     general_group: 常规
     general: 常规
     keybindings: 键盘快捷键
@@ -3516,14 +3596,14 @@ settings:
     audit: 审计
     about: 关于
     network: 网络
-    ssh_tunnels: SSH 隧道
-    proxies: 代理
-    auth_profiles: 访问提供程序
-    connection: 连接
+    ssh_tunnels: "SSH 隧道"
+    proxies: "代理"
+    auth_profiles: "认证配置"
+    connection: "连接"
     hooks: Hooks
     drivers: 驱动
-    services: RPC 服务
-    mcp_governance: MCP 治理
+    services: "RPC 服务"
+    mcp_governance: "MCP 治理"
     mcp_clients: 客户端
     mcp_roles: 角色
     mcp_policies: 策略

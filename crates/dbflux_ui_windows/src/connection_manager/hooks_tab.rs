@@ -1,4 +1,5 @@
 use super::*;
+use crate::settings::layout;
 use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Radii, Widths};
@@ -156,7 +157,6 @@ impl ConnectionManagerWindow {
         let focused = self.edit_state == EditState::Navigating
             && self.active_tab == ActiveTab::Settings
             && self.form_focus == focus_target;
-        let ring_color = cx.theme().ring;
 
         let row = div()
             .flex()
@@ -164,25 +164,24 @@ impl ConnectionManagerWindow {
             .gap_3()
             .child(div().w(px(160.0)).child(Text::caption(label.clone())))
             .child(
-                div()
-                    .w(Widths::CM_FORM_DROPDOWN)
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(focused, |d| d.border_color(ring_color))
-                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                    .p(px(2.0))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.enter_edit_mode_for_field(focus_target, window, cx);
-                        }),
-                    )
-                    .child(
-                        Input::new(input)
-                            .id(cm_setting_id(field_id))
-                            .aria_label(label)
-                            .small(),
-                    ),
+                layout::cursor_ring(
+                    focused,
+                    div()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.enter_edit_mode_for_field(focus_target, window, cx);
+                            }),
+                        )
+                        .child(
+                            Input::new(input)
+                                .id(cm_setting_id(field_id))
+                                .aria_label(label)
+                                .small(),
+                        ),
+                    cx,
+                )
+                .w(Widths::CM_FORM_DROPDOWN),
             );
 
         Some(row)
@@ -204,7 +203,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(160.0))
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.pre_connect_hook")),
                     )
                     .child(
@@ -222,7 +221,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(160.0))
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.post_connect_hook")),
                     )
                     .child(
@@ -240,7 +239,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(160.0))
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.pre_disconnect_hook")),
                     )
                     .child(
@@ -258,7 +257,7 @@ impl ConnectionManagerWindow {
                     .child(
                         div()
                             .w(px(160.0))
-                            .text_sm()
+                            .text_size(dbflux_components::tokens::FontSizes::BASE)
                             .child(dbflux_i18n::t!("hooks.phase.post_disconnect_hook")),
                     )
                     .child(

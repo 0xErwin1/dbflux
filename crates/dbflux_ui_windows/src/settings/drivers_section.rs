@@ -480,6 +480,12 @@ impl SettingsSection for DriversSection {
         self.drv_selected_idx
             .map(|_| self.render_driver_footer_actions(cx))
     }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drv_selected_idx.is_some() {
+            self.save_driver_settings(window, cx);
+        }
+    }
 }
 
 impl Render for DriversSection {

@@ -274,6 +274,29 @@ pub(crate) fn mcp_role_policy_count(count: usize) -> String {
     }
 }
 
+/// Badge of the Connection Manager's MCP tab: how many clients have a
+/// binding on this connection.
+pub(crate) fn connection_manager_mcp_client_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("connection_manager.tab_badge.mcp_clients.one")
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.tab_badge.mcp_clients.many",
+            count = count
+        )
+    }
+}
+
+/// Header of the allowed-tools group of an MCP policy: "Allowed tools · N of M".
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_allowed_tools_header(selected: usize, total: usize) -> String {
+    dbflux_i18n::t!(
+        "settings.mcp.field.allowed_tools_count",
+        selected = selected,
+        total = total
+    )
+}
+
 /// Formats the "N tools · M classes" caption shown next to an MCP policy row.
 #[cfg(feature = "mcp")]
 pub(crate) fn mcp_policy_tools_classes_summary(tools: usize, classes: usize) -> String {

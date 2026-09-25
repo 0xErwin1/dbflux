@@ -2,6 +2,7 @@ use super::form_section::{FormSection, create_blur_subscription};
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId, layout};
 use crate::labels::{mcp_policy_tools_classes_summary, mcp_role_policy_count};
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::components::multi_select::MultiSelect;
 use dbflux_components::composites::{
@@ -11,10 +12,10 @@ use dbflux_components::composites::{
 use dbflux_components::controls::DropdownItem;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::BadgeTone;
 use dbflux_components::primitives::Text;
-use dbflux_components::primitives::{BadgeTone, FocusShape, Label, focus_ring};
-use dbflux_components::tokens::ChamferCut;
-use dbflux_components::tokens::{ChromeColors, Widths};
+use dbflux_components::tokens::{Spacing, Widths};
 use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -22,7 +23,6 @@ use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 use std::collections::HashSet;
 
 /// Tool ids in their stable display order. Each id doubles as the catalog key
@@ -798,7 +798,6 @@ impl McpSection {
     // ─── Render helpers ───────────────────────────────────────────────────────
 
     fn render_clients_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let clients = self.trusted_clients(cx);
         let selected = self.selected_client_id.clone();
         let is_list_focused = self.mcp_focus == McpFocus::List;
@@ -810,6 +809,7 @@ impl McpSection {
                 let is_selected = selected.as_deref() == Some(client.id.as_str());
                 MasterDetailItem {
                     id: SharedString::from(client.id.clone()),
+                    icon: Some(AppIcon::Bot),
                     label: SharedString::from(client.name.clone()),
                     detail: Some(SharedString::from(client.id.clone())),
                     badge: Some(if client.active {
@@ -846,70 +846,62 @@ impl McpSection {
         let entity = cx.entity();
         let entity_for_action = entity.clone();
 
-        let form = div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(dbflux_components::composites::page_header(
-                dbflux_i18n::t!("settings.mcp.trusted_clients_title"),
-                dbflux_i18n::t!("settings.mcp.trusted_clients_form_description"),
+        let active_checkbox = layout::cursor_ring(
+            self.mcp_focus == McpFocus::Form && self.mcp_form_field == McpFormField::ClientActive,
+            Checkbox::new("mcp-client-active")
+                .checked(self.draft_active)
+                .label(dbflux_i18n::t!("settings.mcp.field.active"))
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.draft_active = *checked;
+                    cx.notify();
+                })),
+            cx,
+        );
+
+        let form = self.render_mcp_detail(
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.mcp.group.client"),
+                Some(AppIcon::Bot.into()),
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(Label::new(dbflux_i18n::t!("settings.mcp.field.client_id")))
-                    .child(self.render_mcp_input_field(
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.client_id"),
+                    self.render_mcp_input_field(
                         &self.input_client_id,
                         McpFormField::ClientId,
-                        ChromeColors::tint(&theme),
+                        dbflux_i18n::t!("settings.mcp.field.client_id"),
+                        true,
                         cx,
-                    ))
-                    .child(Label::new(dbflux_i18n::t!("settings.mcp.field.name")))
-                    .child(self.render_mcp_input_field(
+                    ),
+                    None,
+                ))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.name"),
+                    self.render_mcp_input_field(
                         &self.input_client_name,
                         McpFormField::ClientName,
-                        ChromeColors::tint(&theme),
+                        dbflux_i18n::t!("settings.mcp.field.name"),
+                        false,
                         cx,
-                    ))
-                    .child(Label::new(dbflux_i18n::t!(
-                        "settings.mcp.field.issuer_optional"
-                    )))
-                    .child(self.render_mcp_input_field(
+                    ),
+                    None,
+                ))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.issuer_optional"),
+                    self.render_mcp_input_field(
                         &self.input_client_issuer,
                         McpFormField::ClientIssuer,
-                        ChromeColors::tint(&theme),
+                        dbflux_i18n::t!("settings.mcp.field.issuer_optional"),
+                        true,
                         cx,
-                    ))
-                    .child(focus_ring(
-                        self.mcp_focus == McpFocus::Form
-                            && self.mcp_form_field == McpFormField::ClientActive,
-                        FocusShape::Rect,
-                        Some(ChromeColors::tint(&theme)),
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Checkbox::new("mcp-client-active")
-                                    .checked(self.draft_active)
-                                    .aria_label(dbflux_i18n::t!("settings.mcp.field.active"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.draft_active = *checked;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(Text::body(dbflux_i18n::t!("settings.mcp.field.active"))),
-                        cx,
-                    )),
-            );
+                    ),
+                    None,
+                ))
+                .child(layout::check_row(active_checkbox, None)),
+        );
 
         let list = render_master_detail_list(
             &config,
@@ -938,20 +930,22 @@ impl McpSection {
             .child(form)
     }
 
+    /// Text field of an MCP form, framed for the keyboard cursor.
     fn render_mcp_input_field(
         &self,
         input: &Entity<InputState>,
         field: McpFormField,
-        tint: Hsla,
+        label: String,
+        mono: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_focused = self.mcp_focus == McpFocus::Form && self.mcp_form_field == field;
 
-        focus_ring(
+        layout::field_frame(
             is_focused,
-            FocusShape::Chamfer(ChamferCut::CONTROL),
-            Some(tint),
-            Input::new(input).small(),
+            Some(SettingsMetrics::TEXT_FIELD_WIDTH),
+            mono,
+            Input::new(input).aria_label(label),
             cx,
         )
         .on_mouse_down(
@@ -966,8 +960,26 @@ impl McpSection {
         )
     }
 
+    /// Detail pane of an MCP page: `header` and `body` scrolling together
+    /// inside the page margins.
+    fn render_mcp_detail(&self, header: impl IntoElement, body: impl IntoElement) -> Div {
+        div().flex_1().min_w_0().h_full().flex().flex_col().child(
+            div()
+                .id("mcp-detail-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px(SettingsMetrics::BODY_PADDING_X)
+                .pt(SettingsMetrics::DETAIL_PADDING_TOP)
+                .pb(Spacing::XL)
+                .flex()
+                .flex_col()
+                .child(header)
+                .child(body),
+        )
+    }
+
     fn render_roles_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let roles = self.roles(cx);
         let selected = self.selected_role_id.clone();
         let is_list_focused = self.mcp_focus == McpFocus::List;
@@ -990,6 +1002,7 @@ impl McpSection {
                 };
                 MasterDetailItem {
                     id: SharedString::from(role.id.clone()),
+                    icon: Some(AppIcon::Layers),
                     label: SharedString::from(label),
                     detail: Some(SharedString::from(mcp_role_policy_count(
                         role.policy_ids.len(),
@@ -1021,45 +1034,39 @@ impl McpSection {
         let role_policies_focused =
             self.mcp_focus == McpFocus::Form && self.mcp_form_field == McpFormField::RolePolicies;
 
-        let form = div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(dbflux_components::composites::page_header(
-                dbflux_i18n::t!("settings.mcp.roles_title"),
-                dbflux_i18n::t!("settings.mcp.roles_form_description"),
+        let form = self.render_mcp_detail(
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.mcp.group.role"),
+                Some(AppIcon::Layers.into()),
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(Label::new(dbflux_i18n::t!("settings.mcp.field.role_id")))
-                    .child(self.render_mcp_input_field(
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.role_id"),
+                    self.render_mcp_input_field(
                         &self.input_role_id,
                         McpFormField::RoleId,
-                        ChromeColors::tint(&theme),
+                        dbflux_i18n::t!("settings.mcp.field.role_id"),
+                        true,
                         cx,
-                    ))
-                    .child(Label::new(dbflux_i18n::t!("settings.mcp.field.policies")))
-                    .child(
-                        Text::body(dbflux_i18n::t!("settings.mcp.hint.select_policies"))
-                            .color(theme.muted_foreground),
-                    )
-                    .child(focus_ring(
+                    ),
+                    None,
+                ))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.policies"),
+                    layout::cursor_ring(
                         role_policies_focused,
-                        FocusShape::Chamfer(ChamferCut::CONTROL),
-                        Some(ChromeColors::tint(&theme)),
-                        self.role_policies_multiselect.clone(),
+                        div()
+                            .w(SettingsMetrics::TEXT_FIELD_WIDTH)
+                            .child(self.role_policies_multiselect.clone()),
                         cx,
-                    )),
-            );
+                    )
+                    .w(SettingsMetrics::TEXT_FIELD_WIDTH),
+                    Some(dbflux_i18n::t!("settings.mcp.hint.select_policies").into()),
+                )),
+        );
 
         let list = render_master_detail_list(
             &config,
@@ -1089,7 +1096,6 @@ impl McpSection {
     }
 
     fn render_policies_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
         let tool_meta = tool_meta();
         let class_meta = class_meta();
         let policies: Vec<ToolPolicyDto> = self
@@ -1120,6 +1126,7 @@ impl McpSection {
                 };
                 MasterDetailItem {
                     id: SharedString::from(policy.id.clone()),
+                    icon: Some(AppIcon::Scale),
                     label: SharedString::from(label),
                     detail: Some(SharedString::from(mcp_policy_tools_classes_summary(
                         policy.allowed_tools.len(),
@@ -1151,154 +1158,117 @@ impl McpSection {
 
         let mut tool_index = 0usize;
 
-        let form = div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .flex_col()
-            .child(dbflux_components::composites::page_header(
-                dbflux_i18n::t!("settings.mcp.policies_title"),
-                dbflux_i18n::t!("settings.mcp.policies_form_description"),
-                cx,
-            ))
-            .child(
+        let class_rows =
+            class_meta
+                .iter()
+                .enumerate()
+                .map(|(index, (class, label, description))| {
+                    let class = *class;
+                    let checked = self.draft_policy_classes.contains(class);
+                    let is_focused = is_form_focused && field == McpFormField::PolicyClass(index);
+
+                    self.render_policy_check_row(
+                        SharedString::from(format!("policy-class-{}", class)),
+                        label.clone(),
+                        description.clone(),
+                        checked,
+                        is_focused,
+                        move |this, checked| {
+                            if checked {
+                                this.draft_policy_classes.insert(class.to_string());
+                            } else {
+                                this.draft_policy_classes.remove(class);
+                            }
+                        },
+                        cx,
+                    )
+                });
+
+        let class_rows: Vec<Div> = class_rows.collect();
+
+        let tool_groups: Vec<Div> = TOOL_GROUPS
+            .iter()
+            .map(|(group_id, tools)| {
+                let rows: Vec<Div> = tools
+                    .iter()
+                    .map(|&tool| {
+                        let index = tool_index;
+                        tool_index += 1;
+                        let checked = self.draft_policy_tools.contains(tool);
+                        let label = tool_label(&tool_meta, tool);
+                        let description = tool_description(&tool_meta, tool);
+                        let is_focused =
+                            is_form_focused && field == McpFormField::PolicyTool(index);
+
+                        self.render_policy_check_row(
+                            SharedString::from(format!("policy-tool-{}", tool)),
+                            label,
+                            description,
+                            checked,
+                            is_focused,
+                            move |this, checked| {
+                                if checked {
+                                    this.draft_policy_tools.insert(tool.to_string());
+                                } else {
+                                    this.draft_policy_tools.remove(tool);
+                                }
+                            },
+                            cx,
+                        )
+                    })
+                    .collect();
+
                 div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
                     .flex()
                     .flex_col()
-                    .gap_3()
-                    .child(Label::new(dbflux_i18n::t!("settings.mcp.field.policy_id")))
-                    .child(self.render_mcp_input_field(
+                    .child(
+                        div()
+                            .pt(FormMetrics::ROW_GAP)
+                            .pb(FormMetrics::HELP_GAP)
+                            .child(Text::label(tool_group_label(group_id))),
+                    )
+                    .children(rows)
+            })
+            .collect();
+
+        let allowed_tool_count = self.draft_policy_tools.len();
+
+        let form = self.render_mcp_detail(
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.mcp.group.policy"),
+                Some(AppIcon::Scale.into()),
+                cx,
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.mcp.field.policy_id"),
+                    self.render_mcp_input_field(
                         &self.input_policy_id,
                         McpFormField::PolicyId,
-                        ChromeColors::tint(&theme),
+                        dbflux_i18n::t!("settings.mcp.field.policy_id"),
+                        true,
                         cx,
-                    ))
-                    .child(Label::new(dbflux_i18n::t!(
-                        "settings.mcp.field.allowed_execution_classes"
-                    )))
-                    .child(div().flex().flex_wrap().gap_3().children(
-                        class_meta.iter().enumerate().map(
-                            |(index, (class, label, description))| {
-                                let class = *class;
-                                let checked = self.draft_policy_classes.contains(class);
-                                let is_focused =
-                                    is_form_focused && field == McpFormField::PolicyClass(index);
-
-                                focus_ring(
-                                    is_focused,
-                                    FocusShape::Rect,
-                                    Some(ChromeColors::tint(&theme)),
-                                    div()
-                                        .flex()
-                                        .items_start()
-                                        .gap_2()
-                                        .child(
-                                            div().pt(px(2.0)).child(
-                                                Checkbox::new(SharedString::from(format!(
-                                                    "policy-class-{}",
-                                                    class
-                                                )))
-                                                .checked(checked)
-                                                .aria_label(label.clone())
-                                                .on_click(cx.listener(
-                                                    move |this, checked: &bool, _, cx| {
-                                                        if *checked {
-                                                            this.draft_policy_classes
-                                                                .insert(class.to_string());
-                                                        } else {
-                                                            this.draft_policy_classes.remove(class);
-                                                        }
-                                                        cx.notify();
-                                                    },
-                                                )),
-                                            ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_0p5()
-                                                .child(Text::body(label.clone()))
-                                                .child(
-                                                    Text::body(description.clone())
-                                                        .color(theme.muted_foreground),
-                                                ),
-                                        ),
-                                    cx,
-                                )
-                            },
-                        ),
-                    ))
-                    .child(Label::new(dbflux_i18n::t!(
-                        "settings.mcp.field.allowed_tools"
-                    )))
-                    .children(TOOL_GROUPS.iter().map(|(group_id, tools)| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(Text::label(tool_group_label(group_id)))
-                            .child(div().flex().flex_col().gap_2().pl_2().children(
-                                tools.iter().map(|&tool| {
-                                    let index = tool_index;
-                                    tool_index += 1;
-                                    let checked = self.draft_policy_tools.contains(tool);
-                                    let label = tool_label(&tool_meta, tool);
-                                    let description = tool_description(&tool_meta, tool);
-                                    let is_focused =
-                                        is_form_focused && field == McpFormField::PolicyTool(index);
-
-                                    focus_ring(
-                                        is_focused,
-                                        FocusShape::Rect,
-                                        Some(ChromeColors::tint(&theme)),
-                                        div()
-                                            .flex()
-                                            .items_start()
-                                            .gap_2()
-                                            .child(
-                                                div().pt(px(2.0)).child(
-                                                    Checkbox::new(SharedString::from(format!(
-                                                        "policy-tool-{}",
-                                                        tool
-                                                    )))
-                                                    .checked(checked)
-                                                    .aria_label(label.clone())
-                                                    .on_click(cx.listener(
-                                                        move |this, checked: &bool, _, cx| {
-                                                            if *checked {
-                                                                this.draft_policy_tools
-                                                                    .insert(tool.to_string());
-                                                            } else {
-                                                                this.draft_policy_tools
-                                                                    .remove(tool);
-                                                            }
-                                                            cx.notify();
-                                                        },
-                                                    )),
-                                                ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_0p5()
-                                                    .child(Text::body(label))
-                                                    .child(
-                                                        Text::body(description)
-                                                            .color(theme.muted_foreground),
-                                                    ),
-                                            ),
-                                        cx,
-                                    )
-                                }),
-                            ))
-                    })),
-            );
+                    ),
+                    None,
+                ))
+                .child(dbflux_components::composites::section_header(
+                    dbflux_i18n::t!("settings.mcp.field.allowed_execution_classes"),
+                    Some(AppIcon::Layers.into()),
+                    cx,
+                ))
+                .children(class_rows)
+                .child(dbflux_components::composites::section_header(
+                    crate::labels::mcp_allowed_tools_header(
+                        allowed_tool_count,
+                        mcp_policy_tool_ids().len(),
+                    ),
+                    Some(AppIcon::Bot.into()),
+                    cx,
+                ))
+                .children(tool_groups),
+        );
 
         let list = render_master_detail_list(
             &config,
@@ -1327,12 +1297,96 @@ impl McpSection {
             .child(form)
     }
 
+    /// One checkbox row of the policy form: the checkbox and its name, and
+    /// the muted description in a second column.
+    #[allow(clippy::too_many_arguments)]
+    fn render_policy_check_row(
+        &self,
+        id: SharedString,
+        label: String,
+        description: String,
+        checked: bool,
+        is_focused: bool,
+        setter: impl Fn(&mut Self, bool) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(FormMetrics::ROW_GAP)
+            .py(FormMetrics::ROW_PADDING_Y)
+            .border_b_1()
+            .border_color(cx.theme().table_row_border)
+            .child(
+                div()
+                    .w(SettingsMetrics::FORM_LABEL_WIDTH)
+                    .flex_shrink_0()
+                    .child(layout::cursor_ring(
+                        is_focused,
+                        Checkbox::new(id)
+                            .checked(checked)
+                            .label(label)
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                setter(this, *checked);
+                                cx.notify();
+                            })),
+                        cx,
+                    )),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(layout::help_text(description)),
+            )
+    }
+
+    /// Activate/deactivate and Delete, on the left of the footer, for a
+    /// saved client.
+    fn render_clients_footer_leading_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_form_focused = self.mcp_focus == McpFocus::Form;
+        let field = self.mcp_form_field;
+        let has_client = self.selected_client(cx).is_some();
+        let active_label = if self.draft_active {
+            dbflux_i18n::t!("settings.mcp.action.deactivate")
+        } else {
+            dbflux_i18n::t!("settings.mcp.action.activate")
+        };
+
+        layout::inline_controls()
+            .child(
+                Button::new("mcp-client-toggle-active", active_label)
+                    .small()
+                    .secondary()
+                    .icon(AppIcon::Power)
+                    .focused(is_form_focused && field == McpFormField::ClientToggleActive)
+                    .disabled(!has_client)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_selected_client_active(window, cx);
+                    })),
+            )
+            .child(
+                Button::new(
+                    "mcp-client-delete",
+                    dbflux_i18n::t!("settings.mcp.action.delete"),
+                )
+                .small()
+                .danger()
+                .icon(AppIcon::Delete)
+                .focused(is_form_focused && field == McpFormField::DeleteButton)
+                .disabled(!has_client)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.delete_selected_client(window, cx);
+                })),
+            )
+            .into_any_element()
+    }
+
     fn render_clients_footer_actions(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let save_label = if self.selected_client(cx).is_some() {
@@ -1340,63 +1394,47 @@ impl McpSection {
         } else {
             dbflux_i18n::t!("settings.mcp.action.create_client")
         };
-        let active_label = if self.draft_active {
-            dbflux_i18n::t!("settings.mcp.action.deactivate")
-        } else {
-            dbflux_i18n::t!("settings.mcp.action.activate")
-        };
 
-        div()
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap_3()
-            .child(
-                Text::body(if self.client_has_unsaved_changes(cx) {
-                    dbflux_i18n::t!("settings.mcp.status.unsaved")
-                } else {
-                    dbflux_i18n::t!("settings.mcp.status.saved")
-                })
-                .color(cx.theme().muted_foreground),
-            )
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::ClientToggleActive,
-                tint,
-                Button::new("mcp-client-toggle-active", active_label)
-                    .small()
-                    .ghost()
-                    .w_full()
-                    .disabled(self.selected_client(cx).is_none())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_selected_client_active(window, cx);
-                    })),
-            ))
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::DeleteButton,
-                tint,
-                Button::new(
-                    "mcp-client-delete",
-                    dbflux_i18n::t!("settings.mcp.action.delete"),
-                )
-                .small()
-                .danger()
-                .w_full()
-                .disabled(self.selected_client(cx).is_none())
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.delete_selected_client(window, cx);
-                })),
-            ))
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::SaveButton,
-                tint,
-                Button::new("mcp-client-save", save_label)
-                    .small()
-                    .primary()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_client(window, cx);
-                    })),
-            ))
+        Button::new("mcp-client-save", save_label)
+            .small()
+            .primary()
+            .icon(AppIcon::Check)
+            .kbd("Ctrl S")
+            .focused(is_form_focused && field == McpFormField::SaveButton)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.save_client(window, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// Delete, or the read-only notice of a built-in item, on the left of the
+    /// footer for roles and policies.
+    fn render_builtin_or_delete(
+        &self,
+        builtin: bool,
+        has_selection: bool,
+        builtin_notice: String,
+        delete_id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if builtin {
+            return layout::help_text(builtin_notice).into_any_element();
+        }
+
+        let is_focused =
+            self.mcp_focus == McpFocus::Form && self.mcp_form_field == McpFormField::DeleteButton;
+
+        Button::new(delete_id, dbflux_i18n::t!("settings.mcp.action.delete"))
+            .small()
+            .danger()
+            .icon(AppIcon::Delete)
+            .focused(is_focused)
+            .disabled(!has_selection)
+            .on_click(cx.listener(|this, _, window, cx| match this.variant {
+                McpSectionVariant::Roles => this.delete_selected_role(window, cx),
+                McpSectionVariant::Policies => this.delete_selected_policy(window, cx),
+                McpSectionVariant::Clients => this.delete_selected_client(window, cx),
+            }))
             .into_any_element()
     }
 
@@ -1405,7 +1443,6 @@ impl McpSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let role_is_builtin = self
@@ -1419,44 +1456,16 @@ impl McpSection {
             dbflux_i18n::t!("settings.mcp.action.create_role")
         };
 
-        div()
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap_3()
-            .when(role_is_builtin, |div| {
-                div.child(
-                    Text::body(dbflux_i18n::t!("settings.mcp.error.builtin_role_readonly"))
-                        .color(cx.theme().muted_foreground),
-                )
-            })
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::DeleteButton,
-                tint,
-                Button::new(
-                    "mcp-role-delete",
-                    dbflux_i18n::t!("settings.mcp.action.delete"),
-                )
-                .small()
-                .danger()
-                .w_full()
-                .disabled(self.selected_role_id.is_none() || role_is_builtin)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.delete_selected_role(window, cx);
-                })),
-            ))
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::SaveButton,
-                tint,
-                Button::new("mcp-role-save", save_label)
-                    .small()
-                    .primary()
-                    .w_full()
-                    .disabled(role_is_builtin)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_role(window, cx);
-                    })),
-            ))
+        Button::new("mcp-role-save", save_label)
+            .small()
+            .primary()
+            .icon(AppIcon::Check)
+            .kbd("Ctrl S")
+            .focused(is_form_focused && field == McpFormField::SaveButton)
+            .disabled(role_is_builtin)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.save_role(window, cx);
+            }))
             .into_any_element()
     }
 
@@ -1465,7 +1474,6 @@ impl McpSection {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let tint = ChromeColors::tint(cx.theme());
         let is_form_focused = self.mcp_focus == McpFocus::Form;
         let field = self.mcp_form_field;
         let policy_is_builtin = self
@@ -1479,47 +1487,84 @@ impl McpSection {
             dbflux_i18n::t!("settings.mcp.action.create_policy")
         };
 
-        div()
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap_3()
-            .when(policy_is_builtin, |div| {
-                div.child(
-                    Text::body(dbflux_i18n::t!(
-                        "settings.mcp.error.builtin_policy_readonly"
-                    ))
-                    .color(cx.theme().muted_foreground),
-                )
-            })
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::DeleteButton,
-                tint,
-                Button::new(
-                    "mcp-policy-delete",
-                    dbflux_i18n::t!("settings.mcp.action.delete"),
-                )
-                .small()
-                .danger()
-                .w_full()
-                .disabled(self.selected_policy_id.is_none() || policy_is_builtin)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.delete_selected_policy(window, cx);
-                })),
-            ))
-            .child(layout::footer_action_frame(
-                is_form_focused && field == McpFormField::SaveButton,
-                tint,
-                Button::new("mcp-policy-save", save_label)
-                    .small()
-                    .primary()
-                    .w_full()
-                    .disabled(policy_is_builtin)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_policy(window, cx);
-                    })),
-            ))
+        Button::new("mcp-policy-save", save_label)
+            .small()
+            .primary()
+            .icon(AppIcon::Check)
+            .kbd("Ctrl S")
+            .focused(is_form_focused && field == McpFormField::SaveButton)
+            .disabled(policy_is_builtin)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.save_policy(window, cx);
+            }))
             .into_any_element()
+    }
+
+    /// Leading footer actions of the active page.
+    fn render_mcp_footer_leading_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.variant {
+            McpSectionVariant::Clients => self.render_clients_footer_leading_actions(cx),
+            McpSectionVariant::Roles => {
+                let builtin = self
+                    .selected_role_id
+                    .as_deref()
+                    .map(dbflux_mcp::is_builtin)
+                    .unwrap_or(false);
+
+                self.render_builtin_or_delete(
+                    builtin,
+                    self.selected_role_id.is_some(),
+                    dbflux_i18n::t!("settings.mcp.error.builtin_role_readonly"),
+                    "mcp-role-delete",
+                    cx,
+                )
+            }
+            McpSectionVariant::Policies => {
+                let builtin = self
+                    .selected_policy_id
+                    .as_deref()
+                    .map(dbflux_mcp::is_builtin)
+                    .unwrap_or(false);
+
+                self.render_builtin_or_delete(
+                    builtin,
+                    self.selected_policy_id.is_some(),
+                    dbflux_i18n::t!("settings.mcp.error.builtin_policy_readonly"),
+                    "mcp-policy-delete",
+                    cx,
+                )
+            }
+        }
+    }
+
+    /// Saves the page's current item for the Ctrl+S shortcut. Built-in roles
+    /// and policies are read-only and ignore it.
+    fn save_current_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.variant {
+            McpSectionVariant::Clients => self.save_client(window, cx),
+            McpSectionVariant::Roles => {
+                let builtin = self
+                    .selected_role_id
+                    .as_deref()
+                    .map(dbflux_mcp::is_builtin)
+                    .unwrap_or(false);
+
+                if !builtin {
+                    self.save_role(window, cx);
+                }
+            }
+            McpSectionVariant::Policies => {
+                let builtin = self
+                    .selected_policy_id
+                    .as_deref()
+                    .map(dbflux_mcp::is_builtin)
+                    .unwrap_or(false);
+
+                if !builtin {
+                    self.save_policy(window, cx);
+                }
+            }
+        }
     }
 
     // ─── Keyboard navigation ──────────────────────────────────────────────────
@@ -2032,6 +2077,18 @@ impl SettingsSection for McpSection {
             McpSectionVariant::Policies => self.render_policies_footer_actions(window, cx),
         })
     }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        Some(self.render_mcp_footer_leading_actions(cx))
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_current_item(window, cx);
+    }
 }
 
 impl Render for McpSection {
@@ -2070,11 +2127,18 @@ impl Render for McpSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::page_header(
-                title,
-                description,
-                cx,
-            ))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .pb(SettingsMetrics::PAGE_HEAD_PADDING_BOTTOM - Spacing::SM)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(dbflux_components::composites::page_header(
+                        title,
+                        description,
+                        cx,
+                    )),
+            )
             .child(div().flex_1().min_h_0().overflow_hidden().child(content))
     }
 }

@@ -365,6 +365,43 @@ pub fn floating_window_kind() -> Option<WindowKind> {
     }
 }
 
+/// Space kept free between a secondary window and each edge of the display's
+/// visible area when the requested size does not fit. (24 px)
+const WINDOW_SCREEN_MARGIN: f32 = 24.0;
+
+/// Shrinks `requested` so it fits inside `available` minus the screen margin
+/// on every side. A dimension that already fits is kept.
+pub fn fit_window_size(
+    requested: gpui::Size<gpui::Pixels>,
+    available: gpui::Size<gpui::Pixels>,
+) -> gpui::Size<gpui::Pixels> {
+    let margin = px(WINDOW_SCREEN_MARGIN * 2.0);
+    let max_width = (available.width - margin).max(px(0.0));
+    let max_height = (available.height - margin).max(px(0.0));
+
+    gpui::Size {
+        width: requested.width.min(max_width),
+        height: requested.height.min(max_height),
+    }
+}
+
+/// Bounds for a new secondary window of `width` by `height`, shrunk to fit
+/// the primary display's visible area (see [`fit_window_size`]) and centered
+/// in it. Without a known display the requested size is centered as-is.
+pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<gpui::Pixels> {
+    let requested = gpui::size(px(width), px(height));
+
+    match cx.primary_display() {
+        Some(display) => {
+            let visible = display.visible_bounds();
+            let fitted = fit_window_size(requested, visible.size);
+
+            gpui::Bounds::centered_at(visible.center(), fitted)
+        }
+        None => gpui::Bounds::centered(None, requested, cx),
+    }
+}
+
 /// Applies standard DBFlux window options for secondary windows (Settings, Connection
 /// Manager, SSO Wizard, etc.): floating kind (where supported), min size so X11 window
 /// managers emit `WM_NORMAL_HINTS`, and platform-appropriate decorations.
@@ -376,10 +413,44 @@ pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_hei
         options.kind = kind;
     }
 
+    // A minimum larger than the window it applies to would force the window
+    // past the display, so it never exceeds the fitted initial size.
+    let initial_size = match options.window_bounds {
+        Some(gpui::WindowBounds::Windowed(bounds)) => Some(bounds.size),
+        _ => None,
+    };
+
     options.window_min_size = Some(gpui::Size {
-        width: px(min_width),
-        height: px(min_height),
+        width: initial_size.map_or(px(min_width), |size| px(min_width).min(size.width)),
+        height: initial_size.map_or(px(min_height), |size| px(min_height).min(size.height)),
     });
 
     options.window_decorations = decoration_request();
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::fit_window_size;
+    use gpui::{px, size};
+
+    #[test]
+    fn a_size_that_fits_the_display_is_kept() {
+        let fitted = fit_window_size(size(px(1320.0), px(900.0)), size(px(2560.0), px(1400.0)));
+
+        assert_eq!(fitted, size(px(1320.0), px(900.0)));
+    }
+
+    #[test]
+    fn a_size_larger_than_the_display_shrinks_to_it_minus_the_margin() {
+        let fitted = fit_window_size(size(px(1320.0), px(900.0)), size(px(1280.0), px(720.0)));
+
+        assert_eq!(fitted, size(px(1232.0), px(672.0)));
+    }
+
+    #[test]
+    fn each_dimension_is_fitted_on_its_own() {
+        let fitted = fit_window_size(size(px(1180.0), px(1000.0)), size(px(1920.0), px(1000.0)));
+
+        assert_eq!(fitted, size(px(1180.0), px(952.0)));
+    }
 }

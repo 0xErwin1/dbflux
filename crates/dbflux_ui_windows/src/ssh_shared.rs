@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use dbflux_components::tokens::{Heights, Spacing};
 use dbflux_core::{SshAuthMethod, SshTunnelConfig};
-use gpui::prelude::*;
-use gpui::{Hsla, px};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SshAuthSelection {
@@ -64,25 +61,4 @@ pub fn get_ssh_secret(
     } else {
         Some(secret)
     }
-}
-
-pub fn render_radio_button(selected: bool, tint: Hsla, border: Hsla) -> impl IntoElement {
-    gpui::div()
-        .w(Heights::ICON_SM)
-        .h(Heights::ICON_SM)
-        .rounded_full()
-        .border_2()
-        .border_color(if selected { tint } else { border })
-        .when(selected, |d| {
-            d.child(
-                gpui::div()
-                    .absolute()
-                    .top(px(3.0))
-                    .left(px(3.0))
-                    .w(Spacing::XXS)
-                    .h(Spacing::XXS)
-                    .rounded_full()
-                    .bg(tint),
-            )
-        })
 }

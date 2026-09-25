@@ -1,34 +1,31 @@
+use crate::settings::layout;
 use crate::ssh_shared::SshAuthSelection;
+use crate::tokens::{ConnectionFormMetrics, FormMetrics};
 use dbflux_app::keymap::ContextId;
 use dbflux_components::components::form_renderer;
-use dbflux_components::controls::Button;
-use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputState};
+use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, FocusShape, Icon as AppIconElement, Label, Text, focus_ring,
+    BannerBlock, BannerVariant, FocusShape, Icon as AppIconElement, Label, SegmentedControl,
+    SegmentedItem, Text, focus_ring,
 };
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::ChamferCut;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Heights};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::checkbox::Checkbox;
-use gpui_component::radio::Radio;
-
-/// Label column width for horizontal field rows (matches design spec).
-const FIELD_LABEL_WIDTH: Pixels = px(140.0);
 
 use super::{
-    ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View, cm_field_id,
+    ActiveTab, ConnectionManagerWindow, DismissEvent, EditState, FormFocus, TestStatus, View,
+    cm_field_id,
 };
 
 impl ConnectionManagerWindow {
-    /// Build a standard horizontal form row: 140 px label column on the left, flex-1 control
-    /// column on the right. Optionally shows a muted help line below the control.
+    /// Build a form row of the connection form: the label in the 170 px
+    /// column (with the required marker), the control on the right and an
+    /// optional muted help line under it.
     pub(super) fn field_row_cm(
         label: impl Into<SharedString>,
         required: bool,
@@ -36,33 +33,34 @@ impl ConnectionManagerWindow {
         help: Option<impl Into<SharedString>>,
         cx: &App,
     ) -> Div {
-        let label_el = Label::new(label).required(required);
-
-        let mut control_col = div().flex_1().min_w_0().child(control);
-
-        if let Some(help_text) = help {
-            control_col = control_col.child(
-                div()
-                    .mt(px(2.0))
-                    .text_size(FontSizes::XS)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(help_text.into()),
-            );
-        }
+        let label_el = Label::new(label)
+            .required(required)
+            .color(cx.theme().foreground);
 
         div()
             .flex()
             .items_start()
-            .gap(Spacing::MD)
-            .py(px(2.0))
+            .gap(FormMetrics::ROW_GAP)
+            .py(FormMetrics::ROW_PADDING_Y)
             .child(
                 div()
-                    .w(FIELD_LABEL_WIDTH)
-                    .pt(Spacing::XXS)
+                    .w(ConnectionFormMetrics::LABEL_WIDTH)
                     .flex_shrink_0()
+                    .pt(FormMetrics::LABEL_PADDING_TOP)
                     .child(label_el),
             )
-            .child(control_col)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(FormMetrics::HELP_GAP)
+                    .child(control)
+                    .when_some(help, |column, help| {
+                        column.child(layout::help_text(help.into()))
+                    }),
+            )
     }
 
     pub(super) fn render_focus_shell(
@@ -103,12 +101,11 @@ impl ConnectionManagerWindow {
         show_focus: bool,
         show_save_checkbox: bool,
         save_password: bool,
-        ring_color: Hsla,
+        _ring_color: Hsla,
         help_text: Option<String>,
         label: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme().clone();
         let focus = self.form_focus;
         let password_source_is_literal = self
             .form
@@ -121,124 +118,82 @@ impl ConnectionManagerWindow {
         let toggle_focused = show_focus && focus == FormFocus::PasswordToggle;
         let checkbox_focused = show_focus && focus == FormFocus::PasswordSave;
 
-        let controls = div()
-            .flex()
-            .flex_col()
-            .gap_1()
+        let toggle = password_source_is_literal.then(|| {
+            let (icon, toggle_label) = if self.form.show_password {
+                (
+                    AppIcon::EyeOff,
+                    dbflux_i18n::t!("settings.field.hide_secret"),
+                )
+            } else {
+                (AppIcon::Eye, dbflux_i18n::t!("settings.field.show_secret"))
+            };
+
+            Button::new("toggle-password", toggle_label)
+                .ghost()
+                .small()
+                .icon(icon)
+                .icon_only()
+                .tab_stop(false)
+                .focused(toggle_focused)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.form.show_password = !this.form.show_password;
+                    cx.notify();
+                }))
+        });
+
+        let mut password_input = Input::new(&self.form.input_password)
+            .id(cm_field_id("password"))
+            .aria_label(label.to_string())
+            .secret(true);
+
+        if let Some(toggle) = toggle {
+            password_input = password_input.suffix(toggle);
+        }
+
+        let controls = layout::inline_controls()
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(170.0))
-                            .rounded(Radii::SM)
-                            .border_2()
-                            .when(selector_focused, |d| d.border_color(ring_color))
-                            .when(!selector_focused, |d| {
-                                d.border_color(gpui::transparent_black())
-                            })
-                            .p(px(2.0))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(
-                                        FormFocus::PasswordValueSource,
-                                        window,
-                                        cx,
-                                    );
-                                }),
-                            )
-                            .child(self.form.password_value_source_selector.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .rounded(Radii::SM)
-                            .border_2()
-                            .when(password_focused, |d| d.border_color(ring_color))
-                            .when(!password_focused, |d| {
-                                d.border_color(gpui::transparent_black())
-                            })
-                            .p(px(2.0))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(FormFocus::Password, window, cx);
-                                }),
-                            )
-                            .child(
-                                Input::new(&self.form.input_password)
-                                    .id(cm_field_id("password"))
-                                    .aria_label(label.to_string())
-                                    .content_type(InputContentType::Password),
-                            ),
-                    )
-                    .when(password_source_is_literal, |d| {
-                        d.child(
-                            div()
-                                .rounded(Radii::SM)
-                                .border_2()
-                                .when(toggle_focused, |dd| dd.border_color(ring_color))
-                                .when(!toggle_focused, |dd| {
-                                    dd.border_color(gpui::transparent_black())
-                                })
-                                .child(
-                                    Self::render_password_toggle(
-                                        self.form.show_password,
-                                        "toggle-password",
-                                        &theme,
-                                    )
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.form.show_password = !this.form.show_password;
-                                            cx.notify();
-                                        },
-                                    )),
-                                ),
-                        )
-                    })
-                    .when(show_save_checkbox && password_source_is_literal, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .rounded(Radii::SM)
-                                .border_2()
-                                .when(checkbox_focused, |dd| dd.border_color(ring_color))
-                                .when(!checkbox_focused, |dd| {
-                                    dd.border_color(gpui::transparent_black())
-                                })
-                                .p(px(2.0))
-                                .child(
-                                    Checkbox::new("save-password")
-                                        .checked(save_password)
-                                        .aria_label(dbflux_i18n::t!(
-                                            "connection_manager.action.save"
-                                        ))
-                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                            this.form.form_save_password = *checked;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(Text::body(dbflux_i18n::t!(
-                                    "connection_manager.action.save"
-                                ))),
-                        )
-                    }),
-            )
-            .when_some(help_text, |d, help| {
-                d.child(
+                layout::cursor_ring(
+                    selector_focused,
                     div()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(help),
+                        .w(ConnectionFormMetrics::SOURCE_SELECT_WIDTH)
+                        .child(self.form.password_value_source_selector.clone()),
+                    cx,
+                )
+                .flex_shrink_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.enter_edit_mode_for_field(FormFocus::PasswordValueSource, window, cx);
+                    }),
+                ),
+            )
+            .child(
+                layout::field_frame(password_focused, None, true, password_input, cx)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.enter_edit_mode_for_field(FormFocus::Password, window, cx);
+                        }),
+                    ),
+            )
+            .when(show_save_checkbox && password_source_is_literal, |row| {
+                row.child(
+                    layout::cursor_ring(
+                        checkbox_focused,
+                        Checkbox::new("save-password")
+                            .checked(save_password)
+                            .label(dbflux_i18n::t!("connection_manager.action.save"))
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.form.form_save_password = *checked;
+                                cx.notify();
+                            })),
+                        cx,
+                    )
+                    .flex_shrink_0(),
                 )
             });
 
-        Self::field_row_cm(label.to_string(), false, controls, None::<&str>, cx).into_any_element()
+        Self::field_row_cm(label.to_string(), false, controls, help_text, cx).into_any_element()
     }
 
     pub(super) fn render_readonly_row(
@@ -250,8 +205,14 @@ impl ConnectionManagerWindow {
         div()
             .flex()
             .items_center()
-            .gap_3()
-            .child(div().w(px(100.0)).child(Label::new(label.to_string())))
+            .gap(FormMetrics::ROW_GAP)
+            .py(FormMetrics::ROW_PADDING_Y)
+            .child(
+                div()
+                    .w(ConnectionFormMetrics::LABEL_WIDTH)
+                    .flex_shrink_0()
+                    .child(Label::new(label.to_string())),
+            )
             .child(Text::body(value.to_string()))
     }
 
@@ -260,12 +221,16 @@ impl ConnectionManagerWindow {
         title: &str,
         content: impl IntoElement,
         _theme: &gpui_component::Theme,
+        cx: &App,
     ) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(Text::label(title))
+            .child(dbflux_components::composites::section_header(
+                title.to_string(),
+                None,
+                cx,
+            ))
             .child(content)
     }
 
@@ -280,13 +245,6 @@ impl ConnectionManagerWindow {
 
         let driver_name = driver.display_name().to_string();
         let validation_errors = self.validation_errors.clone();
-        let test_status = self.test_status;
-        let test_error = self.test_error.clone();
-        let test_result_body = self
-            .test_result
-            .as_ref()
-            .map(|r| r.format_body())
-            .filter(|s| !s.is_empty());
         let is_editing = self.editing_profile_id.is_some();
         let title = if is_editing {
             crate::labels::connection_manager_window_title_edit(&driver_name)
@@ -309,62 +267,18 @@ impl ConnectionManagerWindow {
             ActiveTab::Mcp => self.render_mcp_tab(cx),
         };
 
+        let test_banner = self.render_test_banner(cx);
+        let header = self
+            .render_form_header(title, is_editing, show_focus, cx)
+            .into_any_element();
         let theme = cx.theme();
         let border_color = theme.border;
-        let ring_color = theme.ring;
 
         div()
             .flex()
             .flex_col()
             .size_full()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .p_3()
-                    .border_b_1()
-                    .border_color(border_color)
-                    .when(!is_editing, |d| {
-                        d.child(
-                            Button::new("back", "<")
-                                .ghost()
-                                .small()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.back_to_driver_select(window, cx);
-                                })),
-                        )
-                    })
-                    .child({
-                        let brand_icon = self.form.selected_driver.as_ref().map(|driver| {
-                            let metadata = driver.metadata();
-                            AppIcon::for_driver(metadata.icon, metadata.category)
-                        });
-
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .when_some(brand_icon, |el, icon| {
-                                el.child(
-                                    AppIconElement::new(icon)
-                                        .size(Heights::ICON_LG)
-                                        .color(theme.foreground),
-                                )
-                            })
-                            .child(Text::heading(title))
-                    })
-                    .child(div().flex_1())
-                    .child(self.form_field_input_inline(
-                        &dbflux_i18n::t!("connection_manager.field.name"),
-                        "name",
-                        &self.form.input_name,
-                        show_focus && focus == FormFocus::Name,
-                        ring_color,
-                        FormFocus::Name,
-                        cx,
-                    )),
-            )
+            .child(header)
             .child(tab_bar)
             .child(
                 div()
@@ -373,188 +287,291 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
-                    .bg(cx.theme().tab_bar)
+                    .bg(theme.popover)
                     .overflow_scroll()
                     .track_scroll(&self.form_scroll_handle)
-                    .gap_4()
-                    .p_4()
+                    .px(ConnectionFormMetrics::PADDING_X)
+                    .pt(ConnectionFormMetrics::BODY_PADDING_TOP)
+                    .pb(ConnectionFormMetrics::BANNER_MARGIN_BOTTOM)
                     .when(!validation_errors.is_empty(), |d| {
                         let combined = validation_errors.join("\n");
                         d.child(
-                            BannerBlock::new(
-                                BannerVariant::Danger,
-                                dbflux_i18n::t!("connection_manager.banner.correct_following"),
-                            )
-                            .with_body(combined),
+                            div().py(FormMetrics::ROW_PADDING_Y).child(
+                                BannerBlock::new(
+                                    BannerVariant::Danger,
+                                    dbflux_i18n::t!("connection_manager.banner.correct_following"),
+                                )
+                                .with_body(combined),
+                            ),
                         )
                     })
                     .children(tab_content),
             )
+            .when_some(test_banner, |form, banner| {
+                form.child(
+                    div()
+                        .flex_shrink_0()
+                        .bg(cx.theme().popover)
+                        .px(ConnectionFormMetrics::PADDING_X)
+                        .pb(ConnectionFormMetrics::BANNER_MARGIN_BOTTOM)
+                        .child(banner),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(FormMetrics::INLINE_GAP)
+                    .h(crate::tokens::SettingsMetrics::FOOTER_HEIGHT)
+                    .px(crate::tokens::SettingsMetrics::FOOTER_PADDING_X)
+                    .border_t_1()
+                    .border_color(border_color)
+                    .bg(cx.theme().background)
+                    .child(
+                        Button::new(
+                            "test-connection",
+                            dbflux_i18n::t!("connection_manager.action.test_connection"),
+                        )
+                        .small()
+                        .secondary()
+                        .icon(AppIcon::Plug)
+                        .focused(test_focused)
+                        .disabled(self.test_status == TestStatus::Testing)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.test_connection(window, cx);
+                        })),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        Button::new(
+                            "footer-cancel",
+                            dbflux_i18n::t!("connection_manager.driver_select.cancel"),
+                        )
+                        .small()
+                        .secondary()
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            cx.emit(DismissEvent);
+                            window.remove_window();
+                        })),
+                    )
+                    .child(
+                        Button::new(
+                            "save-connection",
+                            dbflux_i18n::t!("connection_manager.action.save"),
+                        )
+                        .small()
+                        .primary()
+                        .icon(AppIcon::Check)
+                        .kbd("Ctrl S")
+                        .focused(save_focused)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.save_profile(window, cx);
+                        })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// Header of the form (P1ConnForm): back button, driver logo, title and
+    /// subtitle, and the connection name field on the right.
+    fn render_form_header(
+        &self,
+        title: String,
+        is_editing: bool,
+        show_focus: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let brand_icon = self.form.selected_driver.as_ref().map(|driver| {
+            let metadata = driver.metadata();
+            AppIcon::for_driver(metadata.icon, metadata.category)
+        });
+        let name_focused = show_focus && self.form_focus == FormFocus::Name;
+        let name_label = dbflux_i18n::t!("connection_manager.field.name");
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let strong = ChromeColors::strong(theme);
+        let border = theme.border;
+
+        let name_field = layout::field_frame(
+            name_focused,
+            Some(ConnectionFormMetrics::NAME_FIELD_WIDTH),
+            false,
+            Input::new(&self.form.input_name)
+                .id(cm_field_id("name"))
+                .aria_label(name_label)
+                .prefix(
+                    AppIconElement::new(AppIcon::Pencil)
+                        .size(Heights::ICON_SM)
+                        .color(muted),
+                ),
+            cx,
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                this.enter_edit_mode_for_field(FormFocus::Name, window, cx);
+            }),
+        );
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(ConnectionFormMetrics::HEADER_GAP)
+            .py(ConnectionFormMetrics::HEADER_PADDING_Y)
+            .px(ConnectionFormMetrics::PADDING_X)
+            .border_b_1()
+            .border_color(border)
+            .when(!is_editing, |header| {
+                header.child(
+                    Button::new("back", dbflux_i18n::t!("connection_manager.action.back"))
+                        .secondary()
+                        .icon(AppIcon::ChevronLeft)
+                        .icon_only()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.back_to_driver_select(window, cx);
+                        })),
+                )
+            })
+            .when_some(brand_icon, |header, icon| {
+                header.child(
+                    AppIconElement::new(icon)
+                        .size(ConnectionFormMetrics::HEADER_LOGO)
+                        .color(theme.foreground),
+                )
+            })
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .p_3()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .when(test_status != TestStatus::None, |d| {
-                        let banners = SemBannerColors::for_current(cx);
-                        let banner = match test_status {
-                            TestStatus::Testing => BannerBlock::new(
-                                BannerVariant::Info,
-                                dbflux_i18n::t!("connection_manager.banner.testing_connection"),
-                            )
-                            .with_icon(
-                                AppIconElement::new(AppIcon::Loader)
-                                    .size(Heights::ICON_SM)
-                                    .color(banners.info_fg),
-                            ),
-                            TestStatus::Success => {
-                                let mut banner = BannerBlock::new(
-                                    BannerVariant::Success,
-                                    dbflux_i18n::t!(
-                                        "connection_manager.banner.connection_successful"
-                                    ),
-                                )
-                                .with_icon(
-                                    AppIconElement::new(AppIcon::CircleCheck)
-                                        .size(Heights::ICON_SM)
-                                        .color(banners.success_fg),
-                                );
-                                if let Some(body) = test_result_body {
-                                    banner = banner.with_body(body);
-                                }
-                                banner
-                            }
-                            TestStatus::SuccessWithWarning => {
-                                let mut banner = BannerBlock::new(
-                                    BannerVariant::Warning,
-                                    dbflux_i18n::t!(
-                                        "connection_manager.banner.connection_successful_warnings"
-                                    ),
-                                )
-                                .with_icon(
-                                    AppIconElement::new(AppIcon::Info)
-                                        .size(Heights::ICON_SM)
-                                        .color(banners.warning_fg),
-                                );
-                                if let Some(body) = test_error.or(test_result_body) {
-                                    banner = banner.with_body(body);
-                                }
-                                banner
-                            }
-                            TestStatus::Failed => {
-                                let message = test_error.unwrap_or_else(|| {
-                                    dbflux_i18n::t!("connection_manager.banner.connection_failed")
-                                });
-                                let message_to_copy = message.clone();
-                                BannerBlock::new(
-                                    BannerVariant::Danger,
-                                    dbflux_i18n::t!("connection_manager.banner.connection_failed"),
-                                )
-                                .with_body(message)
-                                .with_icon(
-                                    AppIconElement::new(AppIcon::Info)
-                                        .size(Heights::ICON_SM)
-                                        .color(banners.error_fg),
-                                )
-                                .with_actions(
-                                    Button::new(
-                                        "copy-test-connection-error",
-                                        dbflux_i18n::t!("connection_manager.action.copy"),
-                                    )
-                                    .ghost()
-                                    .small()
-                                    .icon(AppIcon::Copy)
-                                    .on_click(
-                                        move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                message_to_copy.clone(),
-                                            ));
-                                        },
-                                    ),
-                                )
-                            }
-                            TestStatus::None => unreachable!("guarded by when condition"),
-                        };
-
-                        d.child(banner)
-                    })
+                    .gap(ConnectionFormMetrics::TITLE_GAP)
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .when(!is_editing, |d| {
-                                d.child(
-                                    Button::new(
-                                        "footer-back",
-                                        dbflux_i18n::t!("connection_manager.action.back"),
-                                    )
-                                    .ghost()
-                                    .icon(AppIcon::ChevronLeft)
-                                    .small()
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            this.back_to_driver_select(window, cx);
-                                        },
-                                    )),
-                                )
-                            })
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .rounded(Radii::SM)
-                                    .border_2()
-                                    .when(test_focused, |d| d.border_color(ring_color))
-                                    .when(!test_focused, |d| {
-                                        d.border_color(gpui::transparent_black())
-                                    })
-                                    .child(
-                                        Button::new(
-                                            "test-connection",
-                                            dbflux_i18n::t!(
-                                                "connection_manager.action.test_connection"
-                                            ),
-                                        )
-                                        .ghost()
-                                        .icon(AppIcon::ExternalLink)
-                                        .small()
-                                        .disabled(test_status == TestStatus::Testing)
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                this.test_connection(window, cx);
-                                            }),
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .rounded(Radii::SM)
-                                    .border_2()
-                                    .when(save_focused, |d| d.border_color(ring_color))
-                                    .when(!save_focused, |d| {
-                                        d.border_color(gpui::transparent_black())
-                                    })
-                                    .child(
-                                        Button::new(
-                                            "save-connection",
-                                            dbflux_i18n::t!("connection_manager.action.save"),
-                                        )
-                                        .primary()
-                                        .icon(AppIcon::Check)
-                                        .small()
-                                        .on_click(
-                                            cx.listener(|this, _, window, cx| {
-                                                this.save_profile(window, cx);
-                                            }),
-                                        ),
-                                    ),
-                            ),
+                        Text::title(title)
+                            .font_size(ConnectionFormMetrics::TITLE_FONT)
+                            .text_color(strong),
+                    )
+                    .child(
+                        Text::body(dbflux_i18n::t!("connection_manager.form.required_hint"))
+                            .font_size(ConnectionFormMetrics::SUBTITLE_FONT)
+                            .muted_foreground(),
                     ),
             )
-            .into_any_element()
+            .child(div().flex_1())
+            .child(name_field)
+    }
+
+    /// Test-connection result banner shown above the footer.
+    fn render_test_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let test_status = self.test_status;
+        let test_error = self.test_error.clone();
+        let test_result_body = self
+            .test_result
+            .as_ref()
+            .map(|r| r.format_body())
+            .filter(|s| !s.is_empty());
+        let banners = SemBannerColors::for_current(cx);
+
+        let banner = match test_status {
+            TestStatus::None => return None,
+            TestStatus::Testing => BannerBlock::new(
+                BannerVariant::Info,
+                dbflux_i18n::t!("connection_manager.banner.testing_connection"),
+            )
+            .with_icon(
+                AppIconElement::new(AppIcon::Loader)
+                    .size(Heights::ICON_SM)
+                    .color(banners.info_fg),
+            ),
+            TestStatus::Success => {
+                let mut banner = BannerBlock::new(
+                    BannerVariant::Success,
+                    dbflux_i18n::t!("connection_manager.banner.connection_successful"),
+                )
+                .with_icon(
+                    AppIconElement::new(AppIcon::CircleCheck)
+                        .size(Heights::ICON_SM)
+                        .color(banners.success_fg),
+                );
+                if let Some(body) = test_result_body {
+                    banner = banner.with_body(body);
+                }
+                banner
+            }
+            TestStatus::SuccessWithWarning => {
+                let mut banner = BannerBlock::new(
+                    BannerVariant::Warning,
+                    dbflux_i18n::t!("connection_manager.banner.connection_successful_warnings"),
+                )
+                .with_icon(
+                    AppIconElement::new(AppIcon::Info)
+                        .size(Heights::ICON_SM)
+                        .color(banners.warning_fg),
+                );
+                if let Some(body) = test_error.or(test_result_body) {
+                    banner = banner.with_body(body);
+                }
+                banner
+            }
+            TestStatus::Failed => {
+                let message = test_error.unwrap_or_else(|| {
+                    dbflux_i18n::t!("connection_manager.banner.connection_failed")
+                });
+                let message_to_copy = message.clone();
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("connection_manager.banner.connection_failed"),
+                )
+                .with_body(message)
+                .with_icon(
+                    AppIconElement::new(AppIcon::Info)
+                        .size(Heights::ICON_SM)
+                        .color(banners.error_fg),
+                )
+                .with_actions(
+                    Button::new(
+                        "copy-test-connection-error",
+                        dbflux_i18n::t!("connection_manager.action.copy"),
+                    )
+                    .ghost()
+                    .small()
+                    .icon(AppIcon::Copy)
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(message_to_copy.clone()));
+                    }),
+                )
+            }
+        };
+
+        Some(banner.into_any_element())
+    }
+
+    /// Frame around a control that the form's keyboard cursor can land on:
+    /// the cursor ring, and a press that moves the cursor to `field` and
+    /// starts editing it.
+    #[allow(clippy::too_many_arguments)]
+    fn cm_control_frame(
+        &self,
+        focused: bool,
+        field: Option<FormFocus>,
+        enabled: bool,
+        width: Option<Pixels>,
+        mono: bool,
+        control: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        layout::field_frame(focused, width, mono, control, cx)
+            .when(!enabled, |frame| {
+                frame.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
+            })
+            .when_some(field.filter(|_| enabled), |frame, field| {
+                frame.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.enter_edit_mode_for_field(field, window, cx);
+                    }),
+                )
+            })
     }
 
     fn render_form_field(
@@ -562,7 +579,7 @@ impl ConnectionManagerWindow {
         field_def: &FormFieldDef,
         is_ssh_tab: bool,
         show_focus: bool,
-        ring_color: Hsla,
+        _ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let field_focus = Self::field_id_to_focus(&field_def.id, is_ssh_tab);
@@ -599,114 +616,85 @@ impl ConnectionManagerWindow {
                     let selector_focused = show_focus && self.form_focus == selector_focus;
                     let input_focused = show_focus && self.form_focus == input_focus;
 
-                    let control = div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .when(!field_enabled, |d| d.opacity(0.5))
+                    let control = layout::inline_controls()
+                        .child(self.cm_control_frame(
+                            selector_focused,
+                            Some(selector_focus),
+                            field_enabled,
+                            Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
+                            false,
+                            selector,
+                            cx,
+                        ))
                         .child(
-                            div()
-                                .w(px(170.0))
-                                .rounded(Radii::SM)
-                                .border_2()
-                                .when(selector_focused, |d| d.border_color(ring_color))
-                                .when(!selector_focused, |d| {
-                                    d.border_color(gpui::transparent_black())
-                                })
-                                .p(px(2.0))
-                                .when(field_enabled, |d| {
-                                    d.on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.enter_edit_mode_for_field(
-                                                selector_focus,
-                                                window,
-                                                cx,
-                                            );
-                                        }),
-                                    )
-                                })
-                                .child(selector),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .rounded(Radii::SM)
-                                .border_2()
-                                .when(input_focused, |d| d.border_color(ring_color))
-                                .when(!input_focused, |d| {
-                                    d.border_color(gpui::transparent_black())
-                                })
-                                .p(px(2.0))
-                                .when(field_enabled, |d| {
-                                    d.on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.enter_edit_mode_for_field(input_focus, window, cx);
-                                        }),
-                                    )
-                                })
-                                .child(
-                                    Input::new(input_state)
-                                        .id(cm_field_id(&field_def.id))
-                                        .aria_label(field_def.label.clone())
-                                        .disabled(!field_enabled),
-                                ),
+                            self.cm_control_frame(
+                                input_focused,
+                                Some(input_focus),
+                                field_enabled,
+                                None,
+                                true,
+                                Input::new(input_state)
+                                    .id(cm_field_id(&field_def.id))
+                                    .aria_label(field_def.label.clone())
+                                    .disabled(!field_enabled),
+                                cx,
+                            ),
                         );
 
                     return Self::field_row_cm(
                         field_def.label.clone(),
                         field_def.required && field_enabled,
                         control,
-                        None::<&str>,
+                        field_def.help.clone(),
                         cx,
                     )
                     .into_any_element();
                 }
 
-                let fallback_input_focus = input_state.clone();
                 let help_text = field_def.help.clone();
+                let is_secret = form_renderer::is_secret_field(&field_def.kind);
 
-                let control = div()
-                    .flex_1()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(focused, |d| d.border_color(ring_color))
-                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                    .p(px(2.0))
-                    .when(!field_enabled, |d| d.opacity(0.5))
-                    .when_some(
-                        field_focus.and_then(|field| field_enabled.then_some(field)),
-                        |d, field| {
-                            d.on_mouse_down(
+                let input = Input::new(input_state)
+                    .id(cm_field_id(&field_def.id))
+                    .aria_label(field_def.label.clone())
+                    .disabled(!field_enabled)
+                    .secret(is_secret);
+
+                let control = match field_focus {
+                    Some(field) => self.cm_control_frame(
+                        focused,
+                        Some(field),
+                        field_enabled,
+                        None,
+                        !is_secret,
+                        input,
+                        cx,
+                    ),
+                    None => {
+                        let fallback_input_focus = input_state.clone();
+
+                        self.cm_control_frame(
+                            false,
+                            None,
+                            field_enabled,
+                            None,
+                            !is_secret,
+                            input,
+                            cx,
+                        )
+                        .when(field_enabled, |frame| {
+                            frame.on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(field, window, cx);
+                                    this.begin_inline_editor_interaction(cx);
+                                    fallback_input_focus.update(cx, |state, cx| {
+                                        state.focus(window, cx);
+                                    });
                                 }),
                             )
-                        },
-                    )
-                    .when(field_enabled && field_focus.is_none(), |d| {
-                        let fallback_input_focus = fallback_input_focus.clone();
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                this.begin_inline_editor_interaction(cx);
-                                fallback_input_focus.update(cx, |state, cx| {
-                                    state.focus(window, cx);
-                                });
-                            }),
-                        )
-                    })
-                    .child(
-                        Input::new(input_state)
-                            .id(cm_field_id(&field_def.id))
-                            .aria_label(field_def.label.clone())
-                            .disabled(!field_enabled)
-                            .when(form_renderer::is_secret_field(&field_def.kind), |input| {
-                                input.content_type(InputContentType::Password)
-                            }),
-                    );
+                        })
+                    }
+                };
 
                 Self::field_row_cm(
                     field_def.label.clone(),
@@ -725,62 +713,46 @@ impl ConnectionManagerWindow {
 
                 let browse_focused = show_focus && self.form_focus == FormFocus::FileBrowse;
 
-                let control = div()
-                    .flex()
-                    .gap_2()
+                let control = layout::inline_controls()
                     .child(
-                        div()
-                            .flex_1()
-                            .rounded(Radii::SM)
-                            .border_2()
-                            .when(focused, |d| d.border_color(ring_color))
-                            .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                            .p(px(2.0))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    if let Some(field) = field_focus {
-                                        this.enter_edit_mode_for_field(field, window, cx);
-                                    }
-                                }),
-                            )
-                            .child(
-                                Input::new(input_state)
-                                    .id(cm_field_id(&field_def.id))
-                                    .aria_label(field_def.label.clone()),
-                            ),
+                        self.cm_control_frame(
+                            focused,
+                            field_focus,
+                            true,
+                            None,
+                            true,
+                            Input::new(input_state)
+                                .id(cm_field_id(&field_def.id))
+                                .aria_label(field_def.label.clone()),
+                            cx,
+                        ),
                     )
                     .child(
-                        div()
-                            .rounded(Radii::SM)
-                            .border_2()
-                            .when(browse_focused, |d| d.border_color(ring_color))
-                            .when(!browse_focused, |d| {
-                                d.border_color(gpui::transparent_black())
-                            })
-                            .child(
-                                Button::new(
-                                    "browse-file-path",
-                                    dbflux_i18n::t!("connection_manager.action.browse"),
-                                )
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| {
-                                        this.browse_file_path(window, cx);
-                                    },
-                                )),
-                            ),
+                        Button::new(
+                            "browse-file-path",
+                            dbflux_i18n::t!("connection_manager.action.browse"),
+                        )
+                        .small()
+                        .secondary()
+                        .icon(AppIcon::Folder)
+                        .focused(browse_focused)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.browse_file_path(window, cx);
+                        })),
                     );
 
                 Self::field_row_cm(
                     field_def.label.clone(),
                     field_def.required,
                     control,
-                    None::<&str>,
+                    field_def.help.clone(),
                     cx,
                 )
                 .into_any_element()
+            }
+
+            FormFieldKind::Checkbox if field_def.id == "use_uri" => {
+                self.render_use_uri_selector(focused, cx).into_any_element()
             }
 
             FormFieldKind::Checkbox => {
@@ -796,13 +768,9 @@ impl ConnectionManagerWindow {
                 };
 
                 let checkbox_id = gpui::SharedString::from(field_id.clone());
-                let control = div()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(focused, |d| d.border_color(ring_color))
-                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                    .p(px(2.0))
-                    .child(
+                let control = layout::check_row(
+                    layout::cursor_ring(
+                        focused,
                         Checkbox::new(checkbox_id)
                             .checked(is_checked)
                             .label(field_def.label.as_str())
@@ -815,10 +783,13 @@ impl ConnectionManagerWindow {
                                 window.focus(&this.focus_handle, cx);
                                 cx.notify();
                             })),
-                    );
+                        cx,
+                    ),
+                    field_def.help.clone().map(SharedString::from),
+                );
 
-                // Checkboxes include their label inside the checkbox element; show an empty label
-                // column to preserve grid alignment.
+                // Checkboxes carry their own label; the label column stays
+                // empty so the box lines up with the other controls.
                 Self::field_row_cm("", false, control, None::<&str>, cx).into_any_element()
             }
 
@@ -829,32 +800,41 @@ impl ConnectionManagerWindow {
                         SshAuthSelection::Password => 1,
                     };
 
-                    let control = div()
-                        .flex()
-                        .gap_2()
-                        .children(options.iter().enumerate().map(|(idx, opt)| {
-                            Radio::new(SharedString::from(format!(
-                                "{}-{}",
-                                cm_field_id(&field_def.id),
-                                opt.value
-                            )))
-                            .small()
-                            .label(opt.label.clone())
-                            .checked(idx == selected_index)
-                            .on_click(cx.listener(move |this, _: &bool, window, cx| {
-                                this.access.ssh_auth_method = if idx == 0 {
-                                    SshAuthSelection::PrivateKey
-                                } else {
-                                    SshAuthSelection::Password
-                                };
+                    let items: Vec<SegmentedItem> = options
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, opt)| SegmentedItem::new(idx.to_string(), opt.label.clone()))
+                        .collect();
+                    let entity = cx.entity();
+
+                    let control = SegmentedControl::new(
+                        items,
+                        selected_index.to_string(),
+                        move |selected, window, cx| {
+                            let method = if selected.as_ref() == "0" {
+                                SshAuthSelection::PrivateKey
+                            } else {
+                                SshAuthSelection::Password
+                            };
+
+                            entity.update(cx, |this, cx| {
+                                this.access.ssh_auth_method = method;
                                 window.focus(&this.focus_handle, cx);
                                 cx.notify();
-                            }))
-                            .into_any_element()
-                        }));
+                            });
+                        },
+                    );
 
-                    Self::field_row_cm(field_def.label.clone(), false, control, None::<&str>, cx)
-                        .into_any_element()
+                    Self::field_row_cm(
+                        field_def.label.clone(),
+                        false,
+                        div()
+                            .flex()
+                            .child(layout::cursor_ring(focused, control, cx)),
+                        None::<&str>,
+                        cx,
+                    )
+                    .into_any_element()
                 } else {
                     let field_id = field_def.id.clone();
                     let field_enabled = self.is_field_enabled(field_def);
@@ -865,33 +845,41 @@ impl ConnectionManagerWindow {
                         .cloned()
                         .unwrap_or_else(|| field_def.default_value.clone());
 
-                    let control = div().flex().gap_2().children(options.iter().map(|opt| {
-                        let field_id = field_id.clone();
-                        let opt_value = opt.value.clone();
+                    let items: Vec<SegmentedItem> = options
+                        .iter()
+                        .map(|opt| SegmentedItem::new(opt.value.clone(), opt.label.clone()))
+                        .collect();
+                    let entity = cx.entity();
 
-                        Radio::new(SharedString::from(format!(
-                            "{}-{}",
-                            cm_field_id(&field_id),
-                            opt.value
-                        )))
-                        .small()
-                        .label(opt.label.clone())
-                        .checked(opt.value == selected_value)
-                        .disabled(!field_enabled)
-                        .on_click(cx.listener(move |this, _: &bool, window, cx| {
-                            this.form
-                                .select_values
-                                .insert(field_id.clone(), opt_value.clone());
-                            window.focus(&this.focus_handle, cx);
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                    }));
+                    let control = SegmentedControl::new(
+                        items,
+                        selected_value,
+                        move |selected, window, cx| {
+                            if !field_enabled {
+                                return;
+                            }
+
+                            let field_id = field_id.clone();
+                            let value = selected.to_string();
+
+                            entity.update(cx, |this, cx| {
+                                this.form.select_values.insert(field_id, value);
+                                window.focus(&this.focus_handle, cx);
+                                cx.notify();
+                            });
+                        },
+                    );
 
                     Self::field_row_cm(
                         field_def.label.clone(),
                         field_def.required && field_enabled,
-                        control,
+                        div()
+                            .id(cm_field_id(&field_def.id))
+                            .flex()
+                            .when(!field_enabled, |row| {
+                                row.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
+                            })
+                            .child(layout::cursor_ring(focused, control, cx)),
                         field_def.help.clone(),
                         cx,
                     )
@@ -903,7 +891,10 @@ impl ConnectionManagerWindow {
                 let field_enabled = self.is_field_enabled(field_def);
 
                 let dropdown = div()
-                    .when(!field_enabled, |d| d.opacity(0.5))
+                    .w(ConnectionFormMetrics::DATABASE_FIELD_WIDTH)
+                    .when(!field_enabled, |d| {
+                        d.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
+                    })
                     .when(field_enabled, |d| {
                         d.on_mouse_down(
                             MouseButton::Left,
@@ -918,7 +909,7 @@ impl ConnectionManagerWindow {
                     field_def.label.clone(),
                     field_def.required && field_enabled,
                     dropdown,
-                    None::<&str>,
+                    field_def.help.clone(),
                     cx,
                 )
                 .into_any_element()
@@ -927,6 +918,71 @@ impl ConnectionManagerWindow {
             // DynamicSelect is not used in driver connection forms.
             FormFieldKind::DynamicSelect { .. } => div().into_any_element(),
         }
+    }
+
+    /// "Enter as": the driver's URI option drawn as a two-segment control
+    /// (Fields / Connection URI) instead of a checkbox.
+    fn render_use_uri_selector(&self, focused: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let uri_mode = self
+            .form
+            .checkbox_states
+            .get("use_uri")
+            .copied()
+            .unwrap_or(false);
+        let entity = cx.entity();
+
+        let control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new(
+                    "fields",
+                    dbflux_i18n::t!("connection_manager.enter_as.fields"),
+                )
+                .icon(AppIcon::Layers),
+                SegmentedItem::new("uri", dbflux_i18n::t!("connection_manager.enter_as.uri"))
+                    .icon(AppIcon::Link2),
+            ],
+            if uri_mode { "uri" } else { "fields" },
+            move |selected, window, cx| {
+                let use_uri = selected.as_ref() == "uri";
+
+                entity.update(cx, |this, cx| {
+                    let current = this
+                        .form
+                        .checkbox_states
+                        .get("use_uri")
+                        .copied()
+                        .unwrap_or(false);
+
+                    if current == use_uri {
+                        return;
+                    }
+
+                    this.form
+                        .checkbox_states
+                        .insert("use_uri".to_string(), use_uri);
+
+                    if use_uri {
+                        this.sync_fields_to_uri(window, cx);
+                    } else {
+                        this.sync_uri_to_fields(window, cx);
+                    }
+
+                    window.focus(&this.focus_handle, cx);
+                    cx.notify();
+                });
+            },
+        );
+
+        Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.enter_as.label"),
+            false,
+            div()
+                .id("cm-field-use_uri")
+                .flex()
+                .child(layout::cursor_ring(focused, control, cx)),
+            None::<&str>,
+            cx,
+        )
     }
 
     /// Renders the sections of a driver form tab.
@@ -1002,8 +1058,11 @@ impl ConnectionManagerWindow {
                 div()
                     .flex()
                     .flex_col()
-                    .gap_2()
-                    .child(Text::label(section.title.clone()))
+                    .child(dbflux_components::composites::section_header(
+                        section.title.clone(),
+                        None,
+                        cx,
+                    ))
                     .children(field_elements)
                     .into_any_element(),
             );
@@ -1018,7 +1077,7 @@ impl ConnectionManagerWindow {
         port_field: &FormFieldDef,
         uri_field: Option<&FormFieldDef>,
         show_focus: bool,
-        ring_color: Hsla,
+        _ring_color: Hsla,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(host_input) = self.input_state_for_field("host") else {
@@ -1073,85 +1132,44 @@ impl ConnectionManagerWindow {
         let input_focused = show_focus && self.form_focus == FormFocus::Host;
         let port_focused = show_focus && self.form_focus == FormFocus::Port;
 
-        let control = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .when(!primary_enabled, |d| d.opacity(0.5))
+        let control = layout::inline_controls()
+            .child(self.cm_control_frame(
+                selector_focused,
+                Some(FormFocus::HostValueSource),
+                primary_enabled,
+                Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
+                false,
+                self.form.host_value_source_selector.clone(),
+                cx,
+            ))
             .child(
-                div()
-                    .w(px(170.0))
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(selector_focused, |d| d.border_color(ring_color))
-                    .when(!selector_focused, |d| {
-                        d.border_color(gpui::transparent_black())
-                    })
-                    .p(px(2.0))
-                    .when(primary_enabled, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.enter_edit_mode_for_field(
-                                    FormFocus::HostValueSource,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                    })
-                    .child(self.form.host_value_source_selector.clone()),
+                self.cm_control_frame(
+                    input_focused,
+                    Some(FormFocus::Host),
+                    primary_enabled,
+                    None,
+                    true,
+                    Input::new(primary_input)
+                        .id(cm_field_id(primary_field_id))
+                        .aria_label(primary_label.clone())
+                        .disabled(!primary_enabled),
+                    cx,
+                ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(input_focused, |d| d.border_color(ring_color))
-                    .when(!input_focused, |d| {
-                        d.border_color(gpui::transparent_black())
-                    })
-                    .p(px(2.0))
-                    .when(primary_enabled, |d| {
-                        d.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, window, cx| {
-                                this.enter_edit_mode_for_field(FormFocus::Host, window, cx);
-                            }),
-                        )
-                    })
-                    .child(
-                        Input::new(primary_input)
-                            .id(cm_field_id(primary_field_id))
-                            .aria_label(primary_label.clone())
-                            .disabled(!primary_enabled),
+            .when(!using_uri, |row| {
+                row.child(
+                    self.cm_control_frame(
+                        port_focused,
+                        Some(FormFocus::Port),
+                        port_enabled,
+                        Some(ConnectionFormMetrics::PORT_FIELD_WIDTH),
+                        true,
+                        Input::new(port_input)
+                            .id(cm_field_id(&port_field.id))
+                            .aria_label(port_field.label.clone())
+                            .disabled(!port_enabled),
+                        cx,
                     ),
-            )
-            .when(!using_uri, |d| {
-                d.child(
-                    div()
-                        .w(px(96.0))
-                        .rounded(Radii::SM)
-                        .border_2()
-                        .when(port_focused, |dd| dd.border_color(ring_color))
-                        .when(!port_focused, |dd| {
-                            dd.border_color(gpui::transparent_black())
-                        })
-                        .p(px(2.0))
-                        .when(port_enabled, |dd| {
-                            dd.on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(FormFocus::Port, window, cx);
-                                }),
-                            )
-                        })
-                        .child(
-                            Input::new(port_input)
-                                .id(cm_field_id(&port_field.id))
-                                .aria_label(port_field.label.clone())
-                                .disabled(!port_enabled),
-                        ),
                 )
             });
 
@@ -1165,6 +1183,8 @@ impl ConnectionManagerWindow {
         .into_any_element()
     }
 
+    /// Labelled text field used by the Access tab: the label over the
+    /// framed input.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn form_field_input(
         &self,
@@ -1173,100 +1193,51 @@ impl ConnectionManagerWindow {
         input: &Entity<InputState>,
         required: bool,
         focused: bool,
-        ring_color: Hsla,
-        field: FormFocus,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div()
-            .rounded(Radii::SM)
-            .border_2()
-            .when(focused, |d| d.border_color(ring_color))
-            .when(!focused, |d| d.border_color(gpui::transparent_black()))
-            .p(px(2.0))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    this.enter_edit_mode_for_field(field, window, cx);
-                }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .mb_1()
-                    .child(Label::new(label.to_string()).required(required)),
-            )
-            .child(
-                Input::new(input)
-                    .id(cm_field_id(field_id))
-                    .aria_label(label.to_string()),
-            )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn form_field_input_inline(
-        &self,
-        label: &str,
-        field_id: &str,
-        input: &Entity<InputState>,
-        focused: bool,
-        ring_color: Hsla,
+        _ring_color: Hsla,
         field: FormFocus,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
             .flex()
-            .items_center()
-            .gap_2()
-            .child(Label::new(format!("{}:", label)))
+            .flex_col()
+            .gap(FormMetrics::HELP_GAP)
+            .child(Label::new(label.to_string()).required(required))
             .child(
-                div()
-                    .w(px(200.0))
-                    .rounded(Radii::SM)
-                    .border_2()
-                    .when(focused, |d| d.border_color(ring_color))
-                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
-                    .p(px(2.0))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.enter_edit_mode_for_field(field, window, cx);
-                        }),
-                    )
-                    .child(
-                        Input::new(input)
-                            .id(cm_field_id(field_id))
-                            .aria_label(label.to_string()),
-                    ),
+                self.cm_control_frame(
+                    focused,
+                    Some(field),
+                    true,
+                    None,
+                    true,
+                    Input::new(input)
+                        .id(cm_field_id(field_id))
+                        .aria_label(label.to_string()),
+                    cx,
+                ),
             )
     }
 
+    /// Eye button that shows or hides a secret field's value.
     pub(super) fn render_password_toggle(
         show: bool,
         toggle_id: &'static str,
-        theme: &gpui_component::theme::Theme,
-    ) -> Stateful<Div> {
-        let secondary = theme.secondary;
-        let muted_foreground = theme.muted_foreground;
-
-        let icon = if show { AppIcon::EyeOff } else { AppIcon::Eye };
-
-        div()
-            .id(toggle_id)
-            .w(Heights::TOOLBAR)
-            .h(Heights::TOOLBAR)
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover(move |d| d.bg(secondary))
-            .child(
-                AppIconElement::new(icon)
-                    .size(Heights::ICON_SM)
-                    .color(muted_foreground),
+        _theme: &gpui_component::theme::Theme,
+    ) -> Button {
+        let (icon, label) = if show {
+            (
+                AppIcon::EyeOff,
+                dbflux_i18n::t!("settings.field.hide_secret"),
             )
+        } else {
+            (AppIcon::Eye, dbflux_i18n::t!("settings.field.show_secret"))
+        };
+
+        Button::new(toggle_id, label)
+            .ghost()
+            .small()
+            .icon(icon)
+            .icon_only()
+            .tab_stop(false)
     }
 }
 
@@ -1399,6 +1370,7 @@ impl Render for ConnectionManagerWindow {
             }))
             .size_full()
             .bg(theme.background)
+            .text_size(dbflux_components::tokens::FontSizes::BASE)
             .when_some(csd_title_bar, |el, title_bar| el.child(title_bar))
             .child(match self.view {
                 View::DriverSelect => self.render_driver_select(window, cx).into_any_element(),

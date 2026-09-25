@@ -352,6 +352,9 @@ pub fn save_profiles(
             ssh_tunnel_profile_id: ssh_tunnel_profile_id_str,
             created_at: String::new(),
             updated_at: String::new(),
+            environment: profile
+                .environment
+                .map(|environment| environment.as_str().to_string()),
         };
 
         repo.upsert(&dto)?;
@@ -1703,6 +1706,10 @@ fn load_profiles(
                 access_kind,
                 mcp_governance,
                 read_only_flag: false,
+                environment: dto
+                    .environment
+                    .as_deref()
+                    .and_then(dbflux_core::ConnectionEnvironment::from_id),
             })
         })
         .collect()
@@ -2298,6 +2305,32 @@ mod tests {
         assert!(bindings.post_connect.is_empty());
         assert!(bindings.pre_disconnect.is_empty());
         assert!(bindings.post_disconnect.is_empty());
+    }
+
+    #[test]
+    fn profile_environment_round_trips_and_defaults_to_none() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut production = ConnectionProfile::new("prod", DbConfig::default_postgres());
+        production.environment = Some(dbflux_core::ConnectionEnvironment::Production);
+        let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[production.clone(), unset.clone()])
+            .expect("save profiles with environment");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert_eq!(
+            find(production.id).environment(),
+            Some(dbflux_core::ConnectionEnvironment::Production)
+        );
+        assert_eq!(find(unset.id).environment(), None);
     }
 
     #[test]

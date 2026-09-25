@@ -104,6 +104,18 @@ impl RenderOnce for StatusIndicator {
     }
 }
 
+/// A bare diamond of `size` in `color`, for markers that carry a color
+/// outside the [`Status`] set (environment chips).
+pub fn status_diamond(color: Hsla, size: Pixels) -> impl IntoElement {
+    div().flex_shrink_0().size(size).child(
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| paint_diamond(bounds, color, window),
+        )
+        .size_full(),
+    )
+}
+
 /// Fills a diamond inscribed in `bounds` (its corners touch the edge midpoints).
 fn paint_diamond(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window) {
     let center = bounds.center();

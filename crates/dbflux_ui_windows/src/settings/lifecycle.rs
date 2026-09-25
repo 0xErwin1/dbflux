@@ -23,7 +23,7 @@ impl SettingsCoordinator {
         cx: &mut Context<Self>,
     ) -> Self {
         let active_section = initial_section;
-        let mut sidebar_tree = Self::build_sidebar_tree();
+        let mut sidebar_tree = Self::build_sidebar_tree("");
         sidebar_tree.select_by_id(Self::tree_id_for_section(active_section));
 
         let focus_handle = cx.focus_handle();
@@ -35,6 +35,25 @@ impl SettingsCoordinator {
 
         let export_modal = cx.new(|cx| ExportBundleModal::new(app_state.clone(), window, cx));
         let import_panel = cx.new(|cx| ImportConnectionsPanel::new(app_state.clone(), window, cx));
+
+        let nav_search = cx.new(|cx| {
+            dbflux_components::controls::InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.nav.search_placeholder"))
+        });
+        let nav_search_sub = cx.subscribe_in(
+            &nav_search,
+            window,
+            |this, _, event: &dbflux_components::controls::InputEvent, window, cx| match event {
+                dbflux_components::controls::InputEvent::Change => {
+                    this.apply_nav_search(cx);
+                }
+                dbflux_components::controls::InputEvent::PressEnter { .. } => {
+                    this.focus_handle.focus(window, cx);
+                    this.activate_sidebar_cursor(window, cx);
+                }
+                _ => {}
+            },
+        );
 
         let import_sub = cx.subscribe(
             &import_panel,
@@ -49,6 +68,7 @@ impl SettingsCoordinator {
         Self {
             app_state,
             sidebar_tree,
+            nav_search,
             focus_area: SettingsFocus::Sidebar,
             focus_handle,
             active_section,
@@ -66,7 +86,7 @@ impl SettingsCoordinator {
             pending_export_target: None,
             pending_import_open: false,
             _subscriptions: section_subscription,
-            _portability_subscriptions: vec![import_sub],
+            _portability_subscriptions: vec![import_sub, nav_search_sub],
         }
     }
 
@@ -376,6 +396,11 @@ impl SettingsCoordinator {
 
         let chord = key_chord_from_gpui(&event.keystroke);
 
+        if self.nav_search_focused(window, cx) {
+            self.handle_nav_search_key(&chord, window, cx);
+            return;
+        }
+
         match (chord.key.as_str(), chord.modifiers) {
             ("w", modifiers) if modifiers == Modifiers::ctrl() => {
                 self.try_close(window);
@@ -383,6 +408,11 @@ impl SettingsCoordinator {
             }
             ("q", modifiers) if modifiers == Modifiers::ctrl() => {
                 self.try_close(window);
+                return;
+            }
+            ("s", modifiers) if modifiers == Modifiers::ctrl() => {
+                self.active_section_entity.save_from_shortcut(window, cx);
+                cx.notify();
                 return;
             }
             ("h", modifiers) if modifiers == Modifiers::ctrl() => {
@@ -430,11 +460,90 @@ impl SettingsCoordinator {
             ("enter", modifiers) | ("space", modifiers) if modifiers == Modifiers::none() => {
                 self.activate_sidebar_cursor(window, cx);
             }
+            ("/", modifiers) if modifiers == Modifiers::none() => {
+                self.focus_nav_search(window, cx);
+            }
             _ => {}
         }
     }
 
-    fn activate_sidebar_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn nav_search_focused(&self, window: &Window, cx: &App) -> bool {
+        self.nav_search
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx)
+    }
+
+    pub(super) fn focus_nav_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_area == SettingsFocus::Content {
+            self.active_section_entity.focus_out(window, cx);
+        }
+
+        self.focus_area = SettingsFocus::Sidebar;
+        self.nav_search
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    /// Keys typed while the navigation search holds focus: the input edits
+    /// the text itself; Escape and the arrows hand focus back to the tree.
+    /// Enter arrives as `InputEvent::PressEnter` and opens the entry under the
+    /// tree cursor.
+    fn handle_nav_search_key(
+        &mut self,
+        chord: &dbflux_app::keymap::KeyChord,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match (chord.key.as_str(), chord.modifiers) {
+            ("escape", modifiers) if modifiers == Modifiers::none() => {
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+            }
+            ("down", modifiers) if modifiers == Modifiers::none() => {
+                self.sidebar_tree.move_next();
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+            }
+            ("up", modifiers) if modifiers == Modifiers::none() => {
+                self.sidebar_tree.move_prev();
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    /// Rebuilds the navigation tree for the current search text, keeping the
+    /// active section under the cursor when it is still listed, else the
+    /// first entry.
+    pub(super) fn apply_nav_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.nav_search.read(cx).value().to_string();
+        self.sidebar_tree = Self::build_sidebar_tree(&query);
+
+        let active_id = Self::tree_id_for_section(self.active_section);
+        let active_listed = self
+            .sidebar_tree
+            .rows()
+            .iter()
+            .any(|row| row.id.as_ref() == active_id);
+
+        if active_listed {
+            self.sidebar_tree.select_by_id(active_id);
+        } else if let Some(first_leaf) = self
+            .sidebar_tree
+            .rows()
+            .iter()
+            .find(|row| row.selectable)
+            .map(|row| row.id.clone())
+        {
+            self.sidebar_tree.select_by_id(first_leaf.as_ref());
+        }
+
+        cx.notify();
+    }
+
+    pub(super) fn activate_sidebar_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.sidebar_tree.activate() {
             TreeNavAction::Selected(id) => {
                 if let Some(section) = Self::section_for_tree_id(id.as_ref()) {

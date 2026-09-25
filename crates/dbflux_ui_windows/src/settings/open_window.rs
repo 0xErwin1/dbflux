@@ -11,6 +11,16 @@ use gpui_component::Root;
 
 use super::{SettingsCoordinator, SettingsSectionId};
 
+/// Initial Settings window size, from the P1Settings* boards. Shrunk to the
+/// display when it does not fit.
+const WINDOW_WIDTH: f32 = 1320.0;
+const WINDOW_HEIGHT: f32 = 900.0;
+
+/// Smallest Settings window; the navigation and the pages scroll below the
+/// initial size.
+const WINDOW_MIN_WIDTH: f32 = 800.0;
+const WINDOW_MIN_HEIGHT: f32 = 600.0;
+
 /// Opens the Settings window or focuses it if one is already open.
 ///
 /// When a window already exists, focuses it and returns without invoking
@@ -42,7 +52,7 @@ pub fn open_or_focus_settings<S>(
         }
     }
 
-    let bounds = Bounds::centered(None, size(px(950.0), px(700.0)), cx);
+    let bounds = platform::fitted_window_bounds(WINDOW_WIDTH, WINDOW_HEIGHT, cx);
 
     let mut options = WindowOptions {
         app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
@@ -54,7 +64,7 @@ pub fn open_or_focus_settings<S>(
         focus: true,
         ..Default::default()
     };
-    platform::apply_window_options(&mut options, 800.0, 600.0);
+    platform::apply_window_options(&mut options, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT);
 
     let app_state_for_new = app_state.clone();
 
