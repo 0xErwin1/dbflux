@@ -2199,10 +2199,8 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         let mut new_selections = Vec::with_capacity(end_row - start_row + 1);
         for row in start_row..=end_row {
-            let sel_start = self
-                .display_map
-                .display_row_column_to_offset(row, start_col);
-            let sel_end = self.display_map.display_row_column_to_offset(row, end_col);
+            let sel_start = self.columnar_offset_at_scalar_column(row, start_col);
+            let sel_end = self.columnar_offset_at_scalar_column(row, end_col);
             let id = self.selections.generate_id();
             let sel_start = self.text.clip_offset(sel_start, Bias::Left);
             let sel_end = self.text.clip_offset(sel_end, Bias::Left);
@@ -2225,7 +2223,25 @@ impl<M: InputModeKind> InputBaseState<M> {
                     .nearest_visible_display_row(display_point.row)
             });
 
-        (row, display_point.column + point.columns_past_line_end)
+        let row_start = self.display_map.display_row_column_to_offset(row, 0);
+        let column = self.text.to_string()[row_start..point.offset]
+            .chars()
+            .count();
+        (row, column + point.columns_past_line_end)
+    }
+
+    fn columnar_offset_at_scalar_column(&self, row: usize, column: usize) -> usize {
+        let start = self.display_map.display_row_column_to_offset(row, 0);
+        let end = self
+            .display_map
+            .display_row_column_to_offset(row, self.text.len());
+        let text = self.text.to_string();
+        let row_text = text[start..end].trim_end_matches(['\n', '\r']);
+        start
+            + row_text
+                .char_indices()
+                .nth(column)
+                .map_or(row_text.len(), |(offset, _)| offset)
     }
 
     pub(super) fn on_mouse_down(
@@ -2816,6 +2832,63 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// in the underlying rope's byte units.
     pub fn selected_range(&self) -> std::ops::Range<usize> {
         (*self.selections.active()).into()
+    }
+
+    /// Nonempty selection fragments in document order (including multi-cursor blocks).
+    pub fn selected_nonempty_ranges(&self) -> Vec<Range<usize>> {
+        let mut ranges: Vec<_> = self
+            .selections
+            .iter()
+            .filter_map(|selection| {
+                (!selection.is_empty()).then_some(selection.start..selection.end)
+            })
+            .collect();
+        ranges.sort_by_key(|range| (range.start, range.end));
+        ranges
+    }
+
+    /// Select an inclusive display-row rectangle using the Alt-drag block engine.
+    /// Offsets are UTF-8 byte positions on the anchor and head glyphs.
+    pub fn set_columnar_selection(&mut self, anchor: usize, head: usize, cx: &mut Context<Self>) {
+        let anchor = self.text.clip_offset(anchor, Bias::Left);
+        let head = self.text.clip_offset(head, Bias::Left);
+        self.selected_word_range = None;
+        let (anchor_row, anchor_col) = self.columnar_row_column(ColumnarPoint::new(anchor, 0));
+        let (head_row, head_col) = self.columnar_row_column(ColumnarPoint::new(head, 0));
+        if !self.is_multi_line() {
+            return;
+        }
+        self.undo_manager.break_transaction_coalescing();
+        let (first_row, last_row) = (anchor_row.min(head_row), anchor_row.max(head_row));
+        let (left_col, right_col) = (anchor_col.min(head_col), anchor_col.max(head_col));
+        let text = self.text.to_string();
+        let mut selections = Vec::with_capacity(last_row - first_row + 1);
+        for row in first_row..=last_row {
+            let start = self.text.clip_offset(
+                self.columnar_offset_at_scalar_column(row, left_col),
+                Bias::Left,
+            );
+            let right = self.text.clip_offset(
+                self.columnar_offset_at_scalar_column(row, right_col),
+                Bias::Left,
+            );
+            let end = text[right..]
+                .chars()
+                .next()
+                .filter(|character| {
+                    *character != '\n'
+                        && *character != '\r'
+                        && self.columnar_row_column(ColumnarPoint::new(right, 0)).0 == row
+                })
+                .map_or(right, |character| right + character.len_utf8());
+            let id = self.selections.generate_id();
+            selections.push(CursorSelection::new(id, start, end));
+        }
+        self.selections.replace_all(selections);
+        cx.notify();
+        self.selections
+            .activate(head_row - anchor_row.min(head_row));
+        self.selections.active_mut().reversed = head_col < anchor_col;
     }
 
     pub fn select_all(&mut self, _: &mut Window, cx: &mut Context<Self>) {
@@ -8750,6 +8823,93 @@ mod tests {
                 );
                 let ranges: Vec<_> = state.selections.iter().map(|s| (s.start, s.end)).collect();
                 assert_eq!(ranges, vec![(1, 3), (6, 8), (11, 13)]);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_public_ranges_reverse_and_short_row(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+        setup_cursors(&mut cx, &input, "abcd\na\nabcd");
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_columnar_selection(11, 1, cx);
+                assert_eq!(state.selected_nonempty_ranges(), vec![1..4, 8..11]);
+                assert_eq!(state.selected_range(), 1..4);
+                state.set_selected_range(0..0, cx);
+                assert!(state.selected_nonempty_ranges().is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_soft_wrapped_display_rows_do_not_swallow_neighbors(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("éabcdefghij\nx", window, cx);
+                state.display_map.on_layout_changed(Some(px(60.)), cx);
+                let line = state.display_map.line(0).expect("first line");
+                assert!(line.wrapped_lines.len() > 1);
+                let boundary = line.wrapped_lines[0].end;
+                let next_glyph = state.value()[boundary..]
+                    .chars()
+                    .next()
+                    .expect("wrapped continuation");
+                let head = boundary + next_glyph.len_utf8();
+                state.set_columnar_selection(0, head, cx);
+                let ranges = state.selected_nonempty_ranges();
+                assert!(
+                    ranges.len() >= 2,
+                    "expected distinct wrapped display rows: {ranges:?}"
+                );
+                assert!(ranges.iter().all(|range| range.end <= 12), "{ranges:?}");
+                assert!(ranges.windows(2).all(|pair| pair[0].end <= pair[1].start));
+                assert!(!ranges.iter().any(|range| range.contains(&12)));
+                state.set_columnar_selection(0, boundary, cx);
+                let boundary_ranges = state.selected_nonempty_ranges();
+                assert!(
+                    boundary_ranges.len() >= 2,
+                    "boundary must address next display row: {boundary_ranges:?}"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_nonzero_unicode_scalar_column(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+        setup_cursors(&mut cx, &input, "éx\nax");
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_columnar_selection(2, 6, cx);
+                assert_eq!(state.selected_nonempty_ranges(), vec![2..3, 5..6]);
+                state.build_columnar_selection(
+                    ColumnarPoint::new(2, 0),
+                    ColumnarPoint::new(6, 0),
+                    cx,
+                );
+                assert_eq!(state.selected_nonempty_ranges(), vec![2..3, 5..6]);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_mixed_utf8_row_width(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+        setup_cursors(&mut cx, &input, "é\na");
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                state.set_columnar_selection(0, 3, cx);
+                assert_eq!(state.selected_nonempty_ranges(), vec![0..2, 3..4]);
             });
         });
     }

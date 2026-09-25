@@ -87,21 +87,21 @@ impl CodeDocument {
     /// Returns selected text when a non-empty selection exists.
     pub(super) fn selected_query(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<String> {
-        self.editor.input_state.update(cx, |state, cx| {
-            let sel = state.selected_text_range(false, window, cx)?;
-
-            if sel.range.is_empty() {
+        self.editor.input_state.update(cx, |state, _cx| {
+            let ranges = state.selected_nonempty_ranges();
+            if ranges.is_empty() {
                 return None;
             }
-
-            let mut adjusted = None;
-            state
-                .text_for_range(sel.range, &mut adjusted, window, cx)
-                .map(|text| text.trim().to_string())
-                .filter(|text| !text.is_empty())
+            let fragments = ranges
+                .into_iter()
+                .filter_map(|range| state.value().get(range).map(str::to_string))
+                .collect::<Vec<_>>();
+            let text = fragments.join("\n");
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_string())
         })
     }
 

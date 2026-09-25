@@ -818,6 +818,7 @@ document:
       insert: "삽입"
       visual: "비주얼"
       visual_line: "비주얼 줄"
+      visual_block: "비주얼 블록"
     output:
       running: "실행 중..."
       stopped: 중지됨

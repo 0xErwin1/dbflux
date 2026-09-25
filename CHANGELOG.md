@@ -10,9 +10,14 @@ All notable changes to DBFlux will be documented in this file.
   insertion positions, `e`/`E`/`w`/`W`/`b`/`B` word motions, motion counts,
   and counted `x`/`u`. `v` and `V` now select characters or whole lines using
   real editor ranges; motions and counts extend the selection, `Escape` exits,
-  and `Ctrl+Enter` passes nonempty selected query text to execution. Block
-  Visual selection and operators are not included; end-to-end query execution
-  has not been verified.
+  and `Ctrl+Enter` passes nonempty selected query text to execution. Normal
+  `Ctrl+v` enters genuine multi-range, display-row rectangular Visual Block
+  selection; Insert `Ctrl+v` still pastes. `Ctrl+Enter` joins ordered nonempty
+  row fragments with newlines (as with mouse Alt-drag), falling back to the
+  full buffer for whitespace-only selections. Block columns count Unicode
+  scalars, so tabs, wide characters and combining graphemes may not align to
+  visual cells. Live UI visual validation remains pending; pixel-perfect
+  alignment is not claimed. Operators are not included.
 
 * **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
   Vim mode toggle, off by default. Code editors then open in Normal mode,

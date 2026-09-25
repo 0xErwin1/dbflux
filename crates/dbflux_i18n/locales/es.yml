@@ -818,6 +818,7 @@ document:
       insert: "INSERTAR"
       visual: "VISUAL"
       visual_line: "VISUAL LÍNEA"
+      visual_block: "VISUAL BLOQUE"
     output:
       running: "Ejecutando..."
       stopped: Detenido

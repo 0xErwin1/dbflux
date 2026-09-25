@@ -498,6 +498,55 @@ fn visual_character_selection_tracks_reverse_unicode_and_escape(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn visual_block_selects_rows_and_executes_fragments(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abXX\na\nabYY", true);
+    editor.set_cursor(1);
+    editor.keys("ctrl-v j j 2 l");
+    assert_eq!(editor.mode(), Some(VimMode::VisualBlock));
+    assert_eq!(editor.selected_query().as_deref(), Some("bXX\nbYY"));
+    editor.keys("escape");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.selected_query(), None);
+    assert_eq!(editor.text(), "abXX\na\nabYY");
+}
+
+#[gpui::test]
+fn visual_block_nonzero_utf8_column_selects_matching_scalars(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "éx\nax", true);
+    editor.set_cursor(2);
+    editor.keys("ctrl-v j");
+    assert_eq!(editor.selected_query().as_deref(), Some("x\nx"));
+}
+
+#[gpui::test]
+fn visual_block_reverse_unicode_and_whitespace_fallback(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é中x\néx\né中x", true);
+    editor.set_cursor(11);
+    editor.keys("ctrl-v k k");
+    assert_eq!(editor.mode(), Some(VimMode::VisualBlock));
+    assert_eq!(editor.selected_query().as_deref(), Some("é\né\né"));
+    editor.keys("escape");
+    assert_eq!(editor.selected_query(), None);
+
+    let mut editor = open_editor(cx, "  \n  ", true);
+    editor.keys("ctrl-v j");
+    assert_eq!(editor.selected_query(), None);
+}
+
+#[gpui::test]
+fn visual_block_includes_last_glyph_and_single_glyph_rows(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "x\nx\nx", true);
+    editor.keys("ctrl-v j j");
+    assert_eq!(editor.selected_query().as_deref(), Some("x\nx\nx"));
+    editor.keys("escape");
+
+    let mut editor = open_editor(cx, "abc\na\nabc", true);
+    editor.set_cursor(2);
+    editor.keys("ctrl-v j j");
+    assert_eq!(editor.selected_query().as_deref(), Some("c\nc"));
+}
+
+#[gpui::test]
 fn visual_line_selection_includes_terminators_and_reverses(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "first\r\nsecond\nlast", true);
     editor.keys("shift-v j");
@@ -564,6 +613,52 @@ fn selected_query_trims_visual_and_non_visual_selections(cx: &mut TestAppContext
     assert_eq!(editor.selected_query().as_deref(), Some("one"));
     editor.set_cursor(0);
     assert_eq!(editor.selected_query(), None);
+}
+
+#[gpui::test]
+fn insert_ctrl_v_pastes_while_normal_ctrl_v_enters_visual_block(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    editor.keys("i");
+    editor.window.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("PASTED".to_string()));
+    });
+    editor.keys("ctrl-v");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "PASTEDab");
+    editor.keys("escape ctrl-v");
+    assert_eq!(editor.mode(), Some(VimMode::VisualBlock));
+    assert_eq!(editor.text(), "PASTEDab");
+}
+
+#[gpui::test]
+fn selected_query_joins_mouse_style_ranges_in_document_order(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one\ntwo\nthree", true);
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.editor.input_state.update(cx, |state, cx| {
+                state.set_columnar_selection(8, 0, cx);
+                assert_eq!(state.selected_nonempty_ranges(), vec![0..1, 4..5, 8..9]);
+            });
+        });
+    });
+    assert_eq!(editor.selected_query().as_deref(), Some("o\nt\nt"));
+}
+
+#[gpui::test]
+fn selected_query_uses_block_fragment_when_active_row_is_empty(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab\n\n", true);
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.editor.input_state.update(cx, |state, cx| {
+                state.set_columnar_selection(1, 3, cx);
+                assert_eq!(state.selected_nonempty_ranges(), vec![0..2]);
+                assert!(state.selected_range().is_empty());
+            });
+        });
+    });
+    assert_eq!(editor.selected_query().as_deref(), Some("ab"));
 }
 
 #[gpui::test]
@@ -715,6 +810,8 @@ fn normal_mode_blocks_enter_tab_paste_and_deletion_keys(cx: &mut TestAppContext)
         .write_to_clipboard(ClipboardItem::new_string("PASTED".to_string()));
 
     editor.keys("tab shift-tab ctrl-v backspace delete");
+    assert_eq!(editor.mode(), Some(VimMode::VisualBlock));
+    editor.keys("escape");
 
     // Context-menu paste dispatches the same action to the focused editor.
     let document = editor.document.clone();

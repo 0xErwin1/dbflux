@@ -818,6 +818,7 @@ document:
       insert: "INSERT"
       visual: "VISUAL"
       visual_line: "VISUAL LINE"
+      visual_block: "VISUAL BLOCK"
     output:
       running: "Running..."
       stopped: Stopped

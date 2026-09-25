@@ -593,7 +593,7 @@ editor (SQL and the other query languages, Lua, Python, Bash) and to nothing
 else, so search boxes, forms, and the command palette keep typing as usual.
 
 An editor starts in Normal mode when it opens and when you turn Vim mode on. A
-strip under the editor shows the mode: `NORMAL`, `INSERT`, `VISUAL`, or `VISUAL LINE`. Each tab keeps its
+strip under the editor shows the mode: `NORMAL`, `INSERT`, `VISUAL`, `VISUAL LINE`, or `VISUAL BLOCK`. Each tab keeps its
 own mode when you switch tabs or move focus away and back.
 
 | Mode | Keys | Action |
@@ -607,16 +607,25 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
 | Normal | `u` | Undo |
-| Normal | `v` / `V` | Select characters / whole lines in Visual mode |
+| Normal | `v` / `V` / `Ctrl+v` | Select characters / whole lines / a display-row rectangle in Visual mode |
 | Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
 | Visual / Visual Line | `v` / `V` | Exit the active Visual mode / switch between characterwise and linewise selection |
-| Visual / Visual Line | `Escape` | Clear the selection and return to Normal mode |
+| Visual / Visual Line / Visual Block | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
 
 Prefix a motion or `x` / `u` with a count (for example, `3w`, `2x`,
 `2u`). A counted `x` deletes up to the end of the line without joining lines;
-a counted `u` undoes that many steps. `0` without a count moves to the start of the line; after a nonzero digit it remains part of the count (for example, `20w`). An
-interrupted count does not carry over to the next command. In Visual mode, counted motions extend the actual editor selection. `Ctrl+Enter` uses the trimmed selection only if it contains non-whitespace text; an empty or whitespace-only selection falls back to the full buffer. This describes selection routing, not an end-to-end execution guarantee.
+a counted `u` undoes that many steps. `0` without a count moves to the start of
+the line; after a nonzero digit it remains part of the count (for example,
+`20w`). An interrupted count does not carry over to the next command. In
+Visual mode, counted motions extend the editor selection.
+
+`Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
+otherwise it uses the full buffer. For a Visual Block selection, it joins
+ordered nonempty row fragments with newlines, as with mouse Alt-drag. A
+whitespace-only block selection uses the full buffer. Block columns count
+Unicode scalars, not visual cells: tabs, wide characters, and combining
+sequences may not align with on-screen columns.
 
 Everything else in Normal mode:
 
@@ -624,7 +633,8 @@ Everything else in Normal mode:
 |-------|-------------------------|
 | Other unsupported letters, punctuation, `Space` | Nothing |
 | `Tab` / `Shift+Tab` | Nothing: no indent, and focus stays in the editor |
-| Paste (`Ctrl+v` / `Cmd+v` or the context menu) | Nothing |
+| `Ctrl+v` | Enter Visual Block mode (not paste) |
+| Paste (`Cmd+v` or the context menu) | Nothing |
 | Input method (IME) composition and commit | Dropped |
 | `Backspace` / `Delete` | Nothing |
 | `Escape` | Its usual meaning: cancel a running query, or leave the editor |
@@ -634,7 +644,7 @@ In Normal mode the cursor sits on a character, never past the end of a line.
 Leaving Insert mode moves it back one character, as Vim does. On an empty line
 `x` does nothing, so it never joins lines.
 
-In Insert mode the editor behaves as it does with Vim mode off, except for
+In Insert mode the editor behaves as it does with Vim mode off, including `Ctrl+v` paste, except for
 `Escape`. With a completion or code-action menu open, `Escape` closes the menu
 and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
@@ -649,7 +659,7 @@ do nothing there.
 
 **Limitations.**
 
-- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), search, block Visual selection,
+- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), search,
   text objects, registers, macros, `.` repeat, `:` commands, or a redo key.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

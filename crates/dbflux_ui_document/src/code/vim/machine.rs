@@ -18,6 +18,7 @@ pub enum VimMode {
     Insert,
     Visual,
     VisualLine,
+    VisualBlock,
 }
 
 /// What a key does in the current mode.
@@ -30,6 +31,7 @@ pub(crate) enum VimCommand {
     EnterInsert,
     EnterVisual,
     EnterVisualLine,
+    EnterVisualBlock,
     LeaveVisual,
     Append,
     AppendLine,
@@ -65,8 +67,11 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 
     match mode {
         VimMode::Insert => (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert),
-        VimMode::Normal | VimMode::Visual | VimMode::VisualLine => {
-            let visual = matches!(mode, VimMode::Visual | VimMode::VisualLine);
+        VimMode::Normal | VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => {
+            let visual = matches!(
+                mode,
+                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+            );
             if key.key == "escape" && visual {
                 return Some(VimCommand::LeaveVisual);
             }
@@ -129,6 +134,7 @@ pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
         VimCommand::LeaveInsert | VimCommand::LeaveVisual => VimMode::Normal,
         VimCommand::EnterVisual => VimMode::Visual,
         VimCommand::EnterVisualLine => VimMode::VisualLine,
+        VimCommand::EnterVisualBlock => VimMode::VisualBlock,
         _ => mode,
     }
 }

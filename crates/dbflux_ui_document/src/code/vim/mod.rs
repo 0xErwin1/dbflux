@@ -60,7 +60,12 @@ impl CodeDocument {
             return;
         }
 
-        if !enabled && matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+        if !enabled
+            && matches!(
+                self.vim.mode,
+                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+            )
+        {
             let cursor = self
                 .vim
                 .visual_cursor
@@ -148,7 +153,23 @@ impl CodeDocument {
                 || modifiers.function,
         };
 
-        let Some(command) = machine::command_for(self.vim.mode, key) else {
+        let block_key = modifiers.control
+            && !modifiers.alt
+            && !modifiers.platform
+            && !modifiers.function
+            && !modifiers.shift
+            && key.key == "v"
+            && self.vim.mode != VimMode::Insert;
+        let command = if block_key {
+            Some(if self.vim.mode == VimMode::VisualBlock {
+                VimCommand::LeaveVisual
+            } else {
+                VimCommand::EnterVisualBlock
+            })
+        } else {
+            machine::command_for(self.vim.mode, key)
+        };
+        let Some(command) = command else {
             self.vim.count = None;
             return false;
         };
@@ -203,7 +224,9 @@ impl CodeDocument {
                 self.set_vim_mode(VimMode::Insert, cx);
             }
             VimCommand::EnterInsert => self.set_vim_mode(VimMode::Insert, cx),
-            VimCommand::EnterVisual | VimCommand::EnterVisualLine => {
+            VimCommand::EnterVisual
+            | VimCommand::EnterVisualLine
+            | VimCommand::EnterVisualBlock => {
                 let cursor = self
                     .vim
                     .visual_cursor
@@ -213,10 +236,10 @@ impl CodeDocument {
                 }
                 self.vim.visual_cursor = Some(cursor);
                 self.set_vim_mode(
-                    if command == VimCommand::EnterVisual {
-                        VimMode::Visual
-                    } else {
-                        VimMode::VisualLine
+                    match command {
+                        VimCommand::EnterVisual => VimMode::Visual,
+                        VimCommand::EnterVisualLine => VimMode::VisualLine,
+                        _ => VimMode::VisualBlock,
                     },
                     cx,
                 );
@@ -270,7 +293,10 @@ impl CodeDocument {
         if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
             return false;
         }
-        if matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+        if matches!(
+            self.vim.mode,
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        ) {
             self.apply_vim_command(VimCommand::LeaveVisual, window, cx);
             return true;
         }
@@ -339,7 +365,10 @@ impl CodeDocument {
     }
 
     fn set_editor_cursor(&mut self, offset: usize, cx: &mut Context<Self>) {
-        if matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+        if matches!(
+            self.vim.mode,
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        ) {
             self.vim.visual_cursor = Some(offset);
             self.update_visual_selection(cx);
         } else {
@@ -360,7 +389,11 @@ impl CodeDocument {
                 cursor,
                 self.vim.mode == VimMode::VisualLine,
             );
-            state.set_selected_range(range, cx);
+            if self.vim.mode == VimMode::VisualBlock {
+                state.set_columnar_selection(anchor, cursor, cx);
+            } else {
+                state.set_selected_range(range, cx);
+            }
         });
     }
 

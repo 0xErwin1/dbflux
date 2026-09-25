@@ -192,6 +192,13 @@ impl Selections {
         }
     }
 
+    /// Make a block row active without changing the other row selections.
+    pub(super) fn activate(&mut self, index: usize) {
+        if index < self.selections.len() {
+            self.selections.swap(0, index);
+        }
+    }
+
     /// Removes every selection except the active one (index 0).
     pub(super) fn remove_all_but_active(&mut self) {
         self.selections.truncate(1);
