@@ -15,7 +15,6 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Icon;
 use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::radio::Radio;
@@ -455,7 +454,7 @@ impl ConnectionManagerWindow {
                                     )
                                     .ghost()
                                     .small()
-                                    .icon(Icon::new(AppIcon::Copy))
+                                    .icon(AppIcon::Copy)
                                     .on_click(
                                         move |_, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -482,7 +481,7 @@ impl ConnectionManagerWindow {
                                         dbflux_i18n::t!("connection_manager.action.back"),
                                     )
                                     .ghost()
-                                    .icon(Icon::new(AppIcon::ChevronLeft))
+                                    .icon(AppIcon::ChevronLeft)
                                     .small()
                                     .on_click(cx.listener(
                                         |this, _, window, cx| {
@@ -508,7 +507,7 @@ impl ConnectionManagerWindow {
                                             ),
                                         )
                                         .ghost()
-                                        .icon(Icon::new(AppIcon::ExternalLink))
+                                        .icon(AppIcon::ExternalLink)
                                         .small()
                                         .disabled(test_status == TestStatus::Testing)
                                         .on_click(
@@ -532,7 +531,7 @@ impl ConnectionManagerWindow {
                                             dbflux_i18n::t!("connection_manager.action.save"),
                                         )
                                         .primary()
-                                        .icon(Icon::new(AppIcon::Check))
+                                        .icon(AppIcon::Check)
                                         .small()
                                         .on_click(
                                             cx.listener(|this, _, window, cx| {

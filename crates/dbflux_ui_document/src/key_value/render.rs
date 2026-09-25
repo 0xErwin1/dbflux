@@ -5,7 +5,8 @@ use super::view::{icon_button_base, render_delete_confirm_modal, render_kv_conte
 use super::{KeyValueFocusMode, KvValueViewMode, TtlState};
 use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
-use dbflux_components::controls::{Dropdown, Input};
+use dbflux_components::composites::SplitButton;
+use dbflux_components::controls::{Button, Dropdown, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -841,60 +842,28 @@ impl Render for super::KeyValueDocument {
                             }),
                         ),
                     )
-                    .child(
-                        div()
-                            .id("kv-refresh-control")
-                            .h(Heights::BUTTON)
-                            .flex()
-                            .items_center()
-                            .gap_0()
-                            .rounded(Radii::SM)
-                            .bg(theme.background)
-                            .border_1()
-                            .border_color(theme.input)
-                            .child(
-                                div()
-                                    .id("kv-refresh-action")
-                                    .h_full()
-                                    .px(Spacing::SM)
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            if this.runner.is_primary_active() {
-                                                this.runner.cancel_primary(cx);
-                                                this.last_error = None;
-                                                cx.notify();
-                                            } else {
-                                                this.reload_keys(cx);
-                                            }
-                                        }),
-                                    )
-                                    .child(
-                                        Icon::new(if self.runner.is_primary_active() {
-                                            AppIcon::Loader
-                                        } else if self.refresh_policy.is_auto() {
-                                            AppIcon::Clock
-                                        } else {
-                                            AppIcon::RefreshCcw
-                                        })
-                                        .small()
-                                        .color(theme.foreground),
-                                    )
-                                    .child(Text::body(refresh_label)),
-                            )
-                            .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                            .child(
-                                div()
-                                    .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                                    .h_full()
-                                    .child(self.refresh_dropdown.clone()),
-                            ),
-                    ),
+                    .child(SplitButton::new(
+                        "kv-refresh-control",
+                        Button::new("kv-refresh-action", refresh_label)
+                            .small()
+                            .icon(if self.runner.is_primary_active() {
+                                AppIcon::Loader
+                            } else if self.refresh_policy.is_auto() {
+                                AppIcon::Clock
+                            } else {
+                                AppIcon::RefreshCcw
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.runner.cancel_primary(cx);
+                                    this.last_error = None;
+                                    cx.notify();
+                                } else {
+                                    this.reload_keys(cx);
+                                }
+                            })),
+                        self.refresh_dropdown.clone(),
+                    )),
             )
             // Pagination bar
             .child({

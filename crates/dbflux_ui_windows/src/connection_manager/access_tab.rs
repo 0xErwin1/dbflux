@@ -7,7 +7,6 @@ use dbflux_components::tokens::{ChromeColors, Radii, Widths};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Icon;
 use gpui_component::checkbox::Checkbox;
 
 use super::{
@@ -615,7 +614,7 @@ impl ConnectionManagerWindow {
                                 )
                                 .small()
                                 .ghost()
-                                .icon(Icon::new(AppIcon::ExternalLink)),
+                                .icon(AppIcon::ExternalLink),
                             ),
                     ),
                 &theme,
@@ -805,7 +804,7 @@ impl ConnectionManagerWindow {
                                     )
                                     .small()
                                     .ghost()
-                                    .icon(Icon::new(AppIcon::ExternalLink)),
+                                    .icon(AppIcon::ExternalLink),
                                 ),
                         ),
                     &theme,
@@ -911,7 +910,7 @@ impl ConnectionManagerWindow {
                 })
                 .child(
                     Button::new("test-ssh", dbflux_i18n::t!("access.test_ssh"))
-                        .icon(Icon::new(AppIcon::ExternalLink))
+                        .icon(AppIcon::ExternalLink)
                         .small()
                         .ghost()
                         .disabled(ssh_test_status == TestStatus::Testing)
@@ -955,7 +954,7 @@ impl ConnectionManagerWindow {
                                 "save-ssh-tunnel",
                                 dbflux_i18n::t!("access.save_as_tunnel"),
                             )
-                            .icon(Icon::new(AppIcon::Plus))
+                            .icon(AppIcon::Plus)
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {

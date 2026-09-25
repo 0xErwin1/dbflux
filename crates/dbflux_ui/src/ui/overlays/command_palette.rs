@@ -3,7 +3,7 @@ use crate::ui::icons::AppIcon;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 #[cfg(test)]
 use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
+use dbflux_components::primitives::{Icon, Kbd, overlay_bg, surface_modal_container};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChromeColors, Radii, Spacing};
 use dbflux_components::typography::{Body, InterfaceText, MonoCaption};
@@ -851,7 +851,7 @@ impl CommandPalette {
         let right_el: Option<AnyElement> = match item {
             PaletteItem::Action { shortcut, .. } => shortcut.map(|s| {
                 let parts = palette_shortcut_parts(s);
-                Chord::new(parts).into_any_element()
+                Kbd::chord(parts).into_any_element()
             }),
             PaletteItem::Connection { .. }
             | PaletteItem::Resource(_)
@@ -867,9 +867,7 @@ impl CommandPalette {
             .items_center()
             .gap(Spacing::SM)
             .when_some(right_el, |d, el| d.child(el))
-            .when(is_selected, |d| {
-                d.child(Chord::new(vec![SharedString::from("\u{21B5}")]))
-            });
+            .when(is_selected, |d| d.child(Kbd::new("\u{21B5}")));
 
         div()
             .id(("cmd", idx))
@@ -1024,7 +1022,7 @@ impl Render for CommandPalette {
                                 "{} / {}",
                                 filtered_count, total_count
                             )))
-                            .child(Chord::new(vec![SharedString::from("Esc")])),
+                            .child(Kbd::new("Esc")),
                     )
                     .child(
                         div()
@@ -1108,7 +1106,7 @@ impl Render for CommandPalette {
                                             .flex()
                                             .items_center()
                                             .gap(Spacing::XS)
-                                            .child(Chord::new(vec![
+                                            .child(Kbd::chord(vec![
                                                 SharedString::from("\u{2191}"),
                                                 SharedString::from("\u{2193}"),
                                             ]))
@@ -1124,7 +1122,7 @@ impl Render for CommandPalette {
                                             .flex()
                                             .items_center()
                                             .gap(Spacing::XS)
-                                            .child(Chord::new(vec![SharedString::from("\u{21B5}")]))
+                                            .child(Kbd::new("\u{21B5}"))
                                             .child(
                                                 InterfaceText::caption(dbflux_i18n::t!(
                                                     "palette.footer.run"

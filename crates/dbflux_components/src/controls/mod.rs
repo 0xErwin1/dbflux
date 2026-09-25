@@ -6,7 +6,9 @@ mod readonly_text_view;
 mod selectable_text;
 mod tab_trigger;
 
-pub use button::{Button, ButtonSize, ButtonVariant};
+pub use button::{
+    Button, ButtonFills, ButtonSize, ButtonVariant, button_colors, is_activation_key,
+};
 pub use checkbox::Checkbox;
 pub use dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 pub use input::{

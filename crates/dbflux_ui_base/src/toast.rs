@@ -5,8 +5,7 @@ use std::time::Duration;
 use crate::user_error::throttle::TokenBucket;
 
 use dbflux_components::controls::Button;
-use dbflux_components::icon::IconSource;
-use dbflux_components::primitives::{Chamfer, Icon, IconButton};
+use dbflux_components::primitives::{Chamfer, Icon};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
@@ -489,14 +488,15 @@ impl ToastHost {
                 )
             });
 
-        let close_button = IconButton::new(
-            ("toast-close", toast_id),
-            IconSource::Svg(AppIcon::CircleX.path().into()),
-        )
-        .icon_size(Feedback::TOAST_CLOSE_ICON)
-        .on_click(cx.listener(move |host, _, _, cx| {
-            host.dismiss(toast_id, cx);
-        }));
+        let close_button = Button::new(("toast-close", toast_id), "Dismiss")
+            .ghost()
+            .small()
+            .icon(AppIcon::CircleX)
+            .icon_only()
+            .icon_size(Feedback::TOAST_CLOSE_ICON)
+            .on_click(cx.listener(move |host, _, _, cx| {
+                host.dismiss(toast_id, cx);
+            }));
 
         let title_row = gpui::div()
             .flex()

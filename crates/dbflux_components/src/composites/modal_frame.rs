@@ -4,9 +4,10 @@ use gpui::prelude::*;
 use gpui::{App, ElementId, FocusHandle, MouseButton, Pixels, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 
+use crate::controls::Button;
 use crate::icon::IconSource;
-use crate::primitives::{IconButton, SurfaceRole, Text, surface_modal_container};
-use crate::tokens::{ChromeEdgeRole, Heights, Spacing};
+use crate::primitives::{SurfaceRole, Text, surface_modal_container};
+use crate::tokens::{ChromeEdgeRole, Spacing};
 
 type CloseHandler = Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>;
 
@@ -199,8 +200,11 @@ impl ModalFrame {
                 })
                 .child("Close")
                 .into_any_element(),
-            ModalFrameCloseAffordance::Icon(icon) => IconButton::new("close-btn", icon)
-                .icon_size(Heights::ICON_SM)
+            ModalFrameCloseAffordance::Icon(icon) => Button::new("close-btn", "")
+                .ghost()
+                .small()
+                .icon(icon)
+                .icon_only()
                 .on_click(move |_, window, cx| {
                     (close_for_button)(window, cx);
                 })

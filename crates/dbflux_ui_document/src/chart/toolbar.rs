@@ -151,7 +151,6 @@ pub fn render_chart_toolbar(
         false,
         ctx.refresh_dropdown.clone(),
         move |window, cx| on_refresh(window, cx),
-        theme,
     );
 
     // --- Toolbar action button helper ---

@@ -8,7 +8,7 @@ mod modal_frame;
 mod panel_header;
 mod refresh_split_button;
 mod section_header;
-mod split_toolbar_action;
+mod split_button;
 mod tab_strip;
 mod wizard_rail;
 
@@ -39,7 +39,7 @@ pub use section_header::{
     SectionHeaderInspection, SectionHeaderVariant, inspect_section_header, section_header,
     section_header_variant, section_header_variant_with_action, section_header_with_action,
 };
-pub use split_toolbar_action::split_toolbar_action;
+pub use split_button::SplitButton;
 pub use tab_strip::tab_strip;
 pub use wizard_rail::{
     RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,

@@ -1,6 +1,6 @@
 use dbflux_components::controls::{Button, GpuiInput, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, IconButton, KbdBadge, Text};
+use dbflux_components::primitives::{Icon, Kbd, Text};
 use dbflux_components::tokens::{ChromeColors, FontSizes};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DatabaseCategory;
@@ -94,11 +94,17 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
-                        IconButton::new("cm-driver-back", AppIcon::ChevronLeft.into()).on_click(
-                            |_, window, _cx| {
-                                window.remove_window();
-                            },
-                        ),
+                        Button::new(
+                            "cm-driver-back",
+                            dbflux_i18n::t!("connection_manager.action.back"),
+                        )
+                        .ghost()
+                        .small()
+                        .icon(AppIcon::ChevronLeft)
+                        .icon_only()
+                        .on_click(|_, window, _cx| {
+                            window.remove_window();
+                        }),
                     )
                     .child(
                         Icon::new(AppIcon::Database)
@@ -123,7 +129,7 @@ impl ConnectionManagerWindow {
                     .gap_2()
                     .w(px(360.0))
                     .child(render_filter_input(&self.form.driver_filter_input))
-                    .child(KbdBadge::new("/")),
+                    .child(Kbd::new("/")),
             )
     }
 

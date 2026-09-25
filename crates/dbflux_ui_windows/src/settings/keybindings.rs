@@ -1,7 +1,7 @@
 use dbflux_app::keymap::{ContextId, KeyChord};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Chord, Icon as FluxIcon};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon as FluxIcon, Kbd};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_components::typography::{Body, FieldLabel, InterfaceText};
 use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
@@ -349,7 +349,7 @@ impl KeybindingsSection {
             .child(
                 div()
                     .w(px(140.0))
-                    .child(Chord::new(chord_display_parts(chord))),
+                    .child(Kbd::chord(chord_display_parts(chord))),
             )
             .child(div().flex_1().child(if is_inherited {
                 Body::new(cmd_name.to_string()).color(muted_foreground)

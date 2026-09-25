@@ -1,4 +1,4 @@
-use dbflux_components::tokens::Heights;
+use dbflux_components::tokens::{ButtonMetrics, Heights};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::theme;
@@ -88,8 +88,14 @@ fn audit_and_key_value_refresh_dropdowns_share_compact_trigger_geometry(cx: &mut
         .debug_bounds("kv-auto-refresh")
         .expect("key-value refresh dropdown should render");
 
-    assert_eq!(audit_trigger_bounds.size.width, px(28.0));
-    assert_eq!(kv_trigger_bounds.size.width, px(28.0));
+    assert_eq!(
+        audit_trigger_bounds.size.width,
+        ButtonMetrics::SPLIT_MENU_WIDTH
+    );
+    assert_eq!(
+        kv_trigger_bounds.size.width,
+        ButtonMetrics::SPLIT_MENU_WIDTH
+    );
     assert!(audit_trigger_bounds.size.height > px(0.0));
     assert!(kv_trigger_bounds.size.height > px(0.0));
     assert!(audit_trigger_bounds.size.height <= Heights::BUTTON);

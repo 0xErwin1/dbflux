@@ -17,8 +17,9 @@
 //!   document; the `Input` entity is lazily created when editing starts.
 //! - The toolbar always renders (even when there are zero panels).
 
-use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
+use crate::chrome::compact_top_bar;
 use dbflux_components::composites::refresh_split_button;
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{Dropdown, InputState};
 use dbflux_components::saved_chart::TimeRangePreset;
 use dbflux_components::tokens::{Radii, Spacing};
@@ -243,21 +244,22 @@ pub(super) fn dashboard_toolbar(
                 doc.update(cx, |this, cx| this.refresh_all_loaded_panels(cx));
             }
         },
-        &theme,
     );
 
     let refresh_control = div().flex_shrink_0().child(refresh_btn);
 
-    // "+ Add Panel" toolbar button — `ToolbarButton` keeps the 28 px row
-    // height that matches every other DBFlux toolbar (data grid, audit, code).
+    // "+ Add Panel" toolbar button, 28 px like every other DBFlux toolbar.
     let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
         this.request_add_panel(cx);
     });
 
-    let add_btn = ToolbarButton::new("dash-add-panel-toolbar")
-        .label(dbflux_i18n::t!("document.dashboard.toolbar.add_panel"))
-        .variant(ToolbarButtonVariant::Primary)
-        .on_click(move |event, window, app| on_add_panel(event, window, app));
+    let add_btn = Button::new(
+        "dash-add-panel-toolbar",
+        dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
+    )
+    .small()
+    .primary()
+    .on_click(move |event, window, app| on_add_panel(event, window, app));
 
     // Edit/View toggle. Pencil icon = "enter edit"; Eye icon = "back to view".
     use dbflux_components::icons::AppIcon;
@@ -276,11 +278,11 @@ pub(super) fn dashboard_toolbar(
             dbflux_i18n::t!("document.dashboard.toolbar.edit_mode_tooltip"),
         )
     };
-    let mode_btn = ToolbarButton::new("dash-mode-toggle")
+    let mode_btn = Button::new("dash-mode-toggle", mode_tooltip)
+        .small()
         .icon(mode_icon)
-        .variant(ToolbarButtonVariant::Default)
-        .focused(in_edit_mode)
-        .tooltip(mode_tooltip)
+        .icon_only()
+        .selected(in_edit_mode)
         .on_click(move |event, window, app| on_toggle_mode(event, window, app));
 
     // Group right-anchored controls. Read-only dashboards omit the mutation
@@ -292,15 +294,15 @@ pub(super) fn dashboard_toolbar(
         let on_save_as = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
             this.request_save_as_editable(cx);
         });
-        let save_as_btn = ToolbarButton::new("dash-save-as-editable")
-            .label(dbflux_i18n::t!(
-                "document.dashboard.toolbar.save_as_editable"
-            ))
-            .variant(ToolbarButtonVariant::Default)
-            .tooltip(dbflux_i18n::t!(
-                "document.dashboard.toolbar.save_as_editable_tooltip"
-            ))
-            .on_click(move |event, window, app| on_save_as(event, window, app));
+        let save_as_btn = Button::new(
+            "dash-save-as-editable",
+            dbflux_i18n::t!("document.dashboard.toolbar.save_as_editable"),
+        )
+        .small()
+        .tooltip(dbflux_i18n::t!(
+            "document.dashboard.toolbar.save_as_editable_tooltip"
+        ))
+        .on_click(move |event, window, app| on_save_as(event, window, app));
         div()
             .flex_shrink_0()
             .ml_auto()
@@ -372,11 +374,13 @@ fn build_custom_time_controls(
         .child(slots.end_hour)
         .child(slots.end_minute)
         .child(
-            ToolbarButton::new("dashboard-custom-time-apply")
-                .label(dbflux_i18n::t!("document.dashboard.toolbar.apply"))
-                .variant(ToolbarButtonVariant::Default)
-                .disabled(!can_apply)
-                .on_click(on_apply),
+            Button::new(
+                "dashboard-custom-time-apply",
+                dbflux_i18n::t!("document.dashboard.toolbar.apply"),
+            )
+            .small()
+            .disabled(!can_apply)
+            .on_click(on_apply),
         )
 }
 

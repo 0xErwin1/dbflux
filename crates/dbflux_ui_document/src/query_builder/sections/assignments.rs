@@ -69,7 +69,7 @@ pub fn render_assignments(
         let kind_variant = if expr_mode {
             ButtonVariant::Danger
         } else {
-            ButtonVariant::Default
+            ButtonVariant::Secondary
         };
 
         let show_value_input = matches!(

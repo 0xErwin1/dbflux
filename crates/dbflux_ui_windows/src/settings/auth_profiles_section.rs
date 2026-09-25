@@ -23,8 +23,8 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use gpui_component::dialog::{Dialog, DialogButtonProps};
-use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -2160,7 +2160,7 @@ impl AuthProfilesSection {
                             "new-auth-profile",
                             dbflux_i18n::t!("settings.auth_profiles.new_profile"),
                         )
-                        .icon(Icon::new(AppIcon::Plus))
+                        .icon(AppIcon::Plus)
                         .small()
                         .w_full()
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -2173,7 +2173,7 @@ impl AuthProfilesSection {
                             "import-auth-profile",
                             dbflux_i18n::t!("settings.auth_profiles.import"),
                         )
-                        .icon(Icon::new(AppIcon::Download))
+                        .icon(AppIcon::Download)
                         .small()
                         .ghost()
                         .w_full()

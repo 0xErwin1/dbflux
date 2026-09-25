@@ -11,8 +11,8 @@ use dbflux_components::controls::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::shell::{ModalFocus, ModalShell};
-use dbflux_components::primitives::{BannerBlock, BannerVariant, IconButton, Text, surface_raised};
-use dbflux_components::tokens::{FontSizes, Heights, Spacing};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, Text, surface_raised};
+use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
 use dbflux_core::access::AccessKind;
@@ -1325,15 +1325,20 @@ impl ExportBundleModal {
                 AppIcon::Eye
             };
 
-            let toggle = IconButton::new("export-passphrase-eye", eye_icon.into()).on_click({
-                let entity = cx.entity().clone();
-                move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.show_passphrase = !this.show_passphrase;
-                        cx.notify();
-                    });
-                }
-            });
+            let toggle = Button::new("export-passphrase-eye", "")
+                .ghost()
+                .small()
+                .icon(eye_icon)
+                .icon_only()
+                .on_click({
+                    let entity = cx.entity().clone();
+                    move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.show_passphrase = !this.show_passphrase;
+                            cx.notify();
+                        });
+                    }
+                });
 
             div()
                 .flex()
@@ -1386,11 +1391,17 @@ impl ExportBundleModal {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let browse = IconButton::new("export-output-browse", AppIcon::Folder.into())
-            .icon_size(Heights::ICON_SM)
-            .on_click(move |_event, _window, cx| {
-                entity.update(cx, |this, cx| this.browse_output_path(cx));
-            });
+        let browse = Button::new(
+            "export-output-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .small()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_output_path(cx));
+        });
 
         let row = div()
             .flex()

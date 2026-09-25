@@ -9,9 +9,9 @@ use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputStat
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::shell::{ModalFocus, ModalShell};
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, IconButton, SegmentedControl, SegmentedItem, Text, surface_raised,
+    BannerBlock, BannerVariant, SegmentedControl, SegmentedItem, Text, surface_raised,
 };
-use dbflux_components::tokens::{FontSizes, Heights, Spacing};
+use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{AuthProfile, ConnectionProfile, LogErr, ProxyProfile, SshTunnelProfile};
 use dbflux_portability::external::{
@@ -1150,11 +1150,17 @@ impl ImportConnectionsPanel {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let browse = IconButton::new("import-input-browse", AppIcon::Folder.into())
-            .icon_size(Heights::ICON_SM)
-            .on_click(move |_event, _window, cx| {
-                entity.update(cx, |this, cx| this.browse_input_path(cx));
-            });
+        let browse = Button::new(
+            "import-input-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .small()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_input_path(cx));
+        });
 
         let bundle_file_label = dbflux_i18n::t!("connection_manager.import.field.bundle_file");
 
@@ -1211,15 +1217,20 @@ impl ImportConnectionsPanel {
                 AppIcon::Eye
             };
 
-            let toggle = IconButton::new("import-passphrase-eye", eye_icon.into()).on_click({
-                let entity = cx.entity().clone();
-                move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.show_passphrase = !this.show_passphrase;
-                        cx.notify();
-                    });
-                }
-            });
+            let toggle = Button::new("import-passphrase-eye", "")
+                .ghost()
+                .small()
+                .icon(eye_icon)
+                .icon_only()
+                .on_click({
+                    let entity = cx.entity().clone();
+                    move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.show_passphrase = !this.show_passphrase;
+                            cx.notify();
+                        });
+                    }
+                });
 
             let passphrase_label = dbflux_i18n::t!("connection_manager.import.field.passphrase");
 
@@ -1263,12 +1274,17 @@ impl ImportConnectionsPanel {
         });
 
         let entity = cx.entity().clone();
-        let primary_browse =
-            IconButton::new("import-external-primary-browse", AppIcon::Folder.into())
-                .icon_size(Heights::ICON_SM)
-                .on_click(move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| this.browse_external_file(false, cx));
-                });
+        let primary_browse = Button::new(
+            "import-external-primary-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .small()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_external_file(false, cx));
+        });
 
         let mut col = div()
             .flex()
@@ -1301,12 +1317,17 @@ impl ImportConnectionsPanel {
             });
 
             let entity = cx.entity().clone();
-            let secondary_browse =
-                IconButton::new("import-external-secondary-browse", AppIcon::Folder.into())
-                    .icon_size(Heights::ICON_SM)
-                    .on_click(move |_event, _window, cx| {
-                        entity.update(cx, |this, cx| this.browse_external_file(true, cx));
-                    });
+            let secondary_browse = Button::new(
+                "import-external-secondary-browse",
+                dbflux_i18n::t!("connection_manager.action.browse"),
+            )
+            .ghost()
+            .small()
+            .icon(AppIcon::Folder)
+            .icon_only()
+            .on_click(move |_event, _window, cx| {
+                entity.update(cx, |this, cx| this.browse_external_file(true, cx));
+            });
 
             col = col
                 .child(

@@ -1,7 +1,7 @@
 use super::*;
-use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
-use dbflux_components::composites::split_toolbar_action;
-use dbflux_components::controls::Button;
+use crate::chrome::compact_top_bar;
+use dbflux_components::composites::SplitButton;
+use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::shell::{ModalShell, ModalVariant};
 use dbflux_components::primitives::{
@@ -57,9 +57,6 @@ impl CodeDocument {
             )
         };
 
-        let accent = theme.accent;
-        let fg = theme.foreground;
-
         let execution_time = self
             .execution
             .active_execution_index
@@ -75,6 +72,10 @@ impl CodeDocument {
         let shortcut_hint_base = "Cmd+Enter";
         #[cfg(not(target_os = "macos"))]
         let shortcut_hint_base = "Ctrl+Enter";
+        #[cfg(target_os = "macos")]
+        let run_shortcut = "Cmd \u{21B5}";
+        #[cfg(not(target_os = "macos"))]
+        let run_shortcut = "Ctrl \u{21B5}";
 
         let shortcut_hint =
             crate::labels::code_toolbar_shortcut_hint_label(shortcut_hint_base, is_db_language);
@@ -83,16 +84,16 @@ impl CodeDocument {
             .id("sql-toolbar")
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("run-query-btn")
+                    Button::new("run-query-btn", run_label)
+                        .small()
                         .icon(run_icon)
-                        .label(run_label)
                         .variant(if is_executing {
-                            ToolbarButtonVariant::Danger
+                            ButtonVariant::Danger
                         } else {
-                            ToolbarButtonVariant::Primary
+                            ButtonVariant::Primary
                         })
                         .disabled(!run_enabled)
-                        .chamfer(ChamferCut::CONTROL)
+                        .when(!is_executing, |button| button.kbd(run_shortcut))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.state == DocumentState::Executing {
                                 this.cancel_query(cx);
@@ -104,20 +105,26 @@ impl CodeDocument {
             })
             .when(!is_read_only && is_db_language && !is_executing, |el| {
                 el.child(
-                    ToolbarButton::new("run-in-new-tab-btn")
-                        .icon(AppIcon::SquarePlay)
-                        .label(dbflux_i18n::t!("document.code.toolbar.new_tab"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_query_in_new_tab(window, cx);
-                        })),
+                    Button::new(
+                        "run-in-new-tab-btn",
+                        dbflux_i18n::t!("document.code.toolbar.new_tab"),
+                    )
+                    .small()
+                    .icon(AppIcon::SquarePlay)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_query_in_new_tab(window, cx);
+                    })),
                 )
                 .child(
-                    ToolbarButton::new("run-selection-btn")
-                        .icon(AppIcon::ScrollText)
-                        .label(dbflux_i18n::t!("document.code.toolbar.selection"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_selected_query(window, cx);
-                        })),
+                    Button::new(
+                        "run-selection-btn",
+                        dbflux_i18n::t!("document.code.toolbar.selection"),
+                    )
+                    .small()
+                    .icon(AppIcon::ScrollText)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_selected_query(window, cx);
+                    })),
                 )
             })
             .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
@@ -129,31 +136,19 @@ impl CodeDocument {
             })
             .child(self.render_secondary_actions(is_read_only, cx))
             .when(!is_read_only && is_db_language, |el| {
-                el.child(split_toolbar_action(
-                    div()
-                        .id("sql-refresh-action")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(|d| d.bg(accent.opacity(0.08)))
+                el.child(SplitButton::new(
+                    "sql-refresh-split",
+                    Button::new("sql-refresh-action", refresh_label)
+                        .small()
+                        .icon(refresh_icon)
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.runner.is_primary_active() {
                                 this.cancel_query(cx);
                             } else {
                                 this.run_query(window, cx);
                             }
-                        }))
-                        .child(Icon::new(refresh_icon).small().color(fg))
-                        .child(Text::caption(refresh_label)),
-                    div()
-                        .id("sql-refresh-control")
-                        .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                        .h_full()
-                        .child(self.refresh.refresh_dropdown.clone()),
-                    cx,
+                        })),
+                    self.refresh.refresh_dropdown.clone(),
                 ))
             })
             .child(div().flex_1())
@@ -184,69 +179,87 @@ impl CodeDocument {
             // Save button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-save-btn")
-                        .icon(AppIcon::Save)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.save"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if this.is_file_backed() {
-                                this.save_file(window, cx);
-                            } else {
-                                this.save_file_as(window, cx);
-                            }
-                        })),
+                    Button::new(
+                        "toolbar-save-btn",
+                        dbflux_i18n::t!("document.code.toolbar.save"),
+                    )
+                    .small()
+                    .icon(AppIcon::Save)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.is_file_backed() {
+                            this.save_file(window, cx);
+                        } else {
+                            this.save_file_as(window, cx);
+                        }
+                    })),
                 )
             })
             // Format button — hidden for read-only documents (no formatter available)
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-format-btn")
-                        .icon(AppIcon::Zap)
-                        .tooltip(dbflux_i18n::t!(
-                            "document.code.toolbar.formatter_unavailable"
-                        ))
-                        .disabled(true),
+                    Button::new(
+                        "toolbar-format-btn",
+                        dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
+                    )
+                    .small()
+                    .icon(AppIcon::Zap)
+                    .icon_only()
+                    .disabled(true),
                 )
             })
             // History button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-history-btn")
-                        .icon(AppIcon::History)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.query_history"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let is_open = this.history.history_modal.read(cx).is_visible();
-                            if is_open {
-                                this.history
-                                    .history_modal
-                                    .update(cx, |modal, cx| modal.close(cx));
-                            } else {
-                                this.history
-                                    .history_modal
-                                    .update(cx, |modal, cx| modal.open(window, cx));
-                            }
-                        })),
+                    Button::new(
+                        "toolbar-history-btn",
+                        dbflux_i18n::t!("document.code.toolbar.query_history"),
+                    )
+                    .small()
+                    .icon(AppIcon::History)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let is_open = this.history.history_modal.read(cx).is_visible();
+                        if is_open {
+                            this.history
+                                .history_modal
+                                .update(cx, |modal, cx| modal.close(cx));
+                        } else {
+                            this.history
+                                .history_modal
+                                .update(cx, |modal, cx| modal.open(window, cx));
+                        }
+                    })),
                 )
             })
             // Explain button — hidden for read-only documents
             .when(!is_read_only && is_db_language, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-explain-btn")
-                        .icon(AppIcon::Info)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.explain_query"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_explain(window, cx);
-                        })),
+                    Button::new(
+                        "toolbar-explain-btn",
+                        dbflux_i18n::t!("document.code.toolbar.explain_query"),
+                    )
+                    .small()
+                    .icon(AppIcon::Info)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_explain(window, cx);
+                    })),
                 )
             })
             // Chart button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-chart-btn")
-                        .icon(AppIcon::ChartSpline)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.open_in_chart"))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.emit_chart_this_query(cx);
-                        })),
+                    Button::new(
+                        "toolbar-chart-btn",
+                        dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
+                    )
+                    .small()
+                    .icon(AppIcon::ChartSpline)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.emit_chart_this_query(cx);
+                    })),
                 )
             })
     }

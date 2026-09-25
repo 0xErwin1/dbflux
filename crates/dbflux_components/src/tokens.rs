@@ -94,6 +94,75 @@ impl ChamferCut {
     pub const MODAL: Pixels = px(18.0);
 }
 
+/// Geometry of `controls::Button` and `composites::SplitButton`, taken from
+/// the DSApp "Buttons" row and the DSStates board.
+pub struct ButtonMetrics;
+
+impl ButtonMetrics {
+    /// Toolbar and dense-form buttons.
+    pub const HEIGHT_SM: Pixels = px(28.0);
+    /// Default buttons (DSStates).
+    pub const HEIGHT_MD: Pixels = px(32.0);
+    /// Large call-to-action buttons.
+    pub const HEIGHT_LG: Pixels = px(44.0);
+
+    /// Width of an icon-only button per size: the DSApp icon buttons are two
+    /// pixels wider than tall, DSStates draws the 32 px ghost icon 40 wide,
+    /// and the large one is square.
+    pub const ICON_ONLY_WIDTH_SM: Pixels = px(30.0);
+    pub const ICON_ONLY_WIDTH_MD: Pixels = px(40.0);
+    pub const ICON_ONLY_WIDTH_LG: Pixels = px(44.0);
+
+    /// Horizontal padding of a labeled button (small and medium).
+    pub const PADDING_X: Pixels = px(12.0);
+    /// Horizontal padding of a large labeled button.
+    pub const PADDING_X_LG: Pixels = px(16.0);
+    /// Left padding of a split button's main action, whose only cut is the
+    /// top-left corner.
+    pub const SPLIT_MAIN_PADDING_LEFT: Pixels = px(14.0);
+    /// Gap between icon, label, and trailing keycap.
+    pub const GAP: Pixels = px(8.0);
+
+    pub const FONT_SM: Pixels = px(12.5);
+    pub const FONT_MD: Pixels = px(13.0);
+
+    /// Icon leading a label.
+    pub const ICON: Pixels = px(15.0);
+    /// Icon of an icon-only button.
+    pub const ICON_ONLY: Pixels = px(16.0);
+
+    /// Width of a split button's menu segment.
+    pub const SPLIT_MENU_WIDTH: Pixels = px(26.0);
+    /// Gap between a split button's two segments.
+    pub const SPLIT_SEAM: Pixels = px(1.0);
+
+    /// Fill alphas of the danger variant (rest, hover, pressed) and of a
+    /// selected ghost or secondary button (DSStates).
+    pub const SOFT_FILL_REST: f32 = 0.14;
+    pub const SOFT_FILL_HOVER: f32 = 0.22;
+    pub const SOFT_FILL_PRESSED: f32 = 0.30;
+
+    /// Opacity of a disabled button, fill and content together.
+    pub const DISABLED_OPACITY: f32 = 0.45;
+}
+
+/// Geometry of `primitives::Kbd`, from the keycaps in AppByzTable and DSApp.
+pub struct KbdMetrics;
+
+impl KbdMetrics {
+    pub const FONT: Pixels = px(10.5);
+    pub const LINE_HEIGHT: Pixels = px(14.0);
+    pub const PADDING_X: Pixels = px(6.0);
+    pub const PADDING_Y: Pixels = px(2.0);
+    /// Padding of a keycap drawn on a filled (primary) button.
+    pub const ON_FILL_PADDING_X: Pixels = px(5.0);
+    pub const ON_FILL_PADDING_Y: Pixels = px(1.0);
+    /// Fill alpha of a keycap drawn on a filled button.
+    pub const ON_FILL_ALPHA: f32 = 0.14;
+    /// Gap between the keycaps of a chord and the plus that joins them.
+    pub const CHORD_GAP: Pixels = px(3.0);
+}
+
 /// Border-width tokens. WIDTH context only — `.border_*` widths, stripe
 /// thicknesses. Do NOT use for margins, paddings, or radii.
 pub struct Borders;

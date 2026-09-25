@@ -1,44 +1,192 @@
 use gpui::prelude::*;
-use gpui::{App, ClickEvent, ElementId, Hsla, SharedString, Window, px};
-use gpui_component::button::{
-    Button as GpuiButton, ButtonVariant as GpuiButtonVariant, ButtonVariants,
+use gpui::{
+    App, ClickEvent, ElementId, FocusHandle, FontWeight, Hsla, KeyDownEvent, KeyUpEvent,
+    MouseButton, Pixels, SharedString, Window, div,
 };
-use gpui_component::{Disableable, Icon, Sizable};
+use gpui_component::ActiveTheme;
+use gpui_component::theme::Theme;
+use gpui_component::tooltip::Tooltip;
 
-use crate::primitives::focus_frame;
+use crate::icon::IconSource;
+use crate::primitives::{
+    Chamfer, ChamferCorners, ChamferFillKind, ChamferRing, Icon, Kbd, KbdTone,
+};
+use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors};
+use crate::typography::AppFonts;
 
-/// Visual variant of the button controlling color scheme.
+/// Color treatment of a [`Button`] (DSStates).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonVariant {
-    #[default]
-    Default,
+    /// Byzantine fill, white content. One per toolbar or dialog.
     Primary,
+    /// Raised fill, body text.
+    #[default]
+    Secondary,
+    /// Transparent until hovered.
     Ghost,
+    /// Soft red fill, danger text.
     Danger,
-    Dropdown,
 }
 
-/// Size variant of the button.
+impl ButtonVariant {
+    /// Whether the rest fill is a solid or tinted fill, which puts the focus
+    /// ring outside the shape.
+    pub fn fill_kind(self) -> ChamferFillKind {
+        match self {
+            Self::Primary | Self::Danger => ChamferFillKind::Filled,
+            Self::Secondary | Self::Ghost => ChamferFillKind::Surface,
+        }
+    }
+}
+
+/// Height of a [`Button`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonSize {
-    #[default]
-    Default,
+    /// 28 px: toolbars and dense rows.
     Small,
+    /// 32 px.
+    #[default]
+    Medium,
+    /// 44 px, cut 12.
+    Large,
 }
 
-/// Full wrapper around `gpui_component::button::Button` that pre-applies
-/// DBFlux design tokens and hides the underlying API.
+impl ButtonSize {
+    pub fn height(self) -> Pixels {
+        match self {
+            Self::Small => ButtonMetrics::HEIGHT_SM,
+            Self::Medium => ButtonMetrics::HEIGHT_MD,
+            Self::Large => ButtonMetrics::HEIGHT_LG,
+        }
+    }
+
+    pub fn icon_only_width(self) -> Pixels {
+        match self {
+            Self::Small => ButtonMetrics::ICON_ONLY_WIDTH_SM,
+            Self::Medium => ButtonMetrics::ICON_ONLY_WIDTH_MD,
+            Self::Large => ButtonMetrics::ICON_ONLY_WIDTH_LG,
+        }
+    }
+
+    /// Controls up to 32 px take the control cut; large buttons the overlay
+    /// cut (Foundations, "Cut depth by size").
+    pub fn cut(self) -> Pixels {
+        match self {
+            Self::Small | Self::Medium => ChamferCut::CONTROL,
+            Self::Large => ChamferCut::OVERLAY,
+        }
+    }
+
+    pub fn font_size(self) -> Pixels {
+        match self {
+            Self::Small => ButtonMetrics::FONT_SM,
+            Self::Medium | Self::Large => ButtonMetrics::FONT_MD,
+        }
+    }
+
+    fn padding_x(self) -> Pixels {
+        match self {
+            Self::Small | Self::Medium => ButtonMetrics::PADDING_X,
+            Self::Large => ButtonMetrics::PADDING_X_LG,
+        }
+    }
+}
+
+/// Fills of one button state set: rest, hover, pressed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ButtonFills {
+    pub rest: Hsla,
+    pub hover: Hsla,
+    pub pressed: Hsla,
+}
+
+/// Fills and content color of a variant (DSStates). A selected ghost or
+/// secondary button takes a soft tint fill and tint content.
+pub fn button_colors(theme: &Theme, variant: ButtonVariant, selected: bool) -> (ButtonFills, Hsla) {
+    let soft = |color: Hsla| ButtonFills {
+        rest: color.opacity(ButtonMetrics::SOFT_FILL_REST),
+        hover: color.opacity(ButtonMetrics::SOFT_FILL_HOVER),
+        pressed: color.opacity(ButtonMetrics::SOFT_FILL_PRESSED),
+    };
+
+    match variant {
+        ButtonVariant::Primary => (
+            ButtonFills {
+                rest: theme.primary,
+                hover: theme.primary_hover,
+                pressed: theme.primary_active,
+            },
+            theme.primary_foreground,
+        ),
+        ButtonVariant::Danger => (soft(theme.danger), theme.danger),
+        ButtonVariant::Secondary | ButtonVariant::Ghost if selected => {
+            let tint = ChromeColors::tint(theme);
+            (soft(tint), tint)
+        }
+        ButtonVariant::Secondary => (
+            ButtonFills {
+                rest: theme.secondary,
+                hover: theme.secondary_hover,
+                pressed: theme.secondary_active,
+            },
+            theme.foreground,
+        ),
+        ButtonVariant::Ghost => (
+            ButtonFills {
+                rest: gpui::transparent_black(),
+                hover: theme.secondary,
+                pressed: theme.secondary_hover,
+            },
+            theme.foreground,
+        ),
+    }
+}
+
+/// Whether a key event is a button activation key (Enter or Space without
+/// modifiers), the same keys GPUI turns into a keyboard click.
+pub fn is_activation_key(keystroke: &gpui::Keystroke) -> bool {
+    (keystroke.key == "enter" || keystroke.key == "space") && !keystroke.modifiers.modified()
+}
+
+/// Per-button state kept across frames: the focus handle and whether an
+/// activation key is held down.
+struct ButtonState {
+    focus_handle: FocusHandle,
+    key_held: bool,
+}
+
+type ButtonClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// The DBFlux button: a chamfered control with an optional leading icon, a
+/// label, and an optional trailing keycap.
+///
+/// Every button is a GPUI tab stop, so Tab reaches it and the focus ring
+/// traces the cut. Enter and Space activate a focused button and show the
+/// pressed fill while held. A mouse press does not move focus, so clicking a
+/// toolbar button leaves focus in the editor or grid it acts on.
+///
+/// An icon-only button is a flag: `.icon_only()` hides the label, and the
+/// label becomes the tooltip unless `.tooltip()` sets another one.
 #[derive(IntoElement)]
 pub struct Button {
     id: ElementId,
     label: SharedString,
     variant: ButtonVariant,
     size: ButtonSize,
-    icon: Option<Icon>,
+    icon: Option<IconSource>,
+    icon_size: Option<Pixels>,
+    icon_only: bool,
+    kbd: Option<SharedString>,
+    tooltip: Option<SharedString>,
     text_color: Option<Hsla>,
     disabled: bool,
+    selected: bool,
+    focused: bool,
+    tab_stop: bool,
     w_full: bool,
-    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync>>,
+    corners: ChamferCorners,
+    padding_left: Option<Pixels>,
+    on_click: Option<ButtonClickHandler>,
 }
 
 impl Button {
@@ -46,12 +194,21 @@ impl Button {
         Self {
             id: id.into(),
             label: label.into(),
-            variant: ButtonVariant::Default,
-            size: ButtonSize::Default,
+            variant: ButtonVariant::default(),
+            size: ButtonSize::default(),
             icon: None,
+            icon_size: None,
+            icon_only: false,
+            kbd: None,
+            tooltip: None,
             text_color: None,
             disabled: false,
+            selected: false,
+            focused: false,
+            tab_stop: true,
             w_full: false,
+            corners: ChamferCorners::default(),
+            padding_left: None,
             on_click: None,
         }
     }
@@ -65,6 +222,10 @@ impl Button {
         self.variant(ButtonVariant::Primary)
     }
 
+    pub fn secondary(self) -> Self {
+        self.variant(ButtonVariant::Secondary)
+    }
+
     pub fn ghost(self) -> Self {
         self.variant(ButtonVariant::Ghost)
     }
@@ -73,20 +234,51 @@ impl Button {
         self.variant(ButtonVariant::Danger)
     }
 
-    pub fn dropdown(self) -> Self {
-        self.variant(ButtonVariant::Dropdown)
-    }
-
-    pub fn small(mut self) -> Self {
-        self.size = ButtonSize::Small;
+    pub fn size(mut self, size: ButtonSize) -> Self {
+        self.size = size;
         self
     }
 
-    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
+    /// 28 px tall, the toolbar size.
+    pub fn small(self) -> Self {
+        self.size(ButtonSize::Small)
+    }
+
+    /// 44 px tall with the overlay cut.
+    pub fn large(self) -> Self {
+        self.size(ButtonSize::Large)
+    }
+
+    /// Icon leading the label.
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
         self
     }
 
+    /// Overrides the icon size (15 px beside a label, 16 px icon-only).
+    pub fn icon_size(mut self, size: Pixels) -> Self {
+        self.icon_size = Some(size);
+        self
+    }
+
+    /// Shows only the icon; the label becomes the tooltip.
+    pub fn icon_only(mut self) -> Self {
+        self.icon_only = true;
+        self
+    }
+
+    /// Trailing keycap with the shortcut that runs the same action.
+    pub fn kbd(mut self, shortcut: impl Into<SharedString>) -> Self {
+        self.kbd = Some(shortcut.into());
+        self
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    /// Overrides the content color of the variant.
     pub fn text_color(mut self, color: Hsla) -> Self {
         self.text_color = Some(color);
         self
@@ -97,75 +289,409 @@ impl Button {
         self
     }
 
+    /// Marks a toggle as on: ghost and secondary buttons take the tint.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// Shows the focus ring for a caller that tracks keyboard focus itself
+    /// (toolbars with their own slot navigation). The button's own GPUI focus
+    /// shows the ring as well.
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Whether Tab stops on this button (default `true`).
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
     pub fn w_full(mut self) -> Self {
         self.w_full = true;
         self
     }
 
+    /// Which corners are cut; a split button cuts only the outer ones.
+    pub(crate) fn corners(mut self, corners: ChamferCorners) -> Self {
+        self.corners = corners;
+        self
+    }
+
+    pub(crate) fn padding_left(mut self, padding: Pixels) -> Self {
+        self.padding_left = Some(padding);
+        self
+    }
+
+    pub(crate) fn current_variant(&self) -> ButtonVariant {
+        self.variant
+    }
+
+    pub(crate) fn current_size(&self) -> ButtonSize {
+        self.size
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
     pub fn on_click(
         mut self,
-        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync + 'static,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(handler));
         self
     }
 
-    fn gpui_variant(&self) -> GpuiButtonVariant {
-        match self.variant {
-            ButtonVariant::Default => GpuiButtonVariant::default(),
-            ButtonVariant::Primary => GpuiButtonVariant::Primary,
-            ButtonVariant::Ghost => GpuiButtonVariant::Ghost,
-            ButtonVariant::Danger => GpuiButtonVariant::Danger,
-            ButtonVariant::Dropdown => GpuiButtonVariant::default(),
-        }
+    fn resolved_tooltip(&self) -> Option<SharedString> {
+        self.tooltip
+            .clone()
+            .or_else(|| (self.icon_only && !self.label.is_empty()).then(|| self.label.clone()))
     }
 }
 
 impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let gpui_variant = self.gpui_variant();
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+        let state = window.use_keyed_state(self.id.clone(), cx, |_, cx| ButtonState {
+            focus_handle: cx.focus_handle(),
+            key_held: false,
+        });
+        let focus_handle = state
             .read(cx)
-            .clone();
-        let is_focused = focus_handle.is_focused(window);
+            .focus_handle
+            .clone()
+            .tab_stop(self.tab_stop && !self.disabled);
+        let has_focus = focus_handle.is_focused(window);
+        let held = has_focus && state.read(cx).key_held;
 
-        let mut btn = GpuiButton::new(self.id)
-            .label(self.label)
-            .with_variant(gpui_variant)
-            .rounded(px(0.0))
-            .overflow_hidden()
-            .disabled(self.disabled)
-            .when(self.variant == ButtonVariant::Dropdown, |b| {
-                b.dropdown_caret(true)
-            });
+        let tooltip = self.resolved_tooltip();
+        let theme = cx.theme();
+        let (fills, content) = button_colors(theme, self.variant, self.selected);
+        let content = self.text_color.unwrap_or(content);
+        let ring_color = theme.ring;
 
-        if let Some(icon) = self.icon {
-            btn = btn.icon(icon);
+        let Button {
+            id,
+            label,
+            variant,
+            size,
+            icon,
+            icon_size,
+            icon_only,
+            kbd,
+            disabled,
+            focused,
+            w_full,
+            corners,
+            padding_left,
+            on_click,
+            ..
+        } = self;
+
+        let mut shape = Chamfer::new(size.cut()).corners(corners).fill(fills.rest);
+
+        if (focused || has_focus) && !disabled {
+            shape = shape.ring(ChamferRing::focus_for(ring_color, variant.fill_kind()));
         }
 
-        if let Some(text_color) = self.text_color {
-            btn = btn.text_color(text_color);
+        if !disabled {
+            shape = shape
+                .fill_hover(fills.hover)
+                .fill_active(fills.pressed)
+                .held(held)
+                .interactive("button-chamfer");
         }
 
-        if self.size == ButtonSize::Small {
-            btn = btn.small();
-        }
+        let icon_size = icon_size.unwrap_or(if icon_only {
+            ButtonMetrics::ICON_ONLY
+        } else {
+            ButtonMetrics::ICON
+        });
 
-        if self.w_full {
-            btn = btn.w_full();
-        }
+        let mut button = div()
+            .id(id)
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .gap(ButtonMetrics::GAP)
+            .h(size.height())
+            .font_family(AppFonts::INTERFACE)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_size(size.font_size())
+            .text_color(content)
+            .whitespace_nowrap()
+            .track_focus(&focus_handle)
+            .child(shape);
 
-        if let Some(handler) = self.on_click {
-            btn = btn.on_click(handler);
-        }
-
-        let button = btn.into_any_element();
-
-        if is_focused {
-            focus_frame(true, None, button, cx).into_any_element()
+        button = if icon_only {
+            button.w(size.icon_only_width())
         } else {
             button
+                .px(size.padding_x())
+                .when_some(padding_left, |button, padding| button.pl(padding))
+        };
+
+        if w_full {
+            button = button.w_full();
         }
+
+        if let Some(icon) = icon {
+            button = button.child(Icon::new(icon).size(icon_size).color(content));
+        }
+
+        if !icon_only && !label.is_empty() {
+            button = button.child(label);
+        }
+
+        if let Some(shortcut) = kbd {
+            let tone = match variant {
+                ButtonVariant::Primary => KbdTone::OnFill,
+                _ => KbdTone::Default,
+            };
+            button = button.child(Kbd::new(shortcut).tone(tone));
+        }
+
+        if let Some(tip) = tooltip {
+            button = button.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx));
+        }
+
+        if disabled {
+            return button.opacity(ButtonMetrics::DISABLED_OPACITY);
+        }
+
+        let state_on_down = state.clone();
+        let state_on_up = state;
+
+        button = button
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, |_, window, _| {
+                window.prevent_default();
+            })
+            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                if is_activation_key(&event.keystroke) && !event.is_held {
+                    state_on_down.update(cx, |state, cx| {
+                        state.key_held = true;
+                        cx.notify();
+                    });
+                }
+            })
+            .on_key_up(move |event: &KeyUpEvent, _, cx| {
+                if is_activation_key(&event.keystroke) {
+                    state_on_up.update(cx, |state, cx| {
+                        if state.key_held {
+                            state.key_held = false;
+                            cx.notify();
+                        }
+                    });
+                }
+            });
+
+        if let Some(handler) = on_click {
+            button = button.on_click(handler);
+        }
+
+        button
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tokens::ChamferCut;
+
+    #[test]
+    fn sizes_map_to_the_board_heights_and_cuts() {
+        assert_eq!(ButtonSize::Small.height(), ButtonMetrics::HEIGHT_SM);
+        assert_eq!(ButtonSize::Medium.height(), ButtonMetrics::HEIGHT_MD);
+        assert_eq!(ButtonSize::Large.height(), ButtonMetrics::HEIGHT_LG);
+
+        assert_eq!(ButtonSize::Small.cut(), ChamferCut::CONTROL);
+        assert_eq!(ButtonSize::Medium.cut(), ChamferCut::CONTROL);
+        assert_eq!(ButtonSize::Large.cut(), ChamferCut::OVERLAY);
+    }
+
+    #[test]
+    fn filled_variants_put_the_ring_outside() {
+        assert_eq!(ButtonVariant::Primary.fill_kind(), ChamferFillKind::Filled);
+        assert_eq!(ButtonVariant::Danger.fill_kind(), ChamferFillKind::Filled);
+        assert_eq!(
+            ButtonVariant::Secondary.fill_kind(),
+            ChamferFillKind::Surface
+        );
+        assert_eq!(ButtonVariant::Ghost.fill_kind(), ChamferFillKind::Surface);
+    }
+
+    #[test]
+    fn icon_only_label_becomes_the_tooltip() {
+        let icon_only = Button::new("save", "Save").icon_only();
+        assert_eq!(icon_only.resolved_tooltip(), Some("Save".into()));
+
+        let explicit = Button::new("save", "Save").icon_only().tooltip("Save file");
+        assert_eq!(explicit.resolved_tooltip(), Some("Save file".into()));
+
+        assert_eq!(Button::new("save", "Save").resolved_tooltip(), None);
+        assert_eq!(
+            Button::new("close", "").icon_only().resolved_tooltip(),
+            None
+        );
+    }
+
+    #[test]
+    fn only_unmodified_enter_and_space_activate() {
+        let parse = |source: &str| gpui::Keystroke::parse(source).expect("valid keystroke");
+
+        assert!(is_activation_key(&parse("enter")));
+        assert!(is_activation_key(&parse("space")));
+        assert!(!is_activation_key(&parse("ctrl-enter")));
+        assert!(!is_activation_key(&parse("a")));
+    }
+
+    #[gpui::test]
+    fn variants_follow_the_states_board(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            crate::theme::apply_theme(
+                dbflux_core::ThemeSetting::Dark,
+                dbflux_core::AppStyle::Default,
+                None,
+                cx,
+            );
+            let theme = cx.theme();
+
+            let (primary, primary_content) = button_colors(theme, ButtonVariant::Primary, false);
+            assert_eq!(primary.rest, theme.primary);
+            assert_eq!(primary.hover, theme.primary_hover);
+            assert_eq!(primary.pressed, theme.primary_active);
+            assert_eq!(primary_content, theme.primary_foreground);
+
+            let (secondary, _) = button_colors(theme, ButtonVariant::Secondary, false);
+            assert_eq!(secondary.rest, theme.secondary);
+            assert_eq!(secondary.hover, theme.secondary_hover);
+            assert_eq!(secondary.pressed, theme.secondary_active);
+
+            let (ghost, _) = button_colors(theme, ButtonVariant::Ghost, false);
+            assert_eq!(ghost.rest.a, 0.0);
+            assert_eq!(ghost.hover, theme.secondary);
+
+            let (danger, danger_content) = button_colors(theme, ButtonVariant::Danger, false);
+            assert_eq!(danger.rest, theme.danger.opacity(0.14));
+            assert_eq!(danger.hover, theme.danger.opacity(0.22));
+            assert_eq!(danger.pressed, theme.danger.opacity(0.30));
+            assert_eq!(danger_content, theme.danger);
+
+            let (_, selected_content) = button_colors(theme, ButtonVariant::Ghost, true);
+            assert_eq!(selected_content, ChromeColors::tint(theme));
+        });
+    }
+
+    struct ToolbarHarness {
+        focus_handle: FocusHandle,
+        renders: usize,
+        clicks: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+    }
+
+    impl Render for ToolbarHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            self.renders += 1;
+
+            let first_clicks = self.clicks.clone();
+            let second_clicks = self.clicks.clone();
+
+            div()
+                .track_focus(&self.focus_handle)
+                .flex()
+                .child(
+                    Button::new("first", "First")
+                        .small()
+                        .on_click(move |_, _, _| first_clicks.borrow_mut().push("first")),
+                )
+                .child(
+                    Button::new("second", "Second")
+                        .small()
+                        .icon_only()
+                        .on_click(move |_, _, _| second_clicks.borrow_mut().push("second")),
+                )
+        }
+    }
+
+    /// Presses and releases a key; `simulate_keystrokes` only sends the key
+    /// down, and GPUI turns the release of Enter or Space into the click.
+    fn press(window: &mut gpui::VisualTestContext, key: &str) {
+        let keystroke = gpui::Keystroke::parse(key).expect("valid keystroke");
+
+        window.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        window.simulate_event(KeyUpEvent { keystroke });
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn tab_reaches_each_button_and_enter_activates_it(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let clicks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let harness_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, window) = cx.add_window_view({
+            let clicks = clicks.clone();
+            let harness_slot = harness_slot.clone();
+            move |window, cx| {
+                let harness = cx.new(|cx| ToolbarHarness {
+                    focus_handle: cx.focus_handle(),
+                    renders: 0,
+                    clicks,
+                });
+                harness_slot.replace(Some(harness.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let harness = harness_slot
+            .borrow()
+            .clone()
+            .expect("the harness should be built");
+
+        window.update(|window, cx| harness.read(cx).focus_handle.clone().focus(window, cx));
+        window.simulate_keystrokes("tab");
+        press(window, "enter");
+        assert_eq!(*clicks.borrow(), vec!["first"]);
+
+        window.simulate_keystrokes("tab");
+        press(window, "space");
+        assert_eq!(*clicks.borrow(), vec!["first", "second"]);
+
+        let before_press = window.update(|_, cx| harness.read(cx).renders);
+        window.simulate_event(KeyDownEvent {
+            keystroke: gpui::Keystroke::parse("enter").expect("valid keystroke"),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        window.run_until_parked();
+        let after_press = window.update(|_, cx| harness.read(cx).renders);
+        assert!(
+            after_press > before_press,
+            "holding Enter must repaint the button with its pressed fill"
+        );
+
+        window.simulate_event(KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        window.run_until_parked();
+        assert_eq!(*clicks.borrow(), vec!["first", "second", "second"]);
+        assert!(
+            window.update(|_, cx| harness.read(cx).renders) > after_press,
+            "releasing Enter must repaint the button with its rest fill"
+        );
     }
 }

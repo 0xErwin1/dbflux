@@ -187,7 +187,7 @@ impl Render for ModalMutationConfirm {
                     "mutation-confirm-cancel",
                     dbflux_i18n::t!("modals.mutation_confirm.cancel"),
                 )
-                .variant(ButtonVariant::Default)
+                .variant(ButtonVariant::Secondary)
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.cancel(cx);
                 })),
@@ -502,7 +502,7 @@ impl Render for ModalMutationConfirmHard {
                     "mutation-hard-cancel",
                     dbflux_i18n::t!("modals.mutation_confirm.cancel"),
                 )
-                .variant(ButtonVariant::Default)
+                .variant(ButtonVariant::Secondary)
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.cancel(cx);
                 })),

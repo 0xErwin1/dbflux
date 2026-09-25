@@ -1,6 +1,7 @@
+use crate::controls::Button;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
-use crate::primitives::{IconButton, overlay_bg, surface_modal_container};
+use crate::primitives::{overlay_bg, surface_modal_container};
 use crate::semantic::BannerColors as SemBannerColors;
 use crate::tokens::{ChromeEdgeRole, FontSizes, Heights, Spacing};
 use dbflux_core::LogErr;
@@ -271,13 +272,13 @@ impl RenderOnce for ModalShell {
 
         let close_btn = close_handler.as_ref().map(|handler| {
             let h = handler.clone();
-            IconButton::new(
-                MODAL_SHELL_CLOSE_ID,
-                IconSource::Svg(AppIcon::X.path().into()),
-            )
-            .icon_size(Heights::ICON_SM)
-            .on_click(move |_, window, cx| (h)(window, cx))
-            .into_any_element()
+            Button::new(MODAL_SHELL_CLOSE_ID, "")
+                .ghost()
+                .small()
+                .icon(IconSource::Svg(AppIcon::X.path().into()))
+                .icon_only()
+                .on_click(move |_, window, cx| (h)(window, cx))
+                .into_any_element()
         });
 
         // Header bar (32 px toolbar height).

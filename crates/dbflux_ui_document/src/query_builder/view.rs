@@ -191,7 +191,7 @@ fn render_mode_selector(
         let variant = if is_active {
             ButtonVariant::Primary
         } else {
-            ButtonVariant::Default
+            ButtonVariant::Secondary
         };
         row = row.child(
             Button::new(("qb-mode", mode as usize), label)

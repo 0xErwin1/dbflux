@@ -3,7 +3,7 @@ use crate::keymap::ContextId;
 use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
 use dbflux_components::controls::Button;
 use dbflux_components::modals::shell::{ModalShell, ModalVariant};
-use dbflux_components::primitives::{Chord, Icon, Text};
+use dbflux_components::primitives::{Icon, Kbd, Text};
 use dbflux_components::typography::Body;
 use dbflux_ui_base::keymap::chord_display_parts;
 use dbflux_ui_base::modal_frame::ModalFrame;
@@ -73,7 +73,7 @@ fn empty_state_shortcut(
             .flex_row()
             .items_center()
             .gap_2()
-            .child(Chord::new(keys))
+            .child(Kbd::chord(keys))
             .child(Text::dim_secondary(description)),
     )
 }
@@ -856,23 +856,22 @@ impl Render for Workspace {
                                                 .border_color(theme.border)
                                                 .child(Text::heading(title))
                                                 .child(
-                                                    dbflux_components::primitives::IconButton::new(
-                                                        "governance-overlay-close",
-                                                        dbflux_components::icon::IconSource::Svg(
-                                                            AppIcon::X.path().into(),
-                                                        ),
-                                                    )
-                                                    .icon_size(Heights::ICON_SM)
-                                                    .on_click(move |_, window, cx| {
-                                                        workspace_for_button.update(
-                                                            cx,
-                                                            |workspace, cx| {
-                                                                workspace.close_governance_panel(
-                                                                    window, cx,
-                                                                );
-                                                            },
-                                                        );
-                                                    }),
+                                                    Button::new("governance-overlay-close", "")
+                                                        .ghost()
+                                                        .small()
+                                                        .icon(AppIcon::X)
+                                                        .icon_only()
+                                                        .on_click(move |_, window, cx| {
+                                                            workspace_for_button.update(
+                                                                cx,
+                                                                |workspace, cx| {
+                                                                    workspace
+                                                                        .close_governance_panel(
+                                                                            window, cx,
+                                                                        );
+                                                                },
+                                                            );
+                                                        }),
                                                 ),
                                         )
                                         .child(div().flex_1().min_h_0().child(content)),

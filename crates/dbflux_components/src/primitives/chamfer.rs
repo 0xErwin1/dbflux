@@ -17,8 +17,12 @@ pub enum ChamferCorners {
     /// Top-left and bottom-right corners are cut; the other two stay square.
     #[default]
     TopLeftBottomRight,
-    /// Only the top-left corner is cut (document tabs).
+    /// Only the top-left corner is cut (document tabs, the main action of a
+    /// split button).
     TopLeft,
+    /// Only the bottom-right corner is cut (the menu segment of a split
+    /// button).
+    BottomRight,
 }
 
 /// A straight edge painted along the top, bottom or left side of the shape, inside
@@ -269,14 +273,88 @@ pub fn chamfer_ring_points(
     chamfer_points(moved_bounds, px(moved_cut), corners)
 }
 
-/// Color at `elapsed` into a linear fill transition, interpolated in RGBA so
-/// hue does not swing through unrelated colors. A zero duration returns `to`.
+/// Control points of the Foundations motion curve, CSS
+/// `cubic-bezier(.2, .8, .2, 1)`.
+const MOTION_CURVE: (f32, f32, f32, f32) = (0.2, 0.8, 0.2, 1.0);
+
+/// One coordinate of a unit cubic Bézier (end points at 0 and 1) at curve
+/// parameter `t`, given its two inner control values.
+fn bezier_coordinate(first: f32, second: f32, t: f32) -> f32 {
+    let inverse = 1.0 - t;
+
+    3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
+}
+
+/// Derivative of [`bezier_coordinate`] with respect to `t`.
+fn bezier_slope(first: f32, second: f32, t: f32) -> f32 {
+    let inverse = 1.0 - t;
+
+    3.0 * inverse * inverse * first
+        + 6.0 * inverse * t * (second - first)
+        + 3.0 * t * t * (1.0 - second)
+}
+
+/// Eased progress for a linear `progress` in `0..=1`, following the
+/// Foundations motion curve `cubic-bezier(.2, .8, .2, 1)` the way CSS does:
+/// the curve parameter whose x equals `progress` is found first (Newton steps,
+/// then bisection when the slope is too flat), and its y is returned.
+pub fn motion_ease(progress: f32) -> f32 {
+    let (x1, y1, x2, y2) = MOTION_CURVE;
+    let progress = progress.clamp(0.0, 1.0);
+
+    if progress <= 0.0 || progress >= 1.0 {
+        return progress;
+    }
+
+    let mut parameter = progress;
+
+    for _ in 0..8 {
+        let error = bezier_coordinate(x1, x2, parameter) - progress;
+
+        if error.abs() < 1e-6 {
+            return bezier_coordinate(y1, y2, parameter);
+        }
+
+        let slope = bezier_slope(x1, x2, parameter);
+
+        if slope.abs() < 1e-6 {
+            break;
+        }
+
+        parameter = (parameter - error / slope).clamp(0.0, 1.0);
+    }
+
+    let (mut low, mut high) = (0.0_f32, 1.0_f32);
+    parameter = progress;
+
+    for _ in 0..32 {
+        let x = bezier_coordinate(x1, x2, parameter);
+
+        if (x - progress).abs() < 1e-6 {
+            break;
+        }
+
+        if x < progress {
+            low = parameter;
+        } else {
+            high = parameter;
+        }
+
+        parameter = (low + high) / 2.0;
+    }
+
+    bezier_coordinate(y1, y2, parameter)
+}
+
+/// Color at `elapsed` into a fill transition eased by [`motion_ease`],
+/// interpolated in RGBA so hue does not swing through unrelated colors. A zero
+/// duration returns `to`.
 pub fn transition_color(from: Hsla, to: Hsla, elapsed: Duration, duration: Duration) -> Hsla {
     if duration.is_zero() || elapsed >= duration {
         return to;
     }
 
-    let progress = elapsed.as_secs_f32() / duration.as_secs_f32();
+    let progress = motion_ease(elapsed.as_secs_f32() / duration.as_secs_f32());
     let from = Rgba::from(from);
     let to = Rgba::from(to);
     let mix = |start: f32, end: f32| start + (end - start) * progress;
@@ -345,8 +423,9 @@ pub fn snap_length_to_device(length: Pixels, scale_factor: f32) -> Pixels {
 /// it, like a `div` hover style) and keeps its pressed flag in element state
 /// keyed by the given id. When the hover or pressed state changes it notifies
 /// the view that rendered it, so callers need no `on_hover` bookkeeping. Fill
-/// changes of an interactive shape fade over `Anim::FAST_MS` (instantly when
-/// the app asks for reduced motion), driven by animation frames of that view.
+/// changes of an interactive shape fade over `Anim::FAST_MS` along the
+/// Foundations easing curve (instantly when the app asks for reduced motion),
+/// driven by animation frames of that view.
 #[derive(IntoElement)]
 pub struct Chamfer {
     cut: Pixels,
@@ -357,6 +436,7 @@ pub struct Chamfer {
     left_edge: Option<ChamferEdge>,
     ring: Option<ChamferRing>,
     interaction_id: Option<ElementId>,
+    held: bool,
 }
 
 impl Chamfer {
@@ -372,6 +452,7 @@ impl Chamfer {
             left_edge: None,
             ring: None,
             interaction_id: None,
+            held: false,
         }
     }
 
@@ -441,6 +522,14 @@ impl Chamfer {
     /// `id` keys the pressed state and must be unique among its siblings.
     pub fn interactive(mut self, id: impl Into<ElementId>) -> Self {
         self.interaction_id = Some(id.into());
+        self
+    }
+
+    /// Shows the pressed fill regardless of the pointer, for a control held
+    /// down from the keyboard (Enter or Space on a focused button). Only takes
+    /// effect on an interactive shape.
+    pub fn held(mut self, held: bool) -> Self {
+        self.held = held;
         self
     }
 
@@ -569,9 +658,8 @@ impl RenderOnce for Chamfer {
                 };
 
                 let hovered = interaction.hitbox.is_hovered(window);
-                let target = self
-                    .colors
-                    .fill_for(hovered, interaction.state.pressed.get());
+                let pressed = self.held || interaction.state.pressed.get();
+                let target = self.colors.fill_for(hovered, pressed);
                 let duration = if cx.reduce_motion() {
                     Duration::ZERO
                 } else {
@@ -729,6 +817,13 @@ fn shape_polygon(bounds: Bounds<Pixels>, cut: Pixels, corners: ChamferCorners) -
             point(right, bottom),
             point(left, bottom),
             point(left, top + cut),
+        ],
+        ChamferCorners::BottomRight => vec![
+            point(left, top),
+            point(right, top),
+            point(right, bottom - cut),
+            point(right - cut, bottom),
+            point(left, bottom),
         ],
     };
 
@@ -897,6 +992,26 @@ mod tests {
                 (100.0, 30.0),
                 (0.0, 30.0),
                 (0.0, 8.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_segment_cut_trims_only_bottom_right() {
+        let points = chamfer_points(
+            rect(0.0, 0.0, 26.0, 28.0),
+            ChamferCut::CONTROL,
+            ChamferCorners::BottomRight,
+        );
+
+        assert_eq!(
+            raw(&points),
+            vec![
+                (0.0, 0.0),
+                (26.0, 0.0),
+                (26.0, 22.0),
+                (20.0, 28.0),
+                (0.0, 28.0),
             ]
         );
     }
@@ -1242,8 +1357,53 @@ mod tests {
         );
     }
 
+    /// Reference for the motion curve: samples the parametric Bézier densely
+    /// and returns the y of the sample whose x is closest to `progress`.
+    fn sampled_curve(progress: f32) -> f32 {
+        let (x1, y1, x2, y2) = MOTION_CURVE;
+        let steps = 200_000;
+
+        (0..=steps)
+            .map(|step| step as f32 / steps as f32)
+            .map(|t| (bezier_coordinate(x1, x2, t), bezier_coordinate(y1, y2, t)))
+            .min_by(|a, b| (a.0 - progress).abs().total_cmp(&(b.0 - progress).abs()))
+            .map(|(_, y)| y)
+            .unwrap_or(progress)
+    }
+
     #[test]
-    fn transition_color_interpolates_linearly() {
+    fn motion_ease_follows_the_foundations_curve() {
+        assert_eq!(motion_ease(0.0), 0.0);
+        assert_eq!(motion_ease(1.0), 1.0);
+        assert_eq!(motion_ease(-0.5), 0.0);
+        assert_eq!(motion_ease(1.5), 1.0);
+
+        for step in 1..20 {
+            let progress = step as f32 / 20.0;
+            let eased = motion_ease(progress);
+
+            assert!(
+                (eased - sampled_curve(progress)).abs() < 1e-3,
+                "motion_ease({progress}) = {eased}, curve gives {}",
+                sampled_curve(progress)
+            );
+        }
+
+        assert!(
+            motion_ease(0.25) > 0.6,
+            "the curve is ease-out: most of the change happens early"
+        );
+
+        let mut previous = 0.0;
+        for step in 1..=100 {
+            let eased = motion_ease(step as f32 / 100.0);
+            assert!(eased >= previous, "the curve never goes backwards");
+            previous = eased;
+        }
+    }
+
+    #[test]
+    fn transition_color_follows_the_motion_curve() {
         let duration = Duration::from_millis(Anim::FAST_MS);
         let black = gpui::black();
         let white = gpui::white();
@@ -1259,7 +1419,7 @@ mod tests {
         );
 
         let halfway = Rgba::from(transition_color(black, white, duration / 2, duration));
-        assert!((halfway.r - 0.5).abs() < 1e-3 && (halfway.a - 1.0).abs() < 1e-3);
+        assert!((halfway.r - motion_ease(0.5)).abs() < 1e-3 && (halfway.a - 1.0).abs() < 1e-3);
     }
 
     #[test]
@@ -1280,7 +1440,7 @@ mod tests {
         let midway = start + duration / 2;
         let (shown_midway, animating) = state.displayed_fill(gpui::white(), midway, duration);
         assert!(animating);
-        assert!((Rgba::from(shown_midway).r - 0.5).abs() < 1e-3);
+        assert!((Rgba::from(shown_midway).r - motion_ease(0.5)).abs() < 1e-3);
 
         let (retargeted, _) = state.displayed_fill(gpui::black(), midway, duration);
         assert_eq!(

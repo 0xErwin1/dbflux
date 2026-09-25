@@ -26,11 +26,10 @@ use gpui_component::button::ButtonVariants;
 use gpui_component::input::{EditorState as GpuiEditorState, Textarea, TextareaState};
 use gpui_component::scroll::ScrollableElement;
 
-use super::super::chrome::{
-    ToolbarButton, ToolbarButtonVariant, compact_top_bar, workspace_footer_bar,
-};
+use super::super::chrome::{compact_top_bar, workspace_footer_bar};
 use super::super::types::DocumentState;
 use dbflux_components::composites::refresh_split_button;
+use dbflux_components::controls::Button;
 
 impl AuditDocument {
     /// Renders a null placeholder matching the DataTable convention: italic muted "NULL".
@@ -308,13 +307,16 @@ impl AuditDocument {
             .child(self.dropdown_timestamp_mode.clone());
 
         let can_apply_custom_time_range = self.can_apply_custom_time_range(cx);
-        let custom_apply_button = ToolbarButton::new("audit-custom-time-apply")
-            .label(dbflux_i18n::t!("document.audit.filter.apply"))
-            .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
-            .disabled(!can_apply_custom_time_range)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.apply_custom_time_range(cx);
-            }));
+        let custom_apply_button = Button::new(
+            "audit-custom-time-apply",
+            dbflux_i18n::t!("document.audit.filter.apply"),
+        )
+        .small()
+        .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
+        .disabled(!can_apply_custom_time_range)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.apply_custom_time_range(cx);
+        }));
 
         // Obtain individual picker elements from the shared panel so the audit
         // render and other hosts stay structurally aligned.  Ring-guard wrappers
@@ -405,17 +407,19 @@ impl AuditDocument {
                     doc.update(cx, |this, cx| this.load_events(cx));
                 }
             },
-            &theme,
         );
 
         // Clear button.
-        let clear_btn = ToolbarButton::new("audit-clear-btn")
-            .label(dbflux_i18n::t!("document.audit.filter.clear"))
-            .variant(ToolbarButtonVariant::Ghost)
-            .focused(self.slot_has_ring(ToolbarSlot::Clear))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.clear_filters(window, cx);
-            }));
+        let clear_btn = Button::new(
+            "audit-clear-btn",
+            dbflux_i18n::t!("document.audit.filter.clear"),
+        )
+        .small()
+        .ghost()
+        .focused(self.slot_has_ring(ToolbarSlot::Clear))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.clear_filters(window, cx);
+        }));
 
         let _ = window;
 

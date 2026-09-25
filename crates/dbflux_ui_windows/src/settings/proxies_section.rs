@@ -19,7 +19,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::checkbox::Checkbox;
 use gpui_component::dialog::{Dialog, DialogButtonProps};
-use gpui_component::{ActiveTheme, Icon, Sizable};
+use gpui_component::{ActiveTheme, Sizable};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -591,7 +591,7 @@ impl ProxiesSection {
                             })
                             .child(
                                 Button::new("new-proxy", dbflux_i18n::t!("settings.proxies.new"))
-                                    .icon(Icon::new(AppIcon::Plus))
+                                    .icon(AppIcon::Plus)
                                     .small()
                                     .w_full()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -608,7 +608,7 @@ impl ProxiesSection {
                             "import-proxy",
                             dbflux_i18n::t!("settings.proxies.action.import"),
                         )
-                        .icon(Icon::new(AppIcon::Download))
+                        .icon(AppIcon::Download)
                         .small()
                         .ghost()
                         .w_full()
