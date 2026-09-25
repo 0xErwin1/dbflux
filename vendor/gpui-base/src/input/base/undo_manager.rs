@@ -70,6 +70,9 @@ pub(crate) struct UndoManager {
     pending_intent: Option<EditIntent>,
     active_group: Option<u64>,
     group_selections_before: Option<Vec<CursorSelection>>,
+    /// The active group already owns the last undo entry, so later batches of
+    /// the group join it even across a coalescing boundary.
+    group_has_entry: bool,
     coalescing_boundary: bool,
 }
 
@@ -84,6 +87,7 @@ impl UndoManager {
             pending_intent: None,
             active_group: None,
             group_selections_before: None,
+            group_has_entry: false,
             coalescing_boundary: false,
         }
     }
@@ -93,6 +97,7 @@ impl UndoManager {
             return false;
         }
         self.active_group = Some(id);
+        self.group_has_entry = false;
         self.break_transaction_coalescing();
         true
     }
@@ -239,19 +244,26 @@ impl UndoManager {
         } else {
             None
         };
-        let can_coalesce = !self.coalescing_boundary
-            && self.undo_transactions.last().is_some_and(|previous| {
-                previous.group_id == group_id
-                    && previous.changes.len() + changes.len() <= MAX_CHANGES_PER_TRANSACTION
-                    && if group_id.is_some() {
-                        true
-                    } else {
-                        intent != EditIntent::Atomic
-                            && previous.intent == intent
-                            && previous.last_batch_len == changes.len()
-                            && is_adjacent_batch(intent, previous.trailing_batch(), &changes)
-                    }
-            });
+        // An editor-owned group ends only through its owner, so once it has an
+        // entry a selection move inside it does not split its undo step.
+        let in_active_group = group_id.is_some() && group_id == self.active_group;
+        let joins_group_entry = in_active_group && self.group_has_entry;
+        if in_active_group {
+            self.group_has_entry = true;
+        }
+        let can_coalesce = self.undo_transactions.last().is_some_and(|previous| {
+            previous.group_id == group_id
+                && previous.changes.len() + changes.len() <= MAX_CHANGES_PER_TRANSACTION
+                && if group_id.is_some() {
+                    joins_group_entry || !self.coalescing_boundary
+                } else {
+                    !self.coalescing_boundary
+                        && intent != EditIntent::Atomic
+                        && previous.intent == intent
+                        && previous.last_batch_len == changes.len()
+                        && is_adjacent_batch(intent, previous.trailing_batch(), &changes)
+                }
+        });
 
         if can_coalesce {
             let previous = self
@@ -384,6 +396,7 @@ impl UndoManager {
         self.pending_intent = None;
         self.active_group = None;
         self.group_selections_before = None;
+        self.group_has_entry = false;
         self.coalescing_boundary = false;
     }
 

@@ -6919,6 +6919,34 @@ mod tests {
     }
 
     #[gpui::test]
+    fn edit_group_merges_edits_across_selection_moves(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abcdef"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                state.set_cursor_to(1);
+                assert!(state.begin_edit_group(1));
+                state.set_selected_range(1..2, cx);
+                state.replace_text_in_range(None, "X", window, cx);
+                state.set_selected_range(2..3, cx);
+                state.replace_text_in_range(None, "Y", window, cx);
+                assert!(state.end_edit_group(1));
+                assert_eq!(state.value(), "aXYdef");
+
+                state.set_selected_range(0..1, cx);
+                state.replace_text_in_range(None, "Z", window, cx);
+                assert_eq!(state.value(), "ZXYdef");
+
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "aXYdef");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abcdef");
+                assert_eq!(state.selected_range(), 1..1);
+            });
+        });
+    }
+
+    #[gpui::test]
     fn edit_group_redo_restores_selection_set_before_closure(cx: &mut TestAppContext) {
         let input_view = InputView::build_textarea(cx, |state| state.default_value("abcdef"));
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
