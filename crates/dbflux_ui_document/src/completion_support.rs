@@ -173,6 +173,29 @@ pub(crate) fn single_line_completion_editor(
         .text_size(FontSizes::SM)
 }
 
+/// Renders a single-line completion input as a frameless one-row `Editor`,
+/// for hosts that draw the field shape themselves (the table filter field).
+///
+/// Same geometry as [`single_line_completion_editor`] minus the frame: no
+/// background, no border, so the vertical padding does not offset a border.
+/// Text is regular weight at `FontSizes::BASE`; the host sets the color.
+pub(crate) fn frameless_single_line_completion_editor(
+    state: &Entity<EditorState>,
+) -> gpui_component::input::Editor {
+    let leading = (dbflux_components::tokens::Heights::ROW_COMPACT
+        - FontSizes::BASE * EDITOR_LINE_HEIGHT)
+        / 2.0;
+
+    gpui_component::input::Editor::new(state)
+        .appearance(false)
+        .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .py(leading - EDITOR_INPUT_PADDING_Y)
+        .px(px(0.0))
+        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_weight(gpui::FontWeight::NORMAL)
+        .text_size(FontSizes::BASE)
+}
+
 /// The line height gpui-component's `Editor::render` applies, relative to the
 /// font size.
 const EDITOR_LINE_HEIGHT: f32 = 1.5;

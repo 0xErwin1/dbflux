@@ -16,6 +16,7 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::components::data_table::SortState as TableSortState;
+use dbflux_components::components::filter_bar::FilterField;
 use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
@@ -732,6 +733,10 @@ pub(super) fn render_filter_bar_as_segment(
 
     let show_toolbar_focus =
         focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
+    let filter_field_focused =
+        focus_mode == GridFocusMode::Toolbar && toolbar_focus == ToolbarFocus::Filter;
+    let limit_field_focused =
+        focus_mode == GridFocusMode::Toolbar && toolbar_focus == ToolbarFocus::Limit;
 
     let theme = cx.theme().clone();
 
@@ -755,7 +760,6 @@ pub(super) fn render_filter_bar_as_segment(
 
     // Pre-clone theme for each section that needs it in a closure.
     let theme_filter = theme.clone();
-    let theme_limit = theme.clone();
     let theme_refresh = theme.clone();
 
     let chip_element: Option<AnyElement> = render_relational_chip(
@@ -835,120 +839,102 @@ pub(super) fn render_filter_bar_as_segment(
                 })
                 .child(Text::label(source_name)),
         )
-        // Toolbar order: WHERE filter (flex_1) | LIMIT | Builder | Refresh.
-        .when(!filter_keyword.is_empty(), move |d| {
-            let grid_for_filter_event = grid_for_filter.clone();
+        // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | Builder | Refresh.
+        .child({
             let grid_for_clear_event = grid_for_clear.clone();
-            let theme_inner = theme_filter.clone();
             let theme_clear = theme_filter.clone();
-            let theme_error_border = theme_filter.clone();
-            d.child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption(filter_keyword).primary())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .items_center()
-                            .h(Heights::ROW_COMPACT)
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus
-                                    && toolbar_focus == ToolbarFocus::Filter
-                                    && !has_filter_error,
-                                move |d| d.border_1().border_color(theme_inner.ring),
-                            )
-                            .when(has_filter_error, move |d| {
-                                d.border_1().border_color(theme_error_border.danger)
-                            })
-                            .on_mouse_down(MouseButton::Left, {
-                                let grid = grid_for_filter_event.clone();
-                                move |_, _, cx| {
-                                    grid.update(cx, |this, cx| {
-                                        this.focus.switching_input = true;
-                                        this.focus.focus_mode = GridFocusMode::Toolbar;
-                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
-                                        this.focus.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .child(
-                                crate::completion_support::single_line_completion_editor(
-                                    &filter_input,
-                                )
-                                .flex_1(),
-                            )
-                            .when(filter_has_value, move |d| {
-                                let grid = grid_for_clear_event.clone();
-                                let theme_hover = theme_clear.clone();
-                                d.child(
-                                    div()
-                                        .id("clear-filter")
-                                        .w(px(20.0))
-                                        .h(px(20.0))
-                                        .mr(Spacing::XS)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(Radii::SM)
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme_clear.muted_foreground)
-                                        .cursor_pointer()
-                                        .hover(move |d| {
-                                            d.bg(theme_hover.secondary)
-                                                .text_color(theme_hover.foreground)
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            grid.update(cx, |this, cx| {
-                                                this.replace_filter_and_reload("", window, cx);
-                                            });
-                                        })
-                                        .child("\u{00d7}"),
-                                )
-                            })
-                            .when_some(chip_element, |d, chip| d.child(chip))
-                            .when_some(resolving_element, |d, indicator| d.child(indicator)),
-                    )
-                    .when_some(error_element, |d, err| d.child(err)),
-            )
-        })
-        .child(
-            div()
+
+            let filter_editor = div()
                 .flex()
                 .items_center()
-                .gap(Spacing::XS)
-                .child(Text::caption("LIMIT").primary())
+                .on_mouse_down(MouseButton::Left, {
+                    let grid = grid_for_filter.clone();
+                    move |_, _, cx| {
+                        grid.update(cx, |this, cx| {
+                            this.focus.switching_input = true;
+                            this.focus.focus_mode = GridFocusMode::Toolbar;
+                            this.focus.toolbar_focus = ToolbarFocus::Filter;
+                            this.focus.edit_state = EditState::Editing;
+                            cx.notify();
+                        });
+                    }
+                })
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .w(px(60.0))
-                        .h(Heights::ROW_COMPACT)
-                        .rounded(Radii::SM)
-                        .when(
-                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                            move |d| d.border_1().border_color(theme_limit.ring),
+                    crate::completion_support::frameless_single_line_completion_editor(
+                        &filter_input,
+                    )
+                    .text_color(theme_filter.accent_foreground)
+                    .flex_1(),
+                );
+
+            let limit_value = div()
+                .on_mouse_down(MouseButton::Left, {
+                    let grid = grid_for_limit.clone();
+                    move |_, _, cx| {
+                        grid.update(cx, |this, cx| {
+                            this.focus.switching_input = true;
+                            this.focus.focus_mode = GridFocusMode::Toolbar;
+                            this.focus.toolbar_focus = ToolbarFocus::Limit;
+                            this.focus.edit_state = EditState::Editing;
+                            cx.notify();
+                        });
+                    }
+                })
+                .child(Input::new(&limit_input).small().appearance(false));
+
+            let field = FilterField::new("data-grid-filter-field")
+                .when(!filter_keyword.is_empty(), |field| {
+                    field.filter(filter_keyword.clone(), filter_editor)
+                })
+                .when(
+                    filter_has_value && !filter_keyword.is_empty(),
+                    move |field| {
+                        let grid = grid_for_clear_event.clone();
+                        let theme_hover = theme_clear.clone();
+                        field.trailing(
+                            div()
+                                .id("clear-filter")
+                                .w(px(20.0))
+                                .h(px(20.0))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .rounded(Radii::SM)
+                                .text_size(FontSizes::SM)
+                                .text_color(theme_clear.muted_foreground)
+                                .cursor_pointer()
+                                .hover(move |d| {
+                                    d.bg(theme_hover.secondary)
+                                        .text_color(theme_hover.foreground)
+                                })
+                                .on_click(move |_, window, cx| {
+                                    grid.update(cx, |this, cx| {
+                                        this.replace_filter_and_reload("", window, cx);
+                                    });
+                                })
+                                .child("\u{00d7}"),
                         )
-                        .on_mouse_down(MouseButton::Left, {
-                            let grid = grid_for_limit.clone();
-                            move |_, _, cx| {
-                                grid.update(cx, |this, cx| {
-                                    this.focus.switching_input = true;
-                                    this.focus.focus_mode = GridFocusMode::Toolbar;
-                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
-                                    this.focus.edit_state = EditState::Editing;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .child(Input::new(&limit_input).small()),
-                ),
-        )
+                    },
+                )
+                .when_some(chip_element, |field, chip| field.trailing(chip))
+                .when_some(resolving_element, |field, indicator| {
+                    field.trailing(indicator)
+                })
+                .limit("LIMIT", limit_value)
+                .filter_focused(filter_field_focused && !filter_keyword.is_empty())
+                .limit_focused(limit_field_focused)
+                .error(has_filter_error);
+
+            div()
+                .flex()
+                .flex_1()
+                .min_w(px(0.0))
+                .items_center()
+                .gap(Spacing::XS)
+                .child(field)
+                .when_some(error_element, |d, err| d.child(err))
+        })
         .when(can_open_builder, {
             let theme_btn = theme.clone();
             let icon_color = theme.muted_foreground;
@@ -1057,6 +1043,10 @@ impl DataGridPanel {
 
         let toolbar_has_filter_error =
             filter_input_has_error(&self.builder.relational_filter_state);
+        let filter_field_focused = self.focus.focus_mode == GridFocusMode::Toolbar
+            && self.focus.toolbar_focus == ToolbarFocus::Filter;
+        let limit_field_focused = self.focus.focus_mode == GridFocusMode::Toolbar
+            && self.focus.toolbar_focus == ToolbarFocus::Limit;
         let toolbar_chip = render_relational_chip(
             &self.builder.relational_filter_state,
             cx,
@@ -1106,102 +1096,87 @@ impl DataGridPanel {
                     })
                     .child(Text::label(source_name.to_string())),
             )
-            // Toolbar order: WHERE filter (flex_1) | LIMIT | view toggle | Builder | Refresh.
-            .when(!filter_keyword.is_empty(), |d| {
-                d.child(
-                    div()
-                        .flex()
-                        .flex_1()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .child(Text::caption(filter_keyword.to_string()).primary())
-                        .child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .items_center()
-                                .rounded(Radii::SM)
-                                .when(
-                                    show_toolbar_focus
-                                        && toolbar_focus == ToolbarFocus::Filter
-                                        && !toolbar_has_filter_error,
-                                    |d| d.border_1().border_color(theme.ring),
-                                )
-                                .when(toolbar_has_filter_error, |d| {
-                                    d.border_1().border_color(theme.danger)
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.focus.switching_input = true;
-                                        this.focus.focus_mode = GridFocusMode::Toolbar;
-                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
-                                        this.focus.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    crate::completion_support::single_line_completion_editor(
-                                        filter_input,
-                                    )
-                                    .flex_1(),
-                                )
-                                .when(filter_has_value, |d| {
-                                    d.child(
-                                        div()
-                                            .id("clear-filter")
-                                            .w(px(20.0))
-                                            .h(px(20.0))
-                                            .mr(Spacing::XS)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(Radii::SM)
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .cursor_pointer()
-                                            .hover(|d| {
-                                                d.bg(theme.secondary).text_color(theme.foreground)
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.replace_filter_and_reload("", window, cx);
-                                            }))
-                                            .child("\u{00d7}"),
-                                    )
-                                })
-                                .when_some(toolbar_chip, |d, chip| d.child(chip))
-                                .when_some(toolbar_resolving, |d, ind| d.child(ind)),
-                        )
-                        .when_some(toolbar_error, |d, err| d.child(err)),
-                )
-            })
-            .child(
-                div()
+            // Toolbar order: WHERE filter and LIMIT in one field (flex_1) | view toggle | Builder | Refresh.
+            .child({
+                let filter_editor = div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption("LIMIT").primary())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.focus.switching_input = true;
+                            this.focus.focus_mode = GridFocusMode::Toolbar;
+                            this.focus.toolbar_focus = ToolbarFocus::Filter;
+                            this.focus.edit_state = EditState::Editing;
+                            cx.notify();
+                        }),
+                    )
                     .child(
-                        div()
-                            .w(px(60.0))
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                                |d| d.border_1().border_color(theme.ring),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus.switching_input = true;
-                                    this.focus.focus_mode = GridFocusMode::Toolbar;
-                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
-                                    this.focus.edit_state = EditState::Editing;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(Input::new(limit_input).small()),
-                    ),
-            )
+                        crate::completion_support::frameless_single_line_completion_editor(
+                            filter_input,
+                        )
+                        .text_color(theme.accent_foreground)
+                        .flex_1(),
+                    );
+
+                let limit_value = div()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.focus.switching_input = true;
+                            this.focus.focus_mode = GridFocusMode::Toolbar;
+                            this.focus.toolbar_focus = ToolbarFocus::Limit;
+                            this.focus.edit_state = EditState::Editing;
+                            cx.notify();
+                        }),
+                    )
+                    .child(Input::new(limit_input).small().appearance(false));
+
+                let has_filter = !filter_keyword.is_empty();
+
+                let field = FilterField::new("data-grid-filter-field")
+                    .when(has_filter, |field| {
+                        field.filter(filter_keyword.to_string(), filter_editor)
+                    })
+                    .when(filter_has_value && has_filter, |field| {
+                        field.trailing(
+                            div()
+                                .id("clear-filter")
+                                .w(px(20.0))
+                                .h(px(20.0))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .rounded(Radii::SM)
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.muted_foreground)
+                                .cursor_pointer()
+                                .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.replace_filter_and_reload("", window, cx);
+                                }))
+                                .child("\u{00d7}"),
+                        )
+                    })
+                    .when_some(toolbar_chip, |field, chip| field.trailing(chip))
+                    .when_some(toolbar_resolving, |field, indicator| {
+                        field.trailing(indicator)
+                    })
+                    .limit("LIMIT", limit_value)
+                    .filter_focused(filter_field_focused && has_filter)
+                    .limit_focused(limit_field_focused)
+                    .error(toolbar_has_filter_error);
+
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(field)
+                    .when_some(toolbar_error, |d, err| d.child(err))
+            })
             .when(self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {

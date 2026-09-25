@@ -107,6 +107,67 @@ impl Borders {
     pub const FOCUS_RING: Pixels = px(1.5);
 }
 
+/// Metrics of the chamfered input family: text fields, select triggers, the
+/// filter field, segmented controls, checkboxes and select menus.
+pub struct Fields;
+
+impl Fields {
+    /// Text field and select trigger height. (30 px)
+    pub const HEIGHT: Pixels = px(30.0);
+    /// Height of a small text field packed into a dense toolbar. (24 px)
+    pub const HEIGHT_SMALL: Pixels = px(24.0);
+    /// Horizontal padding inside a text field or select trigger. (10 px)
+    pub const PADDING_X: Pixels = px(10.0);
+    /// Gap between the parts of a field: icon, value, suffix. (8 px)
+    pub const GAP: Pixels = px(8.0);
+    /// Value text size inside a text field or select trigger. (12.5 px)
+    pub const TEXT: Pixels = px(12.5);
+    /// Select trigger chevron size. (12 px)
+    pub const CHEVRON: Pixels = px(12.0);
+
+    /// Filter field height (WHERE ... LIMIT). (34 px)
+    pub const FILTER_HEIGHT: Pixels = px(34.0);
+    /// Horizontal padding inside the filter field. (12 px)
+    pub const FILTER_PADDING_X: Pixels = px(12.0);
+    /// Gap between the parts of the filter field. (10 px)
+    pub const FILTER_GAP: Pixels = px(10.0);
+    /// Filter field leading icon size. (15 px)
+    pub const FILTER_ICON: Pixels = px(15.0);
+    /// Width reserved for the LIMIT value inside the filter field. (48 px)
+    pub const FILTER_LIMIT_WIDTH: Pixels = px(48.0);
+
+    /// Segment height inside a segmented control. (26 px)
+    pub const SEGMENT_HEIGHT: Pixels = px(26.0);
+    /// Padding between the segmented track and its segments. (2 px)
+    pub const SEGMENT_TRACK_PADDING: Pixels = px(2.0);
+    /// Horizontal padding of one segment. (10 px)
+    pub const SEGMENT_PADDING_X: Pixels = px(10.0);
+    /// Gap between a segment's icon and label. (6 px)
+    pub const SEGMENT_GAP: Pixels = px(6.0);
+    /// Segment icon size. (13 px)
+    pub const SEGMENT_ICON: Pixels = px(13.0);
+
+    /// Checkbox box size. (16 px)
+    pub const CHECKBOX_SIZE: Pixels = px(16.0);
+    /// Check mark size inside a checked box. (12 px)
+    pub const CHECK_MARK: Pixels = px(12.0);
+    /// Gap between a checkbox and its label. (10 px)
+    pub const CHECKBOX_GAP: Pixels = px(10.0);
+
+    /// Vertical padding of a select menu. (8 px)
+    pub const MENU_PADDING_Y: Pixels = px(8.0);
+    /// Horizontal inset of a select menu row inside the menu. (6 px)
+    pub const MENU_ROW_INSET: Pixels = px(6.0);
+    /// Select menu row height. (30 px)
+    pub const MENU_ROW_HEIGHT: Pixels = px(30.0);
+    /// Maximum select menu height before it scrolls. (220 px)
+    pub const MENU_MAX_HEIGHT: Pixels = px(220.0);
+    /// Alpha of the tint wash behind the highlighted select menu row.
+    pub const MENU_HIGHLIGHT_ALPHA: f32 = 0.14;
+    /// Opacity of a disabled control's rest fill.
+    pub const DISABLED_OPACITY: f32 = 0.45;
+}
+
 /// Centralized box-shadow definitions.
 ///
 /// Use these instead of constructing `BoxShadow` at call sites so the shadow

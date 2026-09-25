@@ -12,8 +12,6 @@ mod split_toolbar_action;
 mod tab_strip;
 mod wizard_rail;
 
-pub(crate) use control_shell::control_shell_with_padding;
-
 pub use collapsible_section::collapsible_section;
 pub use control_shell::control_shell;
 pub use field_row::{

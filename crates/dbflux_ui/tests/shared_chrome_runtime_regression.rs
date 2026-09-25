@@ -118,7 +118,7 @@ impl Render for FocusWrapperHarness {
                     .child(focus_frame(
                         false,
                         None,
-                        control_shell(Input::new(&self.first_input).w_full(), cx),
+                        control_shell(Input::new(&self.first_input).w_full().appearance(false), cx),
                         cx,
                     )),
             )
@@ -130,7 +130,10 @@ impl Render for FocusWrapperHarness {
                     .child(focus_frame(
                         false,
                         None,
-                        control_shell(Input::new(&self.second_input).w_full(), cx),
+                        control_shell(
+                            Input::new(&self.second_input).w_full().appearance(false),
+                            cx,
+                        ),
                         cx,
                     )),
             )

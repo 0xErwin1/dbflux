@@ -1502,7 +1502,10 @@ impl CodeDocument {
                                 ContextBarSlot::SourceStart,
                             ),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source.source_start_input), cx),
+                            control_shell(
+                                Input::new(&self.source.source_start_input).appearance(false),
+                                cx,
+                            ),
                             cx,
                         )))
                         .child(
@@ -1521,7 +1524,10 @@ impl CodeDocument {
                                 ContextBarSlot::SourceEnd,
                             ),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source.source_end_input), cx),
+                            control_shell(
+                                Input::new(&self.source.source_end_input).appearance(false),
+                                cx,
+                            ),
                             cx,
                         )))
                     },

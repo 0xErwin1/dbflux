@@ -2,79 +2,62 @@ use gpui::prelude::*;
 use gpui::{App, Pixels, div};
 use gpui_component::ActiveTheme;
 
-use crate::tokens::{ChromeSurfaceInspection, ChromeSurfaceRole, Heights, Spacing};
+use crate::primitives::Chamfer;
+use crate::tokens::{ChamferCut, Fields};
 
-pub(crate) const CONTROL_SHELL_HEIGHT: Pixels = Heights::INPUT;
-pub(crate) const CONTROL_SHELL_HORIZONTAL_PADDING: Pixels = Spacing::SM;
+pub(crate) const CONTROL_SHELL_HEIGHT: Pixels = Fields::HEIGHT;
+pub(crate) const CONTROL_SHELL_HORIZONTAL_PADDING: Pixels = Fields::PADDING_X;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ControlShellMetrics {
     pub height: Pixels,
     pub horizontal_padding: Pixels,
+    pub cut: Pixels,
 }
 
 pub(crate) fn control_shell_metrics() -> ControlShellMetrics {
     ControlShellMetrics {
         height: CONTROL_SHELL_HEIGHT,
         horizontal_padding: CONTROL_SHELL_HORIZONTAL_PADDING,
+        cut: ChamferCut::CONTROL,
     }
 }
 
-pub(crate) fn control_shell_chrome() -> ChromeSurfaceInspection {
-    ChromeSurfaceRole::ControlShell.inspect()
-}
-
+/// Wraps a frameless control (a toolbar-style `Dropdown`, an `Input` with
+/// `appearance(false)`) in the select field shape: a raised chamfered field
+/// with a 1 px line on its straight edges, `Fields::HEIGHT` tall.
 pub fn control_shell(child: impl IntoElement, cx: &App) -> gpui::Div {
-    let metrics = control_shell_metrics();
-
-    control_shell_with_padding(child, metrics.horizontal_padding, cx)
-}
-
-pub(crate) fn control_shell_with_padding(
-    child: impl IntoElement,
-    horizontal_padding: Pixels,
-    cx: &App,
-) -> gpui::Div {
     let theme = cx.theme();
     let metrics = control_shell_metrics();
-    let chrome = control_shell_chrome();
 
     div()
+        .relative()
         .w_full()
         .h(metrics.height)
         .flex()
         .items_center()
-        .px(horizontal_padding)
-        .rounded(chrome.radius)
-        .bg(chrome.background.resolve(theme))
-        .border_1()
-        .border_color(chrome.edge.resolve(theme))
+        .px(metrics.horizontal_padding)
+        .child(
+            Chamfer::new(metrics.cut)
+                .fill(theme.secondary)
+                .border(theme.border),
+        )
         .child(child)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CONTROL_SHELL_HEIGHT, CONTROL_SHELL_HORIZONTAL_PADDING, control_shell_chrome,
-        control_shell_metrics,
-    };
-    use crate::tokens::{ChromeColorSlot, ChromeEdgeRole, Heights, Radii, Spacing};
+    use super::{CONTROL_SHELL_HEIGHT, CONTROL_SHELL_HORIZONTAL_PADDING, control_shell_metrics};
+    use crate::tokens::{ChamferCut, Fields};
 
     #[test]
-    fn control_shell_matches_shared_input_chrome_metrics() {
+    fn control_shell_matches_the_select_field_metrics() {
         let metrics = control_shell_metrics();
 
-        assert_eq!(metrics.height, Heights::INPUT);
-        assert_eq!(metrics.horizontal_padding, Spacing::SM);
-        assert_eq!(CONTROL_SHELL_HEIGHT, Heights::INPUT);
-        assert_eq!(CONTROL_SHELL_HORIZONTAL_PADDING, Spacing::SM);
-    }
-
-    #[test]
-    fn control_shell_uses_tight_secondary_chrome_contract() {
-        let chrome = control_shell_chrome();
-
-        assert_eq!(chrome.background, ChromeColorSlot::Secondary);
-        assert_eq!(chrome.edge, ChromeEdgeRole::Control);
-        assert_eq!(chrome.radius, Radii::SM);
+        assert_eq!(metrics.height, Fields::HEIGHT);
+        assert_eq!(metrics.horizontal_padding, Fields::PADDING_X);
+        assert_eq!(metrics.cut, ChamferCut::CONTROL);
+        assert_eq!(CONTROL_SHELL_HEIGHT, Fields::HEIGHT);
+        assert_eq!(CONTROL_SHELL_HORIZONTAL_PADDING, Fields::PADDING_X);
     }
 }

@@ -2,14 +2,15 @@ use std::panic::Location;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, KeyBinding, LayoutId, Pixels, SharedString, StyleRefinement,
-    Window, actions,
+    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId, Pixels,
+    SharedString, StyleRefinement, Window, actions, div,
 };
-use gpui_component::Sizable;
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
+use gpui_component::{ActiveTheme, Sizable};
 
-use crate::tokens::FontSizes;
+use crate::primitives::{Chamfer, ChamferRing};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
 pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
@@ -47,8 +48,14 @@ pub fn register_input_overrides(cx: &mut App) {
     ]);
 }
 
-/// Thin wrapper around `gpui_component::input::Input` that pre-applies
-/// DBFlux design token defaults (height, size).
+/// Text field built on `gpui_component::input::Input`.
+///
+/// With `appearance` on (the default) the field draws the chamfered shape
+/// itself: the ground fill, a 1 px line on the straight edges and, while the
+/// field holds keyboard focus, an inset tint ring that follows the cut. The
+/// inner `gpui_component` input is borderless and transparent. With
+/// `appearance` off only the bare editable text is drawn, for hosts that
+/// already provide the frame (grid cells, filter fields, shells).
 ///
 /// The font family is inherited from the container: forms render in the
 /// interface face, while data surfaces that set the data face on their rows
@@ -143,16 +150,34 @@ impl Input {
 }
 
 impl RenderOnce for Input {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let chamfered = self.appearance;
+
         let mut input = GpuiInput::new(&self.state)
-            .appearance(self.appearance)
-            .disabled(self.disabled)
-            .font_weight(FontWeight::MEDIUM)
-            .text_size(if self.small {
-                FontSizes::SM
-            } else {
-                FontSizes::BASE
-            });
+            .appearance(false)
+            .disabled(self.disabled);
+
+        input = if chamfered {
+            input
+                .h(if self.small {
+                    Fields::HEIGHT_SMALL
+                } else {
+                    Fields::HEIGHT
+                })
+                .px(Fields::PADDING_X)
+                .gap(Fields::GAP)
+                .font_weight(FontWeight::NORMAL)
+                .text_size(Fields::TEXT)
+                .text_color(cx.theme().accent_foreground)
+        } else {
+            input
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(if self.small {
+                    FontSizes::SM
+                } else {
+                    FontSizes::BASE
+                })
+        };
 
         if self.small {
             input = input.small();
@@ -178,7 +203,49 @@ impl RenderOnce for Input {
             input = input.aria_label(label);
         }
 
-        input
+        if !chamfered {
+            return input.into_any_element();
+        }
+
+        let focused = self
+            .state
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx);
+
+        div()
+            .relative()
+            .w_full()
+            .child(field_shape(
+                cx.theme().background,
+                focused && !self.disabled,
+                self.disabled,
+                cx,
+            ))
+            .child(input)
+            .into_any_element()
+    }
+}
+
+/// The chamfered shape behind a text field: `fill` with a 1 px line on the
+/// straight edges, the inset tint focus ring when `focused`, and the rest
+/// fill at `Fields::DISABLED_OPACITY` when `disabled`.
+pub(crate) fn field_shape(fill: Hsla, focused: bool, disabled: bool, cx: &App) -> Chamfer {
+    let theme = cx.theme();
+    let opacity = if disabled {
+        Fields::DISABLED_OPACITY
+    } else {
+        1.0
+    };
+
+    let shape = Chamfer::new(ChamferCut::CONTROL)
+        .fill(fill.opacity(opacity))
+        .border(theme.border.opacity(opacity));
+
+    if focused {
+        shape.ring(ChamferRing::focus(ChromeColors::tint(theme)))
+    } else {
+        shape
     }
 }
 

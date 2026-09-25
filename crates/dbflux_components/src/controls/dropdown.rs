@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::composites::control_shell_with_padding;
 use crate::density;
-use crate::primitives::focus_frame;
-use crate::tokens::{ChromeEdgeRole, Heights, Radii, Spacing};
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Fields, Heights, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
@@ -57,23 +57,18 @@ enum DropdownTriggerVariant {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DropdownTriggerRenderPlan {
-    uses_control_shell: bool,
-    uses_internal_focus_frame: bool,
-    reserves_legacy_focus_gutter: bool,
+    /// The trigger draws its own chamfered field shape and focus ring.
+    uses_chamfer_shape: bool,
 }
 
 fn dropdown_trigger_render_plan(variant: DropdownTriggerVariant) -> DropdownTriggerRenderPlan {
     match variant {
         DropdownTriggerVariant::Standard => DropdownTriggerRenderPlan {
-            uses_control_shell: true,
-            uses_internal_focus_frame: true,
-            reserves_legacy_focus_gutter: true,
+            uses_chamfer_shape: true,
         },
         DropdownTriggerVariant::Toolbar | DropdownTriggerVariant::Compact => {
             DropdownTriggerRenderPlan {
-                uses_control_shell: false,
-                uses_internal_focus_frame: false,
-                reserves_legacy_focus_gutter: false,
+                uses_chamfer_shape: false,
             }
         }
     }
@@ -121,13 +116,13 @@ struct DropdownDismissTransition {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DropdownMenuChromeInspection {
     edge: ChromeEdgeRole,
-    radius: Pixels,
+    cut: Pixels,
 }
 
 fn dropdown_menu_chrome() -> DropdownMenuChromeInspection {
     DropdownMenuChromeInspection {
-        edge: ChromeEdgeRole::Popover,
-        radius: Radii::MD,
+        edge: ChromeEdgeRole::Control,
+        cut: ChamferCut::OVERLAY,
     }
 }
 
@@ -475,6 +470,7 @@ impl Dropdown {
         let chrome = dropdown_menu_chrome();
 
         let menu_font_size = density::font_base(cx);
+        let highlight_fill = ChromeColors::tint(theme).opacity(Fields::MENU_HIGHLIGHT_ALPHA);
 
         let items: Vec<gpui::AnyElement> = self
             .items
@@ -482,26 +478,42 @@ impl Dropdown {
             .enumerate()
             .map(|(index, item)| {
                 let is_highlighted = self.highlighted_index == Some(index);
+
+                let row_shape = if is_highlighted {
+                    Chamfer::new(ChamferCut::KEYCAP).fill(highlight_fill)
+                } else if is_disabled {
+                    Chamfer::new(ChamferCut::KEYCAP)
+                } else {
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .fill_hover(theme.list_hover)
+                        .interactive(("dropdown-row-shape", index))
+                };
+
+                let text_color = if is_disabled {
+                    theme.muted_foreground
+                } else if is_highlighted {
+                    theme.accent_foreground
+                } else {
+                    theme.foreground
+                };
+
                 let mut row = div()
                     .id(index)
-                    .w_full()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .h(Fields::MENU_ROW_HEIGHT)
+                    .mx(Fields::MENU_ROW_INSET)
+                    .px(Fields::PADDING_X)
                     .font_family(AppFonts::INTERFACE)
-                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_size(menu_font_size)
                     .whitespace_nowrap()
-                    .text_color(theme.foreground)
-                    .when(is_highlighted, |el| {
-                        el.bg(theme.accent).text_color(theme.accent_foreground)
-                    })
-                    .when(!is_highlighted && !is_disabled, |el| {
-                        el.hover(|s| s.bg(theme.list_active))
-                    })
+                    .text_color(text_color)
+                    .child(row_shape)
                     .child(item.label.clone());
 
                 if is_disabled {
-                    row = row.text_color(theme.muted_foreground).cursor_not_allowed();
+                    row = row.cursor_not_allowed();
                 } else {
                     row = row.cursor_pointer().on_mouse_down(
                         MouseButton::Left,
@@ -517,23 +529,29 @@ impl Dropdown {
 
         let menu_debug_selector = self.menu_debug_selector();
 
+        let rows = div()
+            .id("dropdown-menu-rows")
+            .max_h(Fields::MENU_MAX_HEIGHT)
+            .py(Fields::MENU_PADDING_Y)
+            .overflow_y_scroll()
+            .track_scroll(&self.menu_scroll_handle)
+            .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
+            .children(items);
+
         let menu = div()
             .id("dropdown-menu")
             .debug_selector(move || menu_debug_selector.clone())
+            .relative()
             .min_w_full()
-            .max_h(px(220.0))
-            .p(Spacing::XS)
-            .border_1()
-            .border_color(chrome.edge.resolve(theme))
-            .bg(theme.popover)
-            .rounded(density::radius_md(cx))
-            .overflow_scroll()
-            .track_scroll(&self.menu_scroll_handle)
-            .on_scroll_wheel(cx.listener(Self::handle_menu_scroll_wheel))
             .shadow_lg()
             .occlude()
             .on_mouse_down_out(cx.listener(Self::handle_mouse_down_out))
-            .children(items);
+            .child(
+                Chamfer::new(chrome.cut)
+                    .fill(theme.secondary)
+                    .border(chrome.edge.resolve(theme)),
+            )
+            .child(rows);
 
         deferred(
             anchored()
@@ -562,19 +580,21 @@ impl Dropdown {
             .flex()
             .items_center()
             .w_full()
-            .when(disabled, |el| {
-                el.text_color(theme.muted_foreground)
-                    .cursor_not_allowed()
-                    .opacity(0.5)
-            })
-            .when(!disabled, |el| {
-                el.text_color(theme.foreground)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.accent.opacity(0.1)))
-            });
+            .when(disabled, |el| el.cursor_not_allowed())
+            .when(!disabled, |el| el.cursor_pointer());
+
+        if !render_plan.uses_chamfer_shape {
+            trigger = trigger
+                .when(disabled, |el| {
+                    el.text_color(theme.muted_foreground).opacity(0.5)
+                })
+                .when(!disabled, |el| {
+                    el.text_color(theme.foreground)
+                        .hover(|s| s.bg(theme.accent.opacity(0.1)))
+                });
+        }
 
         let font_sm = density::font_sm(cx);
-        let font_base = density::font_base(cx);
 
         match variant {
             DropdownTriggerVariant::Compact => {
@@ -609,19 +629,49 @@ impl Dropdown {
                     );
             }
             DropdownTriggerVariant::Standard => {
+                let opacity = if disabled {
+                    Fields::DISABLED_OPACITY
+                } else {
+                    1.0
+                };
+
+                let mut shape = Chamfer::new(ChamferCut::CONTROL)
+                    .fill(theme.secondary.opacity(opacity))
+                    .border(theme.border.opacity(opacity));
+
+                if !disabled {
+                    shape = shape
+                        .fill_hover(theme.secondary_hover)
+                        .interactive("dropdown-trigger-shape");
+                }
+
+                if self.focus_ring_visible {
+                    shape = shape.ring(ChamferRing::focus(
+                        self.focus_ring_color
+                            .unwrap_or_else(|| ChromeColors::tint(theme)),
+                    ));
+                }
+
+                let text_color = if disabled {
+                    theme.muted_foreground
+                } else {
+                    theme.accent_foreground
+                };
+
                 trigger = trigger
-                    .justify_between()
-                    .gap(Spacing::SM)
-                    .py(Spacing::XS)
+                    .relative()
+                    .h(Fields::HEIGHT)
+                    .gap(Fields::GAP)
+                    .px(Fields::PADDING_X)
                     .font_family(AppFonts::INTERFACE)
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_size(font_base)
+                    .text_size(Fields::TEXT)
+                    .text_color(text_color)
+                    .child(shape)
                     .child(div().flex_1().truncate().child(label))
                     .child(
-                        div()
-                            .text_size(font_sm)
-                            .text_color(theme.muted_foreground)
-                            .child("▾"),
+                        Icon::new(AppIcon::ChevronDown)
+                            .size(Fields::CHEVRON)
+                            .color(theme.muted_foreground),
                     );
             }
         }
@@ -635,24 +685,7 @@ impl Dropdown {
             trigger = trigger.on_click(cx.listener(Self::handle_trigger_click));
         }
 
-        let trigger = if render_plan.uses_control_shell {
-            control_shell_with_padding(trigger, Spacing::MD, cx).into_any_element()
-        } else {
-            trigger.into_any_element()
-        };
-
-        let trigger = if render_plan.reserves_legacy_focus_gutter {
-            div().w_full().p(px(2.0)).child(trigger).into_any_element()
-        } else {
-            trigger
-        };
-
-        if render_plan.uses_internal_focus_frame {
-            focus_frame(self.focus_ring_visible, self.focus_ring_color, trigger, cx)
-                .into_any_element()
-        } else {
-            trigger
-        }
+        trigger.into_any_element()
     }
 }
 
@@ -688,7 +721,7 @@ mod tests {
         Dropdown, DropdownTriggerVariant, dropdown_dismiss_transition, dropdown_focus_ring_state,
         dropdown_menu_chrome, dropdown_selection_transition, dropdown_trigger_render_plan,
     };
-    use crate::tokens::{ChromeEdgeRole, Radii};
+    use crate::tokens::{ChamferCut, ChromeEdgeRole};
 
     #[test]
     fn selection_transition_closes_menu_and_clears_highlight() {
@@ -766,30 +799,24 @@ mod tests {
     }
 
     #[test]
-    fn standard_trigger_uses_shared_shell() {
+    fn standard_trigger_draws_its_chamfered_shape() {
         let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Standard);
 
-        assert!(plan.uses_control_shell);
-        assert!(plan.uses_internal_focus_frame);
-        assert!(plan.reserves_legacy_focus_gutter);
+        assert!(plan.uses_chamfer_shape);
     }
 
     #[test]
-    fn toolbar_trigger_skips_control_shell() {
+    fn toolbar_trigger_skips_the_chamfered_shape() {
         let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Toolbar);
 
-        assert!(!plan.uses_control_shell);
-        assert!(!plan.uses_internal_focus_frame);
-        assert!(!plan.reserves_legacy_focus_gutter);
+        assert!(!plan.uses_chamfer_shape);
     }
 
     #[test]
-    fn compact_trigger_skips_control_shell() {
+    fn compact_trigger_skips_the_chamfered_shape() {
         let plan = dropdown_trigger_render_plan(DropdownTriggerVariant::Compact);
 
-        assert!(!plan.uses_control_shell);
-        assert!(!plan.uses_internal_focus_frame);
-        assert!(!plan.reserves_legacy_focus_gutter);
+        assert!(!plan.uses_chamfer_shape);
     }
 
     #[test]
@@ -813,11 +840,11 @@ mod tests {
     }
 
     #[test]
-    fn dropdown_menu_shell_uses_shared_popover_chrome_contract() {
+    fn dropdown_menu_uses_the_overlay_cut_and_the_strong_line() {
         let chrome = dropdown_menu_chrome();
 
-        assert_eq!(chrome.edge, ChromeEdgeRole::Popover);
-        assert_eq!(chrome.radius, Radii::MD);
+        assert_eq!(chrome.edge, ChromeEdgeRole::Control);
+        assert_eq!(chrome.cut, ChamferCut::OVERLAY);
     }
 
     #[test]
