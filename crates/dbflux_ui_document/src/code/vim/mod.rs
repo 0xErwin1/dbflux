@@ -27,6 +27,9 @@ use dbflux_core::LogErr;
 use gpui_base::input::{EditAnchor, EditAnchorAffinity};
 use gpui_component::input::{Redo, Undo};
 use machine::{VimCommand, VimKey};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
 
 pub use machine::VimMode;
 
@@ -58,6 +61,7 @@ pub(super) struct VimState {
     pending_mark: Option<char>,
     marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
+    change_group: Option<u64>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
 }
@@ -85,6 +89,7 @@ impl CodeDocument {
         }
 
         if !enabled {
+            self.close_change_group(cx);
             let marks = std::mem::take(&mut self.vim.marks);
             self.editor.input_state.update(cx, |state, _cx| {
                 for anchor in marks.into_iter().flatten() {
@@ -307,7 +312,13 @@ impl CodeDocument {
                 _ => None,
             };
             if let Some((motion, big)) = motion {
+                if operator == 'c' && (motion != machine::WordMotion::Forward || big) {
+                    return true;
+                }
                 self.apply_word_operator(operator, motion, big, count, window, cx);
+                return true;
+            }
+            if operator == 'c' {
                 return true;
             }
             if let Some((range, linewise)) = {
@@ -661,6 +672,7 @@ impl CodeDocument {
             // menu opened some other way still closes before the mode changes.
             self.dismiss_editor_menus(cx);
         } else {
+            self.close_change_group(cx);
             self.set_vim_mode(
                 machine::mode_after(self.vim.mode, VimCommand::LeaveInsert),
                 cx,
@@ -867,6 +879,37 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if operator == 'c' {
+            if self.read_only {
+                return;
+            }
+            let range = {
+                let state = self.editor.input_state.read(cx);
+                let start = machine::line_start(state.text(), state.cursor());
+                let end_row = state
+                    .text()
+                    .offset_to_point(start)
+                    .row
+                    .saturating_add(count);
+                let end = if end_row < state.text().lines_len() {
+                    state.text().line_start_offset(end_row)
+                } else {
+                    state.text().len()
+                };
+                let content = state.text().to_string();
+                let selected = content.get(start..end).unwrap_or_default().to_string();
+                let terminator = if selected.ends_with("\r\n") {
+                    2
+                } else if selected.ends_with('\n') {
+                    1
+                } else {
+                    0
+                };
+                (start..end.saturating_sub(terminator).max(start), selected)
+            };
+            self.apply_change(range.0, Some(range.1), window, cx);
+            return;
+        }
         let range = {
             let state = self.editor.input_state.read(cx);
             machine::counted_line_range(state.text(), self.editor_cursor(cx), count)
@@ -949,7 +992,17 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if operator == 'd' && self.read_only {
+        if matches!(operator, 'd' | 'c') && self.read_only {
+            return;
+        }
+        if operator == 'c' {
+            let range = {
+                let state = self.editor.input_state.read(cx);
+                machine::change_word_range(state.text(), state.cursor(), count)
+            };
+            if let Some(range) = range {
+                self.apply_change(range, None, window, cx);
+            }
             return;
         }
         let (range, selected) = {
@@ -977,6 +1030,57 @@ impl CodeDocument {
                 state.replace("", window, cx);
             });
             self.clamp_cursor_for_normal(cx);
+        }
+    }
+
+    fn apply_change(
+        &mut self,
+        range: std::ops::Range<usize>,
+        clipboard: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.read_only {
+            return;
+        }
+        let content = self.editor.input_state.read(cx).text().to_string();
+        let Some(selected) = content.get(range.clone()) else {
+            return;
+        };
+        let group = NEXT_CHANGE_GROUP.fetch_add(1, Ordering::Relaxed);
+        let started = self
+            .editor
+            .input_state
+            .update(cx, |state, _| state.begin_edit_group(group));
+        if !started {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            clipboard.unwrap_or_else(|| selected.to_string()),
+        ));
+        self.vim.change_group = Some(group);
+        self.vim.vertical_goal = None;
+        if !range.is_empty() {
+            self.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(range, cx);
+                state.replace("", window, cx);
+            });
+        }
+        self.set_vim_mode(VimMode::Insert, cx);
+    }
+
+    pub(super) fn close_change_group_on_blur(&mut self, cx: &mut Context<Self>) {
+        if self.vim.change_group.is_some() {
+            self.close_change_group(cx);
+            self.set_vim_mode(VimMode::Normal, cx);
+        }
+    }
+
+    fn close_change_group(&mut self, cx: &mut Context<Self>) {
+        if let Some(group) = self.vim.change_group.take() {
+            self.editor.input_state.update(cx, |state, _| {
+                state.request_end_edit_group(group);
+            });
         }
     }
 

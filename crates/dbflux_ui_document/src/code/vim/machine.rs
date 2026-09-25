@@ -140,6 +140,7 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 "y" if visual => Some(VimCommand::VisualYank),
                 "x" if !visual => Some(VimCommand::DeleteChar),
                 "d" if !visual => Some(VimCommand::Operator('d')),
+                "c" if !visual => Some(VimCommand::Operator('c')),
                 "y" if !visual => Some(VimCommand::Operator('y')),
                 "u" if !visual => Some(VimCommand::Undo),
                 _ => None,
@@ -338,11 +339,49 @@ fn word_class(character: char, big: bool) -> WordClass {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WordMotion {
     End,
     Forward,
     Backward,
+}
+
+pub(crate) fn change_word_range(text: &Rope, offset: usize, count: usize) -> Option<Range<usize>> {
+    let content = text.to_string();
+    let chars = word_offsets(text);
+    let mut index = chars.partition_point(|(start, _)| *start < offset);
+    let first_class = word_class(chars.get(index)?.1, false);
+    let mut remaining = count.max(1);
+    while index < chars.len() && remaining > 0 {
+        let class = word_class(chars[index].1, false);
+        if matches!(chars[index].1, '\r' | '\n') {
+            break;
+        }
+        while index < chars.len()
+            && !matches!(chars[index].1, '\r' | '\n')
+            && word_class(chars[index].1, false) == class
+        {
+            index += 1;
+        }
+        remaining -= 1;
+        if class != WordClass::Space && remaining > 0 {
+            while index < chars.len()
+                && chars[index].1.is_whitespace()
+                && !matches!(chars[index].1, '\r' | '\n')
+            {
+                index += 1;
+            }
+        }
+    }
+    let end = chars.get(index).map_or(content.len(), |(at, _)| *at);
+    let end = if first_class == WordClass::Space {
+        end
+    } else {
+        content[..end]
+            .trim_end_matches(|character: char| character == ' ' || character == '\t')
+            .len()
+    };
+    (end > offset).then_some(offset..end)
 }
 
 pub(crate) fn word_offsets(text: &Rope) -> Vec<(usize, char)> {

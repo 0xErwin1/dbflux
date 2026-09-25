@@ -472,6 +472,7 @@ pub struct CodeDocument {
     vim: vim::VimState,
     vim_search_input: Entity<InputState>,
     _vim_search_subscription: Subscription,
+    _vim_editor_focus_subscription: Option<Subscription>,
 }
 
 struct PendingQueryResult {
@@ -692,7 +693,10 @@ impl CodeDocument {
                 InputEvent::Focus => {
                     this.enter_editor_mode(cx);
                 }
-                InputEvent::Blur | InputEvent::PressEnter { .. } => {}
+                InputEvent::Blur => {
+                    this.close_change_group_on_blur(cx);
+                }
+                InputEvent::PressEnter { .. } => {}
             },
         );
 
@@ -1092,8 +1096,15 @@ impl CodeDocument {
             vim: vim::VimState::default(),
             vim_search_input,
             _vim_search_subscription: vim_search_subscription,
+            _vim_editor_focus_subscription: None,
         };
 
+        let editor_focus = document.editor.input_state.read(cx).focus_handle(cx);
+        document._vim_editor_focus_subscription = Some(cx.on_focus_out(
+            &editor_focus,
+            window,
+            |document, _, _, cx| document.close_change_group_on_blur(cx),
+        ));
         document.sync_context_dropdowns(cx);
         document.sync_vim_setting(cx);
         document

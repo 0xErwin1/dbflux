@@ -615,7 +615,8 @@ status bar.
 | Normal | `e` / `w` / `b` | Move to the end of a word / start of the next word / start of the previous word |
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
-| Normal | `dd` / `yy` | Delete / yank whole logical lines (`yy` copies to the system clipboard) |
+| Normal | `dd` / `yy` / `cc` | Delete / yank / change whole logical lines (`yy` copies to the system clipboard) |
+| Normal | `cw` | Change through the next `w` word-motion boundary |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Delete / yank a characterwise horizontal or linewise vertical motion (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Delete / yank a characterwise word-motion range (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `gg` / `G` | Delete / yank whole logical lines through an absolute target (`y` copies to the system clipboard) |
@@ -639,7 +640,7 @@ the line; after a nonzero digit it remains part of the count (for example,
 Visual mode, counted motions extend the editor selection. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
-the editor. In Normal mode, `d` / `y` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard. Visual `c` remains unsupported.
+the editor. In Normal mode, `d` / `y` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
 otherwise it uses the full buffer. For a Visual Block selection, it joins
@@ -690,15 +691,16 @@ and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
 
-Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` is Normal-only. Visual `c` is unsupported until the native undo/IME seam is available.
+Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` and `cc` are Normal-only. Visual `c` remains unsupported.
 
-**Undo.** Each `x`, `dd`, or motion-based `d` invocation is one undo step,
-including counted commands. Everything typed in one Insert session is one
-undo step, and each new Insert session starts another. `u` undoes the same
-steps as `Ctrl+z` / `Cmd+z`.
+**Change and undo.** Normal `cw` changes through the next `w` boundary; `cc` changes whole logical lines. Both delete the target through native editing and enter Insert mode for replacement text. Counted `cc` includes the selected lines' existing LF or CRLF terminators. The deletion and replacement form one undo step in ordinary sessions, restoring the first caret; read-only editors leave the text unchanged and do not enter Insert mode. Other `c` motions and Visual `c`, `r`, and `R` are unsupported.
+
+Each `x`, `dd`, or motion-based `d` invocation is one undo step, including counted commands. Everything typed in one ordinary Insert session is one undo step, and each new Insert session starts another. An undo group is capped at 1000 changes, so a long session may require multiple undo steps. `u` undoes the same steps as `Ctrl+z` / `Cmd+z`.
+
+**IME limitation.** A late stale unmark from a prior composition after the next composition starts can prematurely commit the active native composition and split the Vim undo group. On a read-only or Normal-mode transition, pending displayed preedit is finalized as-is rather than accepting a later candidate. This is not a claim of full IME safety; live UI behavior has not been validated.
 
 **Read-only editors** (routine definitions) accept motions, `yy`, and
-motion-based `y`; `x`, `dd`, motion-based `d`, and `u` do nothing there.
+motion-based `y`; `x`, `dd`, `cw`, `cc`, motion-based `d`, and `u` do nothing there.
 A read-only delete does not change the clipboard.
 
 **Limitations.**
@@ -711,7 +713,7 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
+  other `c` motions, Visual `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
   `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

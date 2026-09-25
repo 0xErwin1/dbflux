@@ -69,6 +69,7 @@ pub(crate) struct UndoManager {
     pending: Option<PendingTransaction>,
     pending_intent: Option<EditIntent>,
     active_group: Option<u64>,
+    group_selections_before: Option<Vec<CursorSelection>>,
     coalescing_boundary: bool,
 }
 
@@ -82,6 +83,7 @@ impl UndoManager {
             pending: None,
             pending_intent: None,
             active_group: None,
+            group_selections_before: None,
             coalescing_boundary: false,
         }
     }
@@ -95,6 +97,12 @@ impl UndoManager {
         true
     }
 
+    pub(super) fn snapshot_group_selections(&mut self, selections: Vec<CursorSelection>) {
+        if self.active_group.is_some() {
+            self.group_selections_before = Some(selections);
+        }
+    }
+
     pub(super) fn owns_edit_group(&self, id: u64) -> bool {
         self.active_group == Some(id)
     }
@@ -104,6 +112,7 @@ impl UndoManager {
             return false;
         }
         self.active_group = None;
+        self.group_selections_before = None;
         if let Some(last) = self.undo_transactions.last_mut() {
             if last.group_id == Some(id) {
                 last.group_id = None;
@@ -211,6 +220,11 @@ impl UndoManager {
         }
 
         self.redo_transactions.clear();
+        let group_selections_before = if group_id.is_some() && group_id == self.active_group {
+            self.group_selections_before.take()
+        } else {
+            None
+        };
         let can_coalesce = !self.coalescing_boundary
             && self.undo_transactions.last().is_some_and(|previous| {
                 previous.group_id == group_id
@@ -232,6 +246,9 @@ impl UndoManager {
                 .expect("coalescing requires a previous transaction");
             previous.last_batch_len = changes.len();
             previous.changes.extend(changes);
+            if let Some(before) = group_selections_before {
+                previous.selections_before.get_or_insert(before);
+            }
             return;
         }
 
@@ -243,7 +260,7 @@ impl UndoManager {
             group_id,
             last_batch_len: changes.len(),
             changes,
-            selections_before: None,
+            selections_before: group_selections_before,
             selections_after: None,
             auto_closed_pairs_before: None,
             auto_closed_pairs_after: None,
@@ -352,6 +369,7 @@ impl UndoManager {
         self.pending = None;
         self.pending_intent = None;
         self.active_group = None;
+        self.group_selections_before = None;
         self.coalescing_boundary = false;
     }
 

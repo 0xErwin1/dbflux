@@ -6,6 +6,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim Normal-mode change commands** — `cw` changes through the next `w` boundary and `cc` changes whole logical lines, using native Insert replacement. Counted `cc` includes existing LF or CRLF terminators. In ordinary sessions, deletion and replacement are one undo step with the first caret restored; read-only commands are no-ops. Other `c` motions, Visual `c`, and `r` / `R` remain unsupported. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
+
 * **Vim local marks in code editors** — Normal-mode `m{a-z}` sets or
   overwrites a per-document lowercase mark; `'{a-z}` jumps to its line's first
   non-blank character, while backtick followed by the letter jumps to its exact
@@ -45,20 +47,20 @@ All notable changes to DBFlux will be documented in this file.
   Block deletion uses disjoint row ranges in one undo step. An empty selection
   returns to Normal without editing or changing the clipboard; read-only
   deletion keeps the selection with no effect, while yank still works. `dd`
-  remains Normal-only; Visual `c` awaits the native undo/IME seam.
+  and `cc` remain Normal-only; Visual `c` is unsupported.
 
 * **Vim horizontal and vertical operators** — Normal-mode `d` and `y`
   accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
   Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
   the system clipboard; read-only deletes do nothing, and each delete is
-  one undo step. `c` and `r`/`R` remain unsupported; this
+  one undo step. Other `c` motions and `r`/`R` remain unsupported; this
   is not full Vim compatibility.
 
 * **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,
   `e`/`E`, and `b`/`B`. Operator and motion counts multiply (`2d3w`);
   `w`/`b` ranges exclude the destination and `e` ranges include it (also
   for uppercase variants). Yanks use the system clipboard, read-only deletes
-  do nothing, and each delete is one undo step. `c` and `h`/`j`/`k`/`l`
+  do nothing, and each delete is one undo step. Other `c` motions and `h`/`j`/`k`/`l`
   operator motions remain unsupported; this is not full Vim compatibility.
 
 * **Whole-line Vim commands** — Normal-mode `dd` deletes and `yy` copies whole

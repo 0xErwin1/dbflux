@@ -849,6 +849,213 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
 }
 
 #[gpui::test]
+fn change_word_replaces_current_word_without_consuming_following_spaces(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha   beta", true);
+    editor.set_cursor(2);
+    editor.keys("c w");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.type_text("é中");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "alé中   beta");
+    editor.keys("u");
+    assert_eq!(
+        editor.text(),
+        "alpha   beta",
+        "change and insertion undo together"
+    );
+}
+
+#[gpui::test]
+fn change_line_preserves_next_line_and_undoes_as_one_edit(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.keys("c c");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    editor.type_text("replacement");
+    editor.keys("escape");
+    assert_eq!(editor.text(), "replacement\nsecond");
+    editor.keys("u");
+    assert_eq!(
+        editor.text(),
+        "first\nsecond",
+        "one undo restores the entire line"
+    );
+    editor.keys("i");
+    editor.type_text("X");
+    editor.keys("escape u");
+    assert_eq!(
+        editor.text(),
+        "first\nsecond",
+        "later typing has separate history"
+    );
+}
+
+#[gpui::test]
+fn change_word_from_inside_word_keeps_prefix_and_following_spacing(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("alpha   beta{separator}next");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(2);
+        editor.keys("c w");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), format!("al   beta{separator}next"));
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("alX   beta{separator}next"));
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn change_undo_restores_collapsed_caret_inside_word(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta", true);
+    editor.set_cursor(2);
+    assert_eq!(editor.selection(), 2..2);
+    editor.keys("c w");
+    editor.type_text("X");
+    editor.keys("escape u");
+    assert_eq!(editor.text(), "alpha beta");
+    assert_eq!((editor.cursor(), editor.selection()), (2, 2..2));
+}
+
+#[gpui::test]
+fn change_undo_restores_collapsed_caret_inside_line(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta\nnext", true);
+    editor.set_cursor(2);
+    assert_eq!(editor.selection(), 2..2);
+    editor.keys("c c");
+    editor.type_text("X");
+    editor.keys("escape u");
+    assert_eq!(editor.text(), "alpha beta\nnext");
+    assert_eq!((editor.cursor(), editor.selection()), (2, 2..2));
+}
+
+#[gpui::test]
+fn change_word_on_whitespace_changes_spacing_and_enters_insert(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("one   two{separator}last");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor(4);
+        editor.keys("c w");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), format!("one two{separator}last"));
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("one Xtwo{separator}last"));
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn counted_change_line_across_blank_line_preserves_one_terminator(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("first{separator}{separator}third");
+        let mut editor = open_editor(cx, &content, true);
+        editor.keys("2 c c");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), format!("{separator}third"));
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            Some(format!("first{separator}{separator}").as_str())
+        );
+        editor.type_text("replacement");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("replacement{separator}third"));
+        editor.keys("u");
+        assert_eq!(editor.text(), content);
+    }
+}
+
+#[gpui::test]
+fn change_empty_logical_line_enters_insert(cx: &mut TestAppContext) {
+    for separator in ["\n", "\r\n"] {
+        let content = format!("first{separator}{separator}third");
+        let mut editor = open_editor(cx, &content, true);
+        editor.set_cursor("first".len() + separator.len());
+        editor.keys("c c");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+        assert_eq!(editor.text(), content);
+        editor.type_text("X");
+        editor.keys("escape");
+        assert_eq!(editor.text(), format!("first{separator}X{separator}third"));
+    }
+}
+
+#[gpui::test]
+fn change_undo_group_ends_on_blur_before_later_insert(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "alpha beta", true);
+    editor.window.update(|window, _cx| window.activate_window());
+    editor.keys("c w");
+    editor.type_text("X");
+    editor.focus_other_input();
+    editor
+        .window
+        .update(|window, cx| window.simulate_next_frame(cx));
+    editor.window.run_until_parked();
+    let document = editor.document.clone();
+    let harness = editor.harness.clone();
+    let (other_focused, editor_focused, menu_open) = editor.window.update(|window, cx| {
+        let other_focused = harness
+            .read(cx)
+            .other_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        let editor_focused = document
+            .read(cx)
+            .editor
+            .input_state
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+        (
+            other_focused,
+            editor_focused,
+            document.read(cx).editor_menu_open(cx),
+        )
+    });
+    assert!(other_focused, "focus must move to the other input");
+    assert!(!editor_focused, "editor must lose focus");
+    assert!(!menu_open, "editor menu must not suppress blur");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Normal),
+        "change blur must leave Insert"
+    );
+    editor.focus_document(&editor.document.clone());
+    editor.keys("i");
+    editor.type_text("Y");
+    editor.keys("escape u");
+    assert_eq!(
+        editor.text(),
+        "X beta",
+        "undo must not include the prior change"
+    );
+    editor.keys("u");
+    assert_eq!(editor.text(), "alpha beta");
+}
+
+#[gpui::test]
+fn change_operator_cannot_edit_read_only_document(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "alpha  beta\nnext",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor.keys("c w");
+    assert_eq!(editor.text(), "alpha  beta\nnext");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.keys("c c");
+    assert_eq!(editor.text(), "alpha  beta\nnext");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
 fn word_operators_cover_classes_directions_counts_and_undo(cx: &mut TestAppContext) {
     for (keys, expected) in [
         ("d w", ", bar"),

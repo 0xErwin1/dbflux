@@ -666,7 +666,8 @@ de estado del espacio de trabajo.
 | Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
-| Normal | `dd` / `yy` | Borrar / copiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
+| Normal | `dd` / `yy` / `cc` | Borrar / copiar / cambiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
+| Normal | `cw` | Cambiar hasta el siguiente límite del movimiento `w` |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
@@ -746,15 +747,16 @@ modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
 siguiente vuelve al modo Normal.
 
-En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` solo existe en modo Normal. `c` en modo Visual no está disponible hasta contar con la integración nativa de deshacer e IME.
+En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` y `cc` solo existen en modo Normal. Visual `c` sigue sin admitirse.
 
-**Deshacer.** Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de
-deshacer, también con contador. Todo lo escrito en una misma sesión de modo
-Insertar es un paso, y cada nueva sesión de modo Insertar empieza
-otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
+**Cambiar y deshacer.** En modo Normal, `cw` cambia hasta el siguiente límite de `w`; `cc` cambia líneas lógicas completas. Ambos borran mediante la edición nativa y entran en modo Insertar para escribir el reemplazo. Con contador, `cc` incluye los terminadores LF o CRLF existentes de las líneas afectadas. En sesiones normales, el borrado y el reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambian el texto ni entran en modo Insertar. No se admiten otros movimientos con `c`, Visual `c`, `r` ni `R`.
+
+Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
+
+**Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
-movimientos, `yy` y `y` con movimiento; `x`, `dd`, `d` con movimiento y `u`
+movimientos, `yy` y `y` con movimiento; `x`, `dd`, `cw`, `cc`, `d` con movimiento y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
@@ -768,7 +770,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten `c`, `r` / `R`, otras marcas, objetos de texto, registros,
+  No se admiten otros movimientos con `c`, Visual `c`, `r` / `R`, otras marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así

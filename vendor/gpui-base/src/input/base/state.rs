@@ -925,7 +925,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         {
             return false;
         }
-        self.undo_manager.begin_edit_group(id)
+        if !self.undo_manager.begin_edit_group(id) {
+            return false;
+        }
+        self.undo_manager
+            .snapshot_group_selections(self.selections.iter().copied().collect());
+        true
     }
 
     /// End exactly this group. Returns false if the ID is not active or a
@@ -6802,6 +6807,28 @@ mod tests {
                 state.set_value("reset".to_string(), window, cx);
                 assert!(state.begin_edit_group(10));
                 assert!(state.end_edit_group(10));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn edit_group_restores_selection_before_programmatic_replacement(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abcdef"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            input_view.input.update(cx, |state, cx| {
+                state.set_cursor_to(2);
+                assert!(state.begin_edit_group(1));
+                state.set_selection(2, 5);
+                state.replace_text_in_range(None, "x", window, cx);
+                assert!(state.end_edit_group(1));
+                assert_eq!(state.value(), "abxf");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abcdef");
+                assert_eq!(state.selected_range(), 2..2);
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "abxf");
+                assert_eq!(state.selected_range(), 3..3);
             });
         });
     }
