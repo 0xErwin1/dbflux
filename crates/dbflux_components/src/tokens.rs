@@ -184,6 +184,14 @@ impl HeaderMetrics {
     pub const PANEL_PADDING_RIGHT: Pixels = px(12.0);
     /// Gap between the items of a panel header.
     pub const PANEL_GAP: Pixels = px(8.0);
+    /// Height of a collapsible bar docked at the bottom of an area.
+    pub const BAR_HEIGHT: Pixels = px(30.0);
+    /// Horizontal padding of a collapsible bar.
+    pub const BAR_PADDING_X: Pixels = px(12.0);
+    /// Gap between the items of a collapsible bar.
+    pub const BAR_GAP: Pixels = px(10.0);
+    /// Text size of a collapsible bar.
+    pub const BAR_FONT: Pixels = px(12.0);
     /// Top padding of a settings page head.
     pub const SECTION_PADDING_TOP: Pixels = px(22.0);
     /// Bottom padding of a settings page head.

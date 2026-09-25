@@ -3862,6 +3862,7 @@ toast:
     hide_details: 隐藏详情
 workspace:
   background_tasks: 后台任务
+  background_tasks_idle: 空闲
   empty_documents: 没有打开的文档
   hint:
     new_query: 新建查询

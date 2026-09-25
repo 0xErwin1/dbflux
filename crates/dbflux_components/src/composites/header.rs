@@ -6,6 +6,7 @@ use gpui_component::IconName;
 use crate::icon::IconSource;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{ChromeColors, HeaderMetrics, Heights, Spacing};
+use crate::typography::AppFonts;
 
 /// Panel header: 40 px, the title as an uppercase `Label`, actions on the
 /// right, and a line along the bottom.
@@ -34,13 +35,14 @@ pub fn panel_header_with_actions(
     header
 }
 
-/// Collapsible panel header: a chevron, an optional leading icon and the
-/// title, toggled by a click anywhere on the row. `focused` switches the
-/// title and icons to the tint, the way a focused panel reads.
+/// Bottom-docked collapsible bar, as used for Background Tasks: 30 px, a
+/// line above, the title in muted interface text and an optional status in
+/// mono (for example "idle").
 #[allow(clippy::too_many_arguments)]
-pub fn panel_header_collapsible(
+pub fn collapsible_bar(
     id: impl Into<gpui::ElementId>,
     title: impl Into<SharedString>,
+    status: Option<SharedString>,
     collapsed: bool,
     focused: bool,
     leading_icon: Option<IconName>,
@@ -53,6 +55,7 @@ pub fn panel_header_collapsible(
     } else {
         theme.muted_foreground
     };
+    let status_color = theme.muted;
 
     let chevron = if collapsed {
         IconName::ChevronRight
@@ -62,8 +65,18 @@ pub fn panel_header_collapsible(
 
     let hover = theme.secondary;
 
-    panel_header_row(cx)
+    div()
         .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(HeaderMetrics::BAR_GAP)
+        .h(HeaderMetrics::BAR_HEIGHT)
+        .px(HeaderMetrics::BAR_PADDING_X)
+        .border_t_1()
+        .border_color(theme.border)
+        .text_size(HeaderMetrics::BAR_FONT)
+        .text_color(tone)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(
@@ -78,7 +91,15 @@ pub fn panel_header_collapsible(
                     .color(tone),
             )
         })
-        .child(Text::label(title).color(tone))
+        .child(title.into())
+        .when_some(status, |row, status| {
+            row.child(
+                div()
+                    .font_family(AppFonts::MONO)
+                    .text_color(status_color)
+                    .child(status),
+            )
+        })
         .on_click(on_toggle)
 }
 

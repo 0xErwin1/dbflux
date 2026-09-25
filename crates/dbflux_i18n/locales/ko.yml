@@ -3863,6 +3863,7 @@ toast:
     hide_details: 세부 정보 숨기기
 workspace:
   background_tasks: 백그라운드 작업
+  background_tasks_idle: 유휴
   empty_documents: 열린 문서가 없습니다.
   hint:
     new_query: 새 쿼리

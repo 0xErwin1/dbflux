@@ -1,10 +1,11 @@
 use super::*;
 use crate::keymap::ContextId;
-use dbflux_components::composites::panel_header_collapsible;
+use dbflux_components::composites::collapsible_bar;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::{Icon, Kbd, Text};
+use dbflux_components::tokens::HeaderMetrics;
 use dbflux_ui_base::keymap::chord_display_parts;
 use dbflux_ui_base::platform;
 use gpui_component::IconName;
@@ -197,7 +198,13 @@ impl Render for Workspace {
         let theme = cx.theme().clone();
         let bg_color = theme.background;
         let muted_fg = theme.muted_foreground;
-        let header_size = px(25.0);
+        let header_size = HeaderMetrics::BAR_HEIGHT;
+        let running_task_count = self.app_state.read(cx).tasks().running_tasks().len();
+        let tasks_status: SharedString = if running_task_count == 0 {
+            dbflux_i18n::t!("workspace.background_tasks_idle").into()
+        } else {
+            crate::ui::labels::tasks_running_label(running_task_count).into()
+        };
         let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
         let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
@@ -231,9 +238,10 @@ impl Render for Workspace {
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();
-            let tasks_header = panel_header_collapsible(
+            let tasks_header = collapsible_bar(
                 "panel-header-Background Tasks",
                 dbflux_i18n::t!("workspace.background_tasks"),
+                Some(tasks_status.clone()),
                 !tasks_expanded,
                 tasks_focused,
                 Some(IconName::Loader),
@@ -340,9 +348,10 @@ impl Render for Workspace {
         } else {
             // Empty state: welcome message + tasks panel
             let workspace = cx.entity().clone();
-            let tasks_header_empty = panel_header_collapsible(
+            let tasks_header_empty = collapsible_bar(
                 "panel-header-Background Tasks",
                 dbflux_i18n::t!("workspace.background_tasks"),
+                Some(tasks_status.clone()),
                 !tasks_expanded,
                 tasks_focused,
                 Some(IconName::Loader),
@@ -1187,7 +1196,7 @@ mod tests {
     fn workspace_render_uses_canonical_panel_header_contract() {
         let source = workspace_render_source();
 
-        assert!(source.contains("panel_header_collapsible("));
+        assert!(source.contains("collapsible_bar("));
         assert!(!source.contains("fn background_tasks_panel_header("));
         assert!(!source.contains("fn render_panel_header("));
         assert!(!source.contains("fn panel_header_title("));
@@ -1216,7 +1225,7 @@ mod tests {
         assert_eq!(invocations.len(), 2);
 
         for invocation in invocations {
-            assert!(invocation.contains("panel_header_collapsible("));
+            assert!(invocation.contains("collapsible_bar("));
             assert!(invocation.contains("tasks_focused"));
             assert!(invocation.contains("Some(IconName::Loader)"));
         }
@@ -1399,12 +1408,12 @@ mod tests {
         let mut invocations = Vec::new();
         let mut remaining = source.as_str();
 
-        while let Some(start) = remaining.find("panel_header_collapsible(") {
+        while let Some(start) = remaining.find("collapsible_bar(") {
             let tail = &remaining[start..];
             let end = tail
                 .find(",\n                cx,\n            );")
                 .map(|index| index + ",\n                cx,\n            );".len())
-                .expect("workspace render should close the panel_header_collapsible call");
+                .expect("workspace render should close the collapsible_bar call");
 
             invocations.push(tail[..end].to_string());
             remaining = &tail[end..];

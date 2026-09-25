@@ -15,8 +15,8 @@ pub use field_row::{
     field_row_with_label_width,
 };
 pub use header::{
-    page_header, page_header_with_action, panel_header, panel_header_collapsible,
-    panel_header_with_actions, section_header,
+    collapsible_bar, page_header, page_header_with_action, panel_header, panel_header_with_actions,
+    section_header,
 };
 pub use master_detail_list::{
     MasterDetailAction, MasterDetailActionKind, MasterDetailItem, MasterDetailListConfig, RowKind,
