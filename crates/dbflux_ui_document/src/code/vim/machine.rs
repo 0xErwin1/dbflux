@@ -346,20 +346,25 @@ pub(crate) enum WordMotion {
     Backward,
 }
 
-pub(crate) fn change_word_range(text: &Rope, offset: usize, count: usize) -> Option<Range<usize>> {
+pub(crate) fn change_word_range_with_class(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+    big: bool,
+) -> Option<Range<usize>> {
     let content = text.to_string();
     let chars = word_offsets(text);
     let mut index = chars.partition_point(|(start, _)| *start < offset);
-    let first_class = word_class(chars.get(index)?.1, false);
+    let first_class = word_class(chars.get(index)?.1, big);
     let mut remaining = count.max(1);
     while index < chars.len() && remaining > 0 {
-        let class = word_class(chars[index].1, false);
+        let class = word_class(chars[index].1, big);
         if matches!(chars[index].1, '\r' | '\n') {
             break;
         }
         while index < chars.len()
             && !matches!(chars[index].1, '\r' | '\n')
-            && word_class(chars[index].1, false) == class
+            && word_class(chars[index].1, big) == class
         {
             index += 1;
         }
@@ -526,6 +531,22 @@ pub(crate) fn horizontal_operator_range(
     (start < end).then_some(line.start + start..line.start + end)
 }
 
+/// Change to the right removes the requested characters, not the destination.
+pub(crate) fn change_horizontal_right_range(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+) -> Option<Range<usize>> {
+    let range = horizontal_operator_range(text, offset, true, count)?;
+    let line = Line::containing(text, offset);
+    let length: usize = line.content[range.start - line.start..]
+        .chars()
+        .take(count)
+        .map(char::len_utf8)
+        .sum();
+    Some(range.start..range.start + length)
+}
+
 /// Whole current and destination logical lines, clamping at either edge.
 pub(crate) fn vertical_operator_range(
     text: &Rope,
@@ -563,6 +584,25 @@ pub(crate) fn absolute_operator_range(
         text.line_start_offset(end)
     } else {
         text.len()
+    }
+}
+
+/// Keep the separator after changed rows when later rows remain; consume it
+/// entirely (leaving no dangling empty line) when the range reaches EOF.
+pub(crate) fn change_line_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+    let content = text.to_string();
+    let selected = content.get(range.clone()).unwrap_or_default();
+    let separator = if selected.ends_with("\r\n") {
+        2
+    } else if selected.ends_with('\n') {
+        1
+    } else {
+        0
+    };
+    if range.end == content.len() && separator > 0 {
+        range
+    } else {
+        range.start..range.end.saturating_sub(separator).max(range.start)
     }
 }
 

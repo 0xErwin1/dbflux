@@ -312,13 +312,7 @@ impl CodeDocument {
                 _ => None,
             };
             if let Some((motion, big)) = motion {
-                if operator == 'c' && (motion != machine::WordMotion::Forward || big) {
-                    return true;
-                }
                 self.apply_word_operator(operator, motion, big, count, window, cx);
-                return true;
-            }
-            if operator == 'c' {
                 return true;
             }
             if let Some((range, linewise)) = {
@@ -328,20 +322,35 @@ impl CodeDocument {
                 match command {
                     VimCommand::MoveLeft => {
                         machine::horizontal_operator_range(text, cursor, false, count)
+                            .or_else(|| (operator == 'c').then_some(cursor..cursor))
                             .map(|range| (range, false))
                     }
                     VimCommand::MoveRight => {
-                        machine::horizontal_operator_range(text, cursor, true, count)
-                            .map(|range| (range, false))
+                        let range = if operator == 'c' {
+                            machine::change_horizontal_right_range(text, cursor, count)
+                        } else {
+                            machine::horizontal_operator_range(text, cursor, true, count)
+                        };
+                        range.map(|range| (range, false))
                     }
-                    VimCommand::MoveUp => Some((
-                        machine::vertical_operator_range(text, cursor, false, count),
-                        true,
-                    )),
-                    VimCommand::MoveDown => Some((
-                        machine::vertical_operator_range(text, cursor, true, count),
-                        true,
-                    )),
+                    VimCommand::MoveUp | VimCommand::MoveDown => {
+                        let down = command == VimCommand::MoveDown;
+                        let row = text.offset_to_point(cursor).row;
+                        let target = if down {
+                            row.saturating_add(count)
+                                .min(text.lines_len().saturating_sub(1))
+                        } else {
+                            row.saturating_sub(count)
+                        };
+                        if operator == 'c' && row == target {
+                            None
+                        } else {
+                            Some((
+                                machine::vertical_operator_range(text, cursor, down, count),
+                                true,
+                            ))
+                        }
+                    }
                     _ => None,
                 }
             } {
@@ -951,7 +960,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if operator == 'd' && self.read_only {
+        if matches!(operator, 'd' | 'c') && self.read_only {
             return;
         }
         let selected = {
@@ -965,6 +974,20 @@ impl CodeDocument {
             .map(str::to_owned)
         };
         let Some(selected) = selected else { return };
+        if operator == 'c' {
+            let delete_range = if linewise {
+                machine::change_line_range(self.editor.input_state.read(cx).text(), range)
+            } else {
+                range
+            };
+            self.apply_change(
+                delete_range,
+                (!selected.is_empty()).then_some(selected),
+                window,
+                cx,
+            );
+            return;
+        }
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
         if operator == 'd' {
             let delete_range = if linewise {
@@ -998,7 +1021,11 @@ impl CodeDocument {
         if operator == 'c' {
             let range = {
                 let state = self.editor.input_state.read(cx);
-                machine::change_word_range(state.text(), state.cursor(), count)
+                if motion == machine::WordMotion::Forward {
+                    machine::change_word_range_with_class(state.text(), state.cursor(), count, big)
+                } else {
+                    machine::word_operator_range(state.text(), state.cursor(), motion, big, count)
+                }
             };
             if let Some(range) = range {
                 self.apply_change(range, None, window, cx);
@@ -1055,9 +1082,11 @@ impl CodeDocument {
         if !started {
             return;
         }
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-            clipboard.unwrap_or_else(|| selected.to_string()),
-        ));
+        if !selected.is_empty() || clipboard.is_some() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                clipboard.unwrap_or_else(|| selected.to_string()),
+            ));
+        }
         self.vim.change_group = Some(group);
         self.vim.vertical_goal = None;
         if !range.is_empty() {

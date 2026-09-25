@@ -667,7 +667,7 @@ de estado del espacio de trabajo.
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
 | Normal | `dd` / `yy` / `cc` | Borrar / copiar / cambiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
-| Normal | `cw` | Cambiar hasta el siguiente límite del movimiento `w` |
+| Normal | `c` + `h` / `l` / `j` / `k`, `w` / `W` / `e` / `E` / `b` / `B`, `gg` / `G` | Cambiar caracteres con movimientos horizontales o de palabra, o líneas completas con movimientos verticales o absolutos |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
 | Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
@@ -691,7 +691,7 @@ contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
 siguiente comando. En modo Visual, los movimientos con contador extienden la
 selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
 de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
-se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema. Visual `c` sigue sin admitirse.
+se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema. Visual `c` sigue sin admitirse.
 
 `Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
 texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
@@ -749,14 +749,14 @@ siguiente vuelve al modo Normal.
 
 En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` y `cc` solo existen en modo Normal. Visual `c` sigue sin admitirse.
 
-**Cambiar y deshacer.** En modo Normal, `cw` cambia hasta el siguiente límite de `w`; `cc` cambia líneas lógicas completas. Ambos borran mediante la edición nativa y entran en modo Insertar para escribir el reemplazo. Con contador, `cc` incluye los terminadores LF o CRLF existentes de las líneas afectadas. En sesiones normales, el borrado y el reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambian el texto ni entran en modo Insertar. No se admiten otros movimientos con `c`, Visual `c`, `r` ni `R`.
+**Cambiar y deshacer.** En modo Normal, `c` admite `h` / `l` por caracteres, `j` / `k` por líneas, `w` / `W` / `e` / `E` / `b` / `B` por palabras y `gg` / `G` por líneas, además de `cc`. `cw` cambia hasta el siguiente límite de `w`. Los contadores anterior e interior se multiplican (`2c3w` abarca seis movimientos `w`); los destinos absolutos son filas desde 1 limitadas al archivo (`2c3G` apunta a la fila 6), mientras que `cG` sin contador apunta a la última. Los cambios por líneas conservan el separador anterior a la fila siguiente; `cc` con contador incluye los terminadores LF o CRLF existentes de las líneas afectadas. El cambio borra mediante edición nativa y entra en modo Insertar para escribir el reemplazo. En sesiones normales, borrado y reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambia el texto ni entra en modo Insertar. Visual `c` y `r` / `R` siguen sin admitirse.
 
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
-movimientos, `yy` y `y` con movimiento; `x`, `dd`, `cw`, `cc`, `d` con movimiento y `u`
+movimientos, `yy` y `y` con movimiento; `x`, `dd`, `cc`, `c` / `d` con movimiento y `u`
 no hacen nada. Borrar tampoco modifica el portapapeles.
 
 **Limitaciones.**
@@ -770,7 +770,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten otros movimientos con `c`, Visual `c`, `r` / `R`, otras marcas, objetos de texto, registros,
+  No se admiten Visual `c`, `r` / `R`, otras marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así

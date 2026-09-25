@@ -616,7 +616,7 @@ status bar.
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
 | Normal | `dd` / `yy` / `cc` | Delete / yank / change whole logical lines (`yy` copies to the system clipboard) |
-| Normal | `cw` | Change through the next `w` word-motion boundary |
+| Normal | `c` + `h` / `l` / `j` / `k`, `w` / `W` / `e` / `E` / `b` / `B`, `gg` / `G` | Change a characterwise horizontal or word-motion range, or whole logical lines for vertical and absolute-line motions |
 | Normal | `d` / `y` + `h` / `l` / `j` / `k` | Delete / yank a characterwise horizontal or linewise vertical motion (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Delete / yank a characterwise word-motion range (`y` copies to the system clipboard) |
 | Normal | `d` / `y` + `gg` / `G` | Delete / yank whole logical lines through an absolute target (`y` copies to the system clipboard) |
@@ -640,7 +640,7 @@ the line; after a nonzero digit it remains part of the count (for example,
 Visual mode, counted motions extend the editor selection. `gg` and `G` place the
 cursor at the first non-blank character of the destination logical line; `G`
 is a single uppercase key. A pending `g` clears if interrupted or focus leaves
-the editor. In Normal mode, `d` / `y` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
+the editor. In Normal mode, `d` / `y` / `c` with `gg` / `G` acts linewise from the current row through the target, clamped to the buffer: bare `gg` targets row 1 and bare `G` targets the last row. A prefix or inner count specifies an absolute 1-based target; together they multiply (`2d3G` targets row 6). Thus `1dG` targets row 1, unlike bare `dG`. Deletion is one undo step; in read-only editors it does nothing, while yank still copies to the system clipboard.
 
 `Ctrl+Enter` uses the trimmed selection if it contains non-whitespace text;
 otherwise it uses the full buffer. For a Visual Block selection, it joins
@@ -693,14 +693,14 @@ the first `Escape` clears them and the next one returns to Normal mode.
 
 Visual `d` / `x` deletes character, line, or block selections; blocks delete their disjoint row ranges in one undo step. Visual `y` copies the selected text to the system clipboard. If the selection is empty, these commands return to Normal mode without editing or changing the clipboard. In read-only editors, Visual `d` / `x` leaves the selection in place without editing or changing the clipboard; Visual `y` still works. `dd` and `cc` are Normal-only. Visual `c` remains unsupported.
 
-**Change and undo.** Normal `cw` changes through the next `w` boundary; `cc` changes whole logical lines. Both delete the target through native editing and enter Insert mode for replacement text. Counted `cc` includes the selected lines' existing LF or CRLF terminators. The deletion and replacement form one undo step in ordinary sessions, restoring the first caret; read-only editors leave the text unchanged and do not enter Insert mode. Other `c` motions and Visual `c`, `r`, and `R` are unsupported.
+**Change and undo.** Normal `c` accepts `h` / `l` characterwise, `j` / `k` linewise, `w` / `W` / `e` / `E` / `b` / `B` wordwise, and `gg` / `G` linewise, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six `w` motions); absolute-line targets use clamped 1-based rows (`2c3G` targets row 6), while bare `cG` targets the last row. Linewise changes preserve the separator before the following row; counted `cc` includes selected lines' existing LF or CRLF terminators. Changes delete through native editing and enter Insert mode for replacement text. Deletion and replacement form one undo step in ordinary sessions, restoring the first caret; read-only editors leave text unchanged and do not enter Insert mode. Visual `c` and `r` / `R` remain unsupported.
 
 Each `x`, `dd`, or motion-based `d` invocation is one undo step, including counted commands. Everything typed in one ordinary Insert session is one undo step, and each new Insert session starts another. An undo group is capped at 1000 changes, so a long session may require multiple undo steps. `u` undoes the same steps as `Ctrl+z` / `Cmd+z`.
 
 **IME limitation.** A late stale unmark from a prior composition after the next composition starts can prematurely commit the active native composition and split the Vim undo group. On a read-only or Normal-mode transition, pending displayed preedit is finalized as-is rather than accepting a later candidate. This is not a claim of full IME safety; live UI behavior has not been validated.
 
 **Read-only editors** (routine definitions) accept motions, `yy`, and
-motion-based `y`; `x`, `dd`, `cw`, `cc`, motion-based `d`, and `u` do nothing there.
+motion-based `y`; `x`, `dd`, `cc`, motion-based `c` / `d`, and `u` do nothing there.
 A read-only delete does not change the clipboard.
 
 **Limitations.**
@@ -713,7 +713,7 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  other `c` motions, Visual `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
+  Visual `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
   `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

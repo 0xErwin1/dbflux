@@ -1056,6 +1056,182 @@ fn change_operator_cannot_edit_read_only_document(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn change_motion_word_end_big_word_and_backward(cx: &mut TestAppContext) {
+    for (content, cursor, keys, expected) in [
+        ("é_foo, bar", 0, "c e", ", bar"),
+        ("é_foo, bar", 0, "c shift-w", " bar"),
+        ("one two three", 8, "c b", "one three"),
+        ("ab中\r\nnext", 2, "c e", "ab"),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.mode(), Some(VimMode::Insert), "{keys}");
+        assert_eq!(editor.text(), expected, "{keys}");
+        editor.type_text("X");
+        editor.keys("escape u");
+        assert_eq!(editor.text(), content, "{keys}");
+        assert_eq!(editor.cursor(), cursor, "{keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_horizontal_and_vertical_are_distinct(cx: &mut TestAppContext) {
+    for (cursor, keys, expected) in [
+        (0, "c l", "中x\r\nlast"),
+        (0, "2 c l", "x\r\nlast"),
+        (0, "c 2 l", "x\r\nlast"),
+        (5, "c h", "éx\r\nlast"),
+        (0, "c j", ""),
+        (8, "c k", ""),
+    ] {
+        let mut editor = open_editor(cx, "é中x\r\nlast", true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.mode(), Some(VimMode::Insert), "{keys}");
+        assert_eq!(editor.text(), expected, "{keys}");
+        if keys == "c j" || keys == "c k" {
+            assert_eq!(editor.clipboard_text().as_deref(), Some("é中x\r\nlast"));
+        }
+        editor.type_text("Z");
+        editor.keys("escape u");
+        assert_eq!(editor.text(), "é中x\r\nlast", "{keys}");
+        assert_eq!(editor.cursor(), cursor, "{keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_absolute_lines_and_multiplied_counts(cx: &mut TestAppContext) {
+    let content = "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix";
+    for (cursor, keys, expected, yank) in [
+        (
+            18,
+            "c g g",
+            "\r\nfive\r\nsix",
+            "one\r\ntwo\r\nthree\r\nfour\r\n",
+        ),
+        (0, "c shift-g", "", content),
+        (
+            0,
+            "2 c 2 g g",
+            "\r\nfive\r\nsix",
+            "one\r\ntwo\r\nthree\r\nfour\r\n",
+        ),
+        (
+            0,
+            "2 c 2 shift-g",
+            "\r\nfive\r\nsix",
+            "one\r\ntwo\r\nthree\r\nfour\r\n",
+        ),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.mode(), Some(VimMode::Insert), "{keys}");
+        assert_eq!(editor.text(), expected, "{keys}");
+        assert_eq!(editor.clipboard_text().as_deref(), Some(yank), "{keys}");
+        editor.type_text("Z");
+        editor.keys("escape u");
+        assert_eq!(editor.text(), content, "{keys}");
+        assert_eq!(editor.cursor(), cursor, "{keys}");
+        editor.keys("i");
+        editor.type_text("Q");
+        editor.keys("escape u");
+        assert_eq!(editor.text(), content, "next Insert session: {keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_edge_vertical_clamp_preserves_text(cx: &mut TestAppContext) {
+    for (cursor, keys) in [(4, "c j"), (0, "c k")] {
+        let mut editor = open_editor(cx, "foo\nbar", true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.text(), "foo\nbar", "{keys}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{keys}");
+        editor.type_text("Z");
+        editor.keys("escape");
+        assert_eq!(editor.text(), "foo\nbar", "{keys}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_edge_big_word_preserves_separator(cx: &mut TestAppContext) {
+    for (content, expected) in [("foo bar", " bar"), ("foo\nbar", "\nbar")] {
+        let mut editor = open_editor(cx, content, true);
+        editor.keys("c shift-w");
+        assert_eq!(editor.text(), expected, "{content:?}");
+        assert_eq!(editor.mode(), Some(VimMode::Insert));
+    }
+}
+
+#[gpui::test]
+fn change_motion_edge_trailing_row_keeps_single_separator(cx: &mut TestAppContext) {
+    for (keys, expected) in [("c g g", ""), ("c k", "foo\n")] {
+        let mut editor = open_editor(cx, "foo\nbar\n", true);
+        editor.set_cursor(8);
+        editor.keys(keys);
+        assert_eq!(editor.text(), expected, "{keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_edge_empty_range_accepts_input_and_undo(cx: &mut TestAppContext) {
+    for (content, cursor, keys, expected) in [
+        ("foo bar", 0, "c h", "Qfoo bar"),
+        ("foo\n", 4, "c shift-g", "foo\nQ"),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(editor.mode(), Some(VimMode::Insert), "{keys}");
+        editor.type_text("Q");
+        assert_eq!(editor.text(), expected, "{keys}");
+        editor.keys("escape u");
+        assert_eq!(editor.text(), content, "{keys}");
+        assert_eq!(editor.cursor(), cursor, "{keys}");
+    }
+}
+
+#[gpui::test]
+fn change_motion_readonly_keeps_text_mode_and_clipboard(cx: &mut TestAppContext) {
+    for keys in [
+        "c e",
+        "c shift-w",
+        "c b",
+        "c h",
+        "c l",
+        "c j",
+        "c k",
+        "c g g",
+        "c shift-g",
+    ] {
+        let mut editor = open_editor_with(
+            cx,
+            EditorSetup {
+                content: "one\r\ntwo",
+                vim_enabled: true,
+                language: QueryLanguage::Lua,
+                read_only: true,
+            },
+        );
+        editor.set_cursor(5);
+        editor
+            .window
+            .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+        editor.keys(keys);
+        assert_eq!(editor.text(), "one\r\ntwo", "{keys}");
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{keys}");
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            Some("sentinel"),
+            "{keys}"
+        );
+    }
+}
+
+#[gpui::test]
 fn word_operators_cover_classes_directions_counts_and_undo(cx: &mut TestAppContext) {
     for (keys, expected) in [
         ("d w", ", bar"),

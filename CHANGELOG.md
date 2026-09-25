@@ -6,7 +6,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
-* **Vim Normal-mode change commands** — `cw` changes through the next `w` boundary and `cc` changes whole logical lines, using native Insert replacement. Counted `cc` includes existing LF or CRLF terminators. In ordinary sessions, deletion and replacement are one undo step with the first caret restored; read-only commands are no-ops. Other `c` motions, Visual `c`, and `r` / `R` remain unsupported. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
+* **Vim Normal-mode change commands** — `c` accepts characterwise `h` / `l`, linewise `j` / `k`, word motions `w` / `W` / `e` / `E` / `b` / `B`, and linewise `gg` / `G`, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six motions); absolute targets clamp to 1-based rows (`2c3G` targets row 6, while bare `cG` targets the last row). Linewise changes preserve the separator before the following row; counted `cc` includes existing LF or CRLF terminators. Native deletion and Insert replacement form one undo step in ordinary sessions with the first caret restored; read-only changes do nothing. Visual `c` and `r` / `R` remain unsupported, as does a Vim redo key. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
 
 * **Vim local marks in code editors** — Normal-mode `m{a-z}` sets or
   overwrites a per-document lowercase mark; `'{a-z}` jumps to its line's first
@@ -53,15 +53,15 @@ All notable changes to DBFlux will be documented in this file.
   accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
   Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
   the system clipboard; read-only deletes do nothing, and each delete is
-  one undo step. Other `c` motions and `r`/`R` remain unsupported; this
+  one undo step. Visual `c` and `r`/`R` remain unsupported; this
   is not full Vim compatibility.
 
 * **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,
   `e`/`E`, and `b`/`B`. Operator and motion counts multiply (`2d3w`);
   `w`/`b` ranges exclude the destination and `e` ranges include it (also
   for uppercase variants). Yanks use the system clipboard, read-only deletes
-  do nothing, and each delete is one undo step. Other `c` motions and `h`/`j`/`k`/`l`
-  operator motions remain unsupported; this is not full Vim compatibility.
+  do nothing, and each delete is one undo step. Normal `c` now supports these
+  word motions and `h`/`j`/`k`/`l`; this is not full Vim compatibility.
 
 * **Whole-line Vim commands** — Normal-mode `dd` deletes and `yy` copies whole
   logical lines to the system clipboard. Prefix counts and counts between the
