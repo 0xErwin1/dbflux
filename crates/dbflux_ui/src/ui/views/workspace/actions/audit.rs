@@ -154,10 +154,11 @@ impl Workspace {
 
         self.active_governance_panel = Some(super::GovernancePanel::Approvals);
 
-        // The overlay has no focusable element of its own, so the workspace
-        // takes focus: that keeps Escape out of whichever editor or input was
-        // focused underneath and routes it to the workspace keymap instead.
-        self.focus_handle.focus(window, cx);
+        // The view takes focus for its j/k/a/r keys; everything else it
+        // leaves to bubble up to the workspace keymap, so Escape still
+        // closes the overlay instead of reaching the editor underneath.
+        let approvals_focus = self.mcp_approvals_view.read(cx).focus_handle();
+        approvals_focus.focus(window, cx);
         cx.notify();
 
         Toast::info(audit_opened_mcp_approvals_message())

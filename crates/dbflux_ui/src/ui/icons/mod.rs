@@ -58,6 +58,10 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::CaseSensitive,
     AppIcon::ScrollText,
     AppIcon::ListFilter,
+    AppIcon::Tag,
+    AppIcon::Activity,
+    AppIcon::FileDown,
+    AppIcon::SquareFunction,
     AppIcon::ArrowUpDown,
     AppIcon::Plug,
     AppIcon::Unplug,
@@ -194,6 +198,12 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         }
         AppIcon::ScrollText => include_bytes!("../../../../../resources/icons/ui/scroll-text.svg"),
         AppIcon::ListFilter => include_bytes!("../../../../../resources/icons/ui/list-filter.svg"),
+        AppIcon::Tag => include_bytes!("../../../../../resources/icons/ui/tag.svg"),
+        AppIcon::Activity => include_bytes!("../../../../../resources/icons/ui/activity.svg"),
+        AppIcon::FileDown => include_bytes!("../../../../../resources/icons/ui/file-down.svg"),
+        AppIcon::SquareFunction => {
+            include_bytes!("../../../../../resources/icons/ui/square-function.svg")
+        }
         AppIcon::ArrowUpDown => {
             include_bytes!("../../../../../resources/icons/ui/arrow-up-down.svg")
         }

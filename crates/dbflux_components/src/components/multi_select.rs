@@ -1,13 +1,14 @@
-use crate::composites::ListRow;
-use crate::primitives::Text;
-use crate::tokens::{Heights, Spacing};
+use crate::controls::Checkbox;
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, Icon};
+use crate::tokens::{ChamferCut, Fields, FontSizes, Heights, Spacing};
+use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::{
     Anchor, ElementId, EventEmitter, IntoElement, MouseButton, ParentElement, Render, ScrollHandle,
     SharedString, StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
-use gpui_component::checkbox::Checkbox;
 
 use crate::controls::DropdownItem;
 
@@ -29,6 +30,8 @@ pub struct MultiSelect {
     /// embedded inside an external shell (e.g. `control_shell`) without
     /// double-layering visual chrome.
     bare: bool,
+    summary_name: Option<SharedString>,
+    leading_icon: Option<AppIcon>,
 }
 
 impl MultiSelect {
@@ -41,7 +44,22 @@ impl MultiSelect {
             placeholder: dbflux_i18n::t!("controls.multi_select.placeholder").into(),
             menu_scroll_handle: ScrollHandle::new(),
             bare: false,
+            summary_name: None,
+            leading_icon: None,
         }
+    }
+
+    /// Shows the trigger as `name · count` (or `name · all` with nothing
+    /// selected) instead of the selected labels, as the toolbar filters do.
+    pub fn summary(mut self, name: impl Into<SharedString>) -> Self {
+        self.summary_name = Some(name.into());
+        self
+    }
+
+    /// Draws `icon` in the muted color before the trigger label.
+    pub fn leading_icon(mut self, icon: AppIcon) -> Self {
+        self.leading_icon = Some(icon);
+        self
     }
 
     /// Suppress the trigger's own border and background.
@@ -144,6 +162,10 @@ impl MultiSelect {
     }
 
     fn render_trigger_label(&self) -> SharedString {
+        if let Some(name) = &self.summary_name {
+            return summary_label(name, self.selected_indices.len());
+        }
+
         if self.selected_indices.is_empty() {
             return self.placeholder.clone();
         }
@@ -180,14 +202,28 @@ impl MultiSelect {
             .enumerate()
             .map(|(index, item)| {
                 let checked = self.selected_indices.contains(&index);
-                ListRow::new(index)
-                    .build(cx)
-                    .w_full()
-                    .px_2()
-                    .py_1p5()
+
+                div()
+                    .id(("ms-item", index))
+                    .relative()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap(Fields::CHECKBOX_GAP)
+                    .h(Fields::MENU_ROW_HEIGHT)
+                    .mx(Fields::MENU_ROW_INSET)
+                    .px(Fields::PADDING_X)
+                    .cursor_pointer()
+                    .whitespace_nowrap()
+                    .text_color(if checked {
+                        theme.accent_foreground
+                    } else {
+                        theme.foreground
+                    })
+                    .child(
+                        Chamfer::new(ChamferCut::KEYCAP)
+                            .fill_hover(theme.list_hover)
+                            .interactive(("ms-row-shape", index)),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
@@ -198,45 +234,59 @@ impl MultiSelect {
                         Checkbox::new(SharedString::from(format!("ms-item-{}", index)))
                             .checked(checked),
                     )
-                    .child(Text::body(item.label.clone()))
+                    .child(item.label.clone())
                     .into_any_element()
             })
             .collect();
 
-        let footer = div().p_1().pt_0().when(has_selection, |d| {
-            d.child(
-                ListRow::new("ms-clear")
-                    .build(cx)
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _event, _window, cx| {
-                            this.clear_selection(cx);
-                        }),
-                    )
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "controls.multi_select.clear_all"
-                    ))),
-            )
+        let clear_row = has_selection.then(|| {
+            div()
+                .id("ms-clear")
+                .relative()
+                .flex()
+                .items_center()
+                .h(Fields::MENU_ROW_HEIGHT)
+                .mx(Fields::MENU_ROW_INSET)
+                .px(Fields::PADDING_X)
+                .cursor_pointer()
+                .text_color(theme.muted_foreground)
+                .child(
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .fill_hover(theme.list_hover)
+                        .interactive("ms-clear-shape"),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.clear_selection(cx);
+                    }),
+                )
+                .child(dbflux_i18n::t!("controls.multi_select.clear_all"))
         });
+
+        let rows = div()
+            .id("ms-menu-rows")
+            .max_h(Fields::MENU_MAX_HEIGHT)
+            .py(Fields::MENU_PADDING_Y)
+            .overflow_y_scroll()
+            .track_scroll(&self.menu_scroll_handle)
+            .children(items)
+            .children(clear_row);
 
         let menu = div()
             .id("ms-menu")
+            .relative()
             .min_w_full()
-            .max_h(px(220.0))
-            .p_1()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .rounded_md()
-            .overflow_scroll()
-            .track_scroll(&self.menu_scroll_handle)
+            .font_family(AppFonts::INTERFACE)
+            .text_size(FontSizes::BASE)
             .shadow_lg()
             .occlude()
-            .children(items)
-            .child(footer);
+            .child(
+                Chamfer::new(ChamferCut::OVERLAY)
+                    .fill(theme.secondary)
+                    .border(theme.input),
+            )
+            .child(rows);
 
         deferred(
             anchored()
@@ -255,37 +305,75 @@ impl Render for MultiSelect {
         let theme = cx.theme();
         let is_empty = self.items.is_empty();
         let label = self.render_trigger_label();
-        let has_selection = !self.selected_indices.is_empty();
+        let has_selection = !self.selected_indices.is_empty() || self.summary_name.is_some();
         let bare = self.bare;
 
-        // In bare mode the trigger omits its own border/background to avoid
-        // double chrome when embedded inside `control_shell`.
+        let text_color = if is_empty {
+            theme.muted_foreground
+        } else if has_selection {
+            theme.accent_foreground
+        } else {
+            theme.muted_foreground
+        };
+
+        // In bare mode the trigger omits its own shape to avoid double
+        // chrome when embedded inside `control_shell`.
+        let shape = (!bare).then(|| {
+            let opacity = if is_empty {
+                Fields::DISABLED_OPACITY
+            } else {
+                1.0
+            };
+
+            let mut shape = Chamfer::new(ChamferCut::CONTROL)
+                .fill(theme.secondary.opacity(opacity))
+                .border(theme.border.opacity(opacity));
+
+            if !is_empty {
+                shape = shape
+                    .fill_hover(theme.secondary_hover)
+                    .interactive("ms-trigger-shape");
+            }
+
+            shape
+        });
+
         let trigger = div()
             .id("ms-trigger")
-            .h(Heights::BUTTON)
+            .relative()
+            .h(if bare {
+                Heights::BUTTON
+            } else {
+                Fields::HEIGHT
+            })
             .flex()
             .items_center()
-            .justify_between()
-            .gap_2()
+            .gap(Fields::GAP)
             .w_full()
-            .px_3()
-            .when(!bare, |el| {
-                el.rounded_md()
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.input)
+            .px(Fields::PADDING_X)
+            .font_family(AppFonts::INTERFACE)
+            .text_size(Fields::TEXT)
+            .text_color(text_color)
+            .children(shape)
+            .when(is_empty, |el| el.cursor_not_allowed())
+            .when(!is_empty, |el| el.cursor_pointer())
+            .when_some(self.leading_icon, |el, icon| {
+                el.child(
+                    Icon::new(icon)
+                        .size(Fields::LEADING_ICON)
+                        .color(theme.muted_foreground),
+                )
             })
-            .when(is_empty, |el| el.cursor_not_allowed().opacity(0.5))
-            .when(!is_empty, |el| {
-                el.cursor_pointer()
-                    .hover(|s| s.bg(theme.accent.opacity(0.1)))
-            })
-            .child(div().flex_1().truncate().child(if has_selection {
-                Text::body(label)
-            } else {
-                Text::caption(label)
-            }))
-            .child(Text::caption(if self.open { "▴" } else { "▾" }))
+            .child(div().flex_1().whitespace_nowrap().truncate().child(label))
+            .child(
+                Icon::new(if self.open {
+                    AppIcon::ChevronUp
+                } else {
+                    AppIcon::ChevronDown
+                })
+                .size(Fields::CHEVRON)
+                .color(theme.muted_foreground),
+            )
             .when(!is_empty, |el| {
                 el.on_click(cx.listener(|this, _event, _window, cx| {
                     this.toggle_open(cx);
@@ -311,6 +399,21 @@ impl Render for MultiSelect {
 }
 
 impl EventEmitter<MultiSelectChanged> for MultiSelect {}
+
+/// Trigger text of a summarized multi-select: `name · count`, or
+/// `name · all` when nothing is selected (no filter applied).
+fn summary_label(name: &str, selected: usize) -> SharedString {
+    if selected == 0 {
+        dbflux_i18n::t!("controls.multi_select.summary_all", name = name).into()
+    } else {
+        dbflux_i18n::t!(
+            "controls.multi_select.summary_count",
+            name = name,
+            count = selected
+        )
+        .into()
+    }
+}
 
 /// Label for the "+N more" trigger suffix shown when more than three items
 /// are selected.

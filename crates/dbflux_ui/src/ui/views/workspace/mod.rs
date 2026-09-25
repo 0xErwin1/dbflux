@@ -48,7 +48,7 @@ use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
 use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{Heights, Spacing};
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -465,7 +465,21 @@ impl Workspace {
             cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
         #[cfg(feature = "mcp")]
-        let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
+        let workspace_handle = cx.weak_entity();
+        #[cfg(feature = "mcp")]
+        let mcp_approvals_view = cx.new(|cx| {
+            let mut view = McpApprovalsView::new(app_state.clone(), cx);
+            let workspace = workspace_handle.clone();
+            view.set_on_close(move |window, cx| {
+                let closed = workspace.update(cx, |workspace, cx| {
+                    workspace.close_governance_panel(window, cx);
+                });
+                if let Err(error) = closed {
+                    log::debug!("workspace released before the approvals closed: {error}");
+                }
+            });
+            view
+        });
 
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
 
@@ -1494,6 +1508,10 @@ impl Workspace {
                             window,
                             cx,
                         );
+                    }
+                    TabManagerEvent::RequestOpenApprovals => {
+                        #[cfg(feature = "mcp")]
+                        this.open_mcp_approvals(window, cx);
                     }
                     TabManagerEvent::OpenEditorWithContent { sql, .. } => {
                         this.new_query_tab_with_content(sql.clone(), window, cx);

@@ -15,12 +15,14 @@ use super::{AuditDocument, AuditDocumentSource};
 use crate::chart::ChartShell;
 use dbflux_audit::{AuditAggregateParams, AuditGroupColumn};
 use dbflux_components::chart::{AggKind, AuditGroupBy, BindingSpec};
-use dbflux_components::tokens::Spacing;
-use dbflux_core::ColumnKind;
-use dbflux_core::QueryResult;
+use dbflux_components::tokens::{DocumentMetrics, Spacing};
+use dbflux_core::{ColumnKind, QueryResult, Value};
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, Task, Window};
 use std::sync::Arc;
+
+/// Upper bound on timeline bars; a window without a start keeps the latest.
+const TIMELINE_MAX_BUCKETS: usize = 96;
 
 /// Which content panel the audit document currently shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,6 +80,113 @@ impl AuditChartState {
     }
 }
 
+/// One bar of the timeline strip: every event in the bucket, and how many of
+/// them were errors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimelineBucket {
+    pub start_ms: i64,
+    pub total: i64,
+    pub errors: i64,
+}
+
+/// The event timeline drawn above the audit table (P1Audit): event and error
+/// counts per time bucket for the current filters.
+#[derive(Default)]
+pub struct AuditTimeline {
+    /// Incremented before each aggregate; stale completions are dropped.
+    pub load_id: u64,
+    pub bucket_ms: i64,
+    pub buckets: Vec<TimelineBucket>,
+}
+
+/// Column name of the error level in an aggregate grouped by level.
+const ERROR_LEVEL: &str = "error";
+
+/// Folds an aggregate grouped by level (`bucket_ms` then one count column per
+/// level) into consecutive timeline buckets.
+///
+/// With a known `start_ms` the buckets cover `start_ms..end_ms` and empty
+/// buckets are filled with zeros; without one they start at the first bucket
+/// that has events. At most `max_buckets` trailing buckets are kept.
+pub(super) fn timeline_buckets(
+    result: &QueryResult,
+    start_ms: Option<i64>,
+    end_ms: i64,
+    bucket_ms: i64,
+    max_buckets: usize,
+) -> Vec<TimelineBucket> {
+    if bucket_ms <= 0 {
+        return Vec::new();
+    }
+
+    let error_column = result
+        .columns
+        .iter()
+        .position(|column| column.name == ERROR_LEVEL);
+
+    let counts: Vec<TimelineBucket> = result
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let Some(Value::Int(bucket_start)) = row.first() else {
+                return None;
+            };
+
+            let total = row
+                .iter()
+                .skip(1)
+                .map(|value| match value {
+                    Value::Int(count) => *count,
+                    _ => 0,
+                })
+                .sum();
+
+            let errors = match error_column.and_then(|index| row.get(index)) {
+                Some(Value::Int(count)) => *count,
+                _ => 0,
+            };
+
+            Some(TimelineBucket {
+                start_ms: *bucket_start,
+                total,
+                errors,
+            })
+        })
+        .collect();
+
+    let first_start = match start_ms {
+        Some(start) => start.div_euclid(bucket_ms) * bucket_ms,
+        None => match counts.first() {
+            Some(bucket) => bucket.start_ms,
+            None => return Vec::new(),
+        },
+    };
+
+    let mut buckets = Vec::new();
+    let mut bucket_start = first_start;
+
+    while bucket_start <= end_ms {
+        let bucket = counts
+            .iter()
+            .find(|bucket| bucket.start_ms == bucket_start)
+            .copied()
+            .unwrap_or(TimelineBucket {
+                start_ms: bucket_start,
+                total: 0,
+                errors: 0,
+            });
+
+        buckets.push(bucket);
+        bucket_start += bucket_ms;
+    }
+
+    if buckets.len() > max_buckets {
+        buckets.drain(..buckets.len() - max_buckets);
+    }
+
+    buckets
+}
+
 // ---------------------------------------------------------------------------
 // AuditDocument impl block — chart helpers (physically in chart_view.rs)
 // ---------------------------------------------------------------------------
@@ -108,6 +217,88 @@ impl AuditDocument {
         };
 
         (span_ms / TARGET_BUCKETS).max(MIN_BUCKET_MS)
+    }
+
+    /// Spawns the aggregate behind the timeline strip: event counts per level
+    /// in about `DocumentMetrics::TIMELINE_BUCKETS` buckets over the current
+    /// window. Only the local audit store has an aggregate.
+    pub(super) fn trigger_timeline(&mut self, cx: &mut Context<Self>) {
+        let AuditDocumentSource::Internal { adapter } = &self.source else {
+            return;
+        };
+
+        self.timeline.load_id += 1;
+        let load_id = self.timeline.load_id;
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0);
+        let start_ms = self.filters.start_ms;
+        let end_ms = self.filters.end_ms.unwrap_or(now_ms);
+        let bucket_ms = Self::timeline_bucket_ms(start_ms, end_ms);
+
+        let filter = self.active_filter(None, None);
+        let adapter = adapter.clone();
+
+        let task: Task<Result<QueryResult, String>> = cx.background_executor().spawn(async move {
+            adapter.aggregate(&AuditAggregateParams {
+                bucket_ms,
+                group_by: AuditGroupColumn::Level,
+                filter,
+            })
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+
+            cx.update(|cx| {
+                let Some(entity) = this.upgrade() else {
+                    return;
+                };
+
+                entity.update(cx, |doc, cx| {
+                    if doc.timeline.load_id != load_id {
+                        return;
+                    }
+
+                    match result {
+                        Ok(result) => {
+                            doc.timeline.bucket_ms = bucket_ms;
+                            doc.timeline.buckets = timeline_buckets(
+                                &result,
+                                start_ms,
+                                end_ms,
+                                bucket_ms,
+                                TIMELINE_MAX_BUCKETS,
+                            );
+                        }
+                        Err(error) => {
+                            log::warn!("audit timeline aggregate failed: {error}");
+                            doc.timeline.buckets.clear();
+                        }
+                    }
+
+                    cx.notify();
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Bucket width of the timeline strip: the window split into
+    /// `DocumentMetrics::TIMELINE_BUCKETS` bars, at least one minute; one
+    /// hour when the window has no start.
+    pub(super) fn timeline_bucket_ms(start_ms: Option<i64>, end_ms: i64) -> i64 {
+        const FALLBACK_BUCKET_MS: i64 = 3_600_000;
+        const MIN_BUCKET_MS: i64 = 60_000;
+
+        match start_ms {
+            Some(start) if end_ms > start => {
+                ((end_ms - start) / DocumentMetrics::TIMELINE_BUCKETS).max(MIN_BUCKET_MS)
+            }
+            _ => FALLBACK_BUCKET_MS,
+        }
     }
 
     /// Spawns a background aggregate task for the current filters and chart
@@ -341,6 +532,96 @@ mod tests {
             AuditDocument::audit_group_column(AuditGroupBy::Level),
             AuditGroupColumn::Level
         ));
+    }
+
+    fn level_aggregate(rows: Vec<(i64, i64, i64)>) -> QueryResult {
+        use dbflux_core::ColumnMeta;
+
+        let column = |name: &str, kind: ColumnKind| ColumnMeta {
+            name: name.to_string(),
+            type_name: "INTEGER".to_string(),
+            kind,
+            nullable: false,
+            is_primary_key: false,
+        };
+
+        QueryResult::table(
+            vec![
+                column("bucket_ms", ColumnKind::Timestamp),
+                column("error", ColumnKind::Integer),
+                column("info", ColumnKind::Integer),
+            ],
+            rows.into_iter()
+                .map(|(bucket, errors, infos)| {
+                    vec![Value::Int(bucket), Value::Int(errors), Value::Int(infos)]
+                })
+                .collect(),
+            None,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    #[test]
+    fn timeline_fills_empty_buckets_across_the_window() {
+        let result = level_aggregate(vec![(1_000, 1, 2), (3_000, 0, 4)]);
+
+        let buckets = timeline_buckets(&result, Some(1_000), 3_500, 1_000, 96);
+
+        assert_eq!(
+            buckets,
+            vec![
+                TimelineBucket {
+                    start_ms: 1_000,
+                    total: 3,
+                    errors: 1
+                },
+                TimelineBucket {
+                    start_ms: 2_000,
+                    total: 0,
+                    errors: 0
+                },
+                TimelineBucket {
+                    start_ms: 3_000,
+                    total: 4,
+                    errors: 0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn timeline_without_start_begins_at_the_first_bucket_and_keeps_the_latest() {
+        let result = level_aggregate(vec![(2_000, 0, 1), (5_000, 2, 0)]);
+
+        let buckets = timeline_buckets(&result, None, 5_000, 1_000, 2);
+
+        assert_eq!(
+            buckets,
+            vec![
+                TimelineBucket {
+                    start_ms: 4_000,
+                    total: 0,
+                    errors: 0
+                },
+                TimelineBucket {
+                    start_ms: 5_000,
+                    total: 2,
+                    errors: 2
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn timeline_bucket_splits_the_window_into_the_bar_count() {
+        let day = 24 * 3_600_000;
+
+        assert_eq!(
+            AuditDocument::timeline_bucket_ms(Some(0), day),
+            day / DocumentMetrics::TIMELINE_BUCKETS
+        );
+        assert_eq!(AuditDocument::timeline_bucket_ms(None, day), 3_600_000);
+        assert_eq!(AuditDocument::timeline_bucket_ms(Some(0), 1_000), 60_000);
     }
 
     // T-CV-06: AuditViewMode — default is Table

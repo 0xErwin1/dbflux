@@ -47,6 +47,7 @@ use gpui::*;
 use uuid::Uuid;
 
 pub use delete::PendingObjectDelete;
+pub(crate) use render::{object_icon, object_icon_color};
 
 /// Which part of the document currently owns keyboard input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

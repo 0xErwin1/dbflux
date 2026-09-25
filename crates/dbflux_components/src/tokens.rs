@@ -352,6 +352,8 @@ impl Fields {
     pub const TEXT: Pixels = px(12.5);
     /// Select trigger chevron size. (12 px)
     pub const CHEVRON: Pixels = px(12.0);
+    /// Icon before the label of a select trigger. (14 px)
+    pub const LEADING_ICON: Pixels = px(14.0);
 
     /// Filter field height (WHERE ... LIMIT). (34 px)
     pub const FILTER_HEIGHT: Pixels = px(34.0);
@@ -715,6 +717,9 @@ impl Feedback {
     pub const BADGE_FONT: Pixels = px(11.0);
     /// Opacity of the kind color behind a badge label.
     pub const BADGE_FILL_ALPHA: f32 = 0.14;
+    /// Badge icon (11 px), 5 px before the label.
+    pub const BADGE_ICON: Pixels = px(11.0);
+    pub const BADGE_GAP: Pixels = px(5.0);
 
     /// Environment tag padding: 1 px vertical, 6 px horizontal.
     pub const ENV_TAG_PADDING_Y: Pixels = px(1.0);
@@ -1306,6 +1311,179 @@ impl MasterListMetrics {
     pub const ROW_DETAIL_FONT: Pixels = px(11.5);
 }
 
+/// Geometry shared by the document views (P1Audit, P1Approvals, P1Dashboard,
+/// P1Chart, P1Buckets, P1Objects, P1ObjectEditor, P1Builder, P1Schema,
+/// P2Series): the document header and toolbar rows, the event and object
+/// tables, the detail blocks and the footer.
+pub struct DocumentMetrics;
+
+impl DocumentMetrics {
+    /// Header row: 44 px (48 px when it carries the view's controls), 14 px
+    /// side padding, 8 px gap, 16 px tint icon, 14 px bold title.
+    pub const HEADER_HEIGHT: Pixels = px(44.0);
+    pub const HEADER_HEIGHT_TALL: Pixels = px(48.0);
+    pub const PADDING_X: Pixels = px(14.0);
+    pub const GAP: Pixels = px(8.0);
+    pub const TITLE_ICON: Pixels = px(16.0);
+    pub const TITLE_FONT: Pixels = px(14.0);
+    /// Toolbar row under the header: 48 px, 9 px above and below its 30 px
+    /// controls when they wrap onto a second line.
+    pub const TOOLBAR_HEIGHT: Pixels = px(48.0);
+    pub const TOOLBAR_PADDING_Y: Pixels = px(9.0);
+    /// Vertical rule between toolbar groups: 20 px tall, 4 px margins.
+    pub const TOOLBAR_RULE_HEIGHT: Pixels = px(20.0);
+    pub const TOOLBAR_RULE_MARGIN_X: Pixels = px(4.0);
+    /// Search field in a toolbar. (300 px)
+    pub const SEARCH_WIDTH: Pixels = px(300.0);
+    pub const SEARCH_ICON: Pixels = px(14.0);
+    /// Leading icon of a toolbar select. (14 px)
+    pub const SELECT_ICON: Pixels = px(14.0);
+    /// Table rows: 32 px header and rows, 11.5 px header labels, 12.5 px
+    /// cells, 12 px mono metadata cells.
+    pub const TABLE_ROW_HEIGHT: Pixels = px(32.0);
+    pub const TABLE_HEADER_FONT: Pixels = px(11.5);
+    pub const TABLE_CELL_FONT: Pixels = px(12.5);
+    pub const TABLE_META_FONT: Pixels = px(12.0);
+    pub const TABLE_CHEVRON: Pixels = px(11.0);
+    pub const TABLE_ICON: Pixels = px(13.0);
+    /// Wash behind an expanded table row. (tint at 7 %)
+    pub const EXPANDED_ROW_ALPHA: f32 = 0.07;
+    /// Detail block under an expanded row: 14 px top, 16 px bottom, 54 px
+    /// left (aligned with the Time column) and 14 px right padding, 16 px
+    /// between fields, 4 px between label and value, 11 px labels.
+    pub const DETAIL_PADDING_TOP: Pixels = px(14.0);
+    pub const DETAIL_PADDING_BOTTOM: Pixels = px(16.0);
+    pub const DETAIL_PADDING_LEFT: Pixels = px(54.0);
+    pub const DETAIL_FIELD_GAP: Pixels = px(16.0);
+    pub const DETAIL_LABEL_GAP: Pixels = px(4.0);
+    pub const DETAIL_LABEL_FONT: Pixels = px(11.0);
+    pub const DETAIL_FIELD_MIN_WIDTH: Pixels = px(140.0);
+    /// Code block inside a detail: 14 px above, 12 by 14 px padding, 12 px
+    /// mono at 1.7 line height; the action row sits 12 px below.
+    pub const DETAIL_BLOCK_MARGIN_TOP: Pixels = px(14.0);
+    pub const DETAIL_BLOCK_PADDING_Y: Pixels = px(12.0);
+    pub const DETAIL_BLOCK_PADDING_X: Pixels = px(14.0);
+    pub const DETAIL_BLOCK_FONT: Pixels = px(12.0);
+    pub const DETAIL_BLOCK_LINE_HEIGHT: f32 = 1.7;
+    pub const DETAIL_ACTIONS_MARGIN_TOP: Pixels = px(12.0);
+    /// Timeline strip: 10 by 14 px padding, 52 px bars 2 px apart, 12 px to
+    /// the legend, 8 px legend swatches, 11.5 px legend text.
+    pub const TIMELINE_PADDING_Y: Pixels = px(10.0);
+    pub const TIMELINE_BAR_HEIGHT: Pixels = px(52.0);
+    pub const TIMELINE_BAR_GAP: Pixels = px(2.0);
+    pub const TIMELINE_LEGEND_GAP: Pixels = px(12.0);
+    pub const TIMELINE_SWATCH: Pixels = px(8.0);
+    pub const TIMELINE_LEGEND_ROW_GAP: Pixels = px(6.0);
+    pub const TIMELINE_LEGEND_FONT: Pixels = px(11.5);
+    /// Number of bars in the timeline strip.
+    pub const TIMELINE_BUCKETS: i64 = 48;
+}
+
+/// Geometry of the object-storage views (P1Buckets, P1Objects,
+/// P1ObjectEditor): their tables, the bucket details strip and the object
+/// preview rail.
+pub struct ObjectStoreMetrics;
+
+impl ObjectStoreMetrics {
+    /// Search field in the header. (280 px)
+    pub const SEARCH_WIDTH: Pixels = px(280.0);
+    /// Table: 16 px side padding, 34 px bucket rows and 32 px object rows,
+    /// a 15 px icon 9 px before the 13 px mono name (12.5 px for objects).
+    pub const TABLE_PADDING_X: Pixels = px(16.0);
+    pub const BUCKET_ROW_HEIGHT: Pixels = px(34.0);
+    pub const OBJECT_ROW_HEIGHT: Pixels = px(32.0);
+    pub const NAME_ICON: Pixels = px(15.0);
+    pub const NAME_GAP: Pixels = px(9.0);
+    pub const NAME_FONT: Pixels = px(13.0);
+    pub const OBJECT_NAME_FONT: Pixels = px(12.5);
+    /// Bucket columns after the name: region, objects, size, versioning,
+    /// created.
+    pub const REGION_WIDTH: Pixels = px(140.0);
+    pub const OBJECTS_WIDTH: Pixels = px(120.0);
+    pub const SIZE_WIDTH: Pixels = px(130.0);
+    pub const VERSIONING_WIDTH: Pixels = px(130.0);
+    pub const CREATED_WIDTH: Pixels = px(150.0);
+    /// Bucket details strip: 14 by 16 px padding, 28 px between fields, a
+    /// 16 px icon before the bold name, 13 px mono values.
+    pub const DETAILS_PADDING_Y: Pixels = px(14.0);
+    pub const DETAILS_GAP: Pixels = px(28.0);
+    pub const DETAILS_ICON: Pixels = px(16.0);
+    pub const DETAILS_VALUE_FONT: Pixels = px(13.0);
+    /// Path field: 6 px between its parts, a 12 px copy icon.
+    pub const PATH_GAP: Pixels = px(6.0);
+    pub const PATH_COPY_ICON: Pixels = px(12.0);
+    /// Footer of the object-storage views. (34 px)
+    pub const FOOTER_HEIGHT: Pixels = px(34.0);
+    /// Object editor: 10 px above the first line, a 32 px footer with 16 px
+    /// between its items.
+    pub const EDITOR_PADDING_TOP: Pixels = px(10.0);
+    pub const EDITOR_FOOTER_HEIGHT: Pixels = px(32.0);
+    pub const EDITOR_FOOTER_GAP: Pixels = px(16.0);
+}
+
+/// Geometry of the object preview rail (P1Objects): its header, the
+/// "Interpret as" row, the metadata section and the action row.
+pub struct PreviewRailMetrics;
+
+impl PreviewRailMetrics {
+    /// Header: 10 px between the icon, the name and the buttons.
+    pub const HEADER_GAP: Pixels = px(10.0);
+    /// "Interpret as" row: 40 px, 5 px above and below a wrapped control.
+    pub const INTERPRET_HEIGHT: Pixels = px(40.0);
+    pub const INTERPRET_PADDING_Y: Pixels = px(5.0);
+    /// Metadata section: 10 px above and below, a 10 px label, 5 px above
+    /// and below each row.
+    pub const SECTION_PADDING_Y: Pixels = px(10.0);
+    pub const SECTION_LABEL_FONT: Pixels = px(10.0);
+    pub const ROW_PADDING_Y: Pixels = px(5.0);
+    /// Action row: 12 px above and below, 6 px between buttons.
+    pub const ACTIONS_PADDING_Y: Pixels = px(12.0);
+    pub const ACTIONS_GAP: Pixels = px(6.0);
+}
+
+/// Geometry of the MCP approvals view (P1Approvals): the pending list, the
+/// detail title, its field grid and payload block, and the action row.
+pub struct ApprovalsMetrics;
+
+impl ApprovalsMetrics {
+    /// Pending list: 380 px wide, 16 by 12 px padding, 6 px between the
+    /// lines of a row, a 14 px icon, 11.5 px metadata, a 12 % tint wash on
+    /// the selected row and 4 px between the key hints.
+    pub const LIST_WIDTH: Pixels = px(380.0);
+    pub const LIST_PADDING_X: Pixels = px(16.0);
+    pub const LIST_PADDING_Y: Pixels = px(12.0);
+    pub const ROW_GAP: Pixels = px(6.0);
+    pub const ROW_ICON: Pixels = px(14.0);
+    pub const META_FONT: Pixels = px(11.5);
+    pub const SELECTED_ALPHA: f32 = 0.12;
+    pub const HINT_GAP: Pixels = px(4.0);
+    /// Section labels (PENDING, WHAT IT WILL RUN). (10 px)
+    pub const SECTION_LABEL_FONT: Pixels = px(10.0);
+    /// Detail title row: 52 px, 20 px side padding, 10 px gap, 18 px icon,
+    /// 15 px bold mono tool name.
+    pub const TITLE_HEIGHT: Pixels = px(52.0);
+    pub const DETAIL_PADDING_X: Pixels = px(20.0);
+    pub const TITLE_GAP: Pixels = px(10.0);
+    pub const TITLE_ICON: Pixels = px(18.0);
+    pub const TITLE_FONT: Pixels = px(15.0);
+    /// Detail body: 22 px between sections, a three-column field grid with
+    /// 18 px gaps, 10 px under a section label, 13 px value icons 6 px
+    /// before the value.
+    pub const SECTION_GAP: Pixels = px(22.0);
+    pub const GRID_GAP: Pixels = px(18.0);
+    pub const GRID_COLUMNS: usize = 3;
+    pub const SECTION_TITLE_GAP: Pixels = px(10.0);
+    pub const VALUE_ICON: Pixels = px(13.0);
+    pub const VALUE_ICON_GAP: Pixels = px(6.0);
+    /// Payload block: 16 by 14 px padding, 13 px mono at 1.75 line height.
+    pub const CODE_PADDING_X: Pixels = px(16.0);
+    pub const CODE_PADDING_Y: Pixels = px(14.0);
+    pub const CODE_FONT: Pixels = px(13.0);
+    pub const CODE_LINE_HEIGHT: f32 = 1.75;
+    /// Action row: 14 px above and below.
+    pub const FOOTER_PADDING_Y: Pixels = px(14.0);
+}
+
 /// Shared animation timing constants.
 pub struct Anim;
 
@@ -1360,6 +1538,173 @@ impl ChartGeometry {
 
     /// Axis-bar dropdown panel width. (140 px)
     pub const DROPDOWN_PANEL: Pixels = px(140.0);
+}
+
+/// Geometry of the schema diagram (P1Schema): the toolbar, the table
+/// cards and the dot grid.
+pub struct SchemaMetrics;
+
+impl SchemaMetrics {
+    /// Toolbar: 46 px, the zoom readout 44 px wide in 12 px mono.
+    pub const TOOLBAR_HEIGHT: Pixels = px(46.0);
+    pub const ZOOM_WIDTH: Pixels = px(44.0);
+    pub const ZOOM_FONT: Pixels = px(12.0);
+    /// Layout select width. (160 px)
+    pub const LAYOUT_WIDTH: Pixels = px(160.0);
+    /// Table card: 10 px side padding, 8 px header gap, a 13 px tint icon
+    /// and 12 px bold mono name; rows with a 6 px gap, an 11 px key icon and
+    /// 11.5 px mono text.
+    pub const CARD_PADDING_X: Pixels = px(10.0);
+    pub const HEADER_GAP: Pixels = px(8.0);
+    pub const HEADER_ICON: Pixels = px(13.0);
+    pub const HEADER_FONT: Pixels = px(12.0);
+    pub const ROW_GAP: Pixels = px(6.0);
+    pub const ROW_ICON: Pixels = px(11.0);
+    pub const ROW_FONT: Pixels = px(11.5);
+    /// Label of a card's index section. (10 px)
+    pub const INDEX_LABEL_FONT: Pixels = px(10.0);
+    /// Type column width inside a row. (56 px)
+    pub const TYPE_WIDTH: Pixels = px(56.0);
+    /// Wash on the selected card's header. (tint at 12 %)
+    pub const SELECTED_HEADER_ALPHA: f32 = 0.12;
+    /// Dot grid: 2 px dots on the line color.
+    pub const DOT: Pixels = px(2.0);
+    /// Types / Indexes toggle segments. (24 px)
+    pub const TOGGLE_HEIGHT: Pixels = px(24.0);
+}
+
+/// Geometry of the schema inspector rail (P1Schema): 12 by 14 px padding,
+/// 14 px between blocks, 6 px between rows, a 12.5 px summary, 12 px mono
+/// rows with an 11 px icon 6 px before the value.
+pub struct SchemaInspectorMetrics;
+
+impl SchemaInspectorMetrics {
+    pub const PADDING_X: Pixels = px(14.0);
+    pub const PADDING_Y: Pixels = px(12.0);
+    pub const GAP: Pixels = px(14.0);
+    pub const ROW_GAP: Pixels = px(6.0);
+    pub const SUMMARY_FONT: Pixels = px(12.5);
+    pub const LABEL_FONT: Pixels = px(10.0);
+    pub const ROW_FONT: Pixels = px(12.0);
+    pub const ICON: Pixels = px(11.0);
+    pub const ICON_GAP: Pixels = px(6.0);
+}
+
+/// Geometry of the visual query builder rail (P1Builder): its header, the
+/// mode switch, the section cards and the footer.
+pub struct BuilderMetrics;
+
+impl BuilderMetrics {
+    /// 14 px side padding for the header, cards column and footer.
+    pub const RAIL_PADDING_X: Pixels = px(14.0);
+    /// Header: 46 px, 10 px gap, a 16 px tint icon.
+    pub const HEADER_HEIGHT: Pixels = px(46.0);
+    pub const HEADER_GAP: Pixels = px(10.0);
+    pub const HEADER_ICON: Pixels = px(16.0);
+    /// Mode switch row: 10 px above and below.
+    pub const MODE_PADDING_Y: Pixels = px(10.0);
+    /// Cards: 10 px apart, 12 px padding, 10 px between header and body, an
+    /// 8 px gap and a 14 px icon in the header, a 10 px label.
+    pub const SECTION_GAP: Pixels = px(10.0);
+    pub const CARD_PADDING: Pixels = px(12.0);
+    pub const CARD_GAP: Pixels = px(10.0);
+    pub const CARD_HEADER_GAP: Pixels = px(8.0);
+    pub const CARD_ICON: Pixels = px(14.0);
+    pub const CARD_LABEL_FONT: Pixels = px(10.0);
+    /// Chips in the Columns card: 6 px apart.
+    pub const CHIP_GAP: Pixels = px(6.0);
+    /// Rows inside a card: 6 px between controls.
+    pub const ROW_GAP: Pixels = px(6.0);
+    /// Filter row controls: 120 px column select, 64 px comparator.
+    pub const FILTER_COLUMN_WIDTH: Pixels = px(120.0);
+    pub const FILTER_COMPARATOR_WIDTH: Pixels = px(64.0);
+    /// "valid" status: 11.5 px text, 12 px icon 5 px before it.
+    pub const STATUS_FONT: Pixels = px(11.5);
+    pub const STATUS_ICON: Pixels = px(12.0);
+    pub const STATUS_GAP: Pixels = px(5.0);
+    /// SQL preview editor height. (140 px)
+    pub const PREVIEW_HEIGHT: Pixels = px(140.0);
+    /// Footer: 12 px above and below, 8 px between buttons.
+    pub const FOOTER_PADDING_Y: Pixels = px(12.0);
+    pub const FOOTER_GAP: Pixels = px(8.0);
+    /// Link text ("+ Filter · + Group"). (12 px)
+    pub const LINK_FONT: Pixels = px(12.0);
+}
+
+/// Geometry of the dashboard grid (P1Dashboard): the grid padding and
+/// gutter, the panel card and its header, the section dividers and the
+/// resize affordances.
+pub struct DashboardMetrics;
+
+impl DashboardMetrics {
+    /// Grid: 16 px around the panels and 12 px between them, laid out as a
+    /// 10 px container padding plus a 6 px gutter on each panel.
+    pub const GRID_PADDING: Pixels = px(10.0);
+    pub const PANEL_GUTTER: Pixels = px(6.0);
+    /// Panel header: 36 px, 12 px side padding, 8 px gap, a 14 px kind
+    /// icon, a 12 px drag grip, a 12.5 px semibold title.
+    pub const PANEL_HEADER_HEIGHT: Pixels = px(36.0);
+    pub const PANEL_PADDING: Pixels = px(12.0);
+    pub const PANEL_ICON: Pixels = px(14.0);
+    pub const PANEL_GRIP: Pixels = px(12.0);
+    pub const PANEL_TITLE_FONT: Pixels = px(12.5);
+    /// Resize affordances: an 8 px hit strip on the right and bottom edges
+    /// and a 14 px corner triangle.
+    pub const RESIZE_STRIP: Pixels = px(8.0);
+    pub const RESIZE_CORNER: Pixels = px(14.0);
+    /// Section divider: 12 px between the chevron, label and rule, a 12 px
+    /// chevron and a 10 px label.
+    pub const DIVIDER_GAP: Pixels = px(12.0);
+    pub const DIVIDER_CHEVRON: Pixels = px(12.0);
+    pub const DIVIDER_LABEL_FONT: Pixels = px(10.0);
+    /// Room under the last row so it clears the tasks splitter. (24 px)
+    pub const BOTTOM_SLACK: Pixels = px(24.0);
+    /// Empty state height. (240 px)
+    pub const EMPTY_HEIGHT: Pixels = px(240.0);
+}
+
+/// Geometry of the chart document (P1Chart): the axis row, the chart area
+/// padding and the Stats rail.
+pub struct ChartDocumentMetrics;
+
+impl ChartDocumentMetrics {
+    /// Axis row under the header. (46 px)
+    pub const AXIS_ROW_HEIGHT: Pixels = px(46.0);
+    /// Chart area: 24 px above, 28 px on the sides and below.
+    pub const AREA_PADDING_TOP: Pixels = px(24.0);
+    pub const AREA_PADDING: Pixels = px(28.0);
+    /// Stats rail: 300 px wide, 14 by 16 px padding, 10 px under a section
+    /// label, 6 px above and below each row, 16 px above SERIES, 30 px
+    /// series rows with a 10 px swatch, a 13 px close icon.
+    pub const RAIL_WIDTH: Pixels = px(300.0);
+    pub const RAIL_PADDING_Y: Pixels = px(14.0);
+    pub const RAIL_PADDING_X: Pixels = px(16.0);
+    pub const RAIL_LABEL_GAP: Pixels = px(10.0);
+    pub const RAIL_ROW_PADDING_Y: Pixels = px(6.0);
+    pub const RAIL_SECTION_GAP: Pixels = px(16.0);
+    pub const RAIL_SERIES_ROW_HEIGHT: Pixels = px(30.0);
+    pub const RAIL_SWATCH: Pixels = px(10.0);
+    pub const RAIL_ICON: Pixels = px(13.0);
+    pub const RAIL_LABEL_FONT: Pixels = px(10.0);
+    /// Width of the metric picker rail. (320 px)
+    pub const PICKER_WIDTH: Pixels = px(320.0);
+}
+
+/// Geometry of the chart axis row (P1Chart): the X, Y, Group and Agg
+/// selects with their role labels.
+pub struct AxisBarMetrics;
+
+impl AxisBarMetrics {
+    /// 8 px between a role label and its select, and between fields.
+    pub const GAP: Pixels = px(8.0);
+    /// Role labels ("X", "Y", "Group"). (12 px)
+    pub const ROLE_FONT: Pixels = px(12.0);
+    /// Select widths: 190 px for X, 150 px for Y and Group, 110 px for Agg.
+    pub const X_WIDTH: Pixels = px(190.0);
+    pub const FIELD_WIDTH: Pixels = px(150.0);
+    pub const AGG_WIDTH: Pixels = px(110.0);
+    /// Picker offset below the select. (34 px)
+    pub const PICKER_OFFSET: Pixels = px(34.0);
 }
 
 pub struct Widths;

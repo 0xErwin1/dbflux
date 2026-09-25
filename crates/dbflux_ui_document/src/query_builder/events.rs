@@ -39,6 +39,8 @@ pub enum BuilderEvent {
 
     /// The user pressed Reset or Cmd+Backspace.
     ResetRequested,
+    /// The rail's close button: hide the builder, keeping its state.
+    CloseRequested,
 
     /// The user chose to import a saved query to the current profile.
     ImportRequested { source_id: String },

@@ -186,6 +186,8 @@ controls:
     more:
       one: "+%{count} more"
       many: "+%{count} more"
+    summary_all: "%{name} · all"
+    summary_count: "%{name} · %{count}"
 connection_manager:
   tab_badge:
     mcp_clients:
@@ -550,16 +552,6 @@ diagnostics:
 document:
   audit:
     title: "Audit"
-    category_chip:
-      config: "CONFIG"
-      connection: "CONN"
-      query: "QUERY"
-      hook: "HOOK"
-      script: "SCRIPT"
-      system: "SYS"
-      mcp: "MCP"
-      governance: "GOV"
-      object_storage: "STORAGE"
     level_chip:
       trace: "TRACE"
       debug: "DEBUG"
@@ -595,6 +587,7 @@ document:
         many: "Exported %{count} events to %{path}"
       write_failed: "Export failed to write file: %{error}"
       failed: "Export failed: %{error}"
+      hint: "asks where to save"
     task:
       loading_event_stream: "Loading event stream: %{title}"
     detail:
@@ -615,6 +608,10 @@ document:
       source: Source
       summary: Summary
       time: Time
+      tool: "Tool"
+      classification: "Classification"
+      decision: "Decision"
+      reason: "Reason"
     filter:
       bar:
         search: "Search:"
@@ -682,6 +679,15 @@ document:
       loading:
         external: "Loading events…"
         internal: "Loading audit events…"
+    subtitle: "every query, hook, script and agent call on this machine"
+    timeline:
+      events: "events"
+      errors: "errors"
+      drag_to_zoom: "drag to zoom"
+    action:
+      copy_json: "Copy row as JSON"
+      filter_by_correlation: "Filter by correlation"
+      open_approval: "Open approval"
   buckets_table:
     title: "Buckets — %{connection}"
     search_placeholder: "Find buckets by name…"
@@ -702,6 +708,7 @@ document:
     details:
       calculate_size: Calculate size
       calculating: "Calculating…"
+      browse: "Browse"
     footer:
       buckets:
         one: "%{count} bucket"
@@ -710,16 +717,16 @@ document:
         one: "%{count} region"
         many: "%{count} regions"
       hint:
-        open: Enter browse
-        properties: Space properties
-        delete: x delete (empty only)
+        open: "browse"
+        properties: "details"
+        delete: "delete empty"
+        new: "new"
     empty:
       loading: "Loading buckets…"
       error: Failed to list buckets
       error_detail: "Failed to list buckets: %{error}"
       no_match: "No buckets match \"%{query}\""
       no_buckets: This connection has no buckets
-      hint_refresh: "%{key} refresh"
     delete_confirm:
       title: Delete bucket?
       body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."
@@ -755,6 +762,7 @@ document:
       toast:
         created: "Created bucket \"%{name}\""
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
+    breadcrumb: "Buckets"
   chart:
     toolbar:
       type_label: TYPE
@@ -764,8 +772,6 @@ document:
         one: "%{count} pt"
         many: "%{count} pts"
     shell:
-      run: Run
-      running: "Running…"
       save: Save
       cancel: Cancel
       name_placeholder: Chart name
@@ -781,14 +787,18 @@ document:
       stats_rail:
         rebuilding: "Rebuilding chart…"
         no_stats: "No stats available for this series."
-        unavailable: unavailable
-        window_title: Window
         window:
           start: Start
           end: End
           span: Span
           points: Points
         source_title: Source
+        max: "Max"
+        min: "Min"
+        mean: "Mean"
+        last: "Last"
+        series: "Series"
+      saved_badge: "saved"
     status:
       task_label: Chart query
     toast:
@@ -1029,10 +1039,10 @@ document:
     toolbar:
       add_panel: + Add Panel
       apply: Apply
-      edit_mode_tooltip: Edit dashboard
-      exit_edit_mode_tooltip: Exit edit mode
       save_as_editable: Save as editable
       save_as_editable_tooltip: Clone this overview into a new editable dashboard
+      mode_view: "View"
+      mode_edit: "Edit"
   data:
     chart_dock:
       toolbar:
@@ -1220,6 +1230,7 @@ document:
         raw: Raw
         truncated: "(truncated at %{max_lines} lines)"
         empty: "(empty)"
+        both: "Both"
       status:
         rows:
           one: "%{count} row"
@@ -1462,17 +1473,39 @@ document:
       continue: Continue
       close: Close
   governance:
-    semantics_preview: "requester: %{requester} | connection: %{connection} | classification: %{classification}"
-    pending_actor: "actor: %{actor}"
-    refresh: Refresh Pending
+    refresh: "Refresh"
     no_pending: No pending executions
-    pending_title: "Pending %{id}"
-    approval_context: Approval context
-    execution_plan: Execution plan
-    approve: Approve
+    execution_plan: "What it will run"
+    approve: "Approve and run"
     reject: Reject
     select_prompt: Select a pending request to review details.
     load_failed: "Failed to load pending execution %{id}: %{error}"
+    title: "MCP approvals"
+    subtitle: "agent calls that a policy parked for a person"
+    close: "Close"
+    pending_count: "Pending · %{count}"
+    list_hint: "move · decisions are written to the audit log"
+    requested_by: "Requested by"
+    connection: "Connection"
+    classification_label: "Classification"
+    tool: "Tool"
+    requested_at: "Requested at"
+    waiting_label: "Waiting"
+    exec_id: "exec %{id}"
+    status:
+      pending: "Pending"
+    waiting:
+      just_now: "waiting just now"
+      minutes: "waiting %{count} min"
+      hours: "waiting %{count} h"
+    classification:
+      metadata: "Metadata"
+      read: "Read"
+      write: "Write"
+      destructive: "Destructive"
+      admin: "Admin"
+      admin_safe: "Admin (safe)"
+      admin_destructive: "Admin (destructive)"
   import_wizard:
     title: Import Data
     task:
@@ -1985,6 +2018,7 @@ document:
       header:
         open_in_editor: Open in editor
         open_in_system_viewer: Open in system viewer
+        close: "Close preview"
       versions:
         count:
           one: "%{count} version"
@@ -2007,12 +2041,11 @@ document:
         one: "%{count} folder"
         many: "%{count} folders"
       key_hint:
-        delete: x delete
-        filter: / filter
-        open: Enter open
-        preview: Space preview
-        rename: r rename
-        up: "← up a level"
+        delete: "delete"
+        open: "open"
+        preview: "preview"
+        rename: "rename"
+        up: "up"
       load_more: Load more
       loading_more: "Loading more…"
       objects:
@@ -2026,6 +2059,8 @@ document:
       tree: Tree
       upload: Upload
       filter_prefix_placeholder: "Filter this prefix…"
+      list: "List"
+      up: "Up a level"
     transfer:
       dialog_title: Save Object As
       dialog_filter_all_files: All Files
@@ -2080,8 +2115,11 @@ document:
       save: Save
       reset: Reset
       untitled_query: Untitled query
+      close: "Close builder"
     columns:
       all_columns: "All columns (*)"
+      selected_count: "%{selected} of %{total}"
+      add_column: "+ column"
     comparator:
       eq: "="
       neq: "≠"
@@ -2115,6 +2153,9 @@ document:
       bool_op:
         and: AND
         or: OR
+      add_filter_link: "+ Filter"
+      add_group_link: "+ Group"
+      remove: "Remove"
     group_by:
       managed_select_notice: "Grouped query — SELECT is managed automatically"
       heading: Group by columns
@@ -2160,6 +2201,8 @@ document:
       key_order_named: "Sort key order (%{name})"
       key_limited_hint: Ordering is limited to the sort key for this driver.
       invalid_column: "\"%{column}\" is not in the GROUP BY columns or aggregate aliases"
+      move_up: "Move up"
+      move_down: "Move down"
     status:
       limit: Limit
       offset: Offset
@@ -2257,8 +2300,9 @@ document:
       columns: COLUMNS
       foreign_keys: FOREIGN KEYS
       indexes: INDEXES
-      summary: "%{columns} columns · %{indexes} indexes"
-      table: TABLE
+      summary_full: "%{columns} columns · %{indexes} indexes · %{foreign_keys} foreign keys · referenced by %{referenced_by}"
+      unique: "unique"
+      referenced_by: "Referenced by"
     layout:
       compact: Compact
       left_right: Left-Right
@@ -2295,6 +2339,8 @@ document:
       indexes: Indexes
       reset: Reset
       types: Types
+      zoom_in: "Zoom in"
+      zoom_out: "Zoom out"
     view:
       title: "Schema: %{name}"
       title_default_database: database

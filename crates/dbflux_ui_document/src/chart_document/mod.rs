@@ -1341,10 +1341,9 @@ impl ChartDocument {
 
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
     ///
-    /// The three header segments (title Left/0, Run Left/1, Save Right/0) are
-    /// returned by `toolbar_segments`. The content area (chart toolbar row +
-    /// axis bar + chart area) is rendered by `render_chart_content`, which is
-    /// called from the `render` closure.
+    /// The content area (header row with the chart controls, axis row and
+    /// chart area) is rendered by `render_chart_content`, which is called from
+    /// the `render` closure; the panel's own chrome row stays empty.
     ///
     /// `available_modes` returns `[Chart]` only; `ResultPanel` suppresses the
     /// mode bar when the list has fewer than two entries.
@@ -1352,7 +1351,6 @@ impl ChartDocument {
         let e_render = entity.clone();
         let e_focus_do = entity.clone();
         let e_focus_get = entity.clone();
-        let e_segs = entity.clone();
 
         ViewHandle::builder()
             .render(move |window, cx| {
@@ -1362,85 +1360,16 @@ impl ChartDocument {
                 e_focus_do.update(cx, |this, cx| this.focus(window, cx));
             })
             .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
-            .toolbar_segments(move |cx| Self::header_segments(e_segs.clone(), cx))
+            // The chart draws its own header row (title, presets, refresh,
+            // kind switch, Stats and Save), so the panel's chrome row stays
+            // empty.
+            .toolbar_segments(|_cx| Vec::new())
             .available_modes(|_cx| vec![ResultViewMode::Chart])
             .current_mode(|_cx| ResultViewMode::Chart)
             .set_mode(|_mode, _cx| {
                 // Chart is the only supported mode; no-op.
             })
             .build()
-    }
-
-    /// Build the three chrome-row segments for `ChartDocument`.
-    ///
-    /// - `Left/0`: document title label
-    /// - `Left/1`: Run / Running… primary button
-    /// - `Right/0`: Save button
-    fn header_segments(entity: Entity<Self>, cx: &App) -> Vec<ToolbarSegment> {
-        // When embedded inside another document (e.g. a DashboardDocument
-        // panel) the host owns the chrome and no segments should be rendered.
-        if entity.read(cx).embedded {
-            return Vec::new();
-        }
-
-        use dbflux_components::primitives::Text;
-        use dbflux_components::tokens::Spacing;
-        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-        use gpui_component::{Disableable, Sizable};
-
-        let e_title = entity.clone();
-        let e_run = entity.clone();
-        let e_save = entity.clone();
-
-        vec![
-            ToolbarSegment {
-                position: SegmentPosition::Left,
-                index: 0,
-                builder: Box::new(move |_window, cx| {
-                    let title = e_title.read(cx).title.clone();
-                    Text::body(title).into_any_element()
-                }),
-            },
-            ToolbarSegment {
-                position: SegmentPosition::Left,
-                index: 1,
-                builder: Box::new(move |_window, cx| {
-                    let is_executing = e_run.read(cx).exec_state == ExecState::Running;
-                    let e = e_run.clone();
-                    Button::new("run-query")
-                        .label(if is_executing {
-                            dbflux_i18n::t!("document.chart.shell.running")
-                        } else {
-                            dbflux_i18n::t!("document.chart.shell.run")
-                        })
-                        .small()
-                        .with_variant(ButtonVariant::Primary)
-                        .disabled(is_executing)
-                        .on_click(move |_, window, cx| {
-                            e.update(cx, |this, cx| {
-                                this.request_reexecute(window, cx);
-                            });
-                        })
-                        .into_any_element()
-                }),
-            },
-            ToolbarSegment {
-                position: SegmentPosition::Right,
-                index: 0,
-                builder: Box::new(move |_window, _cx| {
-                    let e = e_save.clone();
-                    Button::new("save-chart")
-                        .label(dbflux_i18n::t!("document.chart.shell.save"))
-                        .small()
-                        .on_click(move |_, window, cx| {
-                            e.update(cx, |this, cx| {
-                                this.open_name_prompt(window, cx);
-                            });
-                        })
-                        .into_any_element()
-                }),
-            },
-        ]
     }
 }
 
@@ -1849,22 +1778,6 @@ mod tests {
     ///
     /// Validates the `header_segments` layout contract: after sorting by
     /// `(position, index)` the order must match construction order.
-    #[test]
-    fn header_segments_layout_contract() {
-        let positions: Vec<(SegmentPosition, u16)> = vec![
-            (SegmentPosition::Left, 0),
-            (SegmentPosition::Left, 1),
-            (SegmentPosition::Right, 0),
-        ];
-
-        let mut sorted = positions.clone();
-        sorted.sort_by_key(|&(p, i)| (p, i));
-        assert_eq!(
-            sorted, positions,
-            "header segments must already be in sorted order"
-        );
-    }
-
     // ---- Phase 5: set_data_source ----
 
     /// T-DS-10: `DocumentEvent::DataSourceChanged` variant must exist.

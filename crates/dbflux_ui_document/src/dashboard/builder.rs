@@ -17,17 +17,24 @@
 //!   document; the `Input` entity is lazily created when editing starts.
 //! - The toolbar always renders (even when there are zero panels).
 
-use crate::chrome::compact_top_bar;
+use crate::chrome::{document_bar, document_title, time_preset_control};
 use dbflux_components::composites::refresh_split_button;
 use dbflux_components::controls::Button;
-use dbflux_components::controls::{Dropdown, InputState};
+use dbflux_components::controls::InputState;
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
 use dbflux_components::saved_chart::TimeRangePreset;
-use dbflux_components::tokens::{Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, DashboardMetrics, DocumentMetrics};
 use gpui::prelude::*;
-use gpui::{App, Context, CursorStyle, Entity, IntoElement, MouseButton, Pixels, Window, div, px};
+use gpui::{
+    App, Context, CursorStyle, Entity, IntoElement, MouseButton, PathBuilder, Pixels, Window,
+    canvas, div, point, px,
+};
 use gpui_component::ActiveTheme;
 
-use super::DashboardDocument;
+use super::{DashboardDocument, DashboardMode};
+
+/// Width of the date range picker in the custom range row.
+const DASHBOARD_DATE_PICKER_WIDTH: Pixels = px(220.0);
 
 // ---------------------------------------------------------------------------
 // Drag-reorder state
@@ -190,48 +197,38 @@ pub(super) fn preset_label(preset: TimeRangePreset) -> String {
 // Render helpers (pub(super) — used only by render.rs)
 // ---------------------------------------------------------------------------
 
-/// Returns the dashboard toolbar element.
+/// Returns the dashboard header row (P1Dashboard).
 ///
-/// Renders (left to right):
-/// - `TimeRangePanel` preset dropdown (content-sized) — the canonical
-///   time-range chrome shared with `ChartDocument` and `AuditDocument`.
-/// - Refresh-policy `Dropdown` (content-sized).
-/// - "+ Add Panel" primary button anchored to the right edge.
-///
-/// The dashboard name is intentionally omitted; the tab title already shows it
-/// and `start_dashboard_name_edit` is still reachable through other affordances.
-/// Layout matches `AuditDocument` via `compact_top_bar` so the dashboard
-/// inherits the same flex-wrap + shrink rules and the dropdowns size to their
-/// content instead of stretching across the row.
+/// Renders (left to right): the dashboard icon and title with its
+/// connection badge, then the time presets, the refresh split, "Add panel"
+/// and the View/Edit switch. Read-only dashboards trade the last two for
+/// "Save as editable". While the Custom preset is selected, a second row
+/// carries the date and time pickers.
 pub(super) fn dashboard_toolbar(
     dashboard: &DashboardDocument,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     use dbflux_components::common::time_range::TimeRange;
-    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::icons::AppIcon;
 
     let theme = cx.theme().clone();
+    let tint = ChromeColors::tint(&theme);
     let time_range_panel = dashboard.shared_time_range().clone();
     let refresh_dropdown = dashboard.refresh_dropdown.clone();
-
-    // Preset dropdown lifted out of the TimeRangePanel so the toolbar embeds
-    // the control inline. The TimeRangePanel itself stays the owner of state;
-    // we only render its child widgets.
-    let preset_dropdown: Entity<Dropdown> = time_range_panel.read(cx).dropdown_time_range.clone();
     let selected_time_range = time_range_panel.read(cx).selected_time_range;
     let custom_range_visible = selected_time_range == Some(TimeRange::Custom);
 
-    // Content-sized wrapper — `Dropdown::render` applies `w_full()` internally,
-    // which stretches as a direct flex child. The wrapper acts as an
-    // intrinsic-width flex item so the control collapses to content.
-    let time_control = div()
-        .flex_shrink_0()
-        .rounded(Radii::SM)
-        .child(preset_dropdown);
+    let presets = {
+        let panel = time_range_panel.clone();
 
-    // Refresh split-button — same helper AuditDocument uses, so the visual
-    // language matches the rest of the app. Manual click re-executes every
-    // loaded panel; the dropdown segment sets the auto-refresh interval.
+        time_preset_control(selected_time_range, true, move |index, _, cx| {
+            panel.update(cx, |panel, cx| panel.select_preset(index, cx));
+        })
+    };
+
+    // Refresh split-button — same helper AuditDocument uses. Manual click
+    // re-executes every loaded panel; the dropdown segment sets the
+    // auto-refresh interval.
     let weak = cx.weak_entity();
     let refresh_btn = refresh_split_button(
         "dashboard-refresh-split",
@@ -246,126 +243,142 @@ pub(super) fn dashboard_toolbar(
         },
     );
 
-    let refresh_control = div().flex_shrink_0().child(refresh_btn);
-
-    // "+ Add Panel" toolbar button, 28 px like every other DBFlux toolbar.
-    let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-        this.request_add_panel(cx);
+    let connection_badge = dashboard.profile_id.and_then(|profile_id| {
+        dashboard
+            .app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .map(|profile| Badge::new(profile.name.clone(), BadgeTone::Neutral))
     });
 
-    let add_btn = Button::new(
-        "dash-add-panel-toolbar",
-        dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
-    )
-    .small()
-    .primary()
-    .on_click(move |event, window, app| on_add_panel(event, window, app));
+    let title = div()
+        .flex()
+        .min_w_0()
+        .items_center()
+        .gap(DocumentMetrics::GAP)
+        .child(document_title(
+            AppIcon::ChartColumnBig,
+            tint,
+            dashboard.title(),
+            cx,
+        ))
+        .children(connection_badge);
 
-    // Edit/View toggle. Pencil icon = "enter edit"; Eye icon = "back to view".
-    use dbflux_components::icons::AppIcon;
-    let in_edit_mode = dashboard.is_edit_mode();
-    let on_toggle_mode = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-        this.toggle_mode(cx);
-    });
-    let (mode_icon, mode_tooltip) = if in_edit_mode {
-        (
-            AppIcon::Eye,
-            dbflux_i18n::t!("document.dashboard.toolbar.exit_edit_mode_tooltip"),
-        )
-    } else {
-        (
-            AppIcon::Pencil,
-            dbflux_i18n::t!("document.dashboard.toolbar.edit_mode_tooltip"),
-        )
-    };
-    let mode_btn = Button::new("dash-mode-toggle", mode_tooltip)
-        .small()
-        .icon(mode_icon)
-        .icon_only()
-        .selected(in_edit_mode)
-        .on_click(move |event, window, app| on_toggle_mode(event, window, app));
-
-    // Group right-anchored controls. Read-only dashboards omit the mutation
-    // affordances ("Add Panel" and the Edit/View toggle) but expose a
-    // "Save as editable" button so the user can clone the overview into a
-    // new persisted, mutable dashboard.
     let is_read_only = dashboard.is_read_only();
-    let right_group = if is_read_only {
+
+    let actions: Vec<gpui::AnyElement> = if is_read_only {
         let on_save_as = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
             this.request_save_as_editable(cx);
         });
-        let save_as_btn = Button::new(
-            "dash-save-as-editable",
-            dbflux_i18n::t!("document.dashboard.toolbar.save_as_editable"),
-        )
-        .small()
-        .tooltip(dbflux_i18n::t!(
-            "document.dashboard.toolbar.save_as_editable_tooltip"
-        ))
-        .on_click(move |event, window, app| on_save_as(event, window, app));
-        div()
-            .flex_shrink_0()
-            .ml_auto()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .child(save_as_btn)
+
+        vec![
+            Button::new(
+                "dash-save-as-editable",
+                dbflux_i18n::t!("document.dashboard.toolbar.save_as_editable"),
+            )
+            .small()
+            .icon(AppIcon::Save)
+            .tooltip(dbflux_i18n::t!(
+                "document.dashboard.toolbar.save_as_editable_tooltip"
+            ))
+            .on_click(move |event, window, app| on_save_as(event, window, app))
+            .into_any_element(),
+        ]
     } else {
-        div()
-            .flex_shrink_0()
-            .ml_auto()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .child(add_btn)
-            .child(mode_btn)
+        let on_add_panel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            this.request_add_panel(cx);
+        });
+
+        let weak = cx.weak_entity();
+        let mode_switch = SegmentedControl::new(
+            vec![
+                SegmentedItem::new(
+                    "dash-mode-view",
+                    dbflux_i18n::t!("document.dashboard.toolbar.mode_view"),
+                )
+                .icon(AppIcon::Eye),
+                SegmentedItem::new(
+                    "dash-mode-edit",
+                    dbflux_i18n::t!("document.dashboard.toolbar.mode_edit"),
+                )
+                .icon(AppIcon::Pencil),
+            ],
+            if dashboard.is_edit_mode() {
+                "dash-mode-edit"
+            } else {
+                "dash-mode-view"
+            },
+            move |id, _, cx| {
+                let mode = if id.as_ref() == "dash-mode-edit" {
+                    DashboardMode::Edit
+                } else {
+                    DashboardMode::View
+                };
+
+                if let Some(doc) = weak.upgrade() {
+                    doc.update(cx, |this, cx| this.set_mode(mode, cx));
+                }
+            },
+        );
+
+        vec![
+            Button::new(
+                "dash-add-panel-toolbar",
+                dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
+            )
+            .small()
+            .icon(AppIcon::Plus)
+            .on_click(move |event, window, app| on_add_panel(event, window, app))
+            .into_any_element(),
+            mode_switch.into_any_element(),
+        ]
     };
 
-    // Items pushed in order. When Custom is selected, the picker slots are
-    // inserted between the preset dropdown and the refresh control, mirroring
-    // AuditDocument exactly so users see a familiar custom-range row.
-    let mut items: Vec<gpui::AnyElement> = vec![time_control.into_any_element()];
-
-    if custom_range_visible {
-        let custom_controls = build_custom_time_controls(&time_range_panel, cx);
-        items.push(custom_controls.into_any_element());
-    }
-
-    items.push(refresh_control.into_any_element());
-    items.push(right_group.into_any_element());
-
-    let _ = TimeRangePanel::preset_items; // touch import to keep linter happy
-    compact_top_bar(&theme, items)
+    let header = document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
         .id("dashboard-toolbar")
-        .gap(Spacing::SM)
+        .child(title)
+        .child(div().flex_1())
+        .child(presets)
+        .child(div().flex_shrink_0().child(refresh_btn))
+        .children(actions);
+
+    div()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .child(header)
+        .when(custom_range_visible, |toolbar| {
+            toolbar.child(build_custom_time_controls(&time_range_panel, cx))
+        })
 }
 
 /// Build the custom-range row (date picker + start/end hour/minute + Apply)
 /// using the shared `TimeRangePanel::custom_picker_slots` API.
-///
-/// Returns a flex row containing each picker so it appears inline in the
-/// toolbar exactly the way `AuditDocument` renders the same controls.
 fn build_custom_time_controls(
     panel: &Entity<dbflux_components::common::time_range::view::TimeRangePanel>,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
-    let slots = panel.read(cx).custom_picker_slots(px(220.0), cx);
+    use dbflux_components::icons::AppIcon;
+
+    let slots = panel
+        .read(cx)
+        .custom_picker_slots(DASHBOARD_DATE_PICKER_WIDTH, cx);
     let weak_panel = panel.downgrade();
 
     let can_apply = panel.read(cx).can_apply_custom_range(cx);
     let on_apply = move |_event: &gpui::ClickEvent, _w: &mut Window, app: &mut App| {
         if let Some(panel) = weak_panel.upgrade() {
             panel.update(app, |panel, cx| {
-                let _ = panel.apply_custom_range(cx);
+                if let Err(error) = panel.apply_custom_range(cx) {
+                    log::debug!("dashboard custom range not applied: {error}");
+                }
             });
         }
     };
 
-    div()
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .gap_1()
+    document_bar(DocumentMetrics::TOOLBAR_HEIGHT, cx)
         .child(slots.date_picker)
         .child(slots.from_label)
         .child(slots.start_hour)
@@ -379,23 +392,23 @@ fn build_custom_time_controls(
                 dbflux_i18n::t!("document.dashboard.toolbar.apply"),
             )
             .small()
+            .icon(AppIcon::Check)
             .disabled(!can_apply)
             .on_click(on_apply),
         )
 }
 
-/// Returns the panel-header element for a single panel slot.
-///
-/// Renders: drag handle (title area) + optional inline title input + close
-/// button + right-click context-menu hook.
+/// Returns the panel-header element for a single panel slot (P1Dashboard):
+/// 36 px, a drag grip in edit mode, the panel's kind icon in the tint, the
+/// title, and in edit mode a settings button that opens the panel menu.
 ///
 /// When `is_editing_title` is true, an `Input` entity is rendered inline for
-/// title editing; when false, the title is a clickable span that starts inline
-/// edit on single-click, and a drag handle on mouse-down.
+/// title editing. In edit mode the header is the drag handle.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn panel_header(
     panel_index: u32,
     title: &str,
+    icon: dbflux_components::icons::AppIcon,
     editing_input: Option<&Entity<InputState>>,
     _drag_active: bool,
     menu_open: bool,
@@ -403,164 +416,139 @@ pub(super) fn panel_header(
     has_editable_title: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
+    use dbflux_components::icons::AppIcon;
+
     let is_editing = editing_input.is_some();
-    let title_owned = title.to_string();
+    let theme = cx.theme().clone();
+    let tint = ChromeColors::tint(&theme);
 
-    // Inline title edit is reachable only through the kebab menu's
-    // "Edit title…" entry. Single-clicking the title text used to start the
-    // edit, but the user found it noisy (every accidental click became an
-    // edit), so the click handler is intentionally not wired here.
-
-    // Context menu on right-click — anchors inline next to this panel's
-    // kebab, so no event position is captured. Only available in edit mode.
-    let on_right_click = if edit_mode {
-        Some(cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
-            this.open_panel_context_menu(panel_index, cx);
-        }))
-    } else {
-        None
-    };
-
-    // Drag start on header mouse-down — only in edit mode and only when not
-    // editing the title. The drag captures the cursor position so the global
-    // mouse-move handler can snap to grid cells.
-    let on_drag_start = if edit_mode && !is_editing {
-        let drag_start = cx.listener(
-            move |this, event: &gpui::MouseDownEvent, _, cx: &mut Context<DashboardDocument>| {
-                this.start_panel_drag(panel_index, event.position, cx);
-            },
-        );
-        Some(drag_start)
-    } else {
-        None
-    };
-
-    // Kebab menu button — opens the same context menu as right-click, but
-    // gives keyboard/mouse users a discoverable affordance. The menu floats
-    // inline next to the trigger via the `.relative()` wrapper built below,
-    // so the click position is irrelevant.
-    let on_kebab_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-        this.open_panel_context_menu(panel_index, cx);
-    });
-    // Prevent the header's left-mouse-down handler (which starts a panel drag)
-    // from also firing when the user presses the kebab button.
-    let on_kebab_mouse_down = |_: &gpui::MouseDownEvent, _: &mut Window, cx: &mut App| {
-        cx.stop_propagation();
-    };
-
-    // Header gets a move-cursor when it can be dragged. The previous
-    // OpenHand cursor also appeared while just hovering the title text,
-    // which the user read as an unwanted "hover effect" on the panel; now
-    // the cursor only changes on the header (drag region) and only when
-    // the panel isn't being edited.
     let mut header = div()
         .id(("panel-header", panel_index))
         .flex()
         .flex_row()
+        .flex_shrink_0()
         .items_center()
         .w_full()
-        .gap(px(4.0)) // guardrail-allow: header item spacing
-        .p(px(4.0)); // guardrail-allow: header padding
+        .gap(DocumentMetrics::GAP)
+        .h(DashboardMetrics::PANEL_HEADER_HEIGHT)
+        .px(DashboardMetrics::PANEL_PADDING)
+        .border_b_1()
+        .border_color(theme.border);
 
-    if let Some(handler) = on_right_click {
-        header = header.on_mouse_down(MouseButton::Right, handler);
+    // Context menu on right-click — anchors inline next to this panel's
+    // settings button. Only available in edit mode.
+    if edit_mode {
+        header = header.on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, _: &gpui::MouseDownEvent, _, cx| {
+                this.open_panel_context_menu(panel_index, cx);
+            }),
+        );
     }
 
-    // The header only becomes a drag handle in edit mode. In view mode the
-    // header is just a static label — no cursor change, no drag start.
+    // The header only becomes a drag handle in edit mode, and not while its
+    // title is being edited.
     if edit_mode && !is_editing {
-        header = header.cursor(CursorStyle::OpenHand);
+        header = header.cursor(CursorStyle::OpenHand).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(
+                move |this,
+                      event: &gpui::MouseDownEvent,
+                      _,
+                      cx: &mut Context<DashboardDocument>| {
+                    this.start_panel_drag(panel_index, event.position, cx);
+                },
+            ),
+        );
     }
 
-    if let Some(on_start) = on_drag_start {
-        header = header.on_mouse_down(MouseButton::Left, on_start);
+    if edit_mode {
+        header = header.child(
+            Icon::new(AppIcon::Grid3x3)
+                .size(DashboardMetrics::PANEL_GRIP)
+                .color(theme.input),
+        );
     }
+
+    header = header.child(
+        Icon::new(icon)
+            .size(DashboardMetrics::PANEL_ICON)
+            .color(tint),
+    );
 
     if let Some(input_state) = editing_input {
-        // Render the input inline. Commit and cancel are handled entirely by
-        // the InputEvent subscription established in `start_panel_title_edit`.
-        debug_assert!(
-            editing_input.is_some(),
-            "editing_input must be Some when editing_title_panel_index is set"
+        // Commit and cancel are handled by the InputEvent subscription
+        // established in `start_panel_title_edit`.
+        return header.child(
+            div().flex_1().child(
+                dbflux_components::controls::Input::new(input_state)
+                    .w_full()
+                    .small(),
+            ),
         );
-        header = header.child(
-            dbflux_components::controls::Input::new(input_state)
-                .w_full()
-                .small(),
-        );
-    } else {
-        // Title is a static label. Clicking it used to open inline edit,
-        // but that was too easy to trigger by accident; the kebab menu's
-        // "Edit title…" entry is now the only way to start the edit.
-        let title_elem = div()
-            .id(("panel-title", panel_index))
-            .flex_1()
-            .text_sm()
-            .child(title_owned)
-            .into_any_element();
-
-        // Kebab menu trigger — matches the sidebar pattern: a borderless
-        // square div with content-only sizing and a background-only hover
-        // effect. Adding a border on hover would reflow the header (the user
-        // reported this as a layout shift); leaving the box dimensions static
-        // and only changing `bg` avoids any reflow.
-        //
-        // The menu items are rendered as an absolute sibling inside this
-        // `.relative()` wrapper so the floating panel anchors *directly* next
-        // to the kebab regardless of the dashboard's window offset. This
-        // avoids the window-vs-local coordinate mismatch the previous
-        // click-position implementation suffered from.
-        let theme = cx.theme();
-        let hover_bg = theme.secondary;
-
-        // The kebab is an edit-mode affordance only. In view mode the title
-        // sits alone — no menu, no rename, no remove.
-        if edit_mode {
-            let kebab_trigger = div()
-                .id(("panel-kebab", panel_index))
-                .flex_shrink_0()
-                .px_1()
-                .rounded(Radii::SM)
-                .cursor_pointer()
-                .hover(move |d| d.bg(hover_bg))
-                .text_sm()
-                .child("\u{22EF}") // ⋯
-                .on_mouse_down(MouseButton::Left, on_kebab_mouse_down)
-                .on_click(on_kebab_click);
-
-            let menu_panel = if menu_open {
-                Some(panel_kebab_menu(panel_index, has_editable_title, cx))
-            } else {
-                None
-            };
-
-            let kebab_wrapper = div()
-                .relative()
-                .flex_shrink_0()
-                .child(kebab_trigger)
-                .when_some(menu_panel, |el, panel| {
-                    el.child(
-                        gpui::deferred(
-                            div()
-                                .absolute()
-                                .top(px(20.0)) // sit just below the kebab glyph
-                                .right(px(0.0))
-                                .child(panel),
-                        )
-                        .with_priority(2),
-                    )
-                });
-
-            header = header.child(title_elem).child(kebab_wrapper);
-        } else {
-            // Silence the unused-variable warnings for the listeners we built
-            // unconditionally; in view mode they are intentionally dropped.
-            let _ = (on_kebab_click, on_kebab_mouse_down, menu_open, hover_bg);
-            header = header.child(title_elem);
-        }
     }
 
-    header
+    header = header.child(
+        div()
+            .id(("panel-title", panel_index))
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(DashboardMetrics::PANEL_TITLE_FONT)
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(ChromeColors::strong(&theme))
+            .child(title.to_string()),
+    );
+
+    // The settings menu is an edit-mode affordance only. It floats inline
+    // next to its trigger through the `.relative()` wrapper below, so its
+    // position is independent of the dashboard's window offset.
+    if !edit_mode {
+        return header;
+    }
+
+    let on_settings_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
+        this.open_panel_context_menu(panel_index, cx);
+    });
+
+    let settings = div()
+        .id(("panel-kebab", panel_index))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .cursor_pointer()
+        // Keep the header's drag start from firing on the button.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_click(on_settings_click)
+        .child(
+            Icon::new(AppIcon::Settings)
+                .size(DashboardMetrics::PANEL_ICON)
+                .color(if menu_open {
+                    tint
+                } else {
+                    theme.muted_foreground
+                }),
+        );
+
+    let menu_panel = menu_open.then(|| panel_kebab_menu(panel_index, has_editable_title, cx));
+
+    header.child(div().relative().flex_shrink_0().child(settings).when_some(
+        menu_panel,
+        |el, panel| {
+            el.child(
+                gpui::deferred(
+                    div()
+                        .absolute()
+                        .top(DashboardMetrics::PANEL_ICON)
+                        .right(px(0.0))
+                        .child(panel),
+                )
+                .with_priority(2),
+            )
+        },
+    ))
 }
 
 /// Build the floating menu panel for the panel at `panel_index`.
@@ -643,7 +631,7 @@ pub(super) fn panel_resize_right(
         .top(px(0.0))
         .right(px(0.0))
         .h_full()
-        .w(px(8.0)) // guardrail-allow: resize-strip hit width
+        .w(DashboardMetrics::RESIZE_STRIP)
         .cursor(CursorStyle::ResizeLeftRight)
         .on_mouse_down(MouseButton::Left, on_resize_start)
 }
@@ -668,17 +656,18 @@ pub(super) fn panel_resize_bottom(
         .left(px(0.0))
         .bottom(px(0.0))
         .w_full()
-        .h(px(8.0)) // guardrail-allow: resize-strip hit height
+        .h(DashboardMetrics::RESIZE_STRIP)
         .cursor(CursorStyle::ResizeUpDown)
         .on_mouse_down(MouseButton::Left, on_resize_start)
 }
 
-/// Returns the bottom-right corner resize grip for a panel slot.
-///
-/// The grip is a 16×16 px square with two short diagonal strokes. Dragging it
-/// resizes the panel on both axes simultaneously.
+/// Returns the bottom-right corner resize grip for a panel slot: a 14 px
+/// triangle filling the card's cut corner, in the tint on the focused
+/// panel and the strong line otherwise. Dragging it resizes the panel on
+/// both axes simultaneously.
 pub(super) fn panel_resize_corner(
     panel_index: u32,
+    focused: bool,
     cx: &mut Context<DashboardDocument>,
 ) -> impl IntoElement {
     let on_resize_start = cx.listener(
@@ -688,31 +677,37 @@ pub(super) fn panel_resize_corner(
     );
 
     let theme = cx.theme();
-    let grip_color = theme.muted_foreground;
-    let hover_bg = theme.secondary;
+    let color = if focused {
+        ChromeColors::tint(theme)
+    } else {
+        theme.input
+    };
 
     div()
         .id(("panel-resize-corner", panel_index))
-        .w(px(16.0)) // guardrail-allow: corner grip hit area
-        .h(px(16.0)) // guardrail-allow: corner grip hit area
+        .size(DashboardMetrics::RESIZE_CORNER)
         .absolute()
         .bottom(px(0.0))
         .right(px(0.0))
-        .flex()
-        .items_end()
-        .justify_end()
         .cursor(CursorStyle::ResizeUpLeftDownRight)
-        .hover(move |d| d.bg(hover_bg))
         .on_mouse_down(MouseButton::Left, on_resize_start)
         .child(
-            div()
-                .w(px(10.0))
-                .h(px(10.0))
-                .border_b_2()
-                .border_r_2()
-                .border_color(grip_color)
-                .mr(px(2.0))
-                .mb(px(2.0)),
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let mut builder = PathBuilder::fill();
+                    builder.move_to(point(bounds.right(), bounds.top()));
+                    builder.line_to(point(bounds.right(), bounds.bottom()));
+                    builder.line_to(point(bounds.left(), bounds.bottom()));
+                    builder.close();
+
+                    match builder.build() {
+                        Ok(path) => window.paint_path(path, color),
+                        Err(error) => log::warn!("Failed to build resize grip path: {error}"),
+                    }
+                },
+            )
+            .size_full(),
         )
 }
 
@@ -982,8 +977,8 @@ mod tests {
         let keys = [
             "document.dashboard.toolbar.add_panel",
             "document.dashboard.toolbar.apply",
-            "document.dashboard.toolbar.edit_mode_tooltip",
-            "document.dashboard.toolbar.exit_edit_mode_tooltip",
+            "document.dashboard.toolbar.mode_view",
+            "document.dashboard.toolbar.mode_edit",
             "document.dashboard.toolbar.save_as_editable",
             "document.dashboard.toolbar.save_as_editable_tooltip",
             "document.dashboard.panel.menu.configure",

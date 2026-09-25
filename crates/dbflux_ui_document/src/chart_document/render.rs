@@ -20,7 +20,9 @@
 use super::{ChartDocument, ExecState, should_render_stats_rail, toggle_stats_rail};
 use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
+use crate::chart::toolbar::chart_window_label;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
+use crate::chrome::{document_bar, document_title};
 use dbflux_components::chart::{
     ChartDetection, ChartView, MetricSource, axis_bar_element, format_span, format_x_value,
     format_y_value, legend_element,
@@ -28,58 +30,26 @@ use dbflux_components::chart::{
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::DropdownSelectionChanged;
-use dbflux_components::controls::Input;
+use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{
+    ChartDocumentMetrics, ChromeColors, DocumentMetrics, Fields, Spacing,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::toast::flush_pending_toast;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-use gpui_component::{ActiveTheme, Disableable, Sizable};
+use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
-// Mirrors DataGridPanel::dock_* — flagged for future shared module.
-
-fn dock_section(
-    content: impl IntoElement,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    div()
-        .px(px(14.0))
-        .py(Spacing::MD)
-        .border_b_1()
-        .border_color(theme.border)
-        .child(content)
-}
-
-fn dock_header(label: &str, chart_colors: &ChartColors) -> impl IntoElement {
-    div()
-        .text_size(px(10.0))
-        .text_color(chart_colors.muted_fg)
-        .font_weight(FontWeight::BOLD)
-        .mb(Spacing::XXS)
-        .child(SharedString::from(label.to_uppercase()))
-}
-
-fn dock_kv_row(k: &str, v: impl IntoElement, chart_colors: &ChartColors) -> impl IntoElement {
-    div()
-        .flex()
-        .items_start()
-        .gap(Spacing::SM)
-        .py(px(2.0))
-        .child(
-            div()
-                .w(px(96.0))
-                .flex_shrink_0()
-                .text_size(px(10.0))
-                .text_color(chart_colors.muted_fg)
-                .child(SharedString::from(k.to_string())),
-        )
-        .child(div().flex_1().text_size(px(11.0)).child(v))
-}
+/// Width of the save-chart name prompt.
+const CHART_SAVE_PROMPT_WIDTH: Pixels = px(360.0);
+/// Width of the date range picker in the custom range row.
+const CHART_DATE_PICKER_WIDTH: Pixels = px(260.0);
 
 impl Render for ChartDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -180,61 +150,47 @@ impl Render for ChartDocument {
         let result_panel = self.result_panel.as_ref().unwrap().clone();
 
         // -- Name prompt modal overlay --
-        let show_name_prompt = self.name_prompt.is_some();
-        let name_prompt_element =
-            show_name_prompt.then(|| {
-                let theme = cx.theme().clone();
-                let input = self.name_prompt.as_ref().unwrap().input.clone();
+        let name_prompt_element = self.name_prompt.as_ref().map(|prompt| {
+            let input = prompt.input.clone();
 
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(theme.background.opacity(0.6))
-                    .child(
-                        div()
-                            .bg(theme.secondary)
-                            .border_1()
-                            .border_color(theme.border)
-                            .p(Spacing::LG)
-                            .w(px(360.0))
-                            .flex()
-                            .flex_col()
-                            .gap(Spacing::MD)
-                            .child(Text::body(dbflux_i18n::t!(
-                                "document.chart.toolbar.save_chart"
-                            )))
-                            .child(Input::new(&input).placeholder(dbflux_i18n::t!(
-                                "document.chart.shell.name_placeholder"
-                            )))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap(Spacing::SM)
-                                    .justify_end()
-                                    .child(
-                                        Button::new("cancel-save")
-                                            .label(dbflux_i18n::t!("document.chart.shell.cancel"))
-                                            .small()
-                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                this.cancel_save(cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("confirm-save")
-                                            .label(dbflux_i18n::t!("document.chart.shell.save"))
-                                            .small()
-                                            .with_variant(ButtonVariant::Primary)
-                                            .on_click(cx.listener(|this, _, _window, cx| {
-                                                this.confirm_save(cx);
-                                            })),
-                                    ),
-                            ),
-                    )
-            });
+            Modal::new(dbflux_i18n::t!("document.chart.toolbar.save_chart"))
+                .id("chart-save-prompt")
+                .icon(AppIcon::Save)
+                .width(CHART_SAVE_PROMPT_WIDTH)
+                .body(
+                    Input::new(&input)
+                        .placeholder(dbflux_i18n::t!("document.chart.shell.name_placeholder")),
+                )
+                .footer(
+                    div()
+                        .flex()
+                        .gap(DocumentMetrics::GAP)
+                        .child(
+                            Button::new(
+                                "cancel-save",
+                                dbflux_i18n::t!("document.chart.shell.cancel"),
+                            )
+                            .on_click(cx.listener(
+                                |this, _, _window, cx| {
+                                    this.cancel_save(cx);
+                                },
+                            )),
+                        )
+                        .child(
+                            Button::new(
+                                "confirm-save",
+                                dbflux_i18n::t!("document.chart.shell.save"),
+                            )
+                            .primary()
+                            .icon(AppIcon::Save)
+                            .on_click(cx.listener(
+                                |this, _, _window, cx| {
+                                    this.confirm_save(cx);
+                                },
+                            )),
+                        ),
+                )
+        });
 
         // Outer container: tracks focus, hosts ResultPanel and the name-prompt
         // overlay as a sibling (not inside the chrome row).
@@ -339,21 +295,38 @@ impl ChartDocument {
             let weak_self_for_save = cx.weak_entity();
             let weak_self_for_refresh = cx.weak_entity();
 
-            let dropdown_time_range = self
-                .time_range_panel
-                .as_ref()
-                .map(|p| p.read(cx).dropdown_time_range.clone());
+            let tint = ChromeColors::tint(&theme);
+            let leading = div()
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap(DocumentMetrics::GAP)
+                .child(document_title(
+                    AppIcon::ChartSpline,
+                    tint,
+                    self.title.clone(),
+                    cx,
+                ))
+                .when(self.saved_chart_id.is_some(), |title| {
+                    title.child(Badge::new(
+                        dbflux_i18n::t!("document.chart.shell.saved_badge"),
+                        BadgeTone::Success,
+                    ))
+                })
+                .into_any_element();
 
             let ctx = ChartToolbarContext {
                 theme: &theme,
                 chart_shell: self.chart_shell.clone(),
                 refresh_policy: self.refresh_policy,
                 refresh_dropdown: self.refresh_dropdown.clone(),
-                dropdown_time_range,
+                time_range_panel: self.time_range_panel.clone(),
                 row_count,
                 resolved_window,
                 source_supports_save: true,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
+                leading: Some(leading),
+                show_window: false,
             };
 
             let handlers = ChartToolbarHandlers {
@@ -461,81 +434,75 @@ impl ChartDocument {
             },
         );
 
-        let axis_row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(Heights::ROW)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(axis_bar);
+        let window_label = {
+            let resolved_window = self
+                .last_result
+                .as_ref()
+                .and_then(|r| r.resolved_window.as_ref())
+                .map(|rw| (rw.start_ms, rw.end_ms));
+            let row_count = self
+                .last_result
+                .as_ref()
+                .map(|r| r.row_count())
+                .unwrap_or(0);
+
+            chart_window_label(&self.chart_shell, resolved_window, row_count, cx)
+        };
+
+        let axis_row = document_bar(ChartDocumentMetrics::AXIS_ROW_HEIGHT, cx)
+            .child(axis_bar)
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(window_label),
+            );
 
         // -- Custom date/time picker row --
         // Rendered below the chart toolbar when the user has selected "Custom…"
         // in the range preset dropdown. Mirrors the audit document's custom
         // picker row exactly: same sub-entities from the panel, same spacing,
         // same Apply button with enabled/disabled logic.
+        let selected_time_range = self
+            .time_range_panel
+            .as_ref()
+            .and_then(|panel| panel.read(cx).selected_time_range);
+        self.selected_time_range = selected_time_range;
+
         let custom_picker_row: Option<AnyElement> =
-            if self.selected_time_range == Some(TimeRange::Custom) {
-                if let Some(panel_entity) = &self.time_range_panel {
-                    // Read can_apply (and weak_self for the Apply click closure)
-                    // before the helper call so there are no concurrent borrows.
+            if selected_time_range == Some(TimeRange::Custom) {
+                self.time_range_panel.as_ref().map(|panel_entity| {
                     let can_apply = panel_entity.read(cx).can_apply_custom_range(cx);
                     let weak_self = cx.weak_entity();
 
-                    let apply_btn = div()
-                        .id("chart-custom-time-apply")
-                        .h(Heights::BUTTON)
-                        .flex()
-                        .items_center()
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(theme.input)
-                        .when(can_apply, |d| {
-                            let ws = weak_self.clone();
-                            d.cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(move |_, _, cx| {
-                                    if let Some(doc) = ws.upgrade() {
-                                        doc.update(cx, |this, cx| {
-                                            this.apply_custom_range(cx);
-                                        });
-                                    }
-                                })
-                        })
-                        .when(!can_apply, |d| d.opacity(0.45))
-                        .child(Text::caption(dbflux_i18n::t!(
-                            "document.chart.shell.custom_range.apply"
-                        )));
-
-                    // Outer band: full-width chrome (border, bg, padding) plus
-                    // flex_wrap so the picker row + Apply can wrap on narrow
-                    // viewports. The picker row itself is one opaque unit.
-                    let row = div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .flex_wrap()
-                        .gap_1()
-                        .py(Spacing::XS)
-                        .px(Spacing::SM)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .bg(theme.tab_bar)
+                    document_bar(DocumentMetrics::TOOLBAR_HEIGHT, cx)
                         .child(
                             panel_entity
                                 .read(cx)
-                                .render_custom_picker_row(px(260.0), cx),
+                                .render_custom_picker_row(CHART_DATE_PICKER_WIDTH, cx),
                         )
-                        .child(apply_btn);
-
-                    Some(row.into_any_element())
-                } else {
-                    None
-                }
+                        .child(
+                            Button::new(
+                                "chart-custom-time-apply",
+                                dbflux_i18n::t!("document.chart.shell.custom_range.apply"),
+                            )
+                            .small()
+                            .icon(AppIcon::Check)
+                            .disabled(!can_apply)
+                            .tab_stop(false)
+                            .on_click(move |_, _, cx| {
+                                if let Some(doc) = weak_self.upgrade() {
+                                    doc.update(cx, |this, cx| {
+                                        this.apply_custom_range(cx);
+                                    });
+                                }
+                            }),
+                        )
+                        .into_any_element()
+                })
             } else {
                 None
             };
@@ -572,7 +539,7 @@ impl ChartDocument {
                         .top_0()
                         .right_0()
                         .bottom_0()
-                        .w(px(320.0))
+                        .w(ChartDocumentMetrics::PICKER_WIDTH)
                         .flex()
                         .flex_col()
                         .border_l_1()
@@ -631,7 +598,17 @@ impl ChartDocument {
                 |el, row| el.child(row),
             )
             .when(!embedded, |el| el.child(axis_row))
-            .child(div().flex_1().min_h_0().child(chart_area))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .when(!embedded, |area| {
+                        area.pt(ChartDocumentMetrics::AREA_PADDING_TOP)
+                            .px(ChartDocumentMetrics::AREA_PADDING)
+                            .pb(ChartDocumentMetrics::AREA_PADDING)
+                    })
+                    .child(chart_area),
+            )
             .when_some(embedded_legend, |el, legend| el.child(legend))
             .when_some(metric_rail, |el, rail| el.child(rail))
             .when_some(stats_rail, |el, rail| el.child(rail))
@@ -683,269 +660,268 @@ impl ChartDocument {
             div()
                 .id("embedded-chart-legend")
                 .flex_none()
-                .px(Spacing::SM)
+                .px(DocumentMetrics::PADDING_X)
                 .py(Spacing::XS)
                 .child(legend)
                 .into_any_element(),
         )
     }
 
-    /// Render the 320 px Stats rail for the right-edge overlay.
+    /// Render the Stats rail for the right-edge overlay (P1Chart): the
+    /// window and the focused series' statistics as label and value rows,
+    /// then every series with its swatch and a visibility toggle.
     ///
-    /// Returns `None` when the chart view is still being built or when no stats
-    /// are available for the focused series. Mirrors the layout produced by
-    /// `DataGridPanel::render_rail_stats_tab` with snapshot-style borrows to
-    /// satisfy GPUI's single-context borrow rules.
+    /// Returns `None` when the chart view is still being built.
     fn render_stats_rail(
         &self,
         theme: &gpui_component::theme::Theme,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        let chart_colors = ChartColors::for_current(cx);
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
 
-        // Scope 1: read chart_shell to capture chart_view and focused_idx.
-        let (chart_view_opt, focused_idx) = {
-            let shell = self.chart_shell.read(cx);
-            let cv = shell.chart_view().cloned();
-            let fi = cv
-                .as_ref()
-                .map(|cv| cv.read(cx).focused_series_idx())
-                .unwrap_or(shell.chart_focused_series_idx);
-            (cv, fi)
+        let chart_view = self.chart_shell.read(cx).chart_view().cloned();
+
+        let Some(chart_view) = chart_view else {
+            return Some(
+                self.wrap_stats_rail_chrome(
+                    div()
+                        .text_size(DocumentMetrics::TABLE_META_FONT)
+                        .text_color(muted)
+                        .child(dbflux_i18n::t!(
+                            "document.chart.shell.stats_rail.rebuilding"
+                        ))
+                        .into_any_element(),
+                    theme,
+                ),
+            );
         };
 
-        let placeholder = |msg: String| -> AnyElement {
-            div()
-                .p_2()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(msg)
-                .into_any_element()
-        };
-
-        let Some(chart_view) = chart_view_opt else {
-            return Some(self.wrap_stats_rail_chrome(
-                placeholder(dbflux_i18n::t!(
-                    "document.chart.shell.stats_rail.rebuilding"
-                )),
-                theme,
-                &chart_colors,
-            ));
-        };
-
-        // Scope 2: read chart_view entity to capture all primitive values before
-        // building the element tree. Borrows must be dropped before constructing
-        // elements — mirrors DataGridPanel::render_rail_stats_tab exactly.
-        let (stats_opt, label, color, x_min, x_max, x_is_time) = {
+        let (stats_opt, focused_label, x_min, x_max, x_is_time, series, palette, focused_idx) = {
             let view = chart_view.read(cx);
-            let stats = view.series_stats().get(focused_idx).copied().flatten();
-            let label = view.series_label(focused_idx).to_string();
-            let color = view.series_color(focused_idx, cx);
-            let (x_min, x_max) = view.data_x_bounds();
-            let x_is_time = view.x_is_time();
-            (stats, label, color, x_min, x_max, x_is_time)
+            let focused_idx = view.focused_series_idx();
+            (
+                view.series_stats().get(focused_idx).copied().flatten(),
+                view.series_label(focused_idx).to_string(),
+                view.data_x_bounds().0,
+                view.data_x_bounds().1,
+                view.x_is_time(),
+                view.spec_series().to_vec(),
+                view.resolved_palette(cx),
+                focused_idx,
+            )
         };
 
-        let Some(stats) = stats_opt else {
-            return Some(self.wrap_stats_rail_chrome(
-                placeholder(dbflux_i18n::t!("document.chart.shell.stats_rail.no_stats")),
-                theme,
-                &chart_colors,
-            ));
-        };
-
-        let start_label = format_x_value(x_min, x_is_time);
-        let end_label = format_x_value(x_max, x_is_time);
-        let span_label = format_span(x_max - x_min);
+        let hidden = self.chart_shell.read(cx).chart_hidden_series.clone();
         let points_count = self
             .last_result
             .as_ref()
             .map(|r| r.row_count())
             .unwrap_or(0);
 
-        let cyan_color = theme.cyan;
-        let tint_color = ChromeColors::tint(theme);
+        let source = self.profile_id.and_then(|profile_id| {
+            self.app_state
+                .read(cx)
+                .profiles()
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .map(|profile| profile.name.clone())
+        });
 
-        let cyan_val = |v: f64| -> AnyElement {
+        let row = |label: String, value: String| {
             div()
-                .text_size(px(11.0))
-                .text_color(cyan_color)
-                .child(SharedString::from(format_y_value(v)))
-                .into_any_element()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(DocumentMetrics::GAP)
+                .py(ChartDocumentMetrics::RAIL_ROW_PADDING_Y)
+                .text_size(DocumentMetrics::TABLE_CELL_FONT)
+                .child(div().text_color(muted).child(label))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(AppFonts::MONO)
+                        .text_color(strong)
+                        .child(value),
+                )
         };
-        let tint_val = |v: f64| -> AnyElement {
-            div()
-                .text_size(px(11.0))
-                .text_color(tint_color)
-                .child(SharedString::from(format_y_value(v)))
-                .into_any_element()
-        };
-        let fg_val = |v: f64| -> AnyElement {
-            div()
-                .text_size(px(11.0))
-                .text_color(theme.foreground)
-                .child(SharedString::from(format_y_value(v)))
-                .into_any_element()
-        };
-        let str_val = |s: String| -> AnyElement {
-            div()
-                .text_size(px(11.0))
-                .text_color(theme.foreground)
-                .child(SharedString::from(s))
-                .into_any_element()
-        };
-        let unavail_val = || -> AnyElement {
-            div()
-                .text_size(px(11.0))
-                .text_color(theme.muted_foreground)
-                .italic()
-                .child(dbflux_i18n::t!(
-                    "document.chart.shell.stats_rail.unavailable"
-                ))
-                .into_any_element()
-        };
+
+        let mut rows = vec![
+            row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.window.start"),
+                format_x_value(x_min, x_is_time),
+            ),
+            row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.window.end"),
+                format_x_value(x_max, x_is_time),
+            ),
+            row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.window.span"),
+                format_span(x_max - x_min),
+            ),
+            row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.window.points"),
+                points_count.to_string(),
+            ),
+        ];
+
+        match stats_opt {
+            Some(stats) => {
+                let with_series =
+                    |value: f64| format!("{} ({focused_label})", format_y_value(value));
+
+                rows.extend([
+                    row(
+                        dbflux_i18n::t!("document.chart.shell.stats_rail.max"),
+                        with_series(stats.max),
+                    ),
+                    row(
+                        dbflux_i18n::t!("document.chart.shell.stats_rail.min"),
+                        with_series(stats.min),
+                    ),
+                    row(
+                        dbflux_i18n::t!("document.chart.shell.stats_rail.mean"),
+                        format_y_value(stats.avg),
+                    ),
+                    row("p50".to_string(), format_y_value(stats.p50)),
+                    row("p95".to_string(), format_y_value(stats.p95)),
+                    row("p99".to_string(), format_y_value(stats.p99)),
+                    row(
+                        dbflux_i18n::t!("document.chart.shell.stats_rail.last"),
+                        format_y_value(stats.last),
+                    ),
+                ]);
+            }
+            None => rows.push(row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.series"),
+                dbflux_i18n::t!("document.chart.shell.stats_rail.no_stats"),
+            )),
+        }
+
+        if let Some(source) = source {
+            rows.push(row(
+                dbflux_i18n::t!("document.chart.shell.stats_rail.source_title"),
+                source,
+            ));
+        }
+
+        let series_rows = series
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                let color = palette
+                    .get(spec.color_slot as usize % palette.len().max(1))
+                    .copied()
+                    .unwrap_or(ChromeColors::tint(theme));
+                let is_hidden = hidden.contains(&index);
+                let shell = self.chart_shell.clone();
+
+                div()
+                    .id(("chart-rail-series", index))
+                    .flex()
+                    .items_center()
+                    .gap(DocumentMetrics::GAP)
+                    .h(ChartDocumentMetrics::RAIL_SERIES_ROW_HEIGHT)
+                    .text_size(Fields::TEXT)
+                    .text_color(if is_hidden { muted } else { theme.foreground })
+                    .when(index == focused_idx, |row| {
+                        row.font_weight(FontWeight::BOLD)
+                    })
+                    .cursor_pointer()
+                    .on_click(move |_, _, cx| {
+                        shell.update(cx, |shell, cx| shell.toggle_chart_series_hidden(index, cx));
+                    })
+                    .child(
+                        div()
+                            .size(ChartDocumentMetrics::RAIL_SWATCH)
+                            .flex_shrink_0()
+                            .bg(if is_hidden {
+                                color.opacity(0.35)
+                            } else {
+                                color
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(spec.label.clone()),
+                    )
+                    .child(
+                        Icon::new(if is_hidden {
+                            AppIcon::EyeOff
+                        } else {
+                            AppIcon::Eye
+                        })
+                        .size(ChartDocumentMetrics::RAIL_ICON)
+                        .color(muted),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
 
         let body = div()
             .id("chart-doc-rail-stats-scroll")
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            // SERIES header
-            .child(dock_section(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(div().w(px(10.0)).h(px(10.0)).rounded_sm().bg(color))
-                    .child(
-                        div()
-                            .text_size(FontSizes::XS)
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.foreground)
-                            .child(SharedString::from(label)),
+            .children(rows)
+            .when(!series_rows.is_empty(), |body| {
+                body.child(
+                    div().pt(ChartDocumentMetrics::RAIL_SECTION_GAP).child(
+                        Text::label(dbflux_i18n::t!("document.chart.shell.stats_rail.series"))
+                            .font_size(ChartDocumentMetrics::RAIL_LABEL_FONT),
                     ),
-                theme,
-            ))
-            // STATS section
-            .child(dock_section(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(dock_header(
-                        &dbflux_i18n::t!("document.chart.toolbar.stats"),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row("min", cyan_val(stats.min), &chart_colors))
-                    .child(dock_kv_row("max", cyan_val(stats.max), &chart_colors))
-                    .child(dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
-                    .child(dock_kv_row("p50", fg_val(stats.p50), &chart_colors))
-                    .child(dock_kv_row("p95", fg_val(stats.p95), &chart_colors))
-                    .child(dock_kv_row("p99", tint_val(stats.p99), &chart_colors))
-                    .child(dock_kv_row("last", fg_val(stats.last), &chart_colors)),
-                theme,
-            ))
-            // WINDOW section
-            .child(dock_section(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(dock_header(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window_title"),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.start"),
-                        str_val(start_label),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.end"),
-                        str_val(end_label),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.span"),
-                        str_val(span_label),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.points"),
-                        str_val(format!("{}", points_count)),
-                        &chart_colors,
-                    )),
-                theme,
-            ))
-            // SOURCE section — placeholder until drivers populate QueryResult.metadata
-            .child(dock_section(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .child(dock_header(
-                        &dbflux_i18n::t!("document.chart.shell.stats_rail.source_title"),
-                        &chart_colors,
-                    ))
-                    .child(dock_kv_row("measurement", unavail_val(), &chart_colors))
-                    .child(dock_kv_row("field", unavail_val(), &chart_colors))
-                    .child(dock_kv_row("host", unavail_val(), &chart_colors))
-                    .child(dock_kv_row("region", unavail_val(), &chart_colors)),
-                theme,
-            ))
+                )
+                .children(series_rows)
+            })
             .into_any_element();
 
-        Some(self.wrap_stats_rail_chrome(body, theme, &chart_colors))
+        Some(self.wrap_stats_rail_chrome(body, theme))
     }
 
-    /// Wraps a stats rail body in the absolute-right 320 px chrome, prefixed by
-    /// a header bar containing the "STATS" title and a close button that
-    /// dismisses the rail by setting `chart_rail_open = false` on the shell.
+    /// Wraps a stats rail body in the absolute-right rail chrome, headed by
+    /// the "STATS" label and a close button that dismisses the rail by
+    /// setting `chart_rail_open = false` on the shell.
     fn wrap_stats_rail_chrome(
         &self,
         body: AnyElement,
         theme: &gpui_component::theme::Theme,
-        chart_colors: &ChartColors,
     ) -> AnyElement {
         let shell_for_close = self.chart_shell.clone();
-        let muted_fg = chart_colors.muted_fg;
+        let muted = theme.muted_foreground;
 
         let header = div()
             .flex()
             .flex_row()
             .items_center()
             .justify_between()
-            .px(px(14.0))
-            .py(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
+            .pb(ChartDocumentMetrics::RAIL_LABEL_GAP)
             .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(muted_fg)
-                    .font_weight(FontWeight::BOLD)
-                    .child(dbflux_i18n::t!("document.chart.toolbar.stats").to_uppercase()),
+                Text::label(dbflux_i18n::t!("document.chart.toolbar.stats"))
+                    .font_size(ChartDocumentMetrics::RAIL_LABEL_FONT),
             )
             .child(
                 div()
                     .id("chart-doc-stats-rail-close")
-                    .w(px(20.0))
-                    .h(px(20.0))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(Radii::SM)
                     .cursor_pointer()
-                    .hover(|h| h.bg(theme.muted))
                     .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
                         shell_for_close.update(cx, |s, cx| {
                             s.chart_rail_open = false;
                             cx.notify();
                         });
                     })
-                    .child(Icon::new(AppIcon::X).size(px(11.0)).color(muted_fg)),
+                    .child(
+                        Icon::new(AppIcon::CircleX)
+                            .size(ChartDocumentMetrics::RAIL_ICON)
+                            .color(muted),
+                    ),
             );
 
         div()
@@ -953,15 +929,17 @@ impl ChartDocument {
             .top_0()
             .right_0()
             .bottom_0()
-            .w(px(320.0))
+            .w(ChartDocumentMetrics::RAIL_WIDTH)
             .flex()
             .flex_col()
+            .px(ChartDocumentMetrics::RAIL_PADDING_X)
+            .py(ChartDocumentMetrics::RAIL_PADDING_Y)
             .border_l_1()
             .border_color(theme.border)
-            .bg(theme.popover)
+            .bg(theme.background)
             .occlude()
             .child(header)
-            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
+            .child(body)
             .into_any_element()
     }
 }

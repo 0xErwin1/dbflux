@@ -152,6 +152,7 @@ pub struct Dropdown {
     chevron_trigger: Option<ButtonVariant>,
     toolbar_style: bool,
     mono_label: bool,
+    leading_icon: Option<AppIcon>,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
@@ -179,6 +180,7 @@ impl Dropdown {
             chevron_trigger: None,
             toolbar_style: false,
             mono_label: false,
+            leading_icon: None,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
         }
@@ -303,6 +305,13 @@ impl Dropdown {
     /// that are identifiers (a connection, database or schema name).
     pub fn mono_label(mut self, mono: bool) -> Self {
         self.mono_label = mono;
+        self
+    }
+
+    /// Draws `icon` in the muted color before the label of the standard
+    /// trigger, as the toolbar selects do (a globe before the timezone).
+    pub fn leading_icon(mut self, icon: AppIcon) -> Self {
+        self.leading_icon = Some(icon);
         self
     }
 
@@ -706,6 +715,13 @@ impl Dropdown {
                     .text_size(Fields::TEXT)
                     .text_color(text_color)
                     .child(shape)
+                    .when_some(self.leading_icon, |trigger, icon| {
+                        trigger.child(
+                            Icon::new(icon)
+                                .size(Fields::LEADING_ICON)
+                                .color(theme.muted_foreground),
+                        )
+                    })
                     .child(div().flex_1().truncate().child(label))
                     .child(
                         Icon::new(AppIcon::ChevronDown)

@@ -1,32 +1,62 @@
-use dbflux_components::controls::Button;
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, Radii};
+use std::rc::Rc;
+
+use dbflux_components::controls::{Button, ButtonVariant};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{
+    Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, Kbd, Text,
+};
+use dbflux_components::tokens::{
+    ApprovalsMetrics, ChamferCut, ChromeColors, DocumentMetrics, SyntaxColors, TreeMetrics,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
+use dbflux_policy::ExecutionClassification;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
-use super::chrome::{compact_labeled_control, compact_top_bar, workspace_footer_bar};
+use super::chrome::{detail_field, document_bar, document_subtitle, document_title};
+use super::syntax_runs::json_highlights;
 
+type CloseHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// The MCP approvals view (P1Approvals): the pending agent calls on the
+/// left, the selected call's context and payload on the right, and the
+/// Reject and Approve actions at the bottom.
 pub struct McpApprovalsView {
     app_state: Entity<AppStateEntity>,
     pending: Vec<PendingExecutionSummary>,
     selected_id: Option<String>,
     selected_detail: Option<PendingExecutionDetail>,
     status_message: Option<String>,
+    focus_handle: FocusHandle,
+    on_close: Option<CloseHandler>,
 }
 
 impl McpApprovalsView {
-    pub fn new(app_state: Entity<AppStateEntity>) -> Self {
+    pub fn new(app_state: Entity<AppStateEntity>, cx: &mut Context<Self>) -> Self {
         Self {
             app_state,
             pending: Vec::new(),
             selected_id: None,
             selected_detail: None,
             status_message: None,
+            focus_handle: cx.focus_handle(),
+            on_close: None,
         }
+    }
+
+    /// Adds a close button to the header that runs `on_close`, for a host
+    /// that shows the view as an overlay.
+    pub fn set_on_close(&mut self, on_close: impl Fn(&mut Window, &mut App) + 'static) {
+        self.on_close = Some(Rc::new(on_close));
+    }
+
+    /// Focus handle of the view, which takes the j/k/a/r keys while focused.
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -36,8 +66,23 @@ impl McpApprovalsView {
                 self.pending = pending;
                 self.status_message = None;
 
-                if let Some(selected_id) = self.selected_id.clone() {
-                    self.load_detail(&selected_id, cx);
+                let selected_is_pending = self
+                    .selected_id
+                    .as_ref()
+                    .is_some_and(|id| self.pending.iter().any(|entry| &entry.id == id));
+
+                let next_selection = if selected_is_pending {
+                    self.selected_id.clone()
+                } else {
+                    self.pending.first().map(|entry| entry.id.clone())
+                };
+
+                match next_selection {
+                    Some(selected_id) => self.load_detail(&selected_id, cx),
+                    None => {
+                        self.selected_id = None;
+                        self.selected_detail = None;
+                    }
                 }
             }
             Err(error) => {
@@ -46,6 +91,8 @@ impl McpApprovalsView {
                 self.status_message = Some(error);
             }
         }
+
+        cx.notify();
     }
 
     fn load_detail(&mut self, pending_id: &str, cx: &mut Context<Self>) {
@@ -71,35 +118,104 @@ impl McpApprovalsView {
         }
     }
 
-    fn semantics_preview(detail: &PendingExecutionDetail) -> String {
-        dbflux_i18n::t!(
-            "document.governance.semantics_preview",
-            requester = detail.summary.actor_id,
-            connection = detail.summary.connection_id,
-            classification = Self::classification_label(detail.summary.classification)
-        )
+    /// Moves the selection `step` entries along the pending list, clamped
+    /// to its ends.
+    fn move_selection(&mut self, step: isize, cx: &mut Context<Self>) {
+        if self.pending.is_empty() {
+            return;
+        }
+
+        let current = self
+            .selected_id
+            .as_ref()
+            .and_then(|id| self.pending.iter().position(|entry| &entry.id == id));
+
+        let next = match current {
+            Some(index) => index
+                .saturating_add_signed(step)
+                .min(self.pending.len() - 1),
+            None => 0,
+        };
+
+        let next_id = self.pending[next].id.clone();
+        self.load_detail(&next_id, cx);
+        cx.notify();
     }
 
-    fn classification_label(
-        classification: dbflux_policy::ExecutionClassification,
-    ) -> &'static str {
+    /// Translated name of a classification, as its badge shows it.
+    fn classification_display(classification: ExecutionClassification) -> String {
         match classification {
-            dbflux_policy::ExecutionClassification::Metadata => "metadata",
-            dbflux_policy::ExecutionClassification::Read => "read",
-            dbflux_policy::ExecutionClassification::Write => "write",
-            dbflux_policy::ExecutionClassification::Destructive => "destructive",
-            dbflux_policy::ExecutionClassification::Admin => "admin",
-            dbflux_policy::ExecutionClassification::AdminSafe => "admin_safe",
-            dbflux_policy::ExecutionClassification::AdminDestructive => "admin_destructive",
+            ExecutionClassification::Metadata => {
+                dbflux_i18n::t!("document.governance.classification.metadata")
+            }
+            ExecutionClassification::Read => {
+                dbflux_i18n::t!("document.governance.classification.read")
+            }
+            ExecutionClassification::Write => {
+                dbflux_i18n::t!("document.governance.classification.write")
+            }
+            ExecutionClassification::Destructive => {
+                dbflux_i18n::t!("document.governance.classification.destructive")
+            }
+            ExecutionClassification::Admin => {
+                dbflux_i18n::t!("document.governance.classification.admin")
+            }
+            ExecutionClassification::AdminSafe => {
+                dbflux_i18n::t!("document.governance.classification.admin_safe")
+            }
+            ExecutionClassification::AdminDestructive => {
+                dbflux_i18n::t!("document.governance.classification.admin_destructive")
+            }
         }
+    }
+
+    /// Badge tone of a classification: reads in blue, writes in amber, and
+    /// anything that can lose data or change the schema in red.
+    fn classification_tone(classification: ExecutionClassification) -> BadgeTone {
+        match classification {
+            ExecutionClassification::Metadata => BadgeTone::Neutral,
+            ExecutionClassification::Read => BadgeTone::Info,
+            ExecutionClassification::Write | ExecutionClassification::AdminSafe => {
+                BadgeTone::Warning
+            }
+            ExecutionClassification::Destructive
+            | ExecutionClassification::Admin
+            | ExecutionClassification::AdminDestructive => BadgeTone::Danger,
+        }
+    }
+
+    /// How long a call has waited, from its creation time.
+    fn waiting_label(created_at_epoch_ms: i64, now_ms: i64) -> String {
+        let minutes = (now_ms - created_at_epoch_ms).max(0) / 60_000;
+
+        if minutes < 1 {
+            dbflux_i18n::t!("document.governance.waiting.just_now")
+        } else if minutes < 60 {
+            dbflux_i18n::t!("document.governance.waiting.minutes", count = minutes)
+        } else {
+            dbflux_i18n::t!("document.governance.waiting.hours", count = minutes / 60)
+        }
+    }
+
+    /// Name of the connection a call targets: the profile name when the id
+    /// matches a saved connection, the id otherwise, and an em dash for a
+    /// tool without a connection.
+    fn connection_name(&self, connection_id: &str, cx: &App) -> String {
+        if connection_id.is_empty() {
+            return "—".to_string();
+        }
+
+        self.app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id.to_string() == connection_id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| connection_id.to_string())
     }
 
     fn pending_tool_text(text: impl Into<SharedString>) -> Text {
         Text::code(text)
-    }
-
-    fn pending_actor_text(text: impl Into<SharedString>) -> Text {
-        Text::code(text).muted_foreground()
     }
 
     fn approve_selected(&mut self, cx: &mut Context<Self>) {
@@ -157,153 +273,495 @@ impl McpApprovalsView {
 
         self.refresh(cx);
     }
-}
 
-impl Render for McpApprovalsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn handle_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+
+        if keystroke.modifiers.modified() {
+            return;
+        }
+
+        match keystroke.key.as_str() {
+            "j" | "down" => self.move_selection(1, cx),
+            "k" | "up" => self.move_selection(-1, cx),
+            "a" => self.approve_selected(cx),
+            "r" => self.reject_selected(cx),
+            _ => return,
+        }
+
+        cx.stop_propagation();
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tint = ChromeColors::tint(cx.theme());
+
+        let close = self.on_close.clone().map(|on_close| {
+            Button::new("mcp-approvals-close", "")
+                .small()
+                .ghost()
+                .icon(AppIcon::X)
+                .icon_only()
+                .tooltip(dbflux_i18n::t!("document.governance.close"))
+                .on_click(move |_, window, cx| on_close(window, cx))
+        });
+
+        document_bar(DocumentMetrics::HEADER_HEIGHT, cx)
+            .child(document_title(
+                AppIcon::Bot,
+                tint,
+                dbflux_i18n::t!("document.governance.title"),
+                cx,
+            ))
+            .child(document_subtitle(
+                dbflux_i18n::t!("document.governance.subtitle"),
+                cx,
+            ))
+            .child(div().flex_1())
+            .child(
+                Button::new(
+                    "mcp-approvals-refresh",
+                    dbflux_i18n::t!("document.governance.refresh"),
+                )
+                .small()
+                .icon(AppIcon::RefreshCcw)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.refresh(cx);
+                })),
+            )
+            .children(close)
+    }
+
+    fn render_pending_row(
+        &self,
+        entry: &PendingExecutionSummary,
+        now_ms: i64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let is_selected = self.selected_id.as_deref() == Some(entry.id.as_str());
+        let entry_id = entry.id.clone();
+        let hover = theme.list_hover;
+
+        div()
+            .id(SharedString::from(format!("pending-{}", entry.id)))
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(ApprovalsMetrics::ROW_GAP)
+            .px(ApprovalsMetrics::LIST_PADDING_X)
+            .py(ApprovalsMetrics::LIST_PADDING_Y)
+            .border_b_1()
+            .border_color(theme.table_row_border)
+            .cursor_pointer()
+            .when(is_selected, |row| {
+                row.bg(tint.opacity(ApprovalsMetrics::SELECTED_ALPHA))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(TreeMetrics::SELECTION_BAR)
+                            .bg(tint),
+                    )
+            })
+            .when(!is_selected, |row| row.hover(move |row| row.bg(hover)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.load_detail(&entry_id, cx);
+                this.focus_handle.focus(window, cx);
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(DocumentMetrics::GAP)
+                    .child(
+                        Icon::new(AppIcon::Bot)
+                            .size(ApprovalsMetrics::ROW_ICON)
+                            .color(tint),
+                    )
+                    .child(
+                        Self::pending_tool_text(entry.tool_id.clone())
+                            .color(ChromeColors::strong(theme))
+                            .font_weight(FontWeight::BOLD),
+                    )
+                    .child(div().flex_1())
+                    .child(Badge::new(
+                        Self::classification_display(entry.classification),
+                        Self::classification_tone(entry.classification),
+                    )),
+            )
+            .child(
+                div()
+                    .font_family(AppFonts::MONO)
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(theme.foreground)
+                    .truncate()
+                    .child(self.connection_name(&entry.connection_id, cx)),
+            )
+            .child(
+                div()
+                    .text_size(ApprovalsMetrics::META_FONT)
+                    .text_color(theme.muted_foreground)
+                    .truncate()
+                    .child(format!(
+                        "{} · {}",
+                        entry.actor_id,
+                        Self::waiting_label(entry.created_at_epoch_ms, now_ms)
+                    )),
+            )
+    }
+
+    fn render_pending_list(&self, now_ms: i64, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = self
+            .pending
+            .iter()
+            .map(|entry| {
+                self.render_pending_row(entry, now_ms, cx)
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
         let theme = cx.theme();
 
         div()
-            .size_full()
+            .w(ApprovalsMetrics::LIST_WIDTH)
+            .flex_shrink_0()
+            .h_full()
             .flex()
-            .overflow_hidden()
+            .flex_col()
+            .border_r_1()
+            .border_color(theme.border)
+            .bg(theme.background)
             .child(
                 div()
-                    .w(px(340.0))
-                    .h_full()
-                    .border_r_1()
-                    .border_color(theme.border)
-                    .p_3()
                     .flex()
-                    .flex_col()
-                    .gap_2()
+                    .items_center()
+                    .px(ApprovalsMetrics::LIST_PADDING_X)
+                    .py(ApprovalsMetrics::LIST_PADDING_Y)
                     .child(
-                        Button::new(
-                            "mcp-approvals-refresh",
-                            dbflux_i18n::t!("document.governance.refresh"),
-                        )
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.refresh(cx);
-                        })),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .overflow_y_scrollbar()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .when(self.pending.is_empty(), |root| {
-                                root.child(Text::caption(dbflux_i18n::t!(
-                                    "document.governance.no_pending"
-                                )))
-                            })
-                            .children(self.pending.iter().map(|entry| {
-                                let entry_id = entry.id.clone();
-                                let is_selected =
-                                    self.selected_id.as_deref() == Some(entry.id.as_str());
-
-                                div()
-                                    .id(SharedString::from(format!("pending-{}", entry.id)))
-                                    .p_2()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(if is_selected {
-                                        ChromeColors::tint(theme)
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .bg(if is_selected {
-                                        theme.secondary
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .cursor_pointer()
-                                    .hover({
-                                        let secondary = theme.secondary;
-                                        move |div| div.bg(secondary)
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.load_detail(&entry_id, cx);
-                                        cx.notify();
-                                    }))
-                                    .child(Self::pending_tool_text(entry.tool_id.clone()))
-                                    .child(Self::pending_actor_text(dbflux_i18n::t!(
-                                        "document.governance.pending_actor",
-                                        actor = entry.actor_id
-                                    )))
-                            })),
+                        Text::label(dbflux_i18n::t!(
+                            "document.governance.pending_count",
+                            count = self.pending.len()
+                        ))
+                        .font_size(ApprovalsMetrics::SECTION_LABEL_FONT),
                     ),
             )
             .child(
                 div()
+                    .id("mcp-approvals-list")
                     .flex_1()
-                    .h_full()
-                    .p_4()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
                     .flex()
                     .flex_col()
-                    .gap_3()
-                    .when_some(self.selected_detail.clone(), |root, detail| {
-                        root.child(Text::heading(dbflux_i18n::t!(
-                            "document.governance.pending_title",
-                            id = detail.summary.id
-                        )))
-                        .child(
+                    .when(self.pending.is_empty(), |list| {
+                        list.child(
                             div()
+                                .px(ApprovalsMetrics::LIST_PADDING_X)
                                 .child(Text::caption(dbflux_i18n::t!(
-                                    "document.governance.approval_context"
-                                )))
-                                .child(Text::body(Self::semantics_preview(&detail))),
-                        )
-                        .child(
-                            div()
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.governance.execution_plan"
-                                )))
-                                .child(Text::body(detail.plan.to_string())),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(
-                                    Button::new(
-                                        "mcp-approval-approve",
-                                        dbflux_i18n::t!("document.governance.approve"),
-                                    )
-                                    .small()
-                                    .primary()
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.approve_selected(cx);
-                                        },
-                                    )),
-                                )
-                                .child(
-                                    Button::new(
-                                        "mcp-approval-reject",
-                                        dbflux_i18n::t!("document.governance.reject"),
-                                    )
-                                    .small()
-                                    .danger()
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.reject_selected(cx);
-                                        },
-                                    )),
-                                ),
+                                    "document.governance.no_pending"
+                                ))),
                         )
                     })
-                    .when(self.selected_detail.is_none(), |root| {
-                        root.child(Text::caption(dbflux_i18n::t!(
-                            "document.governance.select_prompt"
-                        )))
+                    .children(rows),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(ApprovalsMetrics::HINT_GAP)
+                    .px(ApprovalsMetrics::LIST_PADDING_X)
+                    .py(ApprovalsMetrics::LIST_PADDING_Y)
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(Kbd::new("j"))
+                    .child(Kbd::new("k"))
+                    .child(dbflux_i18n::t!("document.governance.list_hint")),
+            )
+    }
+
+    fn render_detail(
+        &self,
+        detail: PendingExecutionDetail,
+        now_ms: i64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let summary = &detail.summary;
+
+        let icon_value = |icon: AppIcon, color: Hsla, value: String| {
+            div()
+                .flex()
+                .items_center()
+                .gap(ApprovalsMetrics::VALUE_ICON_GAP)
+                .child(
+                    Icon::new(icon)
+                        .size(ApprovalsMetrics::VALUE_ICON)
+                        .color(color),
+                )
+                .child(value)
+        };
+
+        let fields: Vec<AnyElement> = vec![
+            detail_field(
+                dbflux_i18n::t!("document.governance.requested_by"),
+                icon_value(AppIcon::Bot, tint, summary.actor_id.clone()),
+                cx,
+            )
+            .into_any_element(),
+            detail_field(
+                dbflux_i18n::t!("document.governance.connection"),
+                icon_value(
+                    AppIcon::Database,
+                    theme.info,
+                    self.connection_name(&summary.connection_id, cx),
+                ),
+                cx,
+            )
+            .into_any_element(),
+            detail_field(
+                dbflux_i18n::t!("document.governance.classification_label"),
+                Badge::new(
+                    Self::classification_display(summary.classification),
+                    Self::classification_tone(summary.classification),
+                ),
+                cx,
+            )
+            .into_any_element(),
+            detail_field(
+                dbflux_i18n::t!("document.governance.tool"),
+                summary.tool_id.clone(),
+                cx,
+            )
+            .into_any_element(),
+            detail_field(
+                dbflux_i18n::t!("document.governance.requested_at"),
+                dbflux_components::common::time_range::format_timestamp_ms(
+                    summary.created_at_epoch_ms,
+                    dbflux_components::common::time_range::TimestampDisplayMode::Local,
+                ),
+                cx,
+            )
+            .into_any_element(),
+            detail_field(
+                dbflux_i18n::t!("document.governance.waiting_label"),
+                Self::waiting_label(summary.created_at_epoch_ms, now_ms),
+                cx,
+            )
+            .into_any_element(),
+        ];
+
+        let mut grid_rows = Vec::new();
+        let mut fields = fields.into_iter().peekable();
+
+        while fields.peek().is_some() {
+            let mut row = div().flex().gap(ApprovalsMetrics::GRID_GAP);
+
+            for _ in 0..ApprovalsMetrics::GRID_COLUMNS {
+                let cell = div().flex_1().min_w_0();
+                row = row.child(match fields.next() {
+                    Some(field) => cell.child(field),
+                    None => cell,
+                });
+            }
+
+            grid_rows.push(row);
+        }
+
+        let payload =
+            serde_json::to_string_pretty(&detail.plan).unwrap_or_else(|_| detail.plan.to_string());
+        let highlights = json_highlights(&payload, &SyntaxColors::for_current(cx));
+
+        let payload_block = div()
+            .relative()
+            .px(ApprovalsMetrics::CODE_PADDING_X)
+            .py(ApprovalsMetrics::CODE_PADDING_Y)
+            .font_family(AppFonts::MONO)
+            .text_size(ApprovalsMetrics::CODE_FONT)
+            .line_height(relative(ApprovalsMetrics::CODE_LINE_HEIGHT))
+            .text_color(ChromeColors::strong(theme))
+            .child(
+                Chamfer::new(ChamferCut::INPUT)
+                    .fill(theme.background)
+                    .border(theme.border),
+            )
+            .child(StyledText::new(payload).with_highlights(highlights));
+
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap(ApprovalsMetrics::TITLE_GAP)
+                    .h(ApprovalsMetrics::TITLE_HEIGHT)
+                    .px(ApprovalsMetrics::DETAIL_PADDING_X)
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        Icon::new(AppIcon::Bot)
+                            .size(ApprovalsMetrics::TITLE_ICON)
+                            .color(tint),
+                    )
+                    .child(
+                        div()
+                            .font_family(AppFonts::MONO)
+                            .text_size(ApprovalsMetrics::TITLE_FONT)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(summary.tool_id.clone()),
+                    )
+                    .child(Badge::new(
+                        dbflux_i18n::t!("document.governance.status.pending"),
+                        BadgeTone::Accent,
+                    ))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .font_family(AppFonts::MONO)
+                            .text_size(ApprovalsMetrics::META_FONT)
+                            .text_color(theme.muted_foreground)
+                            .child(dbflux_i18n::t!(
+                                "document.governance.exec_id",
+                                id = summary.id.clone()
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .id("mcp-approval-detail")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .flex()
+                    .flex_col()
+                    .gap(ApprovalsMetrics::SECTION_GAP)
+                    .px(ApprovalsMetrics::DETAIL_PADDING_X)
+                    .py(ApprovalsMetrics::SECTION_GAP)
+                    .when_some(self.status_message.clone(), |detail, message| {
+                        detail.child(BannerBlock::new(BannerVariant::Danger, message))
                     })
-                    .when_some(self.status_message.clone(), |root, message| {
-                        root.child(Text::body(message).danger())
-                    }),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(ApprovalsMetrics::GRID_GAP)
+                            .children(grid_rows),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(ApprovalsMetrics::SECTION_TITLE_GAP)
+                            .child(
+                                Text::label(dbflux_i18n::t!("document.governance.execution_plan"))
+                                    .font_size(ApprovalsMetrics::SECTION_LABEL_FONT),
+                            )
+                            .child(payload_block),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_end()
+                    .gap(ApprovalsMetrics::TITLE_GAP)
+                    .px(ApprovalsMetrics::DETAIL_PADDING_X)
+                    .py(ApprovalsMetrics::FOOTER_PADDING_Y)
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        Button::new(
+                            "mcp-approval-reject",
+                            dbflux_i18n::t!("document.governance.reject"),
+                        )
+                        .small()
+                        .danger()
+                        .icon(AppIcon::CircleX)
+                        .kbd("r")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.reject_selected(cx);
+                        })),
+                    )
+                    .child(
+                        Button::new(
+                            "mcp-approval-approve",
+                            dbflux_i18n::t!("document.governance.approve"),
+                        )
+                        .small()
+                        .variant(ButtonVariant::Primary)
+                        .icon(AppIcon::Check)
+                        .kbd("a")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.approve_selected(cx);
+                        })),
+                    ),
+            )
+    }
+}
+
+impl Focusable for McpApprovalsView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for McpApprovalsView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or(0);
+
+        let detail: AnyElement = match self.selected_detail.clone() {
+            Some(detail) => self.render_detail(detail, now_ms, cx).into_any_element(),
+            None => div()
+                .flex_1()
+                .h_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap(DocumentMetrics::GAP)
+                .p(ApprovalsMetrics::DETAIL_PADDING_X)
+                .when_some(self.status_message.clone(), |empty, message| {
+                    empty.child(BannerBlock::new(BannerVariant::Danger, message))
+                })
+                .child(Text::caption(dbflux_i18n::t!(
+                    "document.governance.select_prompt"
+                )))
+                .into_any_element(),
+        };
+
+        div()
+            .id("mcp-approvals")
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(Self::handle_key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(self.render_header(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(self.render_pending_list(now_ms, cx))
+                    .child(detail),
             )
     }
 }
@@ -311,76 +769,82 @@ impl Render for McpApprovalsView {
 #[cfg(test)]
 mod tests {
     use super::McpApprovalsView;
-    use dbflux_components::primitives::{TextColorSelection, TextDefaultColor};
+    use dbflux_components::primitives::{BadgeTone, TextColorSelection, TextDefaultColor};
     use dbflux_components::typography::AppFonts;
-    use dbflux_mcp::{PendingExecutionDetail, PendingExecutionSummary};
+    use dbflux_policy::ExecutionClassification;
 
     #[test]
-    fn semantics_preview_shows_actual_approval_context() {
-        let detail = PendingExecutionDetail {
-            summary: PendingExecutionSummary {
-                id: "pending-1".to_string(),
-                actor_id: "agent-a".to_string(),
-                connection_id: "conn-a".to_string(),
-                tool_id: "request_execution".to_string(),
-                classification: dbflux_policy::ExecutionClassification::Write,
-                status: "pending".to_string(),
-                created_at_epoch_ms: 0,
-            },
-            plan: serde_json::json!({"session": "one-shot", "scope": "connection"}),
-        };
-
-        let preview = McpApprovalsView::semantics_preview(&detail);
-        assert_eq!(
-            preview,
-            "requester: agent-a | connection: conn-a | classification: write"
-        );
-    }
-
-    #[test]
-    fn semantics_preview_does_not_depend_on_optional_payload_fields() {
-        let detail = PendingExecutionDetail {
-            summary: PendingExecutionSummary {
-                id: "pending-2".to_string(),
-                actor_id: "agent-a".to_string(),
-                connection_id: "conn-a".to_string(),
-                tool_id: "request_execution".to_string(),
-                classification: dbflux_policy::ExecutionClassification::Write,
-                status: "pending".to_string(),
-                created_at_epoch_ms: 0,
-            },
-            plan: serde_json::json!({}),
-        };
-
-        let preview = McpApprovalsView::semantics_preview(&detail);
-        assert_eq!(
-            preview,
-            "requester: agent-a | connection: conn-a | classification: write"
-        );
-    }
-
-    #[test]
-    fn pending_list_uses_distinct_mono_roles_for_tool_and_actor_metadata() {
+    fn pending_tool_names_use_the_code_role() {
         let tool = McpApprovalsView::pending_tool_text("request_execution").inspect();
-        let actor = McpApprovalsView::pending_actor_text("actor: agent-a").inspect();
 
         assert_eq!(tool.family, AppFonts::MONO);
         assert_eq!(tool.fallbacks, &[AppFonts::MONO_FALLBACK]);
         assert_eq!(tool.size_override, None);
-        assert_eq!(tool.weight_override, None);
         assert_eq!(
             tool.color_selection,
             TextColorSelection::RoleDefault(TextDefaultColor::Foreground)
         );
-        assert!(tool.uses_role_default_color);
-        assert!(!tool.uses_muted_foreground_override);
+    }
 
-        assert_eq!(actor.family, AppFonts::MONO);
-        assert_eq!(actor.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(actor.size_override, None);
-        assert_eq!(actor.weight_override, None);
-        assert_eq!(actor.color_selection, TextColorSelection::MutedForeground);
-        assert!(actor.uses_muted_foreground_override);
-        assert!(!actor.has_custom_color_override);
+    #[test]
+    fn classifications_that_can_lose_data_read_as_danger() {
+        assert_eq!(
+            McpApprovalsView::classification_tone(ExecutionClassification::Read),
+            BadgeTone::Info
+        );
+        assert_eq!(
+            McpApprovalsView::classification_tone(ExecutionClassification::Write),
+            BadgeTone::Warning
+        );
+
+        for classification in [
+            ExecutionClassification::Destructive,
+            ExecutionClassification::Admin,
+            ExecutionClassification::AdminDestructive,
+        ] {
+            assert_eq!(
+                McpApprovalsView::classification_tone(classification),
+                BadgeTone::Danger
+            );
+        }
+    }
+
+    #[test]
+    fn waiting_label_rounds_down_to_minutes_then_hours() {
+        let minute = 60_000;
+
+        assert_eq!(
+            McpApprovalsView::waiting_label(0, 30_000),
+            dbflux_i18n::t!("document.governance.waiting.just_now")
+        );
+        assert_eq!(
+            McpApprovalsView::waiting_label(0, 4 * minute),
+            dbflux_i18n::t!("document.governance.waiting.minutes", count = 4)
+        );
+        assert_eq!(
+            McpApprovalsView::waiting_label(0, 125 * minute),
+            dbflux_i18n::t!("document.governance.waiting.hours", count = 2)
+        );
+    }
+
+    #[test]
+    fn approvals_keys_resolve_in_every_locale() {
+        for key in [
+            "document.governance.title",
+            "document.governance.subtitle",
+            "document.governance.list_hint",
+            "document.governance.requested_by",
+            "document.governance.classification.admin_destructive",
+            "document.governance.waiting.just_now",
+        ] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
     }
 }

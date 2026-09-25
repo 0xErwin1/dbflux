@@ -1,14 +1,22 @@
-use dbflux_components::controls::{Button, ButtonVariant, Input, ReadOnlyEditor, ReadonlyTextView};
+use dbflux_components::controls::{Button, Input, ReadOnlyEditor, ReadonlyTextView};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::{
+    Badge, BadgeTone, Chamfer, Icon, SegmentedControl, SegmentedItem, Text,
+};
+use dbflux_components::tokens::{BuilderMetrics, ChamferCut, ChromeColors, Spacing};
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, IntoElement, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, FontWeight, IntoElement, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::Theme;
 
 use crate::query_builder::mutation_state::BuilderMode;
+
+/// Keycap on the Run button: the builder runs on Cmd/Ctrl+Enter.
+#[cfg(target_os = "macos")]
+const RUN_SHORTCUT_HINT: &str = "Cmd \u{21b5}";
+#[cfg(not(target_os = "macos"))]
+const RUN_SHORTCUT_HINT: &str = "Ctrl \u{21b5}";
 
 use super::panel::QueryBuilderPanel;
 
@@ -72,7 +80,7 @@ pub fn render_panel(
 
     let show_mode_selector = panel.shows_mutation_selector(cx);
 
-    let container = div().flex().flex_col().size_full().bg(theme.background);
+    let container = div().flex().flex_col().size_full().bg(theme.popover);
 
     let container = match &panel.focus_handle {
         Some(handle) => container.track_focus(handle),
@@ -85,7 +93,12 @@ pub fn render_panel(
             c.child(render_mode_selector(panel, &theme, cx))
         })
         .child(render_body(panel, &theme, cx))
-        .child(render_preview_pane(panel, &theme))
+        .child(
+            div()
+                .px(BuilderMetrics::RAIL_PADDING_X)
+                .pb(BuilderMetrics::SECTION_GAP)
+                .child(render_preview_pane(panel, &theme)),
+        )
         .child(render_footer(panel, &theme, cx))
 }
 
@@ -98,63 +111,77 @@ fn render_header(
     theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    let source_table = panel.current_spec.source.table.clone();
+    let title = panel
+        .loaded_id
+        .clone()
+        .unwrap_or_else(|| panel.current_spec.source.table.clone());
     let source_schema = panel.current_spec.source.schema.clone();
 
     div()
         .flex()
         .flex_row()
+        .flex_shrink_0()
         .items_center()
-        .gap(Spacing::SM)
-        .px(Spacing::MD)
-        .h(Heights::HEADER)
+        .gap(BuilderMetrics::HEADER_GAP)
+        .px(BuilderMetrics::RAIL_PADDING_X)
+        .h(BuilderMetrics::HEADER_HEIGHT)
         .border_b_1()
         .border_color(theme.border)
-        .bg(theme.background)
         .child(
-            Icon::new(AppIcon::Table)
-                .small()
-                .color(theme.muted_foreground),
+            Icon::new(AppIcon::SquareFunction)
+                .size(BuilderMetrics::HEADER_ICON)
+                .color(ChromeColors::tint(theme)),
         )
-        .child(Text::body(SharedString::from(source_table)).color(theme.foreground))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(FontWeight::BOLD)
+                .text_color(ChromeColors::strong(theme))
+                .child(SharedString::from(title)),
+        )
         .when_some(source_schema, |row, schema| {
-            row.child(
-                div()
-                    .px(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .bg(theme.secondary)
-                    .child(Text::caption(SharedString::from(schema)).color(theme.muted_foreground)),
-            )
+            row.child(Badge::new(schema, BadgeTone::Neutral))
         })
         .child(div().flex_1())
         .child(
-            Button::new(
-                "qb-hdr-save",
-                dbflux_i18n::t!("document.query_builder.chrome.save"),
-            )
-            .icon(AppIcon::Save)
-            .ghost()
-            .small()
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                use crate::query_builder::events::BuilderEvent;
-                let name = this.loaded_id.clone().unwrap_or_else(|| {
-                    dbflux_i18n::t!("document.query_builder.chrome.untitled_query")
-                });
-                cx.emit(BuilderEvent::SaveRequested { name });
-            })),
+            Button::new("qb-hdr-save", "")
+                .icon(AppIcon::Save)
+                .icon_only()
+                .small()
+                .tooltip(dbflux_i18n::t!("document.query_builder.chrome.save"))
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    let name = this.loaded_id.clone().unwrap_or_else(|| {
+                        dbflux_i18n::t!("document.query_builder.chrome.untitled_query")
+                    });
+                    cx.emit(BuilderEvent::SaveRequested { name });
+                })),
         )
         .child(
-            Button::new(
-                "qb-hdr-reset",
-                dbflux_i18n::t!("document.query_builder.chrome.reset"),
-            )
-            .icon(AppIcon::RotateCcw)
-            .ghost()
-            .small()
-            .on_click(cx.listener(|_this, _event, _window, cx| {
-                use crate::query_builder::events::BuilderEvent;
-                cx.emit(BuilderEvent::ResetRequested);
-            })),
+            Button::new("qb-hdr-reset", "")
+                .icon(AppIcon::RotateCcw)
+                .icon_only()
+                .small()
+                .tooltip(dbflux_i18n::t!("document.query_builder.chrome.reset"))
+                .tab_stop(false)
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::ResetRequested);
+                })),
+        )
+        .child(
+            Button::new("qb-hdr-close", "")
+                .icon(AppIcon::X)
+                .icon_only()
+                .small()
+                .tooltip(dbflux_i18n::t!("document.query_builder.chrome.close"))
+                .tab_stop(false)
+                .on_click(cx.listener(|_this, _event, _window, cx| {
+                    use crate::query_builder::events::BuilderEvent;
+                    cx.emit(BuilderEvent::CloseRequested);
+                })),
         )
 }
 
@@ -164,7 +191,7 @@ fn render_header(
 
 fn render_mode_selector(
     panel: &mut QueryBuilderPanel,
-    theme: &Theme,
+    _theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use crate::query_builder::mutation_state::BuilderMode;
@@ -175,35 +202,33 @@ fn render_mode_selector(
         .map(|s| s.mode)
         .unwrap_or(BuilderMode::Select);
 
-    let mut row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(Spacing::XS)
-        .px(Spacing::MD)
-        .py(Spacing::SM)
-        .border_b_1()
-        .border_color(theme.border)
-        .bg(theme.background);
+    let mode_id = |mode: BuilderMode| SharedString::from(format!("qb-mode-{}", mode as usize));
 
-    for (mode, label) in mode_selector_options() {
-        let is_active = mode == current_mode;
-        let variant = if is_active {
-            ButtonVariant::Primary
-        } else {
-            ButtonVariant::Secondary
+    let items = mode_selector_options()
+        .into_iter()
+        .map(|(mode, label)| SegmentedItem::new(mode_id(mode), label))
+        .collect();
+
+    let weak = cx.weak_entity();
+    let control = SegmentedControl::new(items, mode_id(current_mode), move |id, _, cx| {
+        let Some((mode, _)) = mode_selector_options()
+            .into_iter()
+            .find(|(mode, _)| mode_id(*mode) == *id)
+        else {
+            return;
         };
-        row = row.child(
-            Button::new(("qb-mode", mode as usize), label)
-                .variant(variant)
-                .small()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.switch_builder_mode(mode, cx);
-                })),
-        );
-    }
 
-    row
+        if let Some(builder) = weak.upgrade() {
+            builder.update(cx, |this, cx| this.switch_builder_mode(mode, cx));
+        }
+    });
+
+    div()
+        .flex()
+        .flex_shrink_0()
+        .px(BuilderMetrics::RAIL_PADDING_X)
+        .py(BuilderMetrics::MODE_PADDING_Y)
+        .child(control)
 }
 
 /// The mode-switch bar's (mode, label) options, translated through the
@@ -269,19 +294,21 @@ fn render_body(
             let sort_body = shows_sort.then(|| sort::render_sort(panel, cx).into_any_element());
             let limit_body = render_limit_offset_body(panel).into_any_element();
 
-            let mut body = div()
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scrollbar()
-                .child(section_card(
+            let columns_badge = columns_badge(panel);
+            let filters_badge = filters_badge(panel.current_spec.filter.as_ref());
+
+            let mut body = sections_container()
+                .child(section_card_with_badge(
                     dbflux_i18n::t!("document.query_builder.section.columns"),
                     AppIcon::Columns,
+                    columns_badge,
                     theme,
                     columns_body,
                 ))
-                .child(section_card(
+                .child(section_card_with_badge(
                     dbflux_i18n::t!("document.query_builder.section.filters"),
                     AppIcon::ListFilter,
+                    filters_badge,
                     theme,
                     filters_body,
                 ))
@@ -333,10 +360,7 @@ fn render_body(
             let filters_body = filters::render_filters(panel, cx).into_any_element();
             let execution_body = execution::render_execution(panel, cx).into_any_element();
 
-            div()
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scrollbar()
+            sections_container()
                 .child(section_card(
                     dbflux_i18n::t!("document.query_builder.section.set"),
                     AppIcon::Pencil,
@@ -361,10 +385,7 @@ fn render_body(
             let filters_body = filters::render_filters(panel, cx).into_any_element();
             let execution_body = execution::render_execution(panel, cx).into_any_element();
 
-            div()
-                .flex_1()
-                .min_h(px(0.0))
-                .overflow_y_scrollbar()
+            sections_container()
                 .child(section_card(
                     dbflux_i18n::t!("document.query_builder.section.filters_where"),
                     AppIcon::ListFilter,
@@ -382,59 +403,157 @@ fn render_body(
     }
 }
 
-/// Renders the SQL Preview as a fixed pane between the scrollable body and
+/// The scrolling column of section cards: 14 px side padding, 10 px
+/// between cards.
+fn sections_container() -> gpui_component::scroll::Scrollable<gpui::Stateful<gpui::Div>> {
+    div()
+        .id("qb-sections")
+        .flex_1()
+        .min_h(px(0.0))
+        .flex()
+        .flex_col()
+        .gap(BuilderMetrics::SECTION_GAP)
+        .px(BuilderMetrics::RAIL_PADDING_X)
+        .pb(BuilderMetrics::SECTION_GAP)
+        .overflow_y_scrollbar()
+}
+
+/// "N of M" over the Columns card while columns are picked one by one.
+fn columns_badge(panel: &QueryBuilderPanel) -> Option<Badge> {
+    use crate::query_builder::panel::ProjectionMode;
+
+    if panel.projection_mode == ProjectionMode::All || panel.available_columns.is_empty() {
+        return None;
+    }
+
+    Some(Badge::new(
+        dbflux_i18n::t!(
+            "document.query_builder.columns.selected_count",
+            selected = panel.projection_rows.len(),
+            total = panel.available_columns.len()
+        ),
+        BadgeTone::Neutral,
+    ))
+}
+
+/// Number of predicates over the Filters card, when there is any.
+fn filters_badge(filter: Option<&dbflux_core::FilterNode>) -> Option<Badge> {
+    let count = filter.map(predicate_count).unwrap_or(0);
+
+    (count > 0).then(|| Badge::new(count.to_string(), BadgeTone::Accent))
+}
+
+/// Predicates in a filter tree, groups excluded.
+fn predicate_count(node: &dbflux_core::FilterNode) -> usize {
+    match node {
+        dbflux_core::FilterNode::Predicate(_) => 1,
+        dbflux_core::FilterNode::Group { children, .. } => {
+            children.iter().map(predicate_count).sum()
+        }
+    }
+}
+
+/// Renders the SQL Preview as a fixed card between the scrollable body and
 /// the action footer, so it stays visible regardless of how many sections
 /// the user has scrolled past.
 fn render_preview_pane(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
-    let body = render_preview_body(panel, theme).into_any_element();
-    section_card(
+    let line_count = panel.sql_preview.lines().count().max(1);
+    let status = div()
+        .flex()
+        .items_center()
+        .gap(BuilderMetrics::STATUS_GAP)
+        .text_size(BuilderMetrics::STATUS_FONT)
+        .text_color(theme.success)
+        .child(
+            Icon::new(AppIcon::CircleCheck)
+                .size(BuilderMetrics::STATUS_ICON)
+                .color(theme.success),
+        )
+        .child(SharedString::from(crate::labels::valid_lines_label(
+            line_count,
+        )));
+
+    let body = render_preview_body(panel).into_any_element();
+
+    section_card_with_trailing(
         dbflux_i18n::t!("document.query_builder.section.sql_preview"),
         AppIcon::Code,
+        Some(status.into_any_element()),
         theme,
         body,
     )
 }
 
-/// Renders a section as a bordered card with an uppercase header bar and
-/// a padded body. Used for every section in the builder panel so the
-/// hierarchy stays consistent.
+/// A section card (P1Builder): the input cut on the ground with a line
+/// border, 12 px padding and 10 px gap, headed by a tint icon and the
+/// uppercase label.
 fn section_card(
     title: impl Into<SharedString>,
     icon: AppIcon,
     theme: &Theme,
     body: AnyElement,
 ) -> impl IntoElement {
+    section_card_with_trailing(title, icon, None, theme, body)
+}
+
+/// A section card with a badge at the right of its header.
+fn section_card_with_badge(
+    title: impl Into<SharedString>,
+    icon: AppIcon,
+    badge: Option<Badge>,
+    theme: &Theme,
+    body: AnyElement,
+) -> impl IntoElement {
+    section_card_with_trailing(
+        title,
+        icon,
+        badge.map(IntoElement::into_any_element),
+        theme,
+        body,
+    )
+}
+
+fn section_card_with_trailing(
+    title: impl Into<SharedString>,
+    icon: AppIcon,
+    trailing: Option<AnyElement>,
+    theme: &Theme,
+    body: AnyElement,
+) -> impl IntoElement {
     let title: SharedString = title.into();
 
     div()
+        .relative()
         .flex()
         .flex_col()
-        .border_b_1()
-        .border_color(theme.border)
+        .flex_shrink_0()
+        .gap(BuilderMetrics::CARD_GAP)
+        .p(BuilderMetrics::CARD_PADDING)
+        .child(
+            Chamfer::new(ChamferCut::INPUT)
+                .fill(theme.background)
+                .border(theme.border),
+        )
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::XS)
-                .h(Heights::TOOLBAR)
-                .px(Spacing::MD)
-                .bg(theme.secondary)
-                .child(Icon::new(icon).small().color(theme.muted_foreground))
+                .gap(BuilderMetrics::CARD_HEADER_GAP)
                 .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(theme.muted_foreground)
-                        .child(title),
-                ),
+                    Icon::new(icon)
+                        .size(BuilderMetrics::CARD_ICON)
+                        .color(ChromeColors::tint(theme)),
+                )
+                .child(Text::label(title).font_size(BuilderMetrics::CARD_LABEL_FONT))
+                .child(div().flex_1())
+                .children(trailing),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(Spacing::XS)
-                .px(Spacing::MD)
-                .py(Spacing::SM)
+                .gap(BuilderMetrics::CARD_GAP)
                 .child(body),
         )
 }
@@ -541,43 +660,15 @@ fn render_effective_select_preview(
 // SQL Preview
 // ---------------------------------------------------------------------------
 
-fn render_preview_body(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
-    let line_count = panel.sql_preview.lines().count().max(1);
-    let status_text = crate::labels::valid_lines_label(line_count);
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(Spacing::XS)
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(Spacing::XS)
-                .child(
-                    Icon::new(AppIcon::CircleCheck)
-                        .small()
-                        .color(theme.muted_foreground),
-                )
-                .child(
-                    Text::caption(SharedString::from(status_text)).color(theme.muted_foreground),
-                ),
+fn render_preview_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
+    div().when_some(panel.sql_preview_state.as_ref(), |container, state| {
+        container.child(
+            ReadOnlyEditor::new(state)
+                .appearance(false)
+                .w_full()
+                .h(BuilderMetrics::PREVIEW_HEIGHT),
         )
-        .when_some(panel.sql_preview_state.as_ref(), |container, state| {
-            container.child(
-                div()
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(
-                        ReadOnlyEditor::new(state)
-                            .appearance(false)
-                            .w_full()
-                            .h(px(140.0)),
-                    ),
-            )
-        })
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -628,9 +719,9 @@ fn render_footer(
     div()
         .flex()
         .flex_col()
+        .flex_shrink_0()
         .border_t_1()
         .border_color(theme.border)
-        .bg(theme.background)
         .when_some(sort_error, |d, error_msg| {
             d.child(
                 div()
@@ -677,14 +768,32 @@ fn render_footer(
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::SM)
-                .px(Spacing::MD)
-                .h(Heights::HEADER)
+                .gap(BuilderMetrics::FOOTER_GAP)
+                .px(BuilderMetrics::RAIL_PADDING_X)
+                .py(BuilderMetrics::FOOTER_PADDING_Y)
+                .when(!is_mutation_mode, |row| {
+                    row.child(
+                        Button::new(
+                            "qb-open-editor",
+                            dbflux_i18n::t!("document.query_builder.status.open_in_editor"),
+                        )
+                        .icon(AppIcon::ExternalLink)
+                        .small()
+                        .on_click(cx.listener(
+                            |_this, _event, _window, cx| {
+                                use crate::query_builder::events::BuilderEvent;
+                                cx.emit(BuilderEvent::OpenInEditorRequested);
+                            },
+                        )),
+                    )
+                })
+                .child(div().flex_1())
                 .child(
                     Button::new("qb-run", run_label)
                         .icon(AppIcon::Play)
                         .primary()
                         .small()
+                        .kbd(RUN_SHORTCUT_HINT)
                         .disabled(!is_runnable)
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             use crate::query_builder::events::BuilderEvent;
@@ -707,25 +816,7 @@ fn render_footer(
                                 cx.emit(BuilderEvent::RunRequested);
                             }
                         })),
-                )
-                .when(!is_mutation_mode, |row| {
-                    row.child(
-                        Button::new(
-                            "qb-open-editor",
-                            dbflux_i18n::t!("document.query_builder.status.open_in_editor"),
-                        )
-                        .icon(AppIcon::ExternalLink)
-                        .variant(ButtonVariant::Ghost)
-                        .small()
-                        .on_click(cx.listener(
-                            |_this, _event, _window, cx| {
-                                use crate::query_builder::events::BuilderEvent;
-                                cx.emit(BuilderEvent::OpenInEditorRequested);
-                            },
-                        )),
-                    )
-                })
-                .child(div().flex_1()),
+                ),
         )
 }
 

@@ -51,7 +51,7 @@ Delete…**.
 
 ### Edit vs. view
 
-Alterna el botón **lápiz / ojo** en la toolbar:
+Cambia entre **View** y **Edit** en la cabecera:
 
 - El modo **Edit** muestra tiradores de arrastre — arrastra panels para
   reordenarlos, arrastra los bordes o la esquina para redimensionar dentro de la
@@ -72,8 +72,8 @@ Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 | **Query**  | Un panel nuevo a partir de un nombre + una query que escribes.                                                               |
 | **Metric** | Un panel a partir de una metric del driver (solo se muestra cuando el driver de la conexión expone un catálogo de métricas). |
 
-El menú kebab de cada panel (modo Edit) ofrece **Configure / Edit title / Remove
-panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
+El botón de ajustes de cada panel (modo Edit) ofrece **Configure / Edit title /
+Remove panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
 Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.
 
 Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
@@ -85,11 +85,11 @@ que agrupan visualmente los panels y colapsan los panels debajo al hacer clic.
 
 ### Rango de tiempo y refresh
 
-La toolbar tiene:
+La cabecera tiene:
 
-- Un desplegable de **rango de tiempo**: Last 15 min, Last 1 hour, Last 6 hours,
-  Last 24 hours, Last 7 days, o **Custom** (que revela selectores de fecha y
-  hora/minuto). El rango se aplica a todos los chart panels a la vez.
+- Los presets de **rango de tiempo**: 15m, 1h, 6h, 24h, 7d, o **Custom** (que
+  revela una fila de selectores de fecha y hora/minuto). El rango se aplica a
+  todos los chart panels a la vez.
 - Un botón split de **refresh**: haz clic para refrescar todos los panels ahora;
   el desplegable establece un intervalo de auto-refresh (o Off / refresh al
   abrir).
@@ -169,9 +169,18 @@ Hay una única pestaña de audit; reabrirla enfoca la existente.
 
 ### Qué se ve
 
-Cada fila muestra un timestamp, un chip de **severity** (ERROR/WARN/INFO), un
-chip de **category** y un summary. Expande una fila para ver **Category,
-Outcome, Actor, Action, Duration y Summary**.
+Una línea de tiempo sobre la lista dibuja una barra por cada tramo del rango de
+tiempo, con los errores apilados sobre el resto de eventos. Arrastra sobre las
+barras para acercar el rango de tiempo a ellas; los selectores del rango
+Custom muestran entonces la ventana ampliada.
+
+Cada fila muestra la hora, un badge de **level** (ERROR/WARN/INFO), la
+**category**, el summary, el actor, la duración y el **outcome**. Expande una
+fila para ver sus detalles (hora, action, actor, conexión, source, correlation
+id y la tool, la clasificación y la decisión de una llamada de agente), su error
+y sus detalles estructurados. La fila expandida ofrece **Filtrar por
+correlación**, **Copiar fila como JSON** y, para una llamada de agente en espera
+de aprobación, **Abrir aprobación**, que abre la vista de aprobaciones MCP.
 
 Las categorías de un vistazo:
 
@@ -188,10 +197,13 @@ Las categorías de un vistazo:
 
 ### Filtrar
 
-La toolbar ofrece **búsqueda** de texto libre, un **time range** (los mismos
-presets que los dashboards, más Custom), un **timestamp mode** (Local / UTC), y
+La toolbar ofrece **búsqueda** de texto libre, los presets de **time range** (los
+mismos que los dashboards, más Custom), un **timestamp mode** (Local / UTC), y
 filtros multi-select para **Level** (Error/Warn/Info), **Category** y
-**Outcome** (Success/Failure/Cancelled). **Clear** los restablece.
+**Outcome** (Success/Failure/Cancelled). **Clear** los restablece, y **Table /
+Chart** alterna entre la lista de eventos y un chart de los eventos agrupados
+por category, outcome o level. Desde el teclado, activar los presets de tiempo
+pasa al siguiente.
 
 El menú contextual de una fila añade **Copy Row as CSV**, **Copy Summary** y —
 cuando el evento tiene un correlation id — **Filter by Correlation**.

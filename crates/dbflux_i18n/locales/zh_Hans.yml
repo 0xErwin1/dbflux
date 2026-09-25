@@ -186,6 +186,8 @@ controls:
     more:
       one: "+%{count} 项"
       many: "+%{count} 项"
+    summary_all: "%{name} · 全部"
+    summary_count: "%{name} · %{count}"
 connection_manager:
   tab_badge:
     mcp_clients:
@@ -550,16 +552,6 @@ diagnostics:
 document:
   audit:
     title: "审计"
-    category_chip:
-      config: "配置"
-      connection: "连接"
-      query: "查询"
-      hook: "HOOK"
-      script: "脚本"
-      system: "系统"
-      mcp: "MCP"
-      governance: "治理"
-      object_storage: "存储"
     level_chip:
       trace: "跟踪"
       debug: "调试"
@@ -595,6 +587,7 @@ document:
         many: "已导出 %{count} 个事件到 %{path}"
       write_failed: "导出写入文件失败：%{error}"
       failed: "导出失败：%{error}"
+      hint: "会询问保存位置"
     task:
       loading_event_stream: "正在加载事件流：%{title}"
     detail:
@@ -615,6 +608,10 @@ document:
       source: 来源
       summary: 摘要
       time: 时间
+      tool: "工具"
+      classification: "分类"
+      decision: "决定"
+      reason: "原因"
     filter:
       bar:
         search: "搜索："
@@ -682,6 +679,15 @@ document:
       loading:
         external: 正在加载事件…
         internal: 正在加载审计事件…
+    subtitle: "本机上的每一次查询、钩子、脚本和代理调用"
+    timeline:
+      events: "事件"
+      errors: "错误"
+      drag_to_zoom: "拖动以缩放"
+    action:
+      copy_json: "将行复制为 JSON"
+      filter_by_correlation: "按关联 ID 筛选"
+      open_approval: "打开审批"
   buckets_table:
     title: "存储桶 — %{connection}"
     search_placeholder: 按名称查找存储桶…
@@ -702,6 +708,7 @@ document:
     details:
       calculate_size: 计算大小
       calculating: 正在计算…
+      browse: "浏览"
     footer:
       buckets:
         one: "%{count} 个存储桶"
@@ -710,16 +717,16 @@ document:
         one: "%{count} 个区域"
         many: "%{count} 个区域"
       hint:
-        open: Enter 浏览
-        properties: Space 属性
-        delete: x 删除（仅限空存储桶）
+        open: "浏览"
+        properties: "详情"
+        delete: "删除空存储桶"
+        new: "新建"
     empty:
       loading: 正在加载存储桶…
       error: 列出存储桶失败
       error_detail: "列出存储桶失败：%{error}"
       no_match: "没有符合 %{query} 的存储桶"
       no_buckets: 此连接没有存储桶
-      hint_refresh: "%{key} 刷新"
     delete_confirm:
       title: 删除存储桶？
       body: "%{bucket} 为空，将被删除。此操作无法撤销。"
@@ -755,6 +762,7 @@ document:
       toast:
         created: "已创建存储桶 %{name} "
         created_with_limitations: "已创建存储桶 %{name}（有限制）"
+    breadcrumb: "存储桶"
   chart:
     toolbar:
       type_label: 类型
@@ -764,8 +772,6 @@ document:
         one: "%{count} 个点"
         many: "%{count} 个点"
     shell:
-      run: 执行
-      running: 正在执行…
       save: 保存
       cancel: 取消
       name_placeholder: 图表名称
@@ -781,14 +787,18 @@ document:
       stats_rail:
         rebuilding: 正在重建图表…
         no_stats: 此序列没有可用的统计信息。
-        unavailable: 不可用
-        window_title: 窗口
         window:
           start: 开始
           end: 结束
           span: 跨度
           points: 点数
         source_title: 来源
+        max: "最大值"
+        min: "最小值"
+        mean: "平均值"
+        last: "最新值"
+        series: "序列"
+      saved_badge: "已保存"
     status:
       task_label: 图表查询
     toast:
@@ -1029,10 +1039,10 @@ document:
     toolbar:
       add_panel: + 添加面板
       apply: 应用
-      edit_mode_tooltip: 编辑仪表盘
-      exit_edit_mode_tooltip: 退出编辑模式
       save_as_editable: 另存为可编辑
       save_as_editable_tooltip: 将此概览克隆为新的可编辑仪表盘
+      mode_view: "查看"
+      mode_edit: "编辑"
   data:
     chart_dock:
       toolbar:
@@ -1220,6 +1230,7 @@ document:
         raw: 原始
         truncated: "（在 %{max_lines} 行处截断）"
         empty: （空）
+        both: "两者"
       status:
         rows:
           one: "%{count} 行"
@@ -1462,17 +1473,39 @@ document:
       continue: 继续
       close: 关闭
   governance:
-    semantics_preview: "请求者：%{requester} | 连接：%{connection} | 分类：%{classification}"
-    pending_actor: "执行者：%{actor}"
-    refresh: 刷新待处理项
+    refresh: "刷新"
     no_pending: 无待处理执行
-    pending_title: "待处理 %{id}"
-    approval_context: 审批上下文
-    execution_plan: 执行计划
-    approve: 批准
+    execution_plan: "将要运行的内容"
+    approve: "批准并运行"
     reject: 拒绝
     select_prompt: 选择一个待处理请求以查看详情。
     load_failed: "加载待处理执行 %{id} 失败：%{error}"
+    title: "MCP 审批"
+    subtitle: "被策略暂停、等待人工处理的代理调用"
+    close: "关闭"
+    pending_count: "待处理 · %{count}"
+    list_hint: "移动 · 决定会写入审计日志"
+    requested_by: "请求者"
+    connection: "连接"
+    classification_label: "分类"
+    tool: "工具"
+    requested_at: "请求时间"
+    waiting_label: "等待"
+    exec_id: "执行 %{id}"
+    status:
+      pending: "待处理"
+    waiting:
+      just_now: "刚刚开始等待"
+      minutes: "已等待 %{count} 分钟"
+      hours: "已等待 %{count} 小时"
+    classification:
+      metadata: "元数据"
+      read: "读取"
+      write: "写入"
+      destructive: "破坏性"
+      admin: "管理"
+      admin_safe: "管理（安全）"
+      admin_destructive: "管理（破坏性）"
   import_wizard:
     title: 导入数据
     task:
@@ -1985,6 +2018,7 @@ document:
       header:
         open_in_editor: 在编辑器中打开
         open_in_system_viewer: 在系统查看器中打开
+        close: "关闭预览"
       versions:
         count:
           one: "%{count} 个版本"
@@ -2007,12 +2041,11 @@ document:
         one: "%{count} 个文件夹"
         many: "%{count} 个文件夹"
       key_hint:
-        delete: x 删除
-        filter: / 筛选
-        open: Enter 打开
-        preview: Space 预览
-        rename: r 重命名
-        up: ← 上一级
+        delete: "删除"
+        open: "打开"
+        preview: "预览"
+        rename: "重命名"
+        up: "上级"
       load_more: 加载更多
       loading_more: 正在加载更多…
       objects:
@@ -2026,6 +2059,8 @@ document:
       tree: 树
       upload: 上传
       filter_prefix_placeholder: 筛选此前缀…
+      list: "列表"
+      up: "上一级"
     transfer:
       dialog_title: 对象另存为
       dialog_filter_all_files: 所有文件
@@ -2080,8 +2115,11 @@ document:
       save: 保存
       reset: 重置
       untitled_query: 未命名查询
+      close: "关闭构建器"
     columns:
       all_columns: 所有列（*）
+      selected_count: "%{selected} / %{total}"
+      add_column: "+ 列"
     comparator:
       eq: "="
       neq: "≠"
@@ -2115,6 +2153,9 @@ document:
       bool_op:
         and: AND
         or: OR
+      add_filter_link: "+ 筛选"
+      add_group_link: "+ 分组"
+      remove: "移除"
     group_by:
       managed_select_notice: "分组查询 — SELECT 由系统自动管理"
       heading: 按列分组
@@ -2160,6 +2201,8 @@ document:
       key_order_named: "排序键顺序（%{name}）"
       key_limited_hint: 此驱动的排序仅限于排序键。
       invalid_column: "%{column} 不在 GROUP BY 列或聚合别名中"
+      move_up: "上移"
+      move_down: "下移"
     status:
       limit: 限制
       offset: 偏移
@@ -2257,8 +2300,9 @@ document:
       columns: 列
       foreign_keys: 外键
       indexes: 索引
-      summary: "%{columns} 列 · %{indexes} 个索引"
-      table: 表
+      summary_full: "%{columns} 列 · %{indexes} 个索引 · %{foreign_keys} 个外键 · 被 %{referenced_by} 处引用"
+      unique: "唯一"
+      referenced_by: "被引用"
     layout:
       compact: 紧凑
       left_right: 左右
@@ -2295,6 +2339,8 @@ document:
       indexes: 索引
       reset: 重置
       types: 类型
+      zoom_in: "放大"
+      zoom_out: "缩小"
     view:
       title: "Schema：%{name}"
       title_default_database: 数据库

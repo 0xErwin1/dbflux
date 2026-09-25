@@ -351,7 +351,9 @@ impl AuditDocument {
     ) {
         let focused_index = self.filter_bar.focused_index();
 
-        if self.toolbar_index(ToolbarSlot::Refresh) == Some(focused_index) {
+        if self.toolbar_index(ToolbarSlot::Time) == Some(focused_index) {
+            self.cycle_time_preset(cx);
+        } else if self.toolbar_index(ToolbarSlot::Refresh) == Some(focused_index) {
             self.refresh(cx);
             self.filter_bar.deactivate();
             self.focus_handle.focus(window, cx);

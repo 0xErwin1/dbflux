@@ -376,6 +376,9 @@ impl TabManager {
                         profile_id: *profile_id,
                     });
                 }
+                DocumentEvent::RequestOpenApprovals => {
+                    cx.emit(TabManagerEvent::RequestOpenApprovals);
+                }
                 DocumentEvent::OpenEditorWithContent { profile_id, sql } => {
                     cx.emit(TabManagerEvent::OpenEditorWithContent {
                         profile_id: *profile_id,
@@ -791,6 +794,8 @@ pub enum TabManagerEvent {
         source_title: String,
         profile_id: uuid::Uuid,
     },
+    /// A document asked to open the MCP approvals view.
+    RequestOpenApprovals,
     /// The query builder's "Open in Editor" action was triggered.
     ///
     /// Carries the target connection profile and the fully materialized SQL

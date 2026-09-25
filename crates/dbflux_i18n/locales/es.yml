@@ -186,6 +186,8 @@ controls:
     more:
       one: "+%{count} más"
       many: "+%{count} más"
+    summary_all: "%{name} · todos"
+    summary_count: "%{name} · %{count}"
 connection_manager:
   tab_badge:
     mcp_clients:
@@ -550,16 +552,6 @@ diagnostics:
 document:
   audit:
     title: "Auditoría"
-    category_chip:
-      config: "CONFIG"
-      connection: "CONEX"
-      query: "CONSULTA"
-      hook: "HOOK"
-      script: "SCRIPT"
-      system: "SIST"
-      mcp: "MCP"
-      governance: "GOB"
-      object_storage: "ALMAC"
     level_chip:
       trace: "TRAZA"
       debug: "DEPUR"
@@ -595,6 +587,7 @@ document:
         many: "Se exportaron %{count} eventos a %{path}"
       write_failed: "La exportación falló al escribir el archivo: %{error}"
       failed: "Exportación fallida: %{error}"
+      hint: "pregunta dónde guardar"
     task:
       loading_event_stream: "Cargando flujo de eventos: %{title}"
     detail:
@@ -615,6 +608,10 @@ document:
       source: Origen
       summary: Resumen
       time: Hora
+      tool: "Herramienta"
+      classification: "Clasificación"
+      decision: "Decisión"
+      reason: "Motivo"
     filter:
       bar:
         search: "Buscar:"
@@ -682,6 +679,15 @@ document:
       loading:
         external: "Cargando eventos…"
         internal: "Cargando eventos de auditoría…"
+    subtitle: "cada consulta, hook, script y llamada de agente en esta máquina"
+    timeline:
+      events: "eventos"
+      errors: "errores"
+      drag_to_zoom: "arrastra para ampliar"
+    action:
+      copy_json: "Copiar fila como JSON"
+      filter_by_correlation: "Filtrar por correlación"
+      open_approval: "Abrir aprobación"
   buckets_table:
     title: "Buckets — %{connection}"
     search_placeholder: "Buscar buckets por nombre…"
@@ -702,6 +708,7 @@ document:
     details:
       calculate_size: Calcular tamaño
       calculating: "Calculando…"
+      browse: "Explorar"
     footer:
       buckets:
         one: "%{count} bucket"
@@ -710,16 +717,16 @@ document:
         one: "%{count} región"
         many: "%{count} regiones"
       hint:
-        open: Enter para abrir
-        properties: Espacio para propiedades
-        delete: x eliminar (solo vacíos)
+        open: "abrir"
+        properties: "detalles"
+        delete: "eliminar vacío"
+        new: "nuevo"
     empty:
       loading: "Cargando buckets…"
       error: Error al listar buckets
       error_detail: "Error al listar buckets: %{error}"
       no_match: "Ningún bucket coincide con \"%{query}\""
       no_buckets: Esta conexión no tiene buckets
-      hint_refresh: "%{key} para actualizar"
     delete_confirm:
       title: ¿Eliminar bucket?
       body: "\"%{bucket}\" está vacío y se eliminará. Esta acción no se puede deshacer."
@@ -755,6 +762,7 @@ document:
       toast:
         created: "Bucket \"%{name}\" creado"
         created_with_limitations: "Bucket \"%{name}\" creado con limitaciones"
+    breadcrumb: "Buckets"
   chart:
     toolbar:
       type_label: TIPO
@@ -764,8 +772,6 @@ document:
         one: "%{count} punto"
         many: "%{count} puntos"
     shell:
-      run: Ejecutar
-      running: "Ejecutando…"
       save: Guardar
       cancel: Cancelar
       name_placeholder: Nombre del gráfico
@@ -781,14 +787,18 @@ document:
       stats_rail:
         rebuilding: "Regenerando el gráfico…"
         no_stats: "No hay estadísticas disponibles para esta serie."
-        unavailable: no disponible
-        window_title: Ventana
         window:
           start: Inicio
           end: Fin
           span: Duración
           points: Puntos
         source_title: Origen
+        max: "Máx."
+        min: "Mín."
+        mean: "Media"
+        last: "Último"
+        series: "Series"
+      saved_badge: "guardado"
     status:
       task_label: Consulta de gráfico
     toast:
@@ -1029,10 +1039,10 @@ document:
     toolbar:
       add_panel: + Agregar panel
       apply: Aplicar
-      edit_mode_tooltip: Editar dashboard
-      exit_edit_mode_tooltip: Salir del modo de edición
       save_as_editable: Guardar como editable
       save_as_editable_tooltip: Clonar esta vista general en un nuevo dashboard editable
+      mode_view: "Ver"
+      mode_edit: "Editar"
   data:
     chart_dock:
       toolbar:
@@ -1220,6 +1230,7 @@ document:
         raw: Sin procesar
         truncated: "(truncado en %{max_lines} líneas)"
         empty: "(vacío)"
+        both: "Ambos"
       status:
         rows:
           one: "%{count} fila"
@@ -1462,17 +1473,39 @@ document:
       continue: Continuar
       close: Cerrar
   governance:
-    semantics_preview: "solicitante: %{requester} | conexión: %{connection} | clasificación: %{classification}"
-    pending_actor: "actor: %{actor}"
-    refresh: Actualizar pendientes
+    refresh: "Actualizar"
     no_pending: No hay ejecuciones pendientes
-    pending_title: "Pendiente %{id}"
-    approval_context: Contexto de aprobación
-    execution_plan: Plan de ejecución
-    approve: Aprobar
+    execution_plan: "Qué va a ejecutar"
+    approve: "Aprobar y ejecutar"
     reject: Rechazar
     select_prompt: Selecciona una solicitud pendiente para ver los detalles.
     load_failed: "No se pudo cargar la ejecución pendiente %{id}: %{error}"
+    title: "Aprobaciones MCP"
+    subtitle: "llamadas de agentes que una política dejó en espera de una persona"
+    close: "Cerrar"
+    pending_count: "Pendientes · %{count}"
+    list_hint: "mover · las decisiones se escriben en el registro de auditoría"
+    requested_by: "Solicitado por"
+    connection: "Conexión"
+    classification_label: "Clasificación"
+    tool: "Herramienta"
+    requested_at: "Solicitado el"
+    waiting_label: "En espera"
+    exec_id: "ejec %{id}"
+    status:
+      pending: "Pendiente"
+    waiting:
+      just_now: "en espera desde ahora"
+      minutes: "en espera %{count} min"
+      hours: "en espera %{count} h"
+    classification:
+      metadata: "Metadatos"
+      read: "Lectura"
+      write: "Escritura"
+      destructive: "Destructiva"
+      admin: "Administración"
+      admin_safe: "Administración (segura)"
+      admin_destructive: "Administración (destructiva)"
   import_wizard:
     title: Importar datos
     task:
@@ -1985,6 +2018,7 @@ document:
       header:
         open_in_editor: Abrir en el editor
         open_in_system_viewer: Abrir en el visor del sistema
+        close: "Cerrar vista previa"
       versions:
         count:
           one: "%{count} versión"
@@ -2007,12 +2041,11 @@ document:
         one: "%{count} carpeta"
         many: "%{count} carpetas"
       key_hint:
-        delete: x eliminar
-        filter: / filtrar
-        open: Enter abrir
-        preview: Espacio previsualizar
-        rename: r renombrar
-        up: "← subir un nivel"
+        delete: "eliminar"
+        open: "abrir"
+        preview: "vista previa"
+        rename: "renombrar"
+        up: "subir"
       load_more: Cargar más
       loading_more: "Cargando más…"
       objects:
@@ -2026,6 +2059,8 @@ document:
       tree: Árbol
       upload: Subir
       filter_prefix_placeholder: "Filtrar este prefijo…"
+      list: "Lista"
+      up: "Subir un nivel"
     transfer:
       dialog_title: Guardar objeto como
       dialog_filter_all_files: Todos los archivos
@@ -2080,8 +2115,11 @@ document:
       save: Guardar
       reset: Restablecer
       untitled_query: Consulta sin título
+      close: "Cerrar constructor"
     columns:
       all_columns: "Todas las columnas (*)"
+      selected_count: "%{selected} de %{total}"
+      add_column: "+ columna"
     comparator:
       eq: "="
       neq: "≠"
@@ -2115,6 +2153,9 @@ document:
       bool_op:
         and: AND
         or: OR
+      add_filter_link: "+ Filtro"
+      add_group_link: "+ Grupo"
+      remove: "Quitar"
     group_by:
       managed_select_notice: "Consulta agrupada — el SELECT se gestiona automáticamente"
       heading: Agrupar por columnas
@@ -2160,6 +2201,8 @@ document:
       key_order_named: "Orden de la clave de ordenamiento (%{name})"
       key_limited_hint: El ordenamiento está limitado a la clave de ordenamiento para este controlador.
       invalid_column: "\"%{column}\" no está en las columnas de GROUP BY ni en los alias de agregación"
+      move_up: "Subir"
+      move_down: "Bajar"
     status:
       limit: Límite
       offset: Desplazamiento
@@ -2257,8 +2300,9 @@ document:
       columns: COLUMNAS
       foreign_keys: CLAVES FORÁNEAS
       indexes: ÍNDICES
-      summary: "%{columns} columnas · %{indexes} índices"
-      table: TABLA
+      summary_full: "%{columns} columnas · %{indexes} índices · %{foreign_keys} claves foráneas · referenciada por %{referenced_by}"
+      unique: "única"
+      referenced_by: "Referenciada por"
     layout:
       compact: Compacto
       left_right: Izquierda-Derecha
@@ -2295,6 +2339,8 @@ document:
       indexes: Índices
       reset: Restablecer
       types: Tipos
+      zoom_in: "Acercar"
+      zoom_out: "Alejar"
     view:
       title: "Esquema: %{name}"
       title_default_database: base de datos

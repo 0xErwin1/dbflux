@@ -186,6 +186,8 @@ controls:
     more:
       one: "+%{count}개 더보기"
       many: "+%{count}개 더보기"
+    summary_all: "%{name} · 전체"
+    summary_count: "%{name} · %{count}"
 connection_manager:
   tab_badge:
     mcp_clients:
@@ -550,16 +552,6 @@ diagnostics:
 document:
   audit:
     title: "감사"
-    category_chip:
-      config: "설정"
-      connection: "연결"
-      query: "쿼리"
-      hook: "훅"
-      script: "스크립트"
-      system: "시스템"
-      mcp: "MCP"
-      governance: "거버넌스"
-      object_storage: "스토리지"
     level_chip:
       trace: "추적"
       debug: "디버그"
@@ -595,6 +587,7 @@ document:
         many: "%{path}에 이벤트 %{count}개를 내보냈습니다"
       write_failed: "내보내기에서 파일을 쓰지 못했습니다: %{error}"
       failed: "내보내기에 실패했습니다: %{error}"
+      hint: "저장 위치를 묻습니다"
     task:
       loading_event_stream: "이벤트 스트림을 불러오는 중: %{title}"
     detail:
@@ -615,6 +608,10 @@ document:
       source: 소스
       summary: 요약
       time: 시간
+      tool: "도구"
+      classification: "분류"
+      decision: "결정"
+      reason: "사유"
     filter:
       bar:
         search: "검색:"
@@ -682,6 +679,15 @@ document:
       loading:
         external: "이벤트를 불러오는 중…"
         internal: "감사 이벤트를 불러오는 중…"
+    subtitle: "이 기기의 모든 쿼리, 훅, 스크립트, 에이전트 호출"
+    timeline:
+      events: "이벤트"
+      errors: "오류"
+      drag_to_zoom: "드래그하여 확대"
+    action:
+      copy_json: "행을 JSON으로 복사"
+      filter_by_correlation: "상관 ID로 필터"
+      open_approval: "승인 열기"
   buckets_table:
     title: "버킷 — %{connection}"
     search_placeholder: "이름으로 버킷 찾기…"
@@ -702,6 +708,7 @@ document:
     details:
       calculate_size: 크기 계산
       calculating: "계산하는 중…"
+      browse: "탐색"
     footer:
       buckets:
         one: "버킷 %{count}개"
@@ -710,16 +717,16 @@ document:
         one: "리전 %{count}개"
         many: "리전 %{count}개"
       hint:
-        open: Enter 탐색
-        properties: Space 속성
-        delete: x 삭제 (비어 있는 버킷만)
+        open: "탐색"
+        properties: "상세"
+        delete: "빈 버킷 삭제"
+        new: "새로 만들기"
     empty:
       loading: "버킷을 불러오는 중…"
       error: 버킷 목록을 조회하지 못했습니다
       error_detail: "버킷 목록을 조회하지 못했습니다: %{error}"
       no_match: '"%{query}"와 일치하는 버킷이 없습니다'
       no_buckets: 이 연결에는 버킷이 없습니다
-      hint_refresh: "%{key} 새로고침"
     delete_confirm:
       title: 버킷 삭제?
       body: '"%{bucket}" 버킷은 비어 있으며 삭제됩니다. 이 작업은 되돌릴 수 없습니다.'
@@ -755,6 +762,7 @@ document:
       toast:
         created: "\"%{name}\" 버킷 생성됨"
         created_with_limitations: "\"%{name}\" 버킷 생성됨 (제한 있음)"
+    breadcrumb: "버킷"
   chart:
     toolbar:
       type_label: 유형
@@ -764,8 +772,6 @@ document:
         one: "%{count} pt"
         many: "%{count} pt"
     shell:
-      run: 실행
-      running: "실행 중…"
       save: 저장
       cancel: 취소
       name_placeholder: 차트 이름
@@ -781,14 +787,18 @@ document:
       stats_rail:
         rebuilding: "차트 다시 생성 중…"
         no_stats: "이 계열에는 사용할 수 있는 통계가 없습니다."
-        unavailable: 사용할 수 없음
-        window_title: 구간
         window:
           start: 시작
           end: 종료
           span: 범위
           points: 포인트
         source_title: 소스
+        max: "최댓값"
+        min: "최솟값"
+        mean: "평균"
+        last: "마지막"
+        series: "시리즈"
+      saved_badge: "저장됨"
     status:
       task_label: 차트 쿼리
     toast:
@@ -1029,10 +1039,10 @@ document:
     toolbar:
       add_panel: "+ 패널 추가"
       apply: 적용
-      edit_mode_tooltip: 대시보드 편집
-      exit_edit_mode_tooltip: 편집 모드 종료
       save_as_editable: 편집 가능으로 저장
       save_as_editable_tooltip: "이 개요를 복제해 편집 가능한 새 대시보드로 만듭니다"
+      mode_view: "보기"
+      mode_edit: "편집"
   data:
     chart_dock:
       toolbar:
@@ -1220,6 +1230,7 @@ document:
         raw: 원본
         truncated: "(%{max_lines}줄에서 잘림)"
         empty: "(비어 있음)"
+        both: "둘 다"
       status:
         rows:
           one: "행 %{count}개"
@@ -1462,17 +1473,39 @@ document:
       continue: 계속
       close: 닫기
   governance:
-    semantics_preview: "요청자: %{requester} | 연결: %{connection} | 분류: %{classification}"
-    pending_actor: "행위자: %{actor}"
-    refresh: 대기 항목 새로고침
+    refresh: "새로 고침"
     no_pending: "대기 중인 실행이 없습니다"
-    pending_title: "대기 중 %{id}"
-    approval_context: 승인 컨텍스트
-    execution_plan: 실행 계획
-    approve: 승인
+    execution_plan: "실행할 내용"
+    approve: "승인 후 실행"
     reject: 거부
     select_prompt: "세부 정보를 보려면 대기 중인 요청을 선택하세요."
     load_failed: "대기 중인 실행 %{id}을(를) 불러오지 못했습니다: %{error}"
+    title: "MCP 승인"
+    subtitle: "정책이 사람의 결정을 기다리도록 보류한 에이전트 호출"
+    close: "닫기"
+    pending_count: "대기 중 · %{count}"
+    list_hint: "이동 · 결정은 감사 로그에 기록됩니다"
+    requested_by: "요청자"
+    connection: "연결"
+    classification_label: "분류"
+    tool: "도구"
+    requested_at: "요청 시각"
+    waiting_label: "대기"
+    exec_id: "실행 %{id}"
+    status:
+      pending: "대기 중"
+    waiting:
+      just_now: "방금 대기 시작"
+      minutes: "%{count}분 대기"
+      hours: "%{count}시간 대기"
+    classification:
+      metadata: "메타데이터"
+      read: "읽기"
+      write: "쓰기"
+      destructive: "파괴적"
+      admin: "관리"
+      admin_safe: "관리 (안전)"
+      admin_destructive: "관리 (파괴적)"
   import_wizard:
     title: 데이터 가져오기
     task:
@@ -1985,6 +2018,7 @@ document:
       header:
         open_in_editor: 편집기에서 열기
         open_in_system_viewer: 시스템 뷰어에서 열기
+        close: "미리 보기 닫기"
       versions:
         count:
           one: "버전 %{count}개"
@@ -2007,12 +2041,11 @@ document:
         one: "폴더 %{count}개"
         many: "폴더 %{count}개"
       key_hint:
-        delete: x 삭제
-        filter: / 필터
-        open: Enter 열기
-        preview: Space 미리 보기
-        rename: r 이름 바꾸기
-        up: "← 한 단계 위"
+        delete: "삭제"
+        open: "열기"
+        preview: "미리 보기"
+        rename: "이름 변경"
+        up: "위로"
       load_more: 더 불러오기
       loading_more: "더 불러오는 중…"
       objects:
@@ -2026,6 +2059,8 @@ document:
       tree: 트리
       upload: 업로드
       filter_prefix_placeholder: "이 접두사 필터링…"
+      list: "목록"
+      up: "상위 수준"
     transfer:
       dialog_title: 다른 이름으로 개체 저장
       dialog_filter_all_files: 모든 파일
@@ -2080,8 +2115,11 @@ document:
       save: 저장
       reset: 재설정
       untitled_query: 제목 없는 쿼리
+      close: "빌더 닫기"
     columns:
       all_columns: "모든 열 (*)"
+      selected_count: "%{total}개 중 %{selected}개"
+      add_column: "+ 열"
     comparator:
       eq: "="
       neq: "≠"
@@ -2115,6 +2153,9 @@ document:
       bool_op:
         and: AND
         or: OR
+      add_filter_link: "+ 필터"
+      add_group_link: "+ 그룹"
+      remove: "제거"
     group_by:
       managed_select_notice: "그룹화된 쿼리 — SELECT는 자동으로 관리됩니다"
       heading: 열 기준 그룹화
@@ -2160,6 +2201,8 @@ document:
       key_order_named: "정렬 키 순서 (%{name})"
       key_limited_hint: 이 드라이버에서는 정렬 키 기준으로만 정렬할 수 있습니다.
       invalid_column: "\"%{column}\"이(가) GROUP BY 열 또는 집계 별칭에 없습니다"
+      move_up: "위로 이동"
+      move_down: "아래로 이동"
     status:
       limit: 제한
       offset: 오프셋
@@ -2257,8 +2300,9 @@ document:
       columns: 열
       foreign_keys: 외래 키
       indexes: 인덱스
-      summary: "열 %{columns}개 · 인덱스 %{indexes}개"
-      table: 테이블
+      summary_full: "열 %{columns}개 · 인덱스 %{indexes}개 · 외래 키 %{foreign_keys}개 · 참조 %{referenced_by}개"
+      unique: "고유"
+      referenced_by: "참조하는 곳"
     layout:
       compact: 컴팩트
       left_right: 왼쪽-오른쪽
@@ -2295,6 +2339,8 @@ document:
       indexes: 인덱스
       reset: 재설정
       types: 타입
+      zoom_in: "확대"
+      zoom_out: "축소"
     view:
       title: "스키마: %{name}"
       title_default_database: 데이터베이스

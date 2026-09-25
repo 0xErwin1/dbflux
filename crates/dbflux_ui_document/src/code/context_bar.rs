@@ -1455,7 +1455,7 @@ impl CodeDocument {
             .result_tabs
             .active_result_index
             .and_then(|i| self.result_tabs.result_tabs.get(i))
-            .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
+            .map(|t| t.grid.read(cx).result_view_mode().shows_chart())
             .unwrap_or(false);
 
         // Determine whether the custom date-range picker is active.  When it

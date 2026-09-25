@@ -263,6 +263,9 @@ pub struct QueryBuilderPanel {
     /// The id of the currently loaded saved query, if any.
     pub(crate) loaded_id: Option<String>,
 
+    /// Whether the Columns card lists the columns that can still be added.
+    pub(crate) column_picker_open: bool,
+
     /// Weak handle back to the DataGridPanel that owns this builder.
     data_grid: Option<WeakEntity<DataGridPanel>>,
 
@@ -743,6 +746,7 @@ impl QueryBuilderPanel {
             limit_text,
             offset_text,
             loaded_id: None,
+            column_picker_open: false,
             data_grid,
             focus_handle,
             sql_preview,

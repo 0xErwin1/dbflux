@@ -2,11 +2,11 @@
 //! `ChartDocument`.
 //!
 //! Contains (left to right):
-//! - Range dropdown (only when `dropdown_time_range` is `Some`)
-//! - Vertical divider + Refresh split-button (icon + "Refresh" label + interval dropdown)
-//! - Clock icon + resolved window string
-//! - Spacer
-//! - Points · resolution display
+//! - An optional leading element (a document title)
+//! - Time presets (only when a `TimeRangePanel` is wired)
+//! - Refresh split-button (icon + "Refresh" label + interval dropdown)
+//! - Chart kind switch
+//! - Resolved window and point count (when `show_window`)
 //! - Stats toggle button
 //! - Save chart button (gated on `source_supports_save`)
 //!
@@ -14,13 +14,15 @@
 //! assembled separately in each caller.
 
 use super::shell::{ChartRailTab, ChartShell};
+use crate::chrome::time_preset_control;
 use crate::labels::configure_chart_kind_label;
-use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
+use dbflux_components::chart::{ChartKind, format_x_value};
+use dbflux_components::common::time_range::TimeRangePanel;
 use dbflux_components::composites::refresh_split_button;
-use dbflux_components::controls::{ButtonVariant, Dropdown};
+use dbflux_components::controls::{Button, ButtonVariant, Dropdown};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, vdivider};
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
+use dbflux_components::tokens::DocumentMetrics;
 use dbflux_components::typography::AppFonts;
 use dbflux_core::RefreshPolicy;
 use gpui::prelude::*;
@@ -49,9 +51,9 @@ pub struct ChartToolbarContext<'a> {
     pub refresh_policy: RefreshPolicy,
     /// The REFRESH interval-selector dropdown entity (right section of split-button).
     pub refresh_dropdown: Entity<Dropdown>,
-    /// The range preset dropdown from `TimeRangePanel`. When `None` the range
-    /// dropdown and its preceding divider are hidden entirely.
-    pub dropdown_time_range: Option<Entity<Dropdown>>,
+    /// The time-range panel whose presets the toolbar shows as a segmented
+    /// control. When `None` the presets are hidden entirely.
+    pub time_range_panel: Option<Entity<TimeRangePanel>>,
     /// Total number of data-point rows in the current result.
     pub row_count: usize,
     /// The resolved time window from the driver response `(start_ms, end_ms)`.
@@ -64,6 +66,12 @@ pub struct ChartToolbarContext<'a> {
     /// variant of `refresh_dropdown`, whose chevron takes that variant's
     /// content color.
     pub refresh_variant: ButtonVariant,
+    /// Elements drawn before the controls (a document's title), with the
+    /// controls then pushed to the right edge.
+    pub leading: Option<AnyElement>,
+    /// Show the resolved window and point count in the toolbar. A host that
+    /// shows them in its axis row passes `false`.
+    pub show_window: bool,
 }
 
 /// Callbacks for interactive toolbar actions.
@@ -78,75 +86,110 @@ pub struct ChartToolbarHandlers {
     pub on_toggle_stats_rail: ActionHandler,
     /// Called when the "Save chart" button is clicked.
     pub on_save_chart: ActionHandler,
-    /// Called when a chart-kind chip (Line / Bar) is clicked.
+    /// Called when a chart-kind segment is clicked.
     pub on_select_chart_kind: ChartKindHandler,
+}
+
+/// Chart kinds offered by the kind switch, in display order.
+const CHART_KINDS: [ChartKind; 7] = [
+    ChartKind::Line,
+    ChartKind::Bar,
+    ChartKind::Area,
+    ChartKind::Scatter,
+    ChartKind::StackedBar,
+    ChartKind::Pie,
+    ChartKind::Number,
+];
+
+fn chart_kind_id(kind: ChartKind) -> SharedString {
+    let index = CHART_KINDS
+        .iter()
+        .position(|candidate| *candidate == kind)
+        .unwrap_or_default();
+
+    SharedString::from(format!("chart-kind-{index}"))
+}
+
+/// The chart-kind switch: one segment per kind with its icon.
+pub fn chart_kind_control(
+    current: ChartKind,
+    on_select: impl Fn(ChartKind, &mut Window, &mut App) + 'static,
+) -> SegmentedControl {
+    let items = CHART_KINDS
+        .iter()
+        .map(|kind| {
+            SegmentedItem::new(chart_kind_id(*kind), configure_chart_kind_label(*kind))
+                .icon(AppIcon::for_chart_kind(*kind))
+        })
+        .collect();
+
+    SegmentedControl::new(items, chart_kind_id(current), move |id, window, cx| {
+        if let Some(kind) = CHART_KINDS.iter().find(|kind| chart_kind_id(**kind) == *id) {
+            on_select(*kind, window, cx);
+        }
+    })
+}
+
+/// The resolved window and point count: `start → end UTC · 72 pts`, from the
+/// driver's resolved window or, without one, the chart's x bounds.
+pub fn chart_window_label(
+    chart_shell: &Entity<ChartShell>,
+    resolved_window: Option<(i64, i64)>,
+    row_count: usize,
+    cx: &App,
+) -> String {
+    let chart_view = chart_shell.read(cx).chart_view().cloned();
+
+    let bounds = match resolved_window {
+        Some((start_ms, end_ms)) => Some((start_ms as f64, end_ms as f64)),
+        None => chart_view.map(|view| view.read(cx).data_x_bounds()),
+    };
+
+    let points = crate::labels::chart_toolbar_points_label(row_count);
+
+    match bounds {
+        Some((start, end)) => format!(
+            "{} \u{2192} {} UTC \u{00b7} {}",
+            format_x_value(start, true),
+            format_x_value(end, true),
+            points
+        ),
+        None => points,
+    }
 }
 
 /// Render the chart toolbar row.
 ///
-/// Returns the single horizontal toolbar div. Does NOT include the AxisBar row;
-/// each caller composes that separately below this row.
+/// Returns the single horizontal toolbar row. Does NOT include the AxisBar
+/// row; each caller composes that separately below this row.
 pub fn render_chart_toolbar(
     ctx: ChartToolbarContext,
     handlers: ChartToolbarHandlers,
     cx: &mut App,
 ) -> AnyElement {
     let theme = ctx.theme;
-    let muted = theme.muted_foreground;
-    let border = theme.border;
-    let foreground = theme.foreground;
-    let secondary = theme.secondary;
-    let primary = theme.primary;
-    let primary_fg = theme.primary_foreground;
 
-    // --- Read rail state from the shell ---
-    let (chart_view_entity, rail_open, rail_tab, current_kind) = {
+    let (rail_open, rail_tab, current_kind) = {
         let shell = ctx.chart_shell.read(cx);
         (
-            shell.chart_view().cloned(),
             shell.chart_rail_open,
             shell.chart_rail_tab,
             shell.chart_kind(),
         )
     };
 
-    // --- Resolved window label ---
-    let (window_label, x_span_ms) = if let Some((start_ms, end_ms)) = ctx.resolved_window {
-        let start_str = format_x_value(start_ms as f64, true);
-        let end_str = format_x_value(end_ms as f64, true);
-        let span = (end_ms - start_ms) as f64;
-        (format!("{} \u{2192} {} UTC", start_str, end_str), span)
-    } else if let Some(cv) = &chart_view_entity {
-        let (x_min, x_max) = cv.read(cx).data_x_bounds();
-        let start_str = format_x_value(x_min, true);
-        let end_str = format_x_value(x_max, true);
-        let span = x_max - x_min;
-        (format!("{} \u{2192} {} UTC", start_str, end_str), span)
-    } else {
-        ("\u{2014}".to_string(), 0.0)
-    };
+    let window_label = ctx
+        .show_window
+        .then(|| chart_window_label(&ctx.chart_shell, ctx.resolved_window, ctx.row_count, cx));
 
-    let row_count = ctx.row_count;
-    let resolution_label = SharedString::from(format_resolution(x_span_ms, row_count));
-    let window_label: SharedString = window_label.into();
+    let presets = ctx.time_range_panel.map(|panel| {
+        let selected = panel.read(cx).selected_time_range;
 
-    // --- Range dropdown (only when a TimeRangePanel dropdown is wired) ---
-    // Mirrors how AuditDocument surfaces its range dropdown: the entity is
-    // cloned into the element tree so the Dropdown widget handles open/close
-    // and selection internally. The "Custom…" handling is performed by the
-    // TimeRangePanel subscription already wired in the host document — no
-    // additional on_select callback is needed here.
-    let range_section: Option<AnyElement> = ctx.dropdown_time_range.map(|dropdown| {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .child(dropdown)
-            .child(toolbar_divider(cx))
-            .into_any_element()
+        time_preset_control(selected, true, move |index, _, cx| {
+            panel.update(cx, |panel, cx| panel.select_preset(index, cx));
+        })
     });
 
-    // --- Refresh split-button ---
     let on_refresh = handlers.on_refresh.clone();
     let refresh_btn = refresh_split_button(
         "chart-toolbar-refresh",
@@ -158,204 +201,69 @@ pub fn render_chart_toolbar(
     )
     .variant(ctx.refresh_variant);
 
-    // --- Toolbar action button helper ---
-    let toolbar_btn = |id: &'static str, icon: AppIcon, label: SharedString, is_active: bool| {
-        let primary = theme.primary;
-        let primary_fg = theme.primary_foreground;
-
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .px(px(6.0))
-            .py(px(2.0))
-            .rounded(Radii::SM)
-            .text_size(FontSizes::XS)
-            .cursor_pointer()
-            .when(is_active, |d| d.bg(primary).text_color(primary_fg))
-            .when(!is_active, |d| {
-                d.text_color(foreground).hover(move |d| d.bg(secondary))
-            })
-            .child(Icon::new(icon).size(px(11.0)).color(if is_active {
-                primary_fg
-            } else {
-                foreground
-            }))
-            .child(label)
-    };
-
-    // --- Chart kind chips (Line | Bar) ---
     let on_select_kind = handlers.on_select_chart_kind.clone();
-    let kind_options: [(ChartKind, String); 6] = [
-        (ChartKind::Line, configure_chart_kind_label(ChartKind::Line)),
-        (ChartKind::Bar, configure_chart_kind_label(ChartKind::Bar)),
-        (
-            ChartKind::Scatter,
-            configure_chart_kind_label(ChartKind::Scatter),
-        ),
-        (ChartKind::Area, configure_chart_kind_label(ChartKind::Area)),
-        (
-            ChartKind::StackedBar,
-            configure_chart_kind_label(ChartKind::StackedBar),
-        ),
-        (ChartKind::Pie, configure_chart_kind_label(ChartKind::Pie)),
-    ];
-    let num_kinds = kind_options.len();
-
-    let kind_chips = div()
-        .flex()
-        .items_center()
-        .border_1()
-        .border_color(border)
-        .rounded(Radii::SM)
-        .overflow_hidden()
-        .children(
-            kind_options
-                .into_iter()
-                .enumerate()
-                .map(|(i, (kind, label))| {
-                    let is_active = kind == current_kind;
-                    let is_last = i == num_kinds - 1;
-                    let handler = on_select_kind.clone();
-
-                    // The element ID is keyed by position, not by the (translated)
-                    // label text, so it stays stable regardless of active locale.
-                    let mut chip = div()
-                        .id(ElementId::Name(format!("chart-kind-{i}").into()))
-                        .px(px(8.0))
-                        .py(px(3.0))
-                        .text_size(px(11.0))
-                        .font(font(AppFonts::INTERFACE))
-                        .cursor_pointer()
-                        .when(is_active, |d| {
-                            d.bg(primary)
-                                .text_color(primary_fg)
-                                .font_weight(FontWeight::SEMIBOLD)
-                        })
-                        .when(!is_active, |d| {
-                            d.text_color(muted).hover(move |d| d.bg(secondary))
-                        })
-                        .when(!is_last, |d| d.border_r_1().border_color(border))
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            handler(kind, window, cx);
-                        })
-                        .child(label);
-
-                    if i == 0 {
-                        chip = chip.rounded_tl(Radii::SM).rounded_bl(Radii::SM);
-                    } else if is_last {
-                        chip = chip.rounded_tr(Radii::SM).rounded_br(Radii::SM);
-                    }
-
-                    chip
-                }),
-        );
+    let kind_switch = chart_kind_control(current_kind, move |kind, window, cx| {
+        on_select_kind(kind, window, cx)
+    });
 
     let is_stats_active = rail_open && rail_tab == ChartRailTab::Stats;
     let on_stats = handlers.on_toggle_stats_rail.clone();
     let on_save = handlers.on_save_chart.clone();
 
-    let stats_btn = toolbar_btn(
+    let stats_btn = Button::new(
         "chart-toolbar-stats",
-        AppIcon::ChartBar,
-        dbflux_i18n::t!("document.chart.toolbar.stats").into(),
-        is_stats_active,
+        dbflux_i18n::t!("document.chart.toolbar.stats"),
     )
-    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-        on_stats(window, cx);
+    .small()
+    .icon(AppIcon::Sigma)
+    .selected(is_stats_active)
+    .tab_stop(false)
+    .on_click(move |_, window, cx| on_stats(window, cx));
+
+    let save_btn = ctx.source_supports_save.then(|| {
+        Button::new(
+            "chart-toolbar-save",
+            dbflux_i18n::t!("document.chart.toolbar.save_chart"),
+        )
+        .small()
+        .icon(AppIcon::Save)
+        .tab_stop(false)
+        .on_click(move |_, window, cx| on_save(window, cx))
     });
 
-    let save_btn = toolbar_btn(
-        "chart-toolbar-save",
-        AppIcon::Save,
-        dbflux_i18n::t!("document.chart.toolbar.save_chart").into(),
-        false,
-    )
-    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-        on_save(window, cx);
-    });
+    let has_leading = ctx.leading.is_some();
 
-    // Responsive layout: a single `flex_wrap` row that wraps onto multiple
-    // lines when the viewport gets narrower. Per the project pattern
-    // (`result_panel/mod.rs`), `flex_wrap` is incompatible with positional
-    // spacers, so no `flex_1` divider is inserted — items flow left-to-right
-    // and wrap naturally. `w_full` forces the row to its parent's width so
-    // overflow can be detected. `min_h` (instead of fixed `h`) lets the row
-    // grow vertically when items wrap.
     div()
         .flex()
         .flex_row()
         .flex_wrap()
+        .flex_shrink_0()
         .items_center()
         .w_full()
-        .min_h(px(34.0))
-        .px(Spacing::SM)
-        .gap_x(px(4.0))
-        .gap_y(px(2.0))
+        .min_h(DocumentMetrics::HEADER_HEIGHT_TALL)
+        .px(DocumentMetrics::PADDING_X)
+        .py(DocumentMetrics::TOOLBAR_PADDING_Y)
+        .gap(DocumentMetrics::GAP)
         .border_b_1()
         .border_color(theme.border)
-        .bg(theme.tab_bar)
-        .when_some(range_section, |el, range| el.child(range))
+        .when_some(ctx.leading, |row, leading| row.child(leading))
+        .when(has_leading, |row| row.child(div().flex_1()))
+        .children(presets)
         .child(refresh_btn)
-        .child(toolbar_divider(cx))
-        // Clock icon + resolved window string
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(Icon::new(AppIcon::Clock).size(px(11.0)).color(muted))
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(muted)
-                        .font(font(AppFonts::MONO))
-                        .child(window_label),
-                ),
-        )
-        // Points · resolution
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .text_size(px(11.0))
-                .text_color(muted)
-                .font(font(AppFonts::MONO))
-                .child(SharedString::from(
-                    crate::labels::chart_toolbar_points_label(row_count),
-                ))
-                .child("\u{00b7}")
-                .child(resolution_label),
-        )
-        .child(toolbar_divider(cx))
-        // Chart kind selector (Line | Bar)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(muted)
-                        .font_weight(FontWeight::BOLD)
-                        .child(dbflux_i18n::t!("document.chart.toolbar.type_label")),
-                )
-                .child(kind_chips),
-        )
-        .child(toolbar_divider(cx))
-        .child(stats_btn)
-        .when(ctx.source_supports_save, |el| {
-            el.child(toolbar_divider(cx)).child(save_btn)
+        .child(kind_switch)
+        .when_some(window_label, |row, label| {
+            row.child(div().flex_1()).child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(label),
+            )
         })
+        .child(stats_btn)
+        .children(save_btn)
         .into_any_element()
-}
-
-/// Vertical rule between toolbar groups.
-fn toolbar_divider(cx: &App) -> Div {
-    vdivider(cx).h(px(12.0)).mx(Spacing::XS)
 }
 
 #[cfg(test)]
@@ -388,11 +296,13 @@ mod tests {
                 chart_shell: self.chart_shell.clone(),
                 refresh_policy: RefreshPolicy::Manual,
                 refresh_dropdown: self.refresh_dropdown.clone(),
-                dropdown_time_range: None,
+                time_range_panel: None,
                 row_count: 0,
                 resolved_window: Some((0, 3_600_000)),
                 source_supports_save: true,
                 refresh_variant: dbflux_components::controls::ButtonVariant::Secondary,
+                leading: None,
+                show_window: true,
             };
 
             let handlers = ChartToolbarHandlers {
@@ -502,15 +412,17 @@ mod tests {
         );
     }
 
-    /// When `dropdown_time_range` is `None`, no RANGE section element is produced.
+    /// Every kind in the switch maps back to itself through its segment id.
     #[test]
-    fn no_dropdown_time_range_produces_no_range_section() {
-        let dropdown: Option<()> = None;
-        let range_section = dropdown.map(|_| "range");
-        assert!(
-            range_section.is_none(),
-            "absent dropdown_time_range must hide RANGE section"
-        );
+    fn chart_kind_ids_round_trip() {
+        for kind in super::CHART_KINDS {
+            let id = super::chart_kind_id(kind);
+            let found = super::CHART_KINDS
+                .iter()
+                .find(|candidate| super::chart_kind_id(**candidate) == id);
+
+            assert_eq!(found, Some(&kind));
+        }
     }
 
     /// When `source_supports_save` is `false`, the Save button block is skipped.
@@ -539,6 +451,7 @@ mod tests {
             ChartKind::Area,
             ChartKind::StackedBar,
             ChartKind::Pie,
+            ChartKind::Number,
         ];
 
         for kind in kinds {

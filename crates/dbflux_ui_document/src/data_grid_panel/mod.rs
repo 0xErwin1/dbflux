@@ -1836,6 +1836,15 @@ impl DataGridPanel {
             }
         }
 
+        // A time-series measurement also offers the chart above the grid.
+        if self.chart.time_series_collection
+            && self.chart_available(cx)
+            && !modes.contains(&ResultViewMode::Both)
+            && let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Chart)
+        {
+            modes.insert(pos + 1, ResultViewMode::Both);
+        }
+
         modes
     }
 
@@ -2462,7 +2471,7 @@ impl DataGridPanel {
     /// (`apply_collection_result`), so a time-series collection opens as a
     /// chart the same way a time-series query result can.
     fn apply_chart_for_result(&mut self, result: &QueryResult, cx: &mut Context<Self>) {
-        let was_chart_mode = matches!(self.chrome.result_view_mode, ResultViewMode::Chart);
+        let was_chart_mode = self.chrome.result_view_mode.shows_chart();
 
         let detection = detect_chart_columns(result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
@@ -4403,6 +4412,10 @@ impl DataGridPanel {
 
             BuilderEvent::OpenInEditorRequested => {
                 self.open_builder_in_editor(cx);
+            }
+
+            BuilderEvent::CloseRequested => {
+                cx.emit(DataGridEvent::CloseInspector);
             }
 
             BuilderEvent::SaveRequested { name } => {
@@ -10756,7 +10769,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn time_series_collection_browse_opens_as_chart_with_the_driver_query(cx: &mut TestAppContext) {
+    fn time_series_collection_browse_opens_as_chart_and_grid_with_the_driver_query(
+        cx: &mut TestAppContext,
+    ) {
         let (app_state, profile_id) = register_time_series_connection(cx);
         let (panel, window) = open_collection_panel(cx, app_state.clone(), profile_id);
 
@@ -10770,8 +10785,8 @@ mod tests {
 
             assert_eq!(
                 panel.result_view_mode(),
-                super::ResultViewMode::Chart,
-                "a chartable time-series collection must open as a chart"
+                super::ResultViewMode::Both,
+                "a chartable time-series collection must open as the chart above the grid"
             );
             assert!(panel.uses_result_view(), "the chart view must render");
             assert_eq!(
@@ -10779,9 +10794,10 @@ mod tests {
                 vec![
                     super::ResultViewMode::Table,
                     super::ResultViewMode::Chart,
+                    super::ResultViewMode::Both,
                     super::ResultViewMode::Json,
                 ],
-                "the table stays one click away from the chart"
+                "the table and the chart alone stay one click away"
             );
             assert_eq!(
                 panel.view_config.mode,

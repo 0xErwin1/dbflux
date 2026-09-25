@@ -189,6 +189,7 @@ Configure governance in the DBFlux GUI before starting the MCP server.
 
 5. **Workspace → Pending Approvals**
    - Review and approve/reject write/destructive requests that triggered the approval path.
+   - `j` / `k` move through the pending calls, `a` approves and runs the selected one, and `r` rejects it. Every decision is written to the audit log.
 
 6. **Workspace → Audit**
    - Filter by actor/tool/decision/time range and export CSV/JSON.

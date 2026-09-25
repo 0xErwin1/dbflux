@@ -252,8 +252,9 @@ available only on SQL drivers; non-SQL connections do not show it.
 The panel has a mode selector at the top — **SELECT**, **UPDATE**, **DELETE** —
 and a live SQL preview that regenerates on every change. The preview is always
 visible. Press **Run** to execute, or (in SELECT mode) **Open in Editor** to drop
-the generated SQL into a normal query editor. The header has **Save** and
-**Reset**.
+the generated SQL into a normal query editor. The header has **Save**,
+**Reset**, and a close button that hides the rail and keeps what you built;
+**Builder** brings it back.
 
 | Keys | Action |
 |------|--------|

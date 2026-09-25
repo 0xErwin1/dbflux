@@ -150,8 +150,15 @@ fn audit_and_key_value_refresh_dropdowns_share_menu_render_bounds(cx: &mut TestA
     assert_eq!(audit_menu_bounds.size.width, kv_menu_bounds.size.width);
     assert!(audit_menu_bounds.size.width >= audit_trigger_bounds.size.width);
     assert!(kv_menu_bounds.size.width >= kv_trigger_bounds.size.width);
-    assert_eq!(audit_menu_bounds.origin.x, audit_trigger_bounds.origin.x);
-    assert_eq!(kv_menu_bounds.origin.x, kv_trigger_bounds.origin.x);
+    // A menu opens at its trigger's left edge and shifts left only as far as
+    // it takes to stay inside the window, so it always spans its trigger.
+    for (menu, trigger) in [
+        (audit_menu_bounds, audit_trigger_bounds),
+        (kv_menu_bounds, kv_trigger_bounds),
+    ] {
+        assert!(menu.origin.x <= trigger.origin.x);
+        assert!(menu.origin.x + menu.size.width >= trigger.origin.x + trigger.size.width);
+    }
     assert_pixels_close(
         audit_menu_bounds.origin.y,
         audit_trigger_bounds.origin.y + audit_trigger_bounds.size.height + px(4.0),

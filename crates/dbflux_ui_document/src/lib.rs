@@ -19,6 +19,7 @@ pub mod dump_analysis;
 pub mod query_builder;
 pub mod schema_diff;
 mod style_guardrails;
+mod syntax_runs;
 
 #[cfg(feature = "mcp")]
 mod governance;

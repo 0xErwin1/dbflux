@@ -1011,12 +1011,12 @@ pub(in crate::buckets_table) mod tests {
         });
     }
 
-    /// The empty-state hint names a key that, in the table's own keymap
+    /// The refresh keycap names a key that, in the table's own keymap
     /// context, resolves to the refresh command this document handles, and
     /// `r` keeps meaning Rename there.
     #[gpui::test]
-    fn refresh_hint_names_the_key_that_refreshes_the_table(cx: &mut gpui::TestAppContext) {
-        use crate::buckets_table::render::{refresh_hint, refresh_shortcut};
+    fn refresh_shortcut_names_the_key_that_refreshes_the_table(cx: &mut gpui::TestAppContext) {
+        use crate::buckets_table::render::refresh_shortcut;
         use dbflux_app::keymap::{Command, ContextId, KeyChord};
 
         let doc = new_test_entity(cx);
@@ -1036,10 +1036,6 @@ pub(in crate::buckets_table) mod tests {
             keymap.resolve(context, &KeyChord::parse("r").expect("plain letter chord")),
             Some(Command::Rename)
         );
-
-        let hint = refresh_hint().expect("a bound refresh key produces a hint");
-        assert!(hint.starts_with(&format!("{key} ")), "hint was {hint:?}");
-        assert!(!hint.contains("%{"), "hint was {hint:?}");
     }
 
     pub(in crate::buckets_table) fn new_test_entity(

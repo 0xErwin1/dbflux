@@ -203,8 +203,9 @@ selected chart via `open_saved_chart` as described above.
 
 Opening a collection on a connection whose category is
 `DatabaseCategory::TimeSeries` (an InfluxDB measurement, for example) gives its
-data grid the Data, Chart and JSON views that query results have. The first page
-opens as a chart when `detect_chart_columns` returns `Ok`, with the axes seeded
+data grid the Data, Chart and JSON views that query results have, plus **Both**,
+which draws the chart above the grid. The first page opens in Both when
+`detect_chart_columns` returns `Ok`, with the axes seeded
 by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
 the first `Text` column as the group). A group draws one line per distinct
 value of its column, labelled by that value, so a tag such as `host` gives each

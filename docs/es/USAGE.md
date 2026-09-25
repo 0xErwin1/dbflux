@@ -280,7 +280,8 @@ El panel tiene un selector de modo en la parte superior — **SELECT**,
 **UPDATE**, **DELETE** — y una vista previa de SQL en vivo que se regenera con
 cada cambio. La vista previa siempre es visible. Pulsa **Run** para ejecutar, o
 (en modo SELECT) **Open in Editor** para volcar el SQL generado en un editor de
-query normal. La cabecera tiene **Save** y **Reset**.
+query normal. La cabecera tiene **Save**, **Reset** y un botón de cierre que
+oculta el panel y conserva lo construido; **Builder** lo vuelve a mostrar.
 
 | Teclas                             | Acción                           |
 | ---------------------------------- | -------------------------------- |

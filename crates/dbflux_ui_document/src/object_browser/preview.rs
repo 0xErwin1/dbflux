@@ -14,22 +14,28 @@ use super::preview_content::{
     EncodingChoice, ImagePreview, OVERRIDABLE_ENCODINGS, PreviewContentState, PreviewKind,
     encoding_label,
 };
+use super::render::object_icon_color;
 use super::render::{format_modified, object_icon};
 use super::{ObjectAction, ObjectBrowserDocument};
 use crate::labels::object_browser_versions_count_label;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{ChromeColors, Heights, Radii, Spacing};
+use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
+use dbflux_components::tokens::{
+    ChromeColors, DocumentMetrics, Fields, Heights, ObjectStoreMetrics, PreviewRailMetrics, Spacing,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{Encoding, ObjectVersionSummary};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-/// Preferred width of the preview pane when a selection is being previewed.
-pub(super) const PREVIEW_WIDTH: Pixels = px(320.0);
+/// Preferred width of the preview pane when a selection is being previewed
+/// (P1Objects).
+pub(super) const PREVIEW_WIDTH: Pixels = px(460.0);
 
-/// Preferred width while the inline editor is open: 320 px leaves too little
-/// room to read, let alone edit, a line of text next to its line numbers.
+/// Preferred width while the inline editor is open, so a line of text reads
+/// next to its line numbers.
 pub(super) const PREVIEW_EDITOR_WIDTH: Pixels = px(520.0);
 
 /// Floor for the preview pane. Below this the metadata rows and the action
@@ -50,9 +56,8 @@ const PREVIEW_DRAG_MAX_WIDTH: Pixels = px(1200.0);
 /// Hit target of the resize grip on the pane's left edge.
 const PREVIEW_GRIP_WIDTH: Pixels = px(7.0);
 
-/// Label column of the metadata rows. Narrow enough to leave the values room
-/// inside a 320 px pane.
-const METADATA_LABEL_WIDTH: Pixels = px(92.0);
+/// Label column of the metadata rows. (110 px)
+const METADATA_LABEL_WIDTH: Pixels = px(110.0);
 
 /// Vertical room reserved for the image itself, so the meta strip and the
 /// metadata rows below it never jump as images of different shapes load.
@@ -256,6 +261,8 @@ impl ObjectBrowserDocument {
     fn render_preview_header(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let name = object_display_name(key);
+        let icon = object_icon(name);
+        let icon_color = object_icon_color(icon, cx);
         let shows_image = matches!(self.preview_content(), PreviewContentState::Image(_));
         let is_dirty = self.editor_for(key).is_some_and(|editor| editor.dirty);
         // The pinned pane is narrow by design; the same buffer can be taken to
@@ -263,103 +270,77 @@ impl ObjectBrowserDocument {
         // into a buffer here, which is exactly the gate the tab would apply.
         let is_editable_text = self.editor_for(key).is_some();
 
+        let open_in_editor = is_editable_text.then(|| {
+            let key = key.to_string();
+
+            Button::new("object-browser-open-in-editor", "")
+                .small()
+                .icon(AppIcon::Maximize2)
+                .icon_only()
+                .tooltip(dbflux_i18n::t!(
+                    "document.object_browser.preview.header.open_in_editor"
+                ))
+                .tab_stop(false)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.request_open_object_editor(key.clone(), cx);
+                }))
+        });
+
+        let open_external = shows_image.then(|| {
+            let key = key.to_string();
+
+            Button::new("object-browser-open-external", "")
+                .small()
+                .icon(AppIcon::ExternalLink)
+                .icon_only()
+                .tooltip(dbflux_i18n::t!(
+                    "document.object_browser.preview.header.open_in_system_viewer"
+                ))
+                .tab_stop(false)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_object_externally(key.clone(), cx);
+                }))
+        });
+
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
+            .gap(PreviewRailMetrics::HEADER_GAP)
+            .h(DocumentMetrics::HEADER_HEIGHT)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.tab_bar)
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .overflow_hidden()
-                    .child(Icon::new(object_icon(name)).small().muted())
-                    .child(
-                        div()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(Text::code(name.to_string())),
-                    )
-                    .when(is_dirty, |this| this.child(self.render_dirty_badge(cx))),
+                Icon::new(icon)
+                    .size(ObjectStoreMetrics::NAME_ICON)
+                    .color(icon_color),
             )
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XXS)
-                    .when(is_editable_text, |this| {
-                        let key = key.to_string();
-
-                        this.child(
-                            div()
-                                .id("object-browser-open-in-editor")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(Heights::CONTROL)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(dbflux_i18n::t!(
-                                        "document.object_browser.preview.header.open_in_editor"
-                                    ))
-                                    .build(window, cx)
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_open_object_editor(key.clone(), cx);
-                                }))
-                                .child(Icon::new(AppIcon::Maximize2).small().muted()),
-                        )
-                    })
-                    .when(shows_image, |this| {
-                        let key = key.to_string();
-
-                        this.child(
-                            div()
-                                .id("object-browser-open-external")
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(Heights::CONTROL)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new(dbflux_i18n::t!(
-                                        "document.object_browser.preview.header.open_in_system_viewer"
-                                    ))
-                                    .build(window, cx)
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_object_externally(key.clone(), cx);
-                                }))
-                                .child(Icon::new(AppIcon::ExternalLink).small().muted()),
-                        )
-                    })
-                    .child(
-                        div()
-                            .id("object-browser-preview-close")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(Heights::CONTROL)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_preview(cx);
-                            }))
-                            .child(Icon::new(AppIcon::X).small().muted()),
-                    ),
+                    .min_w_0()
+                    .truncate()
+                    .font_family(AppFonts::MONO)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(name.to_string()),
+            )
+            .when(is_dirty, |this| this.child(self.render_dirty_badge(cx)))
+            .child(div().flex_1())
+            .children(open_in_editor)
+            .children(open_external)
+            .child(
+                Button::new("object-browser-preview-close", "")
+                    .small()
+                    .icon(AppIcon::X)
+                    .icon_only()
+                    .tooltip(dbflux_i18n::t!(
+                        "document.object_browser.preview.header.close"
+                    ))
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_preview(cx);
+                    })),
             )
     }
 
@@ -382,82 +363,74 @@ impl ObjectBrowserDocument {
         }
 
         let theme = cx.theme();
-        let current = self.encoding_override;
+
+        let choice_id = |choice: Option<EncodingChoice>| -> SharedString {
+            match choice {
+                None => "object-browser-encoding-auto".into(),
+                Some(EncodingChoice::Raw) => "object-browser-encoding-raw".into(),
+                Some(EncodingChoice::Encoding(encoding)) => {
+                    format!("object-browser-encoding-{}", encoding as u8).into()
+                }
+            }
+        };
+
+        let mut choices: Vec<(Option<EncodingChoice>, String)> = vec![
+            (
+                None,
+                dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
+            ),
+            (
+                Some(EncodingChoice::Raw),
+                dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
+            ),
+        ];
+        choices.extend(OVERRIDABLE_ENCODINGS.iter().map(|encoding| {
+            (
+                Some(EncodingChoice::Encoding(*encoding)),
+                encoding_label(*encoding).to_string(),
+            )
+        }));
+
+        let items = choices
+            .iter()
+            .map(|(choice, label)| SegmentedItem::new(choice_id(*choice), label.clone()))
+            .collect();
+
+        let weak_self = cx.weak_entity();
+        let control = SegmentedControl::new(
+            items,
+            choice_id(self.encoding_override),
+            move |id, _, cx| {
+                let Some((choice, _)) =
+                    choices.iter().find(|(choice, _)| choice_id(*choice) == *id)
+                else {
+                    return;
+                };
+                let choice = *choice;
+
+                if let Some(doc) = weak_self.upgrade() {
+                    doc.update(cx, |this, cx| this.set_encoding_override(choice, cx));
+                }
+            },
+        );
 
         div()
             .flex()
             .flex_wrap()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::XS)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
+            .gap(DocumentMetrics::GAP)
+            .min_h(PreviewRailMetrics::INTERPRET_HEIGHT)
+            .py(PreviewRailMetrics::INTERPRET_PADDING_Y)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                Text::caption(dbflux_i18n::t!(
-                    "document.object_browser.preview.body.interpret_as"
-                ))
-                .muted_foreground(),
-            )
-            .child(self.render_encoding_pill(
-                "object-browser-encoding-auto",
-                dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
-                current.is_none(),
-                None,
-                cx,
+            .text_size(DocumentMetrics::TABLE_META_FONT)
+            .text_color(theme.muted_foreground)
+            .child(dbflux_i18n::t!(
+                "document.object_browser.preview.body.interpret_as"
             ))
-            .child(self.render_encoding_pill(
-                "object-browser-encoding-raw",
-                dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
-                current == Some(EncodingChoice::Raw),
-                Some(EncodingChoice::Raw),
-                cx,
-            ))
-            .children(OVERRIDABLE_ENCODINGS.iter().map(|encoding| {
-                let choice = EncodingChoice::Encoding(*encoding);
-
-                self.render_encoding_pill(
-                    SharedString::from(format!("object-browser-encoding-{}", *encoding as u8)),
-                    encoding_label(*encoding).to_string(),
-                    current == Some(choice),
-                    Some(choice),
-                    cx,
-                )
-            }))
-            .into_any_element()
-    }
-
-    fn render_encoding_pill(
-        &self,
-        id: impl Into<ElementId>,
-        label: impl Into<SharedString>,
-        selected: bool,
-        choice: Option<EncodingChoice>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = cx.theme();
-        let label = label.into();
-
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .h(Heights::CONTROL)
-            .px(Spacing::XS)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .when(selected, |d| d.bg(theme.primary))
-            .when(!selected, |d| {
-                d.bg(theme.secondary).hover(|d| d.bg(theme.muted))
-            })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.set_encoding_override(choice, cx);
-            }))
-            .child(if selected {
-                Text::caption(label).color(theme.primary_foreground)
-            } else {
-                Text::caption(label)
-            })
+            .child(control)
             .into_any_element()
     }
 
@@ -639,29 +612,19 @@ impl ObjectBrowserDocument {
     /// "Load anyway" action offered under a `PreviewGate::TooLarge` refusal:
     /// bypasses the gate once, for this object only.
     fn render_load_anyway_button(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
         let key = key.to_string();
 
-        div()
-            .id("object-browser-load-anyway")
-            .flex()
-            .items_center()
-            .gap(Spacing::XS)
-            .h(Heights::CONTROL)
-            .px(Spacing::SM)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .border_1()
-            .border_color(theme.border)
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.load_preview_body_override(key.clone(), cx);
-            }))
-            .child(Icon::new(AppIcon::Download).small().muted())
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.object_browser.preview.body.load_anyway"
-            )))
-            .into_any_element()
+        Button::new(
+            "object-browser-load-anyway",
+            dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
+        )
+        .small()
+        .icon(AppIcon::Download)
+        .tab_stop(false)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.load_preview_body_override(key.clone(), cx);
+        }))
+        .into_any_element()
     }
 
     fn render_notice(
@@ -682,7 +645,7 @@ impl ObjectBrowserDocument {
             .justify_center()
             .gap(Spacing::SM)
             .p(Spacing::MD)
-            .bg(theme.secondary)
+            .bg(theme.background)
             .child(match tone {
                 NoticeTone::Danger => Icon::new(icon).size(Heights::ICON_LG).danger(),
                 NoticeTone::Warning => Icon::new(icon).size(Heights::ICON_LG).warning(),
@@ -705,75 +668,92 @@ impl ObjectBrowserDocument {
             return div().into_any_element();
         };
 
+        let value = |text: String| {
+            div()
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_color(ChromeColors::strong(theme))
+                .child(text)
+                .into_any_element()
+        };
+
         div()
             .flex()
             .flex_col()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
+            .flex_shrink_0()
+            .px(DocumentMetrics::PADDING_X)
+            .py(PreviewRailMetrics::SECTION_PADDING_Y)
             .border_t_1()
             .border_color(theme.border)
-            .child(div().pb(Spacing::XS).child(Text::label(dbflux_i18n::t!(
-                "document.object_browser.metadata.section"
-            ))))
+            .child(
+                Text::label(dbflux_i18n::t!("document.object_browser.metadata.section"))
+                    .font_size(PreviewRailMetrics::SECTION_LABEL_FONT),
+            )
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.key"),
-                Text::code(metadata.key.clone()).into_any_element(),
+                value(metadata.key.clone()),
+                cx,
             ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.size"),
-                Text::code(format_size_detail(metadata.size_bytes)).into_any_element(),
+                value(format_size_detail(metadata.size_bytes)),
+                cx,
             ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.content_type"),
-                Text::code(optional_value(metadata.content_type.as_deref())).into_any_element(),
+                value(optional_value(metadata.content_type.as_deref())),
+                cx,
             ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.last_modified"),
-                Text::code(format_modified(metadata.last_modified)).into_any_element(),
+                value(format_modified(metadata.last_modified)),
+                cx,
             ))
-            .child(
-                self.metadata_row(
-                    dbflux_i18n::t!("document.object_browser.metadata.etag"),
-                    Text::code(optional_value(metadata.etag.as_deref()))
-                        .muted_foreground()
-                        .into_any_element(),
-                ),
-            )
+            .child(self.metadata_row(
+                dbflux_i18n::t!("document.object_browser.metadata.etag"),
+                value(optional_value(metadata.etag.as_deref())),
+                cx,
+            ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.storage_class"),
-                self.render_storage_class(metadata.storage_class.as_deref(), cx),
+                value(super::render::storage_class_label(
+                    metadata.storage_class.as_deref(),
+                )),
+                cx,
             ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.encryption"),
-                Text::code(optional_value(metadata.encryption.as_deref())).into_any_element(),
+                value(optional_value(metadata.encryption.as_deref())),
+                cx,
             ))
             .child(self.metadata_row(
                 dbflux_i18n::t!("document.object_browser.metadata.versions"),
                 self.render_versions_value(key, metadata.version_count, cx),
+                cx,
             ))
             .child(self.render_versions_list(cx))
             .into_any_element()
     }
 
-    fn metadata_row(&self, label: impl Into<SharedString>, value: AnyElement) -> impl IntoElement {
+    fn metadata_row(
+        &self,
+        label: impl Into<SharedString>,
+        value: AnyElement,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         div()
             .flex()
             .items_start()
-            .gap(Spacing::SM)
-            .py(Spacing::XXS)
+            .py(PreviewRailMetrics::ROW_PADDING_Y)
+            .text_size(Fields::TEXT)
             .child(
                 div()
                     .w(METADATA_LABEL_WIDTH)
                     .flex_shrink_0()
-                    .child(Text::caption(label).muted_foreground()),
+                    .text_color(cx.theme().muted_foreground)
+                    .child(label.into()),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(value),
-            )
+            .child(div().flex_1().min_w_0().overflow_hidden().child(value))
     }
 
     /// Versions value: a count when the driver reported one, otherwise an
@@ -883,115 +863,82 @@ impl ObjectBrowserDocument {
     fn render_preview_actions(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
+        let action = |id: &'static str, icon: AppIcon, label: String| {
+            Button::new(id, label).small().icon(icon).tab_stop(false)
+        };
+
         div()
             .flex()
             .flex_wrap()
-            .items_center()
-            .w_full()
-            .gap(Spacing::XS)
-            .min_h(Heights::TOOLBAR)
-            .py(Spacing::XS)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(self.preview_action_button(
-                "object-browser-download",
-                AppIcon::Download,
-                dbflux_i18n::t!("document.object_browser.preview.action.download"),
-                false,
-                {
-                    let key = key.to_string();
-                    move |this, cx| this.download_object(key.clone(), cx)
-                },
-                cx,
-            ))
-            .child(self.preview_action_button(
-                "object-browser-open-externally",
-                AppIcon::ExternalLink,
-                dbflux_i18n::t!("document.object_browser.preview.action.open"),
-                false,
-                {
-                    let key = key.to_string();
-                    move |this, cx| this.open_object_externally(key.clone(), cx)
-                },
-                cx,
-            ))
-            .child(self.preview_action_button(
-                "object-browser-copy-uri",
-                AppIcon::Copy,
-                dbflux_i18n::t!("document.object_browser.preview.action.copy_uri"),
-                false,
-                {
-                    let key = key.to_string();
-                    move |this, cx| this.copy_object_uri(&key, cx)
-                },
-                cx,
-            ))
-            .child(self.preview_action_button(
-                "object-browser-presign",
-                AppIcon::Link2,
-                dbflux_i18n::t!("document.object_browser.preview.action.presign"),
-                false,
-                {
-                    let key = key.to_string();
-                    move |this, cx| {
-                        this.request_object_action(ObjectAction::Presign { key: key.clone() }, cx)
-                    }
-                },
-                cx,
-            ))
-            .child(self.preview_action_button(
-                "object-browser-delete",
-                AppIcon::Delete,
-                dbflux_i18n::t!("document.object_browser.preview.action.delete"),
-                true,
-                {
-                    let key = key.to_string();
-                    move |this, cx| {
-                        this.request_object_action(ObjectAction::Delete { key: key.clone() }, cx)
-                    }
-                },
-                cx,
-            ))
-    }
-
-    fn preview_action_button(
-        &self,
-        id: &'static str,
-        icon: AppIcon,
-        label: impl Into<SharedString>,
-        destructive: bool,
-        on_activate: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .id(id)
-            .flex()
             .flex_shrink_0()
             .items_center()
-            .justify_center()
-            .gap(Spacing::XS)
-            .h(Heights::CONTROL)
-            .px(Spacing::XS)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                on_activate(this, cx);
-            }))
-            .child(if destructive {
-                Icon::new(icon).small().danger()
-            } else {
-                Icon::new(icon).small().muted()
-            })
-            .child(if destructive {
-                Text::caption(label).danger()
-            } else {
-                Text::caption(label)
-            })
+            .w_full()
+            .gap(PreviewRailMetrics::ACTIONS_GAP)
+            .px(DocumentMetrics::PADDING_X)
+            .py(PreviewRailMetrics::ACTIONS_PADDING_Y)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                action(
+                    "object-browser-download",
+                    AppIcon::Download,
+                    dbflux_i18n::t!("document.object_browser.preview.action.download"),
+                )
+                .primary()
+                .on_click({
+                    let key = key.to_string();
+                    cx.listener(move |this, _, _, cx| this.download_object(key.clone(), cx))
+                }),
+            )
+            .child(
+                action(
+                    "object-browser-copy-uri",
+                    AppIcon::Copy,
+                    dbflux_i18n::t!("document.object_browser.preview.action.copy_uri"),
+                )
+                .on_click({
+                    let key = key.to_string();
+                    cx.listener(move |this, _, _, cx| this.copy_object_uri(&key, cx))
+                }),
+            )
+            .child(
+                action(
+                    "object-browser-presign",
+                    AppIcon::Link2,
+                    dbflux_i18n::t!("document.object_browser.preview.action.presign"),
+                )
+                .on_click({
+                    let key = key.to_string();
+                    cx.listener(move |this, _, _, cx| {
+                        this.request_object_action(ObjectAction::Presign { key: key.clone() }, cx)
+                    })
+                }),
+            )
+            .child(
+                action(
+                    "object-browser-open-externally",
+                    AppIcon::ExternalLink,
+                    dbflux_i18n::t!("document.object_browser.preview.action.open"),
+                )
+                .on_click({
+                    let key = key.to_string();
+                    cx.listener(move |this, _, _, cx| this.open_object_externally(key.clone(), cx))
+                }),
+            )
+            .child(
+                action(
+                    "object-browser-delete",
+                    AppIcon::Delete,
+                    dbflux_i18n::t!("document.object_browser.preview.action.delete"),
+                )
+                .danger()
+                .on_click({
+                    let key = key.to_string();
+                    cx.listener(move |this, _, _, cx| {
+                        this.request_object_action(ObjectAction::Delete { key: key.clone() }, cx)
+                    })
+                }),
+            )
     }
 }
 

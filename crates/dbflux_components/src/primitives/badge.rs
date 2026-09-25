@@ -3,7 +3,8 @@ use gpui::prelude::*;
 use gpui::{App, FontWeight, Hsla, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
-use crate::primitives::Chamfer;
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Feedback, SyntaxColors};
 
 /// Semantic tone shared by [`Badge`] and [`EnvTag`].
@@ -61,11 +62,13 @@ impl BadgeTone {
     }
 }
 
-/// Stateless badge: a short label on a 4 px chamfer, 20 px tall.
+/// Stateless badge: a short label on a 4 px chamfer, 20 px tall, with an
+/// optional 11 px icon before it.
 #[derive(IntoElement)]
 pub struct Badge {
     tone: BadgeTone,
     label: SharedString,
+    icon: Option<AppIcon>,
 }
 
 impl Badge {
@@ -73,7 +76,14 @@ impl Badge {
         Self {
             tone,
             label: label.into(),
+            icon: None,
         }
+    }
+
+    /// Draws `icon` in the label color before the label.
+    pub fn icon(mut self, icon: AppIcon) -> Self {
+        self.icon = Some(icon);
+        self
     }
 }
 
@@ -88,9 +98,13 @@ impl RenderOnce for Badge {
             .flex()
             .flex_shrink_0()
             .items_center()
+            .gap(Feedback::BADGE_GAP)
             .h(Feedback::BADGE_HEIGHT)
             .px(Feedback::BADGE_PADDING_X)
             .child(Chamfer::new(ChamferCut::KEYCAP).fill(fill))
+            .when_some(self.icon, |badge, icon| {
+                badge.child(Icon::new(icon).size(Feedback::BADGE_ICON).color(text_color))
+            })
             .child(
                 div()
                     .whitespace_nowrap()

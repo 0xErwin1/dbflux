@@ -31,9 +31,15 @@ use uuid::Uuid;
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::{MenuItem, menu_frame, menu_row};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Spinner, vdivider};
-use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
+use dbflux_components::primitives::{Chamfer, ChamferCorners, ChamferRing, Icon, Spinner};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, DocumentMetrics, Fields, FontSizes, SchemaMetrics, Spacing,
+    SyntaxColors,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
@@ -41,6 +47,69 @@ use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 /// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
 /// keyboard nudges land on this lattice, so tables line up instead of drifting.
 const GRID_LATTICE: f32 = 24.0;
+
+/// Minimum width of the toolbar menus.
+const SCHEMA_MENU_WIDTH: Pixels = px(160.0);
+
+/// Independent on/off toggles drawn as a segmented track (the Types and
+/// Indexes switches of P1Schema): every active item shows the raised thumb.
+fn toggle_group<const N: usize>(
+    items: [(&'static str, String, bool); N],
+    on_toggle: impl Fn(&SharedString, &mut Window, &mut App) + 'static,
+    theme: &gpui_component::Theme,
+) -> impl IntoElement {
+    let on_toggle = std::rc::Rc::new(on_toggle);
+
+    let segments = items.into_iter().map(|(id, label, active)| {
+        let on_toggle = on_toggle.clone();
+        let id = SharedString::from(id);
+        let clicked = id.clone();
+
+        let thumb = if active {
+            Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
+        } else {
+            Chamfer::new(ChamferCut::KEYCAP)
+                .fill_hover(theme.accent)
+                .interactive(SharedString::from(format!("{id}-thumb")))
+        };
+
+        div()
+            .id(id)
+            .relative()
+            .flex()
+            .items_center()
+            .h(SEGMENT_HEIGHT)
+            .px(Fields::SEGMENT_PADDING_X)
+            .cursor_pointer()
+            .text_color(if active {
+                ChromeColors::strong(theme)
+            } else {
+                theme.muted_foreground
+            })
+            .child(thumb)
+            .child(label)
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                on_toggle(&clicked, window, cx);
+            })
+    });
+
+    div()
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .p(Fields::SEGMENT_TRACK_PADDING)
+        .text_size(FontSizes::XS)
+        .child(
+            Chamfer::new(ChamferCut::CONTROL)
+                .fill(theme.background)
+                .border(theme.border),
+        )
+        .children(segments)
+}
+
+/// Height of a toggle segment (the 24 px segments of P1Schema).
+const SEGMENT_HEIGHT: Pixels = SchemaMetrics::TOGGLE_HEIGHT;
 
 /// Longest type name shown in a column row before it is cut short.
 ///
@@ -1964,149 +2033,83 @@ impl SchemaVizDocument {
         }
     }
 
-    fn make_layout_menu_item(
-        &self,
-        label: String,
-        format: LayoutFormat,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let is_selected = self.layout_format == format;
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .h(rems(1.6))
-            .px(Spacing::SM)
-            .rounded_sm()
-            .cursor_pointer()
-            .text_color(theme.foreground)
-            .when(is_selected, |d| {
-                d.bg(ChromeColors::tint(theme).opacity(0.1))
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.set_layout_format(format, cx);
-                    this.layout_menu_open = false;
-                    cx.notify();
-                }),
+    fn render_layout_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let items = [
+            LayoutFormat::LeftRight,
+            LayoutFormat::Snowflake,
+            LayoutFormat::Compact,
+        ]
+        .into_iter()
+        .map(|format| {
+            let mut item = MenuItem::new(Self::layout_label(format));
+            if self.layout_format == format {
+                item = item.icon(AppIcon::Check);
+            }
+
+            menu_row(
+                SharedString::from(format!("schema-layout-{format:?}")),
+                &item,
+                self.layout_format == format,
+                cx,
             )
-            .child(div().text_size(FontSizes::SM).child(label))
-            .when(is_selected, |d| {
-                d.child(
-                    svg()
-                        .path(AppIcon::CircleCheck.path())
-                        .size_3()
-                        .text_color(ChromeColors::tint(theme)),
-                )
-            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_layout_format(format, cx);
+                this.layout_menu_open = false;
+                cx.notify();
+            }))
+            .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+        self.build_dropdown_menu(items, cx)
     }
 
-    fn render_layout_menu(
-        &self,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_export_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let items = vec![
-            self.make_layout_menu_item(
-                Self::layout_label(LayoutFormat::LeftRight),
-                LayoutFormat::LeftRight,
-                theme,
+            menu_row(
+                "schema-export-dbml",
+                &MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as_dbml"))
+                    .icon(AppIcon::Copy),
+                false,
                 cx,
-            ),
-            self.make_layout_menu_item(
-                Self::layout_label(LayoutFormat::Snowflake),
-                LayoutFormat::Snowflake,
-                theme,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.export_dbml(cx);
+                this.export_menu_open = false;
+                cx.notify();
+            }))
+            .into_any_element(),
+            menu_row(
+                "schema-export-sql",
+                &MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as_sql"))
+                    .icon(AppIcon::Copy),
+                false,
                 cx,
-            ),
-            self.make_layout_menu_item(
-                Self::layout_label(LayoutFormat::Compact),
-                LayoutFormat::Compact,
-                theme,
-                cx,
-            ),
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.copy_as_sql(cx);
+                this.export_menu_open = false;
+                cx.notify();
+            }))
+            .into_any_element(),
         ];
 
         self.build_dropdown_menu(items, cx)
     }
 
-    fn render_export_menu(
+    fn build_dropdown_menu(
         &self,
-        theme: &gpui_component::theme::Theme,
+        items: Vec<AnyElement>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let items: Vec<Div> = vec![
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .h(rems(1.6))
-                .px(Spacing::SM)
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(theme.foreground)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.export_dbml(cx);
-                        this.export_menu_open = false;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .child(dbflux_i18n::t!("document.schema_viz.menu.copy_as_dbml")),
-                ),
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .h(rems(1.6))
-                .px(Spacing::SM)
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(theme.foreground)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| {
-                        this.copy_as_sql(cx);
-                        this.export_menu_open = false;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    div()
-                        .text_size(FontSizes::SM)
-                        .child(dbflux_i18n::t!("document.schema_viz.menu.copy_as_sql")),
-                ),
-        ];
-
-        self.build_dropdown_menu(items, cx)
-    }
-
-    fn build_dropdown_menu(&self, items: Vec<Div>, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         deferred(
-            div()
+            menu_frame(cx)
                 .absolute()
                 .top_full()
-                .mt_1()
+                .mt(Spacing::XS)
                 .left_0()
-                .min_w(px(140.0))
-                .bg(theme.popover)
-                .border_1()
-                .border_color(theme.border)
-                .rounded_md()
-                .shadow_lg()
-                .py(Spacing::XS)
+                .min_w(SCHEMA_MENU_WIDTH)
                 .occlude()
-                .flex_col()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.layout_menu_open = false;
                     this.export_menu_open = false;
@@ -2114,6 +2117,7 @@ impl SchemaVizDocument {
                 }))
                 .children(items),
         )
+        .with_priority(2)
     }
 
     /// Opens the context menu at the given position.
@@ -2626,7 +2630,6 @@ impl SchemaVizDocument {
 
         let theme = cx.theme().clone();
         let background = theme.background;
-        let tab_bar = theme.tab_bar;
         let border = theme.border;
         let muted_foreground = theme.muted_foreground;
 
@@ -2638,10 +2641,10 @@ impl SchemaVizDocument {
             Some(layout) => {
                 // T20: dot-grid background rendered via a single canvas element.
                 // Each dot is a 1.5px square painted at 24px lattice intersections.
-                let dot_color = border.opacity(0.35);
+                let dot_color = border;
                 let dot_lattice = GRID_LATTICE;
                 let dot_extent = 3000.0_f32;
-                let dot_size = px(1.5_f32);
+                let dot_size = SchemaMetrics::DOT;
                 let dot_grid = canvas(
                     |_bounds, _, _cx| {},
                     move |bounds, _, window, _cx| {
@@ -2695,7 +2698,9 @@ impl SchemaVizDocument {
                 .child(self.render_error(&dbflux_i18n::t!("document.schema_viz.error.no_layout"))),
         };
 
-        // T22: Toolbar — left group (zoom, layout, export) + flex-1 spacer + right group (counter + toggles)
+        // Toolbar (P1Schema): zoom out, the zoom readout (click resets the
+        // view), zoom in, Fit, Arrange, the layout select, Export, then the
+        // table and relation counter and the Types / Indexes toggles.
         let n_tables = self.layout.as_ref().map(|l| l.nodes.len()).unwrap_or(0);
         let n_relations = self.layout.as_ref().map(|l| l.edges.len()).unwrap_or(0);
         let counter_label = dbflux_i18n::t!(
@@ -2704,244 +2709,212 @@ impl SchemaVizDocument {
             relations = n_relations
         );
 
-        // Clone entity once before building the toolbar so Checkbox closures can
-        // call back into self via update().
-        let entity_for_types = cx.entity().clone();
-        let entity_for_indexes = cx.entity().clone();
+        let layout_select = {
+            let mut shape = Chamfer::new(ChamferCut::CONTROL)
+                .fill(theme.secondary)
+                .fill_hover(theme.secondary_hover)
+                .border(border)
+                .interactive("schema-layout-select-shape");
 
-        let show_types_val = self.show_types;
-        let show_indexes_val = self.show_indexes;
+            if self.layout_menu_open {
+                shape = shape.ring(ChamferRing::focus(ChromeColors::tint(&theme)));
+            }
 
-        use dbflux_components::controls::Checkbox;
+            div()
+                .relative()
+                .flex_shrink_0()
+                .child(
+                    div()
+                        .id("schema-layout-select")
+                        .relative()
+                        .flex()
+                        .items_center()
+                        .gap(Fields::GAP)
+                        .w(SchemaMetrics::LAYOUT_WIDTH)
+                        .h(Fields::HEIGHT)
+                        .px(Fields::PADDING_X)
+                        .cursor_pointer()
+                        .text_size(Fields::TEXT)
+                        .text_color(ChromeColors::strong(&theme))
+                        .child(shape)
+                        .child(
+                            Icon::new(AppIcon::ArrowLeftRight)
+                                .size(Fields::LEADING_ICON)
+                                .color(muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .truncate()
+                                .child(Self::layout_label(self.layout_format)),
+                        )
+                        .child(
+                            Icon::new(AppIcon::ChevronDown)
+                                .size(Fields::CHEVRON)
+                                .color(muted_foreground),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.layout_menu_open = !this.layout_menu_open;
+                            this.export_menu_open = false;
+                            cx.notify();
+                        })),
+                )
+                .when(self.layout_menu_open, |d| {
+                    d.child(self.render_layout_menu(cx))
+                })
+        };
 
-        let right_group = div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
+        let export_control = div()
+            .relative()
+            .flex_shrink_0()
             .child(
-                div()
-                    .text_size(FontSizes::XS)
-                    .text_color(muted_foreground)
-                    .child(counter_label),
+                Button::new(
+                    "schema-export",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.export"),
+                )
+                .small()
+                .icon(AppIcon::FileDown)
+                .trailing_icon(AppIcon::ChevronDown)
+                .selected(self.export_menu_open)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.export_menu_open = !this.export_menu_open;
+                    this.layout_menu_open = false;
+                    cx.notify();
+                })),
             )
-            .child(vdivider(cx).h(Spacing::LG))
-            .child(
-                Checkbox::new("schema-viz-show-types")
-                    .checked(show_types_val)
-                    .label(dbflux_i18n::t!("document.schema_viz.toolbar.types"))
-                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
-                        entity_for_types.update(cx, |this, cx| {
-                            this.set_show_types(*checked, cx);
-                        });
-                    }),
-            )
-            .child(
-                Checkbox::new("schema-viz-show-indexes")
-                    .checked(show_indexes_val)
-                    .label(dbflux_i18n::t!("document.schema_viz.toolbar.indexes"))
-                    .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
-                        entity_for_indexes.update(cx, |this, cx| {
-                            this.set_show_indexes(*checked, cx);
-                        });
-                    }),
-            );
+            .when(self.export_menu_open, |d| {
+                d.child(self.render_export_menu(cx))
+            });
+
+        let show_types = self.show_types;
+        let show_indexes = self.show_indexes;
+        let toggles = toggle_group(
+            [
+                (
+                    "schema-viz-show-types",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.types"),
+                    show_types,
+                ),
+                (
+                    "schema-viz-show-indexes",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.indexes"),
+                    show_indexes,
+                ),
+            ],
+            cx.listener(|this, id: &SharedString, _, cx| {
+                if id.as_ref() == "schema-viz-show-types" {
+                    let next = !this.show_types;
+                    this.set_show_types(next, cx);
+                } else {
+                    let next = !this.show_indexes;
+                    this.set_show_indexes(next, cx);
+                }
+            }),
+            &theme,
+        );
 
         let zoom_controls = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
+            .gap(DocumentMetrics::GAP)
             .w_full()
-            .px(Spacing::MD)
-            .py(Spacing::XXS)
-            .bg(tab_bar)
+            .h(SchemaMetrics::TOOLBAR_HEIGHT)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
             .border_color(border)
-            // Left group
+            .child(
+                Button::new(
+                    "schema-zoom-out",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.zoom_out"),
+                )
+                .small()
+                .icon(AppIcon::ZoomOut)
+                .icon_only()
+                .disabled(self.zoom <= 0.25)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.zoom = (this.zoom / 1.25).max(0.25);
+                    cx.notify();
+                })),
+            )
             .child(
                 div()
+                    .id("schema-zoom-reset")
+                    .w(SchemaMetrics::ZOOM_WIDTH)
                     .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div().flex().items_center().gap(Spacing::XS).child(
-                            div()
-                                .text_size(FontSizes::SM)
-                                .text_color(muted_foreground)
-                                .child(format!("{:.0}%", zoom * 100.0)),
-                        ),
-                    )
-                    .child(vdivider(cx).h(Spacing::LG))
-                    .child(
-                        div()
-                            .cursor_pointer()
-                            .px(Spacing::SM)
-                            .py(px(2.0))
-                            .rounded_sm()
-                            .when(self.zoom < 4.0, |d| {
-                                d.on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.zoom = (this.zoom * 1.25).min(4.0);
-                                        cx.notify();
-                                    }),
-                                )
-                            })
-                            .child("+"),
-                    )
-                    .child(
-                        div()
-                            .cursor_pointer()
-                            .px(Spacing::SM)
-                            .py(px(2.0))
-                            .rounded_sm()
-                            .when(self.zoom > 0.25, |d| {
-                                d.on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.zoom = (this.zoom / 1.25).max(0.25);
-                                        cx.notify();
-                                    }),
-                                )
-                            })
-                            .child("-"),
-                    )
-                    .child(
-                        div()
-                            .cursor_pointer()
-                            .px(Spacing::SM)
-                            .py(px(2.0))
-                            .rounded_sm()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.zoom = 1.0;
-                                    this.pan_offset = Point::default();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.reset")),
-                    )
-                    .child(
-                        div()
-                            .cursor_pointer()
-                            .px(Spacing::SM)
-                            .py(px(2.0))
-                            .rounded_sm()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.node_position_overrides.clear();
-                                    this.recompute_layout();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.arrange")),
-                    )
-                    .child(
-                        div()
-                            .cursor_pointer()
-                            .px(Spacing::SM)
-                            .py(px(2.0))
-                            .rounded_sm()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.fit_to_view();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.fit")),
-                    )
-                    .child(vdivider(cx).h(Spacing::LG))
-                    // Layout dropdown
-                    .child(
-                        div()
-                            .relative()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(px(2.0))
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .when(self.layout_menu_open, |d| {
-                                        d.bg(ChromeColors::tint(&theme).opacity(0.15))
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.layout_menu_open = !this.layout_menu_open;
-                                            this.export_menu_open = false;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.foreground)
-                                            .child(Self::layout_label(self.layout_format)),
-                                    )
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::ChevronDown.path())
-                                            .size_3()
-                                            .text_color(theme.muted_foreground),
-                                    ),
-                            )
-                            .when(self.layout_menu_open, |d| {
-                                d.child(self.render_layout_menu(&theme, cx))
-                            }),
-                    )
-                    .child(vdivider(cx).h(Spacing::LG))
-                    // Export dropdown
-                    .child(
-                        div()
-                            .relative()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(px(2.0))
-                                    .rounded_sm()
-                                    .cursor_pointer()
-                                    .when(self.export_menu_open, |d| {
-                                        d.bg(ChromeColors::tint(&theme).opacity(0.15))
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.export_menu_open = !this.export_menu_open;
-                                            this.layout_menu_open = false;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.foreground)
-                                            .child(dbflux_i18n::t!(
-                                                "document.schema_viz.toolbar.export"
-                                            )),
-                                    )
-                                    .child(
-                                        svg()
-                                            .path(AppIcon::ChevronDown.path())
-                                            .size_3()
-                                            .text_color(theme.muted_foreground),
-                                    ),
-                            )
-                            .when(self.export_menu_open, |d| {
-                                d.child(self.render_export_menu(&theme, cx))
-                            }),
-                    ),
+                    .justify_center()
+                    .cursor_pointer()
+                    .font_family(AppFonts::MONO)
+                    .text_size(SchemaMetrics::ZOOM_FONT)
+                    .text_color(theme.foreground)
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new(dbflux_i18n::t!(
+                            "document.schema_viz.toolbar.reset"
+                        ))
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.zoom = 1.0;
+                        this.pan_offset = Point::default();
+                        cx.notify();
+                    }))
+                    .child(format!("{:.0}%", zoom * 100.0)),
             )
-            // Flex-1 spacer
+            .child(
+                Button::new(
+                    "schema-zoom-in",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.zoom_in"),
+                )
+                .small()
+                .icon(AppIcon::ZoomIn)
+                .icon_only()
+                .disabled(self.zoom >= 4.0)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.zoom = (this.zoom * 1.25).min(4.0);
+                    cx.notify();
+                })),
+            )
+            .child(
+                Button::new(
+                    "schema-fit",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.fit"),
+                )
+                .small()
+                .icon(AppIcon::Maximize2)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.fit_to_view();
+                    cx.notify();
+                })),
+            )
+            .child(
+                Button::new(
+                    "schema-arrange",
+                    dbflux_i18n::t!("document.schema_viz.toolbar.arrange"),
+                )
+                .small()
+                .icon(AppIcon::Grid3x3)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.node_position_overrides.clear();
+                    this.recompute_layout();
+                    cx.notify();
+                })),
+            )
+            .child(layout_select)
+            .child(export_control)
             .child(div().flex_1())
-            // Right group
-            .child(right_group);
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(SchemaMetrics::ZOOM_FONT)
+                    .text_color(muted_foreground)
+                    .child(counter_label),
+            )
+            .child(toggles);
 
         // The viewport handles all pointer and scroll events.
         // It is `relative()` so child `absolute()` elements are anchored to it.
@@ -3142,26 +3115,6 @@ impl SchemaVizDocument {
             .collect()
     }
 
-    /// Renders a small inline badge for a column attribute (PK, FK, NN).
-    ///
-    /// `filled=true`: solid background badge. `filled=false`: outlined badge.
-    fn render_column_badge(&self, label: &str, filled: bool, color: Hsla) -> impl IntoElement {
-        let base = div()
-            .px(px(3.0))
-            .py(px(1.0))
-            .rounded_full()
-            .text_size(FontSizes::XS)
-            .font_weight(gpui::FontWeight::BOLD)
-            .line_height(px(14.0));
-
-        if filled {
-            base.bg(color).text_color(gpui::white())
-        } else {
-            base.border_1().border_color(color).text_color(color)
-        }
-        .child(label.to_owned())
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn render_node(
         &self,
@@ -3183,13 +3136,8 @@ impl SchemaVizDocument {
 
         let is_selected = self.selected_node.as_ref() == Some(&node_idx);
 
-        let border_color = if is_selected {
-            ChromeColors::tint(theme)
-        } else {
-            theme.border
-        };
-
-        let node_bg = theme.secondary;
+        let tint = ChromeColors::tint(theme);
+        let strong = ChromeColors::strong(theme);
         let muted_fg = theme.muted_foreground;
 
         let is_dragging = dragging_node == Some(node_idx);
@@ -3201,103 +3149,98 @@ impl SchemaVizDocument {
 
         let node_idx_clone = node_idx;
 
-        // T16: Redesigned node header — table icon + schema.name + col count badge
         let table_name = match &node.id.schema {
             Some(s) => format!("{}.{}", s, node.id.name),
             None => node.id.name.clone(),
         };
-        let col_count_label = dbflux_i18n::t!(
-            "document.schema_viz.node.column_count",
-            count = node.columns.len()
-        );
+
+        // The header keeps a 1 px inset so its fill never covers the card's
+        // border, and cuts only its top-left corner to follow the card.
+        let header_fill = if is_selected {
+            tint.opacity(SchemaMetrics::SELECTED_HEADER_ALPHA)
+        } else {
+            theme.secondary
+        };
 
         let node_header = div()
+            .relative()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap_2()
-            .px(px(10.0))
-            .h(px(NODE_HEADER_PX))
-            .bg(theme.tab_bar)
+            .gap(SchemaMetrics::HEADER_GAP)
+            .mt(px(1.0))
+            .mx(px(1.0))
+            .px(SchemaMetrics::CARD_PADDING_X)
+            .h(px(NODE_HEADER_PX - 1.0))
             .border_b_1()
             .border_color(theme.border)
             .child(
-                svg()
-                    .path(AppIcon::Table.path())
-                    .size_3()
-                    .text_color(muted_fg),
+                Chamfer::new(ChamferCut::INPUT)
+                    .corners(ChamferCorners::TopLeft)
+                    .fill(header_fill),
+            )
+            .child(
+                Icon::new(AppIcon::Table)
+                    .size(SchemaMetrics::HEADER_ICON)
+                    .color(tint),
             )
             .child(
                 div()
                     .flex_1()
-                    .text_size(FontSizes::SM)
-                    .text_color(theme.foreground)
+                    .min_w_0()
+                    .truncate()
+                    .font_family(AppFonts::MONO)
+                    .text_size(SchemaMetrics::HEADER_FONT)
                     .font_weight(gpui::FontWeight::BOLD)
-                    .overflow_hidden()
-                    .text_ellipsis()
+                    .text_color(strong)
                     .child(table_name),
-            )
-            .child(
-                div()
-                    .text_size(FontSizes::XS)
-                    .text_color(muted_fg)
-                    .child(col_count_label),
             );
 
-        // T18: Column rows with badge cluster
         let show_types = self.show_types;
         let col_rows: Vec<_> = node
             .columns
             .iter()
             .map(|col| {
-                let pk_color = theme.primary;
-                let fk_color = ChromeColors::tint(theme);
-                let nn_color = muted_fg.opacity(0.5);
-
-                let is_nn = !col.nullable && !col.is_pk;
-
-                // Fixed-width slots so badges and types align in a column
-                // regardless of the column name's width.
-                let badge_slot = div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .flex_shrink_0()
-                    .w(px(56.0))
-                    .gap(Spacing::XS)
-                    .when(col.is_pk, |d| {
-                        d.child(self.render_column_badge("PK", true, pk_color))
-                    })
-                    .when(col.is_fk, |d| {
-                        d.child(self.render_column_badge("FK", false, fk_color))
-                    })
-                    .when(is_nn, |d| {
-                        d.child(self.render_column_badge("NN", true, nn_color))
-                    });
+                let key_icon = if col.is_pk {
+                    Some((AppIcon::KeyRound, theme.warning))
+                } else if col.is_fk {
+                    Some((AppIcon::Link2, theme.info))
+                } else {
+                    None
+                };
 
                 div()
                     .flex()
                     .items_center()
                     .h(px(NODE_ROW_PX))
-                    .gap(Spacing::SM)
+                    .gap(SchemaMetrics::ROW_GAP)
                     .overflow_hidden()
-                    .text_size(FontSizes::XS)
-                    .text_color(theme.foreground)
+                    .font_family(AppFonts::MONO)
+                    .text_size(SchemaMetrics::ROW_FONT)
+                    .child(match key_icon {
+                        Some((icon, color)) => Icon::new(icon)
+                            .size(SchemaMetrics::ROW_ICON)
+                            .color(color)
+                            .into_any_element(),
+                        None => div()
+                            .flex_shrink_0()
+                            .w(SchemaMetrics::ROW_ICON)
+                            .into_any_element(),
+                    })
                     .child(
                         div()
                             .flex_1()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .min_w_0()
+                            .truncate()
+                            .text_color(strong)
                             .child(col.name.clone()),
                     )
-                    .child(badge_slot)
                     .when(show_types, |d| {
                         d.child(
                             div()
                                 .flex_shrink_0()
-                                .w(px(56.0))
-                                .overflow_hidden()
-                                .text_ellipsis()
+                                .max_w(SchemaMetrics::TYPE_WIDTH)
+                                .truncate()
                                 .text_color(muted_fg)
                                 .child(truncate_type_name(&col.type_name)),
                         )
@@ -3305,36 +3248,36 @@ impl SchemaVizDocument {
             })
             .collect();
 
-        // T19: Indexes section (only when show_indexes is true and there are indexes)
+        // Indexes section (only when show_indexes is true and there are indexes)
         let show_indexes = self.show_indexes;
+        let index_color = SyntaxColors::for_current(cx).number;
         let indexes_section = if show_indexes && !node.indexes.is_empty() {
             let index_rows: Vec<_> = node
                 .indexes
                 .iter()
                 .map(|idx| {
-                    let col_part = idx.columns.join(", ");
-                    let label = format!("{} ({})", idx.name, col_part);
+                    let label = format!("{} ({})", idx.name, idx.columns.join(", "));
+
                     div()
                         .flex()
                         .items_center()
                         .h(px(NODE_INDEX_ROW_PX))
-                        .gap(Spacing::XS)
+                        .gap(SchemaMetrics::ROW_GAP)
                         .overflow_hidden()
-                        .text_size(FontSizes::XS)
+                        .font_family(AppFonts::MONO)
+                        .text_size(SchemaMetrics::ROW_FONT)
                         .text_color(muted_fg)
                         .child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(label),
+                            Icon::new(AppIcon::Hash)
+                                .size(SchemaMetrics::ROW_ICON)
+                                .color(index_color),
                         )
+                        .child(div().flex_1().min_w_0().truncate().child(label))
                         .when(idx.unique, |d| {
                             d.child(
-                                svg()
-                                    .path(AppIcon::KeyRound.path())
-                                    .size_3()
-                                    .text_color(ChromeColors::tint(theme)),
+                                Icon::new(AppIcon::KeyRound)
+                                    .size(SchemaMetrics::ROW_ICON)
+                                    .color(tint),
                             )
                         })
                 })
@@ -3344,8 +3287,7 @@ impl SchemaVizDocument {
                 div()
                     .flex()
                     .flex_col()
-                    .px(px(10.0))
-                    .py(px(2.0))
+                    .px(SchemaMetrics::CARD_PADDING_X)
                     .border_t_1()
                     .border_color(theme.border)
                     .child(
@@ -3353,10 +3295,12 @@ impl SchemaVizDocument {
                             .h(px(NODE_INDEX_HEADER_PX))
                             .flex()
                             .items_center()
-                            .text_size(FontSizes::XS)
-                            .text_color(muted_fg)
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child(dbflux_i18n::t!("document.schema_viz.node.indexes")),
+                            .child(
+                                dbflux_components::primitives::Text::label(dbflux_i18n::t!(
+                                    "document.schema_viz.node.indexes"
+                                ))
+                                .font_size(SchemaMetrics::INDEX_LABEL_FONT),
+                            ),
                     )
                     .children(index_rows),
             )
@@ -3364,18 +3308,25 @@ impl SchemaVizDocument {
             None
         };
 
+        let card_shape = if is_selected {
+            Chamfer::new(ChamferCut::INPUT)
+                .fill(theme.popover)
+                .border(theme.input)
+                .ring(ChamferRing::focus(tint))
+        } else {
+            Chamfer::new(ChamferCut::INPUT)
+                .fill(theme.popover)
+                .border(theme.input)
+        };
+
         div()
             .absolute()
             .left(node_left)
             .top(node_top)
             .w(px(width))
-            .border_1()
-            .border_color(border_color)
-            .rounded_md()
-            .bg(node_bg)
-            .shadow_sm()
-            .overflow_hidden()
+            .when(is_selected, |card| card.shadow_lg())
             .cursor(cursor_style)
+            .child(card_shape)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -3450,8 +3401,8 @@ impl SchemaVizDocument {
                 div()
                     .flex()
                     .flex_col()
-                    .px(px(10.0))
-                    .py(px(NODE_BODY_TOP_PX))
+                    .px(SchemaMetrics::CARD_PADDING_X)
+                    .pt(px(NODE_BODY_TOP_PX))
                     .children(col_rows),
             )
             .when_some(indexes_section, |d, sec| d.child(sec))
@@ -3469,6 +3420,7 @@ impl SchemaVizDocument {
     ) -> Vec<Div> {
         let edge_color = ChromeColors::tint(theme);
         let edge_color_dim = ChromeColors::tint(theme).opacity(0.5);
+        let edge_color_rest = theme.input;
 
         let Some(graph) = &self.graph else {
             return Vec::new();
@@ -3479,6 +3431,8 @@ impl SchemaVizDocument {
             route: routing::OrthogonalRoute,
 
             dashed: bool,
+            /// The edge touches the selected table, so it takes the tint.
+            highlighted: bool,
         }
 
         let mut edges: Vec<EdgeData> = Vec::new();
@@ -3584,10 +3538,15 @@ impl SchemaVizDocument {
             );
 
             // All edges render solid; the off-screen dashed variant was dropped.
+            let highlighted = self
+                .selected_node
+                .is_some_and(|selected| selected == source || selected == target);
+
             edges.push(EdgeData {
                 route,
 
                 dashed: false,
+                highlighted,
             });
         }
 
@@ -3613,7 +3572,13 @@ impl SchemaVizDocument {
                     let oy_start = start.y + oy;
                     let ox_end = end.x + ox;
                     let oy_end = end.y + oy;
-                    let color = if e.dashed { edge_color_dim } else { edge_color };
+                    let color = if e.dashed {
+                        edge_color_dim
+                    } else if e.highlighted {
+                        edge_color
+                    } else {
+                        edge_color_rest
+                    };
 
                     let mut builder = PathBuilder::stroke(px(1.5));
                     if e.dashed {

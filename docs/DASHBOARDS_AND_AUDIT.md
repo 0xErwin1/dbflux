@@ -49,7 +49,7 @@ dashboards with **Open / Rename… / Duplicate / Delete…**.
 
 ### Edit vs. view
 
-Toggle the **pencil / eye** button in the toolbar:
+Switch between **View** and **Edit** in the header:
 
 - **Edit** mode shows drag handles — drag panels to reorder, drag the edges or
   corner to resize within the 12-column grid.
@@ -68,8 +68,8 @@ Click **+ Add Panel**. The picker has up to three tabs:
 | **Query** | A new panel from a name + a query you type. |
 | **Metric** | A panel from a driver metric (only shown when the connection's driver exposes a metric catalog). |
 
-Each panel's kebab menu (Edit mode) offers **Configure / Edit title / Remove
-panel**. The **Configure** popover lets you change the chart type (Line, Bar,
+Each panel's settings button (Edit mode) offers **Configure / Edit title /
+Remove panel**. The **Configure** popover lets you change the chart type (Line, Bar,
 Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**.
 
 Dashboards can also contain **Divider** strips — markdown headers that visually
@@ -81,11 +81,11 @@ group panels and collapse the panels beneath them when clicked.
 
 ### Time range and refresh
 
-The toolbar has:
+The header has:
 
-- A **time-range** dropdown: Last 15 min, Last 1 hour, Last 6 hours, Last 24
-  hours, Last 7 days, or **Custom** (which reveals date and hour/minute pickers).
-  The range applies to every chart panel at once.
+- The **time-range** presets: 15m, 1h, 6h, 24h, 7d, or **Custom** (which reveals
+  a row of date and hour/minute pickers). The range applies to every chart panel
+  at once.
 - A **refresh** split-button: click to refresh all panels now; the dropdown sets
   an auto-refresh interval (or Off / refresh-on-open).
 
@@ -155,9 +155,17 @@ There's one audit tab; reopening focuses the existing one.
 
 ### What you see
 
-Each row shows a timestamp, a **severity** chip (ERROR/WARN/INFO), a **category**
-chip, and a summary. Expand a row to see **Category, Outcome, Actor, Action,
-Duration, and Summary**.
+A timeline above the list draws one bar per slice of the time range, with the
+errors stacked on top of the other events. Drag across the bars to zoom the time
+range to them; the custom range pickers then show the zoomed window.
+
+Each row shows the time, a **level** badge (ERROR/WARN/INFO), the **category**,
+the summary, the actor, the duration, and the **outcome**. Expand a row to see
+its details (time, action, actor, connection, source, correlation id, and the
+tool, classification and decision of an agent call), its error, and its
+structured details. The expanded row offers **Filter by correlation**, **Copy
+row as JSON**, and, for an agent call parked for approval, **Open approval**,
+which opens the MCP approvals view.
 
 Categories at a glance:
 
@@ -174,10 +182,13 @@ Categories at a glance:
 
 ### Filter
 
-The toolbar offers free-text **search**, a **time range** (same presets as
+The toolbar offers free-text **search**, the **time range** presets (the same as
 dashboards, plus Custom), a **timestamp mode** (Local / UTC), and multi-select
 filters for **Level** (Error/Warn/Info), **Category**, and **Outcome**
-(Success/Failure/Cancelled). **Clear** resets them.
+(Success/Failure/Cancelled). **Clear** resets them, and **Table / Chart**
+switches between the event list and a chart of the events grouped by category,
+outcome, or level. From the keyboard, activating the time presets moves to the
+next one.
 
 A row's context menu adds **Copy Row as CSV**, **Copy Summary**, and — when the
 event has a correlation id — **Filter by Correlation**.

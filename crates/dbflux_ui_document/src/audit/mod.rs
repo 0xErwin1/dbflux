@@ -8,7 +8,7 @@ mod render;
 mod source_adapter;
 pub mod view;
 
-pub use chart_view::{AuditChartState, AuditViewMode};
+pub use chart_view::{AuditChartState, AuditTimeline, AuditViewMode, TimelineBucket};
 pub use filters::{AuditFilters, TimeRange, TimestampDisplayMode};
 pub use source_adapter::AuditSourceAdapter;
 pub use view::LogStreamView;
@@ -183,6 +183,10 @@ pub struct AuditDocument {
     pub chart: AuditChartState,
     /// Group-by selector shown in the toolbar when in Chart mode.
     dropdown_chart_group_by: Entity<Dropdown>,
+    /// Event and error counts behind the timeline strip.
+    timeline: AuditTimeline,
+    /// Bar indices spanned by a drag over the timeline (anchor, current).
+    timeline_drag: Option<(usize, usize)>,
 
     // ── Keyboard navigation state ─────────────────────────────────────────
     focus_handle: FocusHandle,
@@ -295,13 +299,15 @@ impl AuditDocument {
                 .placeholder(dbflux_i18n::t!("document.audit.filter.placeholder.local"))
                 .items(Self::timestamp_mode_items())
                 .selected_index(Some(0))
-                .toolbar_style(true)
+                .leading_icon(AppIcon::Globe)
         });
 
         let multi_select_level = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::level_items();
             let mut ms = MultiSelect::new("audit-level")
-                .placeholder(dbflux_i18n::t!("document.audit.detail.level"));
+                .placeholder(dbflux_i18n::t!("document.audit.detail.level"))
+                .summary(dbflux_i18n::t!("document.audit.detail.level"))
+                .leading_icon(AppIcon::ListFilter);
             ms.set_items(items, cx);
             ms
         });
@@ -309,7 +315,8 @@ impl AuditDocument {
         let multi_select_category = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::category_items();
             let mut ms = MultiSelect::new("audit-category")
-                .placeholder(dbflux_i18n::t!("document.audit.detail.category"));
+                .placeholder(dbflux_i18n::t!("document.audit.detail.category"))
+                .summary(dbflux_i18n::t!("document.audit.detail.category"));
             ms.set_items(items, cx);
             ms
         });
@@ -317,7 +324,8 @@ impl AuditDocument {
         let multi_select_outcome = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::outcome_items();
             let mut ms = MultiSelect::new("audit-outcome")
-                .placeholder(dbflux_i18n::t!("document.audit.detail.outcome"));
+                .placeholder(dbflux_i18n::t!("document.audit.detail.outcome"))
+                .summary(dbflux_i18n::t!("document.audit.detail.outcome"));
             ms.set_items(items, cx);
             ms
         });
@@ -360,23 +368,6 @@ impl AuditDocument {
                 if matches!(this.view_mode, AuditViewMode::Chart) {
                     this.trigger_chart_aggregate(cx);
                 }
-            },
-        );
-
-        // The panel emits `TimeRangeChanged` only when the effective window
-        // changes, which never happens for the "Custom…" selection (it waits
-        // for Apply). Subscribe directly to the preset dropdown so the toolbar
-        // reveals the custom date/time inputs as soon as Custom is picked.
-        let preset_selection_sub = cx.subscribe(
-            &dropdown_time_range,
-            |this, _, event: &DropdownSelectionChanged, cx| {
-                let Some(range) = TimeRangePanel::time_range_for_index(event.index) else {
-                    return;
-                };
-
-                this.selected_time_range = Some(range);
-                this.refresh_filter_bar_items();
-                cx.notify();
             },
         );
 
@@ -492,7 +483,7 @@ impl AuditDocument {
             Dropdown::new("audit-auto-refresh")
                 .items(items)
                 .selected_index(Some(RefreshPolicy::Manual.index()))
-                .chevron_trigger(ButtonVariant::Secondary)
+                .chevron_trigger(ButtonVariant::Primary)
         });
 
         let refresh_dropdown_sub = cx.subscribe(
@@ -508,7 +499,6 @@ impl AuditDocument {
             &source,
             selected_time_range,
             &search_input,
-            &dropdown_time_range,
             &dropdown_timestamp_mode,
             &custom_date_range_picker,
             &custom_start_hour_dropdown,
@@ -593,7 +583,6 @@ impl AuditDocument {
             _subscriptions: vec![
                 search_sub,
                 time_range_sub,
-                preset_selection_sub,
                 timestamp_mode_sub,
                 level_sub,
                 category_sub,
@@ -605,6 +594,8 @@ impl AuditDocument {
             view_mode: AuditViewMode::Table,
             chart: AuditChartState::new(cx),
             dropdown_chart_group_by,
+            timeline: AuditTimeline::default(),
+            timeline_drag: None,
             focus_handle,
             selected_row: None,
             context_menu: None,
@@ -640,7 +631,6 @@ impl AuditDocument {
         source: &AuditDocumentSource,
         selected_time_range: Option<TimeRange>,
         search_input: &Entity<InputState>,
-        dropdown_time_range: &Entity<Dropdown>,
         dropdown_timestamp_mode: &Entity<Dropdown>,
         custom_date_range_picker: &Entity<DatePickerState>,
         custom_start_hour_dropdown: &Entity<Dropdown>,
@@ -654,10 +644,7 @@ impl AuditDocument {
                 dbflux_i18n::t!("document.audit.filter.bar.search"),
                 search_input.clone(),
             ),
-            FilterBarItem::dropdown(
-                dbflux_i18n::t!("document.audit.filter.bar.time"),
-                dropdown_time_range.clone(),
-            ),
+            FilterBarItem::button(dbflux_i18n::t!("document.audit.filter.bar.time")),
             FilterBarItem::dropdown(
                 dbflux_i18n::t!("document.audit.filter.bar.timezone"),
                 dropdown_timestamp_mode.clone(),
@@ -718,7 +705,6 @@ impl AuditDocument {
             &self.source,
             self.selected_time_range,
             &self.search_input,
-            &self.dropdown_time_range,
             &self.dropdown_timestamp_mode,
             &self.custom_date_range_picker,
             &self.custom_start_hour_dropdown,
@@ -1074,6 +1060,8 @@ impl AuditDocument {
         self.status_message = Some(self.source_loading_label());
         cx.notify();
 
+        self.trigger_timeline(cx);
+
         let page_filter = self.active_filter(
             Some(self.pagination_limit()),
             Some(self.pagination_offset()),
@@ -1278,6 +1266,135 @@ impl AuditDocument {
         }
     }
 
+    /// Selects the time preset at `index` of the `TimeRangePanel` list. A
+    /// relative preset reloads through the panel's `TimeRangeChanged`;
+    /// Custom reveals the date and time pickers and waits for Apply.
+    fn select_time_preset(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(range) = Self::time_range_for_index(index) else {
+            return;
+        };
+
+        self.selected_time_range = Some(range);
+        self.refresh_filter_bar_items();
+        self.time_range_panel
+            .update(cx, |panel, cx| panel.select_preset(index, cx));
+        cx.notify();
+    }
+
+    /// Moves the time preset one step along the list, wrapping after Custom:
+    /// the keyboard activation of the time presets in the toolbar.
+    fn cycle_time_preset(&mut self, cx: &mut Context<Self>) {
+        let next = match self.selected_time_range {
+            Some(range) => (crate::chrome::time_preset_index(range) + 1) % 6,
+            None => 0,
+        };
+
+        self.select_time_preset(next, cx);
+    }
+
+    /// Zooms into the timeline bars `first..=last`: their window becomes a
+    /// custom time range, shown in the custom pickers, and the list reloads.
+    fn zoom_to_timeline_bars(
+        &mut self,
+        first: usize,
+        last: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (first, last) = (first.min(last), first.max(last));
+
+        let (Some(first_bucket), Some(last_bucket)) = (
+            self.timeline.buckets.get(first),
+            self.timeline.buckets.get(last),
+        ) else {
+            return;
+        };
+
+        let start_ms = first_bucket.start_ms;
+        let end_ms = last_bucket.start_ms + self.timeline.bucket_ms;
+        let Some((start_date, start_hour, start_minute)) =
+            Self::date_hour_minute(start_ms, self.timestamp_mode)
+        else {
+            return;
+        };
+        let Some((end_date, end_hour, end_minute)) =
+            Self::date_hour_minute(end_ms, self.timestamp_mode)
+        else {
+            return;
+        };
+
+        self.suppress_load = true;
+        self.selected_time_range = Some(TimeRange::Custom);
+        self.time_range_panel.update(cx, |panel, _cx| {
+            panel.selected_time_range = Some(TimeRange::Custom);
+        });
+        self.dropdown_time_range.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(
+                Some(crate::chrome::time_preset_index(TimeRange::Custom)),
+                cx,
+            )
+        });
+        self.custom_date_range_picker.update(cx, |picker, cx| {
+            picker.set_date(Date::Range(Some(start_date), Some(end_date)), window, cx);
+        });
+        for (dropdown, value) in [
+            (&self.custom_start_hour_dropdown, start_hour),
+            (&self.custom_start_minute_dropdown, start_minute),
+            (&self.custom_end_hour_dropdown, end_hour),
+            (&self.custom_end_minute_dropdown, end_minute),
+        ] {
+            dropdown.update(cx, |dropdown, cx| {
+                dropdown.set_selected_index(Some(value as usize), cx)
+            });
+        }
+        self.suppress_load = false;
+        self.refresh_filter_bar_items();
+
+        self.filters.start_ms = Some(start_ms);
+        self.filters.end_ms = Some(end_ms);
+        self.reset_pagination();
+        self.load_events(cx);
+
+        if matches!(self.view_mode, AuditViewMode::Chart) {
+            self.trigger_chart_aggregate(cx);
+        }
+    }
+
+    /// Calendar date, hour and minute of `ms` in the display timezone.
+    fn date_hour_minute(
+        ms: i64,
+        mode: TimestampDisplayMode,
+    ) -> Option<(chrono::NaiveDate, u32, u32)> {
+        use chrono::Timelike;
+
+        let utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)?;
+        let naive = match mode {
+            TimestampDisplayMode::Local => utc.with_timezone(&chrono::Local).naive_local(),
+            TimestampDisplayMode::Utc => utc.naive_utc(),
+        };
+
+        Some((naive.date(), naive.hour(), naive.minute()))
+    }
+
+    /// Whether an event is an agent call parked for approval, which the
+    /// detail offers to open in the approvals view.
+    fn is_pending_approval(event: &AuditEventDto) -> bool {
+        let pending = event
+            .outcome
+            .as_deref()
+            .and_then(EventOutcome::from_str_repr)
+            == Some(EventOutcome::Pending);
+        let governed = matches!(
+            event
+                .category
+                .as_deref()
+                .and_then(EventCategory::from_str_repr),
+            Some(EventCategory::Mcp | EventCategory::Governance)
+        );
+
+        pending && governed
+    }
+
     pub fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.filters = Self::default_filters_for_source(&self.source);
         self.reset_pagination();
@@ -1396,11 +1513,16 @@ impl AuditDocument {
     }
 
     fn level_items() -> Vec<DropdownItem> {
-        vec![
-            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.error"), "error"),
-            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.warn"), "warn"),
-            DropdownItem::with_value(dbflux_i18n::t!("document.audit.level.info"), "info"),
+        [
+            EventSeverity::Error,
+            EventSeverity::Warn,
+            EventSeverity::Info,
         ]
+        .into_iter()
+        .map(|level| {
+            DropdownItem::with_value(crate::labels::audit_level_label(level), level.as_str())
+        })
+        .collect()
     }
 
     #[allow(dead_code)]
@@ -1767,7 +1889,7 @@ impl Render for AuditDocument {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .bg(theme.background)
+            .bg(theme.popover)
             // Capture panel origin for context-menu coordinate conversion,
             // identical to DataGridPanel.
             .child({
@@ -1790,7 +1912,15 @@ impl Render for AuditDocument {
             // DataGridPanel and CodeDocument. Adding a second on_key_down would
             // cause both to fire with different context IDs, breaking navigation.
             .track_focus(&focus_handle)
+            .child(self.render_header(cx))
             .child(self.render_toolbar(window, cx))
+            .when(self.selected_time_range == Some(TimeRange::Custom), |d| {
+                d.child(self.render_custom_range_row(cx))
+            })
+            .when(
+                self.view_mode == AuditViewMode::Table && self.is_internal(),
+                |d| d.child(self.render_timeline(cx)),
+            )
             .child(content_area)
             .when(self.view_mode == AuditViewMode::Table, |d| {
                 d.child(self.render_status_bar(cx))
@@ -2052,15 +2182,15 @@ mod tests {
     #[test]
     fn row_chips_translate_known_values_and_keep_fallbacks() {
         assert_eq!(
-            AuditDocument::short_category_label(Some("object_storage")),
-            crate::labels::audit_category_chip_label(EventCategory::ObjectStorage)
+            AuditDocument::category_label(Some("object_storage")),
+            crate::labels::audit_category_label(EventCategory::ObjectStorage)
         );
         assert_eq!(
-            AuditDocument::short_category_label(Some("connection")),
-            dbflux_i18n::t!("document.audit.category_chip.connection")
+            AuditDocument::category_label(Some("connection")),
+            dbflux_i18n::t!("document.audit.category.connection")
         );
-        assert_eq!(AuditDocument::short_category_label(Some("unknown")), "NULL");
-        assert_eq!(AuditDocument::short_category_label(None), "NULL");
+        assert_eq!(AuditDocument::category_label(Some("unknown")), "NULL");
+        assert_eq!(AuditDocument::category_label(None), "NULL");
 
         assert_eq!(
             AuditDocument::short_level_label("warn"),

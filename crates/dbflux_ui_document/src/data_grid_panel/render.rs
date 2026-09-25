@@ -785,6 +785,9 @@ impl DataGridPanel {
 /// Width of the footer's export menu.
 const EXPORT_MENU_WIDTH: Pixels = px(220.0);
 
+/// Height of the chart above the grid in the Both view (P2Series). (330 px)
+const BOTH_CHART_HEIGHT: Pixels = px(330.0);
+
 /// The Builder button beside the filter field (AppByzTable: secondary,
 /// icon and label).
 fn builder_button(
@@ -1467,24 +1470,20 @@ impl DataGridPanel {
         let shell_for_stats = chart_shell.clone();
         let shell_for_kind = chart_shell.clone();
 
-        let dropdown_time_range = self
-            .chart
-            .chart_source_time_range_panel
-            .as_ref()
-            .map(|p| p.read(cx).dropdown_time_range.clone());
-
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
             refresh_policy: self.refresh.refresh_policy,
             refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
-            dropdown_time_range,
+            time_range_panel: self.chart.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
             resolved_window,
             // Saving a chart stores its query; a table browse has none, so
             // `open_collection_chart_save` does nothing for it.
             source_supports_save: !matches!(self.source, DataSource::Table { .. }),
             refresh_variant: ButtonVariant::Primary,
+            leading: None,
+            show_window: true,
         };
 
         let weak_panel_for_save = cx.weak_entity();
@@ -1687,6 +1686,102 @@ impl DataGridPanel {
             .into_any_element()
     }
 
+    /// The chart view of a result: the chart toolbar and axis row, the
+    /// canvas with its legend and rail, the point inspector dock and the
+    /// save prompt. Shared by the Chart view and the chart half of Both.
+    fn render_chart_body(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        // Build chart_view on first render before checking whether it exists.
+        self.ensure_chart_view(cx);
+
+        let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
+            .chart
+            .chart_shell
+            .as_ref()
+            .map_or((false, false, None, None), |s| {
+                let shell = s.read(cx);
+                let point = shell.hovered_data_point(cx);
+                (
+                    shell.chart_view().is_some(),
+                    shell.chart_rail_open,
+                    shell.chart_view().cloned(),
+                    point,
+                )
+            });
+
+        let hovered_source =
+            hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
+
+        // The chart occupies 100% of the area regardless of whether the rail
+        // is open. The rail floats as an absolute-positioned overlay on the
+        // right edge so opening it does not resize the canvas.
+        let chart_area = if let Some(chart_entity) = chart_view_entity {
+            div().size_full().child(chart_entity).into_any_element()
+        } else {
+            div()
+                .size_full()
+                .child(self.render_chart_degraded(cx))
+                .into_any_element()
+        };
+
+        let chart_row = div()
+            .flex_grow(1.0)
+            .size_full()
+            .pt(Spacing::MD)
+            .pb(Spacing::SM)
+            .pl(Spacing::SM)
+            .pr(Spacing::MD)
+            .child(chart_area);
+
+        let body = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_grow(1.0)
+            .min_h_0()
+            .child(chart_row)
+            .when(has_chart_view, |d| {
+                d.child(self.render_chart_legend_row(theme, cx))
+            })
+            .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
+
+        // PointInspector right dock — only visible when the host has a back-link
+        // to the source row (DataDocument with track_source_indices=true).
+        // CodeDocument-backed charts always get None here and the dock stays hidden.
+        let inspector_dock = hovered_source.map(|source| self.render_point_inspector(source, cx));
+
+        let chart_with_inspector = div()
+            .flex()
+            .flex_row()
+            .size_full()
+            .min_h_0()
+            .child(body)
+            .when_some(inspector_dock, |row, dock| row.child(dock));
+
+        // Name-prompt overlay for "Save chart" on Collection sources.
+        // Build the overlay outside of a closure to avoid borrow conflicts.
+        let save_overlay: Option<AnyElement> = if self.pending_collection_chart_save.is_some() {
+            Some(
+                self.render_collection_chart_save_overlay(theme, cx)
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(self.render_chart_toolbar(theme, cx))
+            .child(chart_with_inspector)
+            .when_some(save_overlay, |el, overlay| el.child(overlay))
+    }
+
     // -- Result View Renderers --
 
     pub(super) fn render_result_view(
@@ -1703,96 +1798,32 @@ impl DataGridPanel {
                     container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                // Build chart_view on first render before checking whether it exists.
-                let _ = self.ensure_chart_view(cx);
+                container = container.child(self.render_chart_body(theme, cx));
+            }
+            ResultViewMode::Both => {
+                let chart = self.render_chart_body(theme, cx);
 
-                let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
-                    .chart
-                    .chart_shell
-                    .as_ref()
-                    .map_or((false, false, None, None), |s| {
-                        let shell = s.read(cx);
-                        let point = shell.hovered_data_point(cx);
-                        (
-                            shell.chart_view().is_some(),
-                            shell.chart_rail_open,
-                            shell.chart_view().cloned(),
-                            point,
-                        )
-                    });
-
-                let hovered_source =
-                    hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
-
-                // The chart occupies 100% of the area regardless of whether the rail
-                // is open. The rail floats as an absolute-positioned overlay on the
-                // right edge so opening it does not resize the canvas.
-                let chart_area = if let Some(chart_entity) = chart_view_entity {
-                    div().size_full().child(chart_entity).into_any_element()
-                } else {
+                container = container.child(
                     div()
+                        .flex()
+                        .flex_col()
                         .size_full()
-                        .child(self.render_chart_degraded(cx))
-                        .into_any_element()
-                };
-
-                let chart_row = div()
-                    .flex_grow(1.0)
-                    .size_full()
-                    .pt(Spacing::MD)
-                    .pb(Spacing::SM)
-                    .pl(Spacing::SM)
-                    .pr(Spacing::MD)
-                    .child(chart_area);
-
-                let body = div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_grow(1.0)
-                    .min_h_0()
-                    .child(chart_row)
-                    .when(has_chart_view, |d| {
-                        d.child(self.render_chart_legend_row(theme, cx))
-                    })
-                    .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
-
-                // PointInspector right dock — only visible when the host has a back-link
-                // to the source row (DataDocument with track_source_indices=true).
-                // CodeDocument-backed charts always get None here and the dock stays hidden.
-                let inspector_dock =
-                    hovered_source.map(|source| self.render_point_inspector(source, cx));
-
-                let chart_with_inspector = div()
-                    .flex()
-                    .flex_row()
-                    .size_full()
-                    .min_h_0()
-                    .child(body)
-                    .when_some(inspector_dock, |row, dock| row.child(dock));
-
-                // Name-prompt overlay for "Save chart" on Collection sources.
-                // Build the overlay outside of a closure to avoid borrow conflicts.
-                let save_overlay: Option<AnyElement> =
-                    if self.pending_collection_chart_save.is_some() {
-                        Some(
-                            self.render_collection_chart_save_overlay(theme, cx)
-                                .into_any_element(),
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .h(BOTH_CHART_HEIGHT)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .child(chart),
                         )
-                    } else {
-                        None
-                    };
-
-                let col = div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .child(self.render_chart_toolbar(theme, cx))
-                    .child(chart_with_inspector)
-                    .when_some(save_overlay, |el, overlay| el.child(overlay));
-
-                container = container.child(col);
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt)),
+                        ),
+                );
             }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
@@ -3214,8 +3245,9 @@ impl DataGridPanel {
         let muted = theme.muted_foreground;
         let panel = cx.entity().downgrade();
 
-        let view_switch = (available_modes.len() > 1
-            && (footer_hosts_switch || current_result_mode != ResultViewMode::Chart))
+        let view_switch =
+            (available_modes.len() > 1
+                && (footer_hosts_switch || !current_result_mode.shows_chart()))
             .then(|| {
                 let items: Vec<SegmentedItem> = available_modes
                     .iter()
@@ -3420,6 +3452,7 @@ impl DataGridPanel {
         match mode {
             ResultViewMode::Table => AppIcon::Table,
             ResultViewMode::Chart => AppIcon::ChartSpline,
+            ResultViewMode::Both => AppIcon::Columns,
             ResultViewMode::Json => AppIcon::Braces,
             ResultViewMode::Text => AppIcon::ScrollText,
             ResultViewMode::Raw => AppIcon::Code,

@@ -7,27 +7,26 @@
 
 use super::data::{BucketDetailsState, BucketRow, BucketSizeEstimateState};
 use super::{BucketsFocusMode, BucketsTableDocument};
+use crate::chrome::{
+    connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
+};
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::composites::ListRow;
-use dbflux_components::controls::{Button, Input};
+use dbflux_components::composites::{
+    Breadcrumb, BreadcrumbSegment, EmptyState, EmptyStateAction, ListRow,
+};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
-use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
+use dbflux_components::tokens::{ChromeColors, DocumentMetrics, ObjectStoreMetrics, Spacing};
+use dbflux_components::typography::AppFonts;
+use dbflux_core::VersioningStatus;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
-
-/// Column widths. `Name` takes the remaining space; the rest are fixed so the
-/// numeric columns stay right-aligned against a stable edge.
-const REGION_WIDTH: Pixels = px(120.0);
-const OBJECTS_WIDTH: Pixels = px(96.0);
-const SIZE_WIDTH: Pixels = px(112.0);
-const VERSIONING_WIDTH: Pixels = px(96.0);
-const CREATED_WIDTH: Pixels = px(160.0);
 
 /// Placeholder for a value that has not been fetched (and never is fetched
 /// automatically — see DEC-14).
@@ -59,17 +58,6 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 pub(super) fn refresh_shortcut() -> Option<String> {
     dbflux_ui_base::default_keymap()
         .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
-}
-
-/// Empty-state hint for refreshing the bucket list, or `None` when no key
-/// refreshes it (see [`refresh_shortcut`]).
-pub(super) fn refresh_hint() -> Option<String> {
-    refresh_shortcut().map(|key| {
-        dbflux_i18n::t!(
-            "document.buckets_table.empty.hint_refresh",
-            key = key.as_str()
-        )
-    })
 }
 
 /// Footer summary line: how many buckets are listed and how many distinct
@@ -134,174 +122,183 @@ fn created_label(row: &BucketRow) -> String {
         .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
+/// Status diamond and label of a bucket's versioning, or `None` until its
+/// details load.
+fn versioning_status(row: &BucketRow) -> Option<(Status, String)> {
+    let BucketDetailsState::Loaded(details) = &row.details else {
+        return None;
+    };
+
+    let status = match details.versioning {
+        VersioningStatus::Enabled => Status::Connected,
+        VersioningStatus::Suspended => Status::Warning,
+        VersioningStatus::Disabled => Status::Idle,
+    };
+
+    let label = crate::labels::versioning_status_label(details.versioning)
+        .unwrap_or_else(crate::labels::versioning_off_label);
+
+    Some((status, label))
+}
+
+/// Creation date of a bucket as the table shows it.
+fn created_date_label(row: &BucketRow) -> String {
+    row.info
+        .created_at
+        .map(|created| created.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| UNKNOWN.to_string())
+}
+
+/// Keystroke bound to `command` in the table, from the live keymap.
+fn table_shortcut(command: Command) -> Option<String> {
+    dbflux_ui_base::default_keymap().shortcut_for_command(ContextId::Results, command)
+}
+
 impl BucketsTableDocument {
+    /// Header row: the connection and "Buckets" breadcrumb, the bucket
+    /// search, New bucket and the primary Refresh.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let is_loading = self.state == DocumentState::Loading;
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .max_w(px(360.0))
-                    .child(Icon::new(AppIcon::Search).small().muted())
-                    .child(
-                        div()
-                            .flex_1()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus_mode = BucketsFocusMode::Search;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                Input::new(&self.search_input)
-                                    .small()
-                                    .cleanable(true)
-                                    .w_full(),
-                            ),
-                    ),
+        let mut segments: Vec<BreadcrumbSegment> =
+            connection_segment(&self.app_state, self.profile_id, cx)
+                .into_iter()
+                .collect();
+        segments.push(BreadcrumbSegment::new(dbflux_i18n::t!(
+            "document.buckets_table.breadcrumb"
+        )));
+
+        let search = div()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus_mode = BucketsFocusMode::Search;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
             )
+            .child(search_field(
+                &self.search_input,
+                Some(ObjectStoreMetrics::SEARCH_WIDTH),
+                self.focus_mode == BucketsFocusMode::Search,
+                cx,
+            ));
+
+        let mut refresh = Button::new(
+            "buckets-refresh",
+            dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
+        )
+        .small()
+        .primary()
+        .icon(if is_loading {
+            AppIcon::Loader
+        } else {
+            AppIcon::RefreshCcw
+        })
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.load_buckets(cx);
+        }));
+
+        if let Some(key) = refresh_shortcut() {
+            refresh = refresh.kbd(key);
+        }
+
+        document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
+            .child(Breadcrumb::new(segments))
+            .child(div().flex_1())
+            .child(search)
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div()
-                            .id("buckets-refresh")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.load_buckets(cx);
-                            }))
-                            .child(
-                                Icon::new(if is_loading {
-                                    AppIcon::Loader
-                                } else {
-                                    AppIcon::RefreshCcw
-                                })
-                                .small()
-                                .muted(),
-                            )
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.buckets_table.toolbar.refresh"
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .id("buckets-new")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .bg(theme.primary)
-                            .hover(|d| d.opacity(0.9))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_new_bucket(cx);
-                            }))
-                            .child(
-                                Icon::new(AppIcon::Plus)
-                                    .size(Heights::ICON_SM)
-                                    .color(theme.primary_foreground),
-                            )
-                            .child(
-                                Text::caption(dbflux_i18n::t!(
-                                    "document.buckets_table.toolbar.new_bucket"
-                                ))
-                                .color(theme.primary_foreground),
-                            ),
-                    ),
+                Button::new(
+                    "buckets-new",
+                    dbflux_i18n::t!("document.buckets_table.toolbar.new_bucket"),
+                )
+                .small()
+                .icon(AppIcon::Plus)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.request_new_bucket(cx);
+                })),
             )
+            .child(refresh)
     }
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let column = |width: Option<Pixels>, key: &str| {
+            let label = dbflux_i18n::t!(key);
+            match width {
+                Some(width) => div().w(width).flex_shrink_0().child(label),
+                None => div().flex_1().min_w_0().child(label),
+            }
+        };
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
+            .h(DocumentMetrics::TABLE_ROW_HEIGHT)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(div().flex_1().child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.name"
-            ))))
-            .child(div().w(REGION_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.region"
-            ))))
-            .child(
-                div()
-                    .w(OBJECTS_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.objects"
-                    ))),
-            )
-            .child(
-                div()
-                    .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.size"
-                    ))),
-            )
-            .child(
-                div()
-                    .w(VERSIONING_WIDTH)
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.versioning"
-                    ))),
-            )
-            .child(div().w(CREATED_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.created"
-            ))))
+            .border_color(theme.input)
+            .bg(theme.background)
+            .text_size(DocumentMetrics::TABLE_HEADER_FONT)
+            .text_color(theme.muted_foreground)
+            .child(column(None, "document.buckets_table.columns.name"))
+            .child(column(
+                Some(ObjectStoreMetrics::REGION_WIDTH),
+                "document.buckets_table.columns.region",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::OBJECTS_WIDTH),
+                "document.buckets_table.columns.objects",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::SIZE_WIDTH),
+                "document.buckets_table.columns.size",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::VERSIONING_WIDTH),
+                "document.buckets_table.columns.versioning",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::CREATED_WIDTH),
+                "document.buckets_table.columns.created",
+            ))
     }
 
     fn render_row(&self, row: &BucketRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let muted = theme.muted_foreground;
         let name = row.info.name.clone();
         let row_id = SharedString::from(format!("bucket-row-{name}"));
         let select_name = name.clone();
+        let bucket_color = theme.warning;
+
+        let mono_cell = |width: Pixels, value: String, color: Hsla| {
+            div()
+                .w(width)
+                .flex_shrink_0()
+                .pr(DocumentMetrics::GAP)
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_size(DocumentMetrics::TABLE_META_FONT)
+                .text_color(color)
+                .child(value)
+        };
 
         ListRow::new(row_id)
             .selected(selected)
+            .selection_bar(true)
             .build(cx)
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW)
-            .px(Spacing::SM)
+            .h(ObjectStoreMetrics::BUCKET_ROW_HEIGHT)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(theme.table_row_border)
+            .text_size(ObjectStoreMetrics::NAME_FONT)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -313,49 +310,57 @@ impl BucketsTableDocument {
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .items_center()
-                    .gap(Spacing::SM)
+                    .gap(ObjectStoreMetrics::NAME_GAP)
                     .overflow_hidden()
-                    .child(Icon::new(AppIcon::Box).small().muted())
+                    .child(
+                        Icon::new(AppIcon::Box)
+                            .size(ObjectStoreMetrics::NAME_ICON)
+                            .color(bucket_color),
+                    )
                     .child(
                         div()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(Text::code(name)),
+                            .truncate()
+                            .font_family(AppFonts::MONO)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(name),
                     ),
             )
+            .child(mono_cell(
+                ObjectStoreMetrics::REGION_WIDTH,
+                region_label(row),
+                muted,
+            ))
+            .child(mono_cell(
+                ObjectStoreMetrics::OBJECTS_WIDTH,
+                object_count_label(row),
+                ChromeColors::strong(theme),
+            ))
+            .child(mono_cell(
+                ObjectStoreMetrics::SIZE_WIDTH,
+                size_label(row),
+                theme.foreground,
+            ))
             .child(
                 div()
-                    .w(REGION_WIDTH)
-                    .child(Text::code(region_label(row)).muted_foreground()),
-            )
-            .child(
-                div()
-                    .w(OBJECTS_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::code(object_count_label(row))),
-            )
-            .child(
-                div()
-                    .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::code(size_label(row))),
-            )
-            .child(
-                div()
-                    .w(VERSIONING_WIDTH)
-                    .child(match versioning_label(row) {
-                        Some(label) => Text::code(label).success(),
-                        None => Text::code(UNKNOWN).muted_foreground(),
+                    .w(ObjectStoreMetrics::VERSIONING_WIDTH)
+                    .flex_shrink_0()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .child(match versioning_status(row) {
+                        Some((status, label)) => {
+                            StatusIndicator::new(status).label(label).into_any_element()
+                        }
+                        None => div().text_color(muted).child(UNKNOWN).into_any_element(),
                     }),
             )
             .child(
                 div()
-                    .w(CREATED_WIDTH)
-                    .child(Text::code(created_label(row)).muted_foreground()),
+                    .w(ObjectStoreMetrics::CREATED_WIDTH)
+                    .flex_shrink_0()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(created_date_label(row)),
             )
             .into_any_element()
     }
@@ -373,111 +378,132 @@ impl BucketsTableDocument {
             div()
                 .flex()
                 .flex_col()
-                .gap(Spacing::XXS)
-                .child(Text::caption(label))
-                .child(Text::code(value))
+                .flex_shrink_0()
+                .gap(DocumentMetrics::DETAIL_LABEL_GAP)
+                .child(
+                    div()
+                        .text_size(DocumentMetrics::DETAIL_LABEL_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .font_family(AppFonts::MONO)
+                        .text_size(ObjectStoreMetrics::DETAILS_VALUE_FONT)
+                        .text_color(ChromeColors::strong(theme))
+                        .child(value),
+                )
         };
+
+        let mut browse = Button::new(
+            "buckets-browse",
+            dbflux_i18n::t!("document.buckets_table.details.browse"),
+        )
+        .small()
+        .primary()
+        .icon(AppIcon::ChevronRight)
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.open_selected_bucket(cx);
+        }));
+
+        if let Some(key) = table_shortcut(Command::Execute) {
+            browse = browse.kbd(key);
+        }
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .gap(Spacing::LG)
-            .px(Spacing::SM)
-            .py(Spacing::SM)
+            .gap(ObjectStoreMetrics::DETAILS_GAP)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
+            .py(ObjectStoreMetrics::DETAILS_PADDING_Y)
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
+            .bg(theme.background)
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(Spacing::XL)
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.region"),
-                        region_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.versioning"),
-                        versioning,
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.created"),
-                        created_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.objects"),
-                        object_count_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.size"),
-                        size_label(row),
-                    )),
+                    .gap(DocumentMetrics::GAP)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(
+                        Icon::new(AppIcon::Box)
+                            .size(ObjectStoreMetrics::DETAILS_ICON)
+                            .color(theme.warning),
+                    )
+                    .child(row.info.name.clone()),
             )
+            .child(detail_pair(
+                dbflux_i18n::t!("document.buckets_table.columns.region"),
+                region_label(row),
+            ))
+            .child(detail_pair(
+                dbflux_i18n::t!("document.buckets_table.columns.versioning"),
+                versioning,
+            ))
+            .child(detail_pair(
+                dbflux_i18n::t!("document.buckets_table.columns.objects"),
+                object_count_label(row),
+            ))
+            .child(detail_pair(
+                dbflux_i18n::t!("document.buckets_table.columns.size"),
+                size_label(row),
+            ))
+            .child(detail_pair(
+                dbflux_i18n::t!("document.buckets_table.columns.created"),
+                created_label(row),
+            ))
+            .child(div().flex_1())
             .child(
-                div()
-                    .id("buckets-calculate-size")
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h(Heights::CONTROL)
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(theme.border)
-                    .when(!estimate_pending, |d| {
-                        d.cursor_pointer()
-                            .hover(|d| d.bg(theme.muted))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.estimate_selected_bucket_size(cx);
-                            }))
-                    })
-                    .when(estimate_pending, |d| d.opacity(0.6))
-                    .child(Icon::new(AppIcon::Sigma).small().muted())
-                    .child(Text::caption(if estimate_pending {
+                Button::new(
+                    "buckets-calculate-size",
+                    if estimate_pending {
                         dbflux_i18n::t!("document.buckets_table.details.calculating")
                     } else {
                         dbflux_i18n::t!("document.buckets_table.details.calculate_size")
-                    })),
+                    },
+                )
+                .small()
+                .icon(if estimate_pending {
+                    AppIcon::Loader
+                } else {
+                    AppIcon::Sigma
+                })
+                .disabled(estimate_pending)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.estimate_selected_bucket_size(cx);
+                })),
             )
+            .child(browse)
     }
 
     fn render_footer(&self, rows: &[&BucketRow], cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let hints = [
+            (Command::Execute, "document.buckets_table.footer.hint.open"),
+            (
+                Command::ExpandCollapse,
+                "document.buckets_table.footer.hint.properties",
+            ),
+            (
+                Command::ResultsAddRow,
+                "document.buckets_table.footer.hint.new",
+            ),
+            (Command::Delete, "document.buckets_table.footer.hint.delete"),
+        ]
+        .into_iter()
+        .filter_map(|(command, key)| {
+            table_shortcut(command).map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
+        });
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Icon::new(AppIcon::Box).small().muted())
-                    .child(Text::caption(summary_line(rows))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::MD)
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.open"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.properties"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.delete"
-                    ))),
-            )
+        document_footer(cx)
+            .h(ObjectStoreMetrics::FOOTER_HEIGHT)
+            .child(footer_item(AppIcon::Box, summary_line(rows), cx))
+            .child(div().flex_1())
+            .children(hints)
     }
 
     fn render_empty_state(&self) -> AnyElement {
@@ -499,30 +525,34 @@ impl BucketsTableDocument {
 
         let is_error = self.state == DocumentState::Error;
 
+        let mut empty = EmptyState::new(
+            if is_error {
+                AppIcon::TriangleAlert
+            } else {
+                AppIcon::Box
+            },
+            message,
+        );
+
+        if is_error {
+            empty = empty.danger();
+        }
+
+        if let Some(key) = refresh_shortcut() {
+            empty = empty.action(EmptyStateAction::new(
+                AppIcon::RefreshCcw,
+                dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
+                [key],
+            ));
+        }
+
         div()
             .flex_1()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(Spacing::SM)
-            .child(
-                Icon::new(if is_error {
-                    AppIcon::TriangleAlert
-                } else {
-                    AppIcon::Box
-                })
-                .size(Heights::ICON_LG)
-                .muted(),
-            )
-            .child(if is_error {
-                Text::body(message).danger()
-            } else {
-                Text::caption(message)
-            })
-            .when_some(refresh_hint(), |this, hint| {
-                this.child(Text::key_hint(hint))
-            })
+            .p(DocumentMetrics::PADDING_X)
+            .child(empty)
             .into_any_element()
     }
 
@@ -612,7 +642,7 @@ impl Render for BucketsTableDocument {
             .size_full()
             .flex()
             .flex_col()
-            .bg(cx.theme().background)
+            .bg(cx.theme().popover)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {

@@ -1,3 +1,7 @@
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
+use dbflux_components::tokens::{BuilderMetrics, Fields};
+use dbflux_components::typography::AppFonts;
 use gpui::{Context, IntoElement, div};
 
 use crate::labels::sort_direction_label;
@@ -24,56 +28,94 @@ pub fn render_sort(
     let sort_count = panel.sort_rows.len();
     let sort_rows = panel.sort_rows.clone();
 
-    let mut container = div().flex().flex_col().gap_1();
+    let mut container = div().flex().flex_col().gap(BuilderMetrics::ROW_GAP);
 
     for (i, row) in sort_rows.iter().enumerate() {
-        let dir_label = sort_direction_label(row.direction);
-
         let label = format!("{}.{}", row.source_alias, row.column);
         let can_move_up = i > 0;
         let can_move_down = i + 1 < sort_count;
 
+        let direction_id = |direction: VisualSortDirection| {
+            SharedString::from(format!("qb-sort-dir-{i}-{direction:?}"))
+        };
+        let current_direction = direction_id(row.direction);
+        let weak = cx.weak_entity();
+        let direction_switch = SegmentedControl::new(
+            [VisualSortDirection::Asc, VisualSortDirection::Desc]
+                .into_iter()
+                .map(|direction| {
+                    SegmentedItem::new(direction_id(direction), sort_direction_label(direction))
+                })
+                .collect(),
+            current_direction.clone(),
+            move |id, _, cx| {
+                if *id == current_direction {
+                    return;
+                }
+
+                if let Some(builder) = weak.upgrade() {
+                    builder.update(cx, |this, cx| this.toggle_sort_direction(i, cx));
+                }
+            },
+        );
+
         let row_div = div()
             .flex()
             .flex_row()
-            .gap_1()
+            .gap(BuilderMetrics::ROW_GAP)
             .items_center()
-            .child(div().flex_1().text_sm().child(SharedString::from(label)))
             .child(
-                Button::new(("qb-sort-dir", i), dir_label)
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_sort_direction(i, cx);
-                    })),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(AppFonts::MONO)
+                    .text_size(Fields::TEXT)
+                    .child(SharedString::from(label)),
+            )
+            .child(direction_switch)
+            .child(
+                Button::new(
+                    ("qb-sort-up", i),
+                    dbflux_i18n::t!("document.query_builder.sort.move_up"),
+                )
+                .ghost()
+                .small()
+                .icon(AppIcon::ChevronUp)
+                .icon_only()
+                .disabled(!can_move_up)
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    if i > 0 {
+                        this.reorder_sort(i, i - 1, cx);
+                    }
+                })),
             )
             .child(
-                Button::new(("qb-sort-up", i), "↑")
-                    .ghost()
-                    .small()
-                    .disabled(!can_move_up)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        if i > 0 {
-                            this.reorder_sort(i, i - 1, cx);
-                        }
-                    })),
+                Button::new(
+                    ("qb-sort-dn", i),
+                    dbflux_i18n::t!("document.query_builder.sort.move_down"),
+                )
+                .ghost()
+                .small()
+                .icon(AppIcon::ChevronDown)
+                .icon_only()
+                .disabled(!can_move_down)
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.reorder_sort(i, i + 1, cx);
+                })),
             )
             .child(
-                Button::new(("qb-sort-dn", i), "↓")
-                    .ghost()
-                    .small()
-                    .disabled(!can_move_down)
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.reorder_sort(i, i + 1, cx);
-                    })),
-            )
-            .child(
-                Button::new(("qb-rm-sort", i), "✕")
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.remove_sort(i, cx);
-                    })),
+                Button::new(
+                    ("qb-rm-sort", i),
+                    dbflux_i18n::t!("document.query_builder.filters.remove"),
+                )
+                .ghost()
+                .small()
+                .icon(AppIcon::CircleX)
+                .icon_only()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.remove_sort(i, cx);
+                })),
             );
 
         container = container.child(row_div);

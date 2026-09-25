@@ -52,6 +52,7 @@ pub(crate) fn result_view_mode_label(mode: crate::result_view::ResultViewMode) -
     match mode {
         ResultViewMode::Table => dbflux_i18n::t!("document.data.grid.views.table"),
         ResultViewMode::Chart => dbflux_i18n::t!("document.data.grid.views.chart"),
+        ResultViewMode::Both => dbflux_i18n::t!("document.data.grid.views.both"),
         ResultViewMode::Json => dbflux_i18n::t!("document.data.grid.views.json"),
         ResultViewMode::Text => dbflux_i18n::t!("document.data.grid.views.text"),
         ResultViewMode::Raw => dbflux_i18n::t!("document.data.grid.views.raw"),
@@ -1069,29 +1070,6 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
         EventCategory::Governance => dbflux_i18n::t!("document.audit.category.governance"),
         EventCategory::ObjectStorage => {
             dbflux_i18n::t!("document.audit.category.object_storage")
-        }
-    }
-}
-
-/// Short uppercase chip shown for a [`dbflux_core::EventCategory`] in an
-/// audit row.
-///
-/// Exhaustive by construction, like [`audit_category_label`], so a new
-/// category cannot fall through to a placeholder chip.
-pub(crate) fn audit_category_chip_label(category: dbflux_core::EventCategory) -> String {
-    use dbflux_core::EventCategory;
-
-    match category {
-        EventCategory::Config => dbflux_i18n::t!("document.audit.category_chip.config"),
-        EventCategory::Connection => dbflux_i18n::t!("document.audit.category_chip.connection"),
-        EventCategory::Query => dbflux_i18n::t!("document.audit.category_chip.query"),
-        EventCategory::Hook => dbflux_i18n::t!("document.audit.category_chip.hook"),
-        EventCategory::Script => dbflux_i18n::t!("document.audit.category_chip.script"),
-        EventCategory::System => dbflux_i18n::t!("document.audit.category_chip.system"),
-        EventCategory::Mcp => dbflux_i18n::t!("document.audit.category_chip.mcp"),
-        EventCategory::Governance => dbflux_i18n::t!("document.audit.category_chip.governance"),
-        EventCategory::ObjectStorage => {
-            dbflux_i18n::t!("document.audit.category_chip.object_storage")
         }
     }
 }
@@ -2437,8 +2415,8 @@ mod tests {
     use super::{
         MutationItemKind, VisualMutationTaskMode, add_member_modal_placeholders,
         add_member_modal_section_label, add_member_modal_title, agg_fn_display,
-        assignment_value_kind_label, audit_actor_type_label, audit_category_chip_label,
-        audit_category_label, audit_event_source_connection_not_found, audit_events_load_failed,
+        assignment_value_kind_label, audit_actor_type_label, audit_category_label,
+        audit_event_source_connection_not_found, audit_events_load_failed,
         audit_export_exported_toast, audit_export_failed_error,
         audit_export_unsupported_source_toast, audit_export_write_failed_error,
         audit_level_chip_label, audit_level_label, audit_loading_event_stream_task_label,
@@ -3807,20 +3785,6 @@ mod tests {
         }
     }
 
-    fn audit_category_chip_key(category: EventCategory) -> &'static str {
-        match category {
-            EventCategory::Config => "document.audit.category_chip.config",
-            EventCategory::Connection => "document.audit.category_chip.connection",
-            EventCategory::Query => "document.audit.category_chip.query",
-            EventCategory::Hook => "document.audit.category_chip.hook",
-            EventCategory::Script => "document.audit.category_chip.script",
-            EventCategory::System => "document.audit.category_chip.system",
-            EventCategory::Mcp => "document.audit.category_chip.mcp",
-            EventCategory::Governance => "document.audit.category_chip.governance",
-            EventCategory::ObjectStorage => "document.audit.category_chip.object_storage",
-        }
-    }
-
     fn audit_level_chip_key(level: EventSeverity) -> &'static str {
         match level {
             EventSeverity::Trace => "document.audit.level_chip.trace",
@@ -3844,25 +3808,6 @@ mod tests {
                 "{key} missing from {locale} catalog"
             );
         }
-    }
-
-    #[test]
-    fn audit_category_chip_label_maps_every_variant_to_a_key_in_every_locale() {
-        for category in ALL_EVENT_CATEGORIES {
-            let key = audit_category_chip_key(*category);
-
-            assert_eq!(audit_category_chip_label(*category), dbflux_i18n::t!(key));
-            assert_key_resolves_in_every_locale(key);
-        }
-
-        assert_eq!(
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
-            "CONN"
-        );
-        assert_ne!(
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "ko")
-        );
     }
 
     #[test]
@@ -4122,7 +4067,6 @@ mod tests {
             "document.object_browser.status.key_hint.open",
             "document.object_browser.status.key_hint.preview",
             "document.object_browser.status.key_hint.up",
-            "document.object_browser.status.key_hint.filter",
             "document.object_browser.status.key_hint.delete",
             "document.object_browser.status.key_hint.rename",
             "document.object_browser.empty.loading",
@@ -4709,7 +4653,6 @@ mod tests {
             "document.buckets_table.empty.error_detail",
             "document.buckets_table.empty.no_match",
             "document.buckets_table.empty.no_buckets",
-            "document.buckets_table.empty.hint_refresh",
             "document.buckets_table.delete_confirm.title",
             "document.buckets_table.delete_confirm.body",
             "document.buckets_table.delete_confirm.cancel",
@@ -4821,8 +4764,6 @@ mod tests {
             "document.chart.toolbar.save_chart",
             "document.chart.toolbar.points.one",
             "document.chart.toolbar.points.many",
-            "document.chart.shell.run",
-            "document.chart.shell.running",
             "document.chart.shell.save",
             "document.chart.shell.cancel",
             "document.chart.shell.name_placeholder",
@@ -4835,8 +4776,6 @@ mod tests {
             "document.chart.shell.custom_range.apply",
             "document.chart.shell.stats_rail.rebuilding",
             "document.chart.shell.stats_rail.no_stats",
-            "document.chart.shell.stats_rail.unavailable",
-            "document.chart.shell.stats_rail.window_title",
             "document.chart.shell.stats_rail.window.start",
             "document.chart.shell.stats_rail.window.end",
             "document.chart.shell.stats_rail.window.span",
@@ -5736,15 +5675,11 @@ mod tests {
         let keys = [
             "document.governance.refresh",
             "document.governance.no_pending",
-            "document.governance.pending_title",
-            "document.governance.approval_context",
             "document.governance.execution_plan",
             "document.governance.approve",
             "document.governance.reject",
             "document.governance.select_prompt",
             "document.governance.load_failed",
-            "document.governance.semantics_preview",
-            "document.governance.pending_actor",
             "document.shared.result_warnings.context.query",
             "document.shared.result_warnings.context.table_browse",
             "document.shared.result_warnings.context.visual_query",

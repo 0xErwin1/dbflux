@@ -383,6 +383,7 @@ fn mode_segment_id(mode: ResultViewMode) -> &'static str {
     match mode {
         ResultViewMode::Table => "table",
         ResultViewMode::Chart => "chart",
+        ResultViewMode::Both => "both",
         ResultViewMode::Json => "json",
         ResultViewMode::Text => "text",
         ResultViewMode::Raw => "raw",
@@ -394,6 +395,7 @@ fn mode_icon(mode: ResultViewMode) -> AppIcon {
     match mode {
         ResultViewMode::Table => AppIcon::Table,
         ResultViewMode::Chart => AppIcon::ChartColumnBig,
+        ResultViewMode::Both => AppIcon::Columns,
         ResultViewMode::Json => AppIcon::Braces,
         ResultViewMode::Text => AppIcon::ScrollText,
         ResultViewMode::Raw => AppIcon::Code,

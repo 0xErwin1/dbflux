@@ -6,19 +6,20 @@
 //! hints.
 
 use super::{LoadRefusal, LoadState, ObjectEditorDocument};
+use crate::chrome::{document_bar, document_footer, footer_item};
 use crate::handle::DocumentEvent;
 use crate::object_browser::decode_label;
+use crate::object_browser::{object_icon, object_icon_color};
 use crate::object_text::{FIND_SHORTCUT_HINT, SAVE_SHORTCUT_HINT, body_meta_line, cursor_label};
-use dbflux_components::controls::GpuiInput;
+use dbflux_components::composites::EmptyState;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, SegmentedControl, SegmentedItem};
+use dbflux_components::tokens::{ChromeColors, DocumentMetrics, ObjectStoreMetrics};
+use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-
-/// Diameter of the dirty indicator inside the "modified" pill.
-const DIRTY_DOT: Pixels = px(7.0);
 
 impl Render for ObjectEditorDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -32,7 +33,7 @@ impl Render for ObjectEditorDocument {
             .size_full()
             .flex()
             .flex_col()
-            .bg(cx.theme().background)
+            .bg(cx.theme().popover)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _, _, cx| {
@@ -45,49 +46,139 @@ impl Render for ObjectEditorDocument {
     }
 }
 
+/// A shortcut hint as one keycap: `Ctrl+S` reads `Ctrl S`.
+fn keycap_text(hint: &str) -> String {
+    hint.replace('+', " ")
+}
+
 impl ObjectEditorDocument {
-    fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// Header row: the object's icon and URI, the modified badge, the
+    /// Auto/Raw interpretation switch, Find, Discard and the primary Save.
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let is_dirty = self.is_dirty();
+        let is_saving = self.saving;
+        let is_editable = self.is_editable();
+        let can_act = is_editable && is_dirty && !is_saving;
+        let has_buffer = self.buffer.is_some();
+        let has_raw_override = self.has_raw_override();
+        let icon = object_icon(&self.key);
+        let icon_color = object_icon_color(icon, cx);
 
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(Icon::new(AppIcon::FileCode).small().muted())
+        // Raw is offered while looking at a decoded (never dirty) view, and
+        // Auto is the way back from a Raw override; `set_raw_override`
+        // refuses to leave Raw while it holds edits.
+        let interpretation = ((has_buffer && !is_editable) || has_raw_override).then(|| {
+            let weak_self = cx.weak_entity();
+
+            SegmentedControl::new(
+                vec![
+                    SegmentedItem::new(
+                        "object-editor-interpret-auto",
+                        dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
+                    ),
+                    SegmentedItem::new(
+                        "object-editor-interpret-raw",
+                        dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
+                    ),
+                ],
+                if has_raw_override {
+                    "object-editor-interpret-raw"
+                } else {
+                    "object-editor-interpret-auto"
+                },
+                move |id, _, cx| {
+                    let raw = id.as_ref() == "object-editor-interpret-raw";
+
+                    if let Some(doc) = weak_self.upgrade() {
+                        doc.update(cx, |this, cx| {
+                            if this.has_raw_override() != raw {
+                                this.set_raw_override(raw, cx);
+                            }
+                        });
+                    }
+                },
+            )
+        });
+
+        let find = has_buffer.then(|| {
+            Button::new(
+                "object-editor-find",
+                dbflux_i18n::t!("document.object_browser.editor.footer.find"),
+            )
+            .small()
+            .icon(AppIcon::Search)
+            .kbd(keycap_text(FIND_SHORTCUT_HINT))
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_find(window, cx);
+            }))
+        });
+
+        let discard = is_editable.then(|| {
+            Button::new(
+                "object-editor-discard",
+                dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+            )
+            .small()
+            .icon(AppIcon::RotateCcw)
+            .disabled(!can_act)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.discard_edits(window, cx);
+            }))
+        });
+
+        let save = is_editable.then(|| {
+            Button::new(
+                "object-editor-save",
+                if is_saving {
+                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
+                } else {
+                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                },
+            )
+            .small()
+            .primary()
+            .icon(if is_saving {
+                AppIcon::Loader
+            } else {
+                AppIcon::Save
+            })
+            .kbd(keycap_text(SAVE_SHORTCUT_HINT))
+            .disabled(!can_act)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.save(cx);
+            }))
+        });
+
+        document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
+            .child(
+                Icon::new(icon)
+                    .size(DocumentMetrics::TITLE_ICON)
+                    .color(icon_color),
+            )
             .child(
                 div()
-                    .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(Text::code(format!("s3://{}/{}", self.bucket, self.key))),
+                    .truncate()
+                    .font_family(AppFonts::MONO)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(format!("s3://{}/{}", self.bucket, self.key)),
             )
             .when(is_dirty, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .px(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(theme.warning)
-                        .child(div().size(DIRTY_DOT).rounded(Radii::FULL).bg(theme.warning))
-                        .child(
-                            Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.editor.dirty_badge"
-                            ))
-                            .warning(),
-                        ),
-                )
+                this.child(Badge::new(
+                    dbflux_i18n::t!("document.object_browser.editor.dirty_badge"),
+                    BadgeTone::Warning,
+                ))
             })
+            .child(div().flex_1())
+            .children(interpretation)
+            .children(find)
+            .children(discard)
+            .children(save)
     }
 
     fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -99,6 +190,7 @@ impl ObjectEditorDocument {
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
+                .pt(ObjectStoreMetrics::EDITOR_PADDING_TOP)
                 .bg(theme.background)
                 .child(
                     gpui_component::input::Editor::new(&buffer.input)
@@ -125,28 +217,17 @@ impl ObjectEditorDocument {
 
     fn render_refusal(&self, refusal: &LoadRefusal, cx: &mut Context<Self>) -> AnyElement {
         let action = refusal.is_too_large().then(|| {
-            let theme = cx.theme();
-
-            div()
-                .id("object-editor-load-anyway")
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .h(Heights::CONTROL)
-                .px(Spacing::SM)
-                .rounded(Radii::SM)
-                .cursor_pointer()
-                .border_1()
-                .border_color(theme.border)
-                .hover(|d| d.bg(theme.secondary))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.load_anyway(cx);
-                }))
-                .child(Icon::new(AppIcon::Download).small().muted())
-                .child(Text::caption(dbflux_i18n::t!(
-                    "document.object_browser.preview.body.load_anyway"
-                )))
-                .into_any_element()
+            Button::new(
+                "object-editor-load-anyway",
+                dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
+            )
+            .small()
+            .icon(AppIcon::Download)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.load_anyway(cx);
+            }))
+            .into_any_element()
         });
 
         self.render_notice(refusal.message().to_string(), true, action, cx)
@@ -161,6 +242,19 @@ impl ObjectEditorDocument {
     ) -> AnyElement {
         let theme = cx.theme();
 
+        let mut empty = EmptyState::new(
+            if is_error {
+                AppIcon::TriangleAlert
+            } else {
+                AppIcon::Loader
+            },
+            message,
+        );
+
+        if is_error {
+            empty = empty.danger();
+        }
+
         div()
             .flex_1()
             .min_h_0()
@@ -168,35 +262,19 @@ impl ObjectEditorDocument {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(Spacing::SM)
-            .p(Spacing::LG)
-            .child(
-                Icon::new(if is_error {
-                    AppIcon::TriangleAlert
-                } else {
-                    AppIcon::Loader
-                })
-                .size(Heights::ICON_MD)
-                .color(if is_error {
-                    theme.danger
-                } else {
-                    theme.muted_foreground
-                }),
-            )
-            .child(Text::caption(message))
+            .gap(DocumentMetrics::GAP)
+            .p(DocumentMetrics::PADDING_X)
+            .bg(theme.background)
+            .child(empty)
             .when_some(action, |this, action| this.child(action))
             .into_any_element()
     }
 
+    /// Footer: what the buffer is (type, encoding, size), how it decoded,
+    /// and the cursor position.
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        let is_dirty = self.is_dirty();
-        let is_saving = self.saving;
         let is_editable = self.is_editable();
-        let can_act = is_editable && is_dirty && !is_saving;
         let has_buffer = self.buffer.is_some();
-        let has_raw_override = self.has_raw_override();
 
         let position = self
             .buffer
@@ -216,188 +294,30 @@ impl ObjectEditorDocument {
             .as_ref()
             .and_then(|buffer| decode_label(&buffer.baseline, buffer.source));
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .when_some(decoded_label, |this, label| {
-                        this.child(Text::caption(label).primary())
-                    })
-                    .when(has_buffer && !is_editable, |this| {
-                        this.child(
-                            Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.preview.body.decoded_read_only"
-                            ))
-                            .muted_foreground(),
-                        )
-                    })
-                    // "Switch to Raw" only makes sense while looking at a
-                    // decoded (and therefore never-dirty) view; "switch back
-                    // to Auto" is the escape from an active Raw override,
-                    // which — unlike the decoded view — can be dirty, so it
-                    // is disabled rather than hidden while there are edits to
-                    // lose.
-                    .when(has_buffer && !is_editable && !has_raw_override, |this| {
-                        this.child(
-                            div()
-                                .id("object-editor-switch-to-raw")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .border_1()
-                                .border_color(theme.border)
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.set_raw_override(true, cx);
-                                }))
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.preview.body.encoding_raw"
-                                ))),
-                        )
-                    })
-                    .when(has_raw_override, |this| {
-                        this.child(
-                            div()
-                                .id("object-editor-switch-to-auto")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .when(!is_dirty, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|d| d.bg(theme.secondary))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.set_raw_override(false, cx);
-                                        }))
-                                })
-                                .when(is_dirty, |d| d.opacity(0.5))
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.preview.body.encoding_auto"
-                                ))),
-                        )
-                    })
-                    .when(is_editable, |this| {
-                        this.child(
-                            div()
-                                .id("object-editor-save")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .bg(theme.primary)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer().hover(|d| d.opacity(0.9)).on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.save(cx);
-                                        }),
-                                    )
-                                })
-                                .child(
-                                    Icon::new(if is_saving {
-                                        AppIcon::Loader
-                                    } else {
-                                        AppIcon::Save
-                                    })
-                                    .small()
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::caption(if is_saving {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.saving"
-                                        )
-                                    } else {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.save"
-                                        )
-                                    })
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::key_hint(SAVE_SHORTCUT_HINT)
-                                        .color(theme.primary_foreground),
-                                ),
-                        )
-                    })
-                    .when(is_editable, |this| {
-                        this.child(
-                            div()
-                                .id("object-editor-discard")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|d| d.bg(theme.secondary))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.discard_edits(window, cx);
-                                        }))
-                                })
-                                .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.editor.footer.discard"
-                                ))),
-                        )
-                    })
-                    .when(has_buffer, |this| {
-                        this.child(
-                            div()
-                                .id("object-editor-find")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .hover(|d| d.bg(theme.secondary))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_find(window, cx);
-                                }))
-                                .child(Icon::new(AppIcon::Search).small().muted())
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.editor.footer.find"
-                                )))
-                                .child(Text::key_hint(FIND_SHORTCUT_HINT)),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .when_some(meta, |this, meta| {
-                        this.child(Text::caption(meta).muted_foreground())
-                    })
-                    .when_some(position, |this, position| {
-                        this.child(Text::caption(cursor_label(position)).muted_foreground())
-                    }),
-            )
+        let tint = ChromeColors::tint(cx.theme());
+
+        document_footer(cx)
+            .h(ObjectStoreMetrics::EDITOR_FOOTER_HEIGHT)
+            .gap(ObjectStoreMetrics::EDITOR_FOOTER_GAP)
+            .when_some(meta, |footer, meta| {
+                footer.child(footer_item(AppIcon::File, meta, cx))
+            })
+            .when_some(decoded_label, |footer, label| {
+                footer.child(div().text_color(tint).child(label))
+            })
+            .when(has_buffer && !is_editable, |footer| {
+                footer.child(dbflux_i18n::t!(
+                    "document.object_browser.preview.body.decoded_read_only"
+                ))
+            })
+            .child(div().flex_1())
+            .when_some(position, |footer, position| {
+                footer.child(
+                    div()
+                        .font_family(AppFonts::MONO)
+                        .child(cursor_label(position)),
+                )
+            })
     }
 }
 

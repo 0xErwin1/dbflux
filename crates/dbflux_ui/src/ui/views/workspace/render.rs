@@ -5,6 +5,10 @@ use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
+#[cfg(feature = "mcp")]
+use dbflux_components::primitives::{SurfaceRole, surface};
+#[cfg(feature = "mcp")]
+use dbflux_components::tokens::Borders;
 use dbflux_components::tokens::{HeaderMetrics, ShellMetrics};
 use gpui_component::IconName;
 use gpui_component::resizable::ResizablePanel;
@@ -668,12 +672,6 @@ impl Render for Workspace {
                 {
                     root.when_some(self.active_governance_panel, |root, panel| {
                         let workspace_for_backdrop = cx.entity().clone();
-                        let workspace_for_button = cx.entity().clone();
-                        let title = match panel {
-                            super::GovernancePanel::Approvals => {
-                                dbflux_i18n::t!("workspace.mcp_approvals")
-                            }
-                        };
 
                         let content = match panel {
                             super::GovernancePanel::Approvals => {
@@ -697,14 +695,9 @@ impl Render for Workspace {
                                     });
                                 })
                                 .child(
-                                    div()
+                                    surface(SurfaceRole::Modal, cx)
                                         .w(px(1080.0))
                                         .h(px(680.0))
-                                        .bg(theme.sidebar)
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .rounded(Radii::MD)
-                                        .overflow_hidden()
                                         .flex()
                                         .flex_col()
                                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -712,34 +705,11 @@ impl Render for Workspace {
                                         })
                                         .child(
                                             div()
-                                                .h(px(40.0))
-                                                .px(Spacing::MD)
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .border_b_1()
-                                                .border_color(theme.border)
-                                                .child(Text::heading(title))
-                                                .child(
-                                                    Button::new("governance-overlay-close", "")
-                                                        .ghost()
-                                                        .small()
-                                                        .icon(AppIcon::X)
-                                                        .icon_only()
-                                                        .on_click(move |_, window, cx| {
-                                                            workspace_for_button.update(
-                                                                cx,
-                                                                |workspace, cx| {
-                                                                    workspace
-                                                                        .close_governance_panel(
-                                                                            window, cx,
-                                                                        );
-                                                                },
-                                                            );
-                                                        }),
-                                                ),
-                                        )
-                                        .child(div().flex_1().min_h_0().child(content)),
+                                                .flex_1()
+                                                .min_h_0()
+                                                .p(Borders::THIN)
+                                                .child(content),
+                                        ),
                                 ),
                         )
                     })

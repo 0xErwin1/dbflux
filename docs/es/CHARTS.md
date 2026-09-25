@@ -212,9 +212,9 @@ seleccionado a través de `open_saved_chart` como se describió arriba.
 
 Abrir una colección en una conexión cuya categoría es
 `DatabaseCategory::TimeSeries` (un measurement de InfluxDB, por ejemplo) le da a
-su data grid las vistas Data, Chart y JSON que tienen los resultados de query.
-La primera página se abre como chart cuando `detect_chart_columns` devuelve
-`Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
+su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
+más **Both**, que dibuja el chart sobre la cuadrícula. La primera página se abre
+en Both cuando `detect_chart_columns` devuelve `Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
 Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
 ese valor, así que un tag como `host` le da a cada host su propia línea. Lo

@@ -120,6 +120,7 @@ fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
         limit_text,
         offset_text,
         loaded_id: None,
+        column_picker_open: false,
         data_grid: None,
         focus_handle: None,
         sql_preview,
