@@ -432,9 +432,7 @@ pub(crate) fn change_word_range_with_class(
     let end = if first_class == WordClass::Space {
         end
     } else {
-        content[..end]
-            .trim_end_matches(|character: char| character == ' ' || character == '\t')
-            .len()
+        content[..end].trim_end_matches([' ', '\t']).len()
     };
     (end > offset).then_some(offset..end)
 }
@@ -728,7 +726,7 @@ pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Ra
 
 /// An empty trailing logical line yanks the separator that created it.
 /// Other line selections retain their original bytes, including an unterminated EOF.
-pub(crate) fn line_yank_text<'a>(content: &'a str, range: Range<usize>) -> Option<&'a str> {
+pub(crate) fn line_yank_text(content: &str, range: Range<usize>) -> Option<&str> {
     if range.is_empty() && range.start == content.len() {
         let prefix = &content[..range.start];
         if prefix.ends_with("\r\n") {
