@@ -70,6 +70,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Vim linewise yank of a trailing empty line** — `yy` and linewise `y` motions
+  copy the existing LF or CRLF separator instead of an empty clipboard value.
+  Unterminated lines and empty buffers do not gain a newline.
+
 * **SQLite cancel is no longer lost at query start** — cancelling a SQLite
   query right after it started, before its first statement began running,
   did nothing: SQLite drops an interrupt that arrives before a statement

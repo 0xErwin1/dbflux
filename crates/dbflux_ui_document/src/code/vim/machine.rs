@@ -522,6 +522,21 @@ pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Ra
     }
 }
 
+/// An empty trailing logical line yanks the separator that created it.
+/// Other line selections retain their original bytes, including an unterminated EOF.
+pub(crate) fn line_yank_text<'a>(content: &'a str, range: Range<usize>) -> Option<&'a str> {
+    if range.is_empty() && range.start == content.len() {
+        let prefix = &content[..range.start];
+        if prefix.ends_with("\r\n") {
+            return Some(&prefix[prefix.len() - 2..]);
+        }
+        if prefix.ends_with('\n') {
+            return Some(&prefix[prefix.len() - 1..]);
+        }
+    }
+    content.get(range)
+}
+
 /// Deleting the last logical line also removes the separator before it.
 pub(crate) fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize> {
     if range.end != text.len() || range.start == 0 {

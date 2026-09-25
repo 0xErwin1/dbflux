@@ -723,7 +723,48 @@ fn yank_trailing_empty_line_copies_its_line_ending(cx: &mut TestAppContext) {
     editor.keys("y y");
     assert_eq!(editor.text(), "alpha\n");
     assert_ne!(editor.clipboard_text().as_deref(), Some("sentinel"));
-    assert_eq!(editor.clipboard_text().as_deref(), None);
+    assert_eq!(editor.clipboard_text().as_deref(), Some("\n"));
+}
+
+#[gpui::test]
+fn linewise_yank_at_eof_preserves_only_existing_separators(cx: &mut TestAppContext) {
+    for (content, cursor, keys, expected) in [
+        ("a\n", 2, "y y", Some("\n")),
+        ("a\r\n", 3, "3 y y", Some("\r\n")),
+        ("a\n", 2, "y j", Some("\n")),
+        ("a\r\n", 3, "2 y j", Some("\r\n")),
+        ("a\n", 2, "y k", Some("a\n")),
+        ("a\r\n", 3, "2 y k", Some("a\r\n")),
+        ("a\n", 0, "y j", Some("a\n")),
+        ("a\r\n", 0, "y j", Some("a\r\n")),
+        ("a", 0, "y y", Some("a")),
+        ("", 0, "y y", None),
+        ("", 0, "y j", None),
+    ] {
+        let mut editor = open_editor(cx, content, true);
+        editor.set_cursor(cursor);
+        editor.keys(keys);
+        assert_eq!(
+            editor.clipboard_text().as_deref(),
+            expected,
+            "{content:?} {keys}"
+        );
+        assert_eq!(editor.text(), content);
+    }
+
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "a\r\n",
+            vim_enabled: true,
+            language: QueryLanguage::Lua,
+            read_only: true,
+        },
+    );
+    editor.set_cursor(3);
+    editor.keys("y j");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("\r\n"));
+    assert_eq!(editor.text(), "a\r\n");
 }
 
 #[gpui::test]

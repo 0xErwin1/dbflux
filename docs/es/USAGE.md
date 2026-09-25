@@ -725,7 +725,9 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 - Solo existen los comandos de la primera tabla. `dd` y `yy` abarcan líneas lógicas
   completas, con sus terminadores si existen. En el fin del archivo, el contador
   se detiene en la última línea; borrar la última línea quita también el separador
-  anterior, pero copiarla no agrega un salto de línea inexistente. `d` / `y`
+  anterior, pero copiarla no agrega un salto de línea inexistente. En una línea
+  final vacía creada por LF o CRLF, `y` por líneas copia ese separador existente;
+  un archivo vacío no tiene ninguno. `d` / `y`
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.

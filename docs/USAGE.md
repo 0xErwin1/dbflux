@@ -671,7 +671,8 @@ A read-only delete does not change the clipboard.
 - Only the commands in the first table exist. `dd` and `yy` operate on whole logical
   lines, including line endings when present. At EOF, a count stops at the last line;
   deleting the last line also removes its preceding separator, without inventing
-  a trailing newline for yanks. Word-motion `d` / `y` supports
+  a trailing newline for yanks. On an empty trailing line created by LF or CRLF,
+  linewise `y` copies that existing separator; an empty buffer has none. Word-motion `d` / `y` supports
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.

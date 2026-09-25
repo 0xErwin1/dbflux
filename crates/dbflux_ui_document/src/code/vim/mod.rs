@@ -559,7 +559,13 @@ impl CodeDocument {
             machine::counted_line_range(state.text(), self.editor_cursor(cx), count)
         };
         let content = self.editor.input_state.read(cx).text().to_string();
-        let selected = content.get(range.clone()).unwrap_or_default().to_string();
+        let selected = if operator == 'y' {
+            machine::line_yank_text(&content, range.clone())
+        } else {
+            content.get(range.clone())
+        }
+        .unwrap_or_default()
+        .to_string();
         if operator == 'd' && self.read_only {
             return;
         }
@@ -594,11 +600,13 @@ impl CodeDocument {
         }
         let selected = {
             let state = self.editor.input_state.read(cx);
-            state
-                .text()
-                .to_string()
-                .get(range.clone())
-                .map(str::to_owned)
+            let content = state.text().to_string();
+            if operator == 'y' && linewise {
+                machine::line_yank_text(&content, range.clone())
+            } else {
+                content.get(range.clone())
+            }
+            .map(str::to_owned)
         };
         let Some(selected) = selected else { return };
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(selected));
