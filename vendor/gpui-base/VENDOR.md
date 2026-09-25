@@ -16,6 +16,8 @@ This directory starts from the complete published `gpui-base` 0.6.1 crate. DBF-2
 
 Live visual verification of block placement and glyph contrast is still required.
 
+The `state.rs` tests also cover a test-local outer undo bracket around programmatic deletion and native typing or IME composition. This is regression evidence for a future change operator, not a public undo-session API. They do not prove the ordering of a late `unmark_text` callback after a new composition begins.
+
 ## Refresh
 
 Retrieve the desired published `.crate` archive into the Cargo registry cache, verify its SHA-256 against the registry checksum in `Cargo.lock` (or the crates.io index for a new version), and stop if it differs. Extract the archive's single versioned root into `vendor/gpui-base/`, retaining its manifest, license, and source files. Update the root `[patch.crates-io]` entry and resolve the lockfile with Cargo; check the diff against the published archive to identify every local deviation. Run `cargo check -p dbflux_ui_document` and `cargo nextest run -p dbflux_ui_document vim` after refreshing. A version change requires revalidating all future local patches against the new published source.

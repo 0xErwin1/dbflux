@@ -6397,6 +6397,62 @@ mod tests {
     }
 
     #[gpui::test]
+    fn test_undo_manager_outer_delete_bracket_with_native_typing_and_composition(
+        cx: &mut TestAppContext,
+    ) {
+        for composition in [false, true] {
+            let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+            let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+            let input = input_view.input;
+            cx.update(|window, cx| {
+                input.update(cx, |state, cx| {
+                    state.undo_manager.begin_transaction();
+                    state.replace_text_in_range(Some(2..3), "", window, cx);
+                    if composition {
+                        state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                        state.replace_text_in_range(None, "你", window, cx);
+                    } else {
+                        state.replace_text_in_range(None, "x", window, cx);
+                    }
+                    state.undo_manager.commit_transaction();
+                    let result = if composition { "ab你" } else { "abx" };
+                    assert_eq!(state.value(), result);
+                    state.replace_text_in_range(None, "!", window, cx);
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), result);
+                    state.undo(&Undo, window, cx);
+                    assert_eq!(state.value(), "abc");
+                });
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn test_undo_manager_outer_bracket_blur_and_late_unmark(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state.default_value("abc"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.undo_manager.begin_transaction();
+                state.replace_text_in_range(Some(2..3), "", window, cx);
+                state.replace_and_mark_text_in_range(None, "n", None, window, cx);
+                state.on_blur(window, cx);
+                state.undo_manager.commit_transaction();
+                state.unmark_text(window, cx);
+                assert!(!state.undo_manager.has_open_transaction());
+                state.replace_and_mark_text_in_range(None, "x", None, window, cx);
+                state.replace_text_in_range(None, "X", window, cx);
+                assert!(!state.undo_manager.has_open_transaction());
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abn");
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abc");
+            });
+        });
+    }
+
+    #[gpui::test]
     fn test_undo_manager_consecutive_compositions_are_separate_groups(cx: &mut TestAppContext) {
         let input_view = InputView::build(cx, |state| state);
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
