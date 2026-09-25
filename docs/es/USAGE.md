@@ -658,6 +658,8 @@ de estado del espacio de trabajo.
 | Normal | `Enter` | Mover una línea abajo |
 | Normal | `/` | Abrir el campo nativo de búsqueda de texto |
 | Normal | `n` / `N` | Repetir la última búsqueda hacia adelante / atrás (admite contador previo) |
+| Normal | `m{a-z}` | Fijar o sobrescribir una marca local minúscula en el cursor |
+| Normal | `'{a-z}` / `` `{a-z} `` | Ir al primer carácter no blanco de la línea marcada / a la posición exacta marcada (limitada a un cursor Normal) |
 | Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
 | Normal | `i` | Insertar antes del cursor |
 | Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
@@ -709,6 +711,17 @@ no hacen nada y mantienen el foco en él. No admite expresiones regulares ni
 resaltado de búsqueda al estilo Vim. No se ha validado el IME de escritorio ni
 la interfaz renderizada.
 
+**Marcas locales.** Las marcas pertenecen al documento de código actual, no a
+otras pestañas ni a otras sesiones. También se pueden fijar en editores de solo
+lectura. Las ediciones nativas del texto, incluida la entrada en modo Insertar y
+las confirmaciones del IME, desplazan las marcas con el texto durante deshacer y
+rehacer. Insertar en una marca la mueve después del texto insertado; borrar o
+sustituir el texto marcado la lleva al inicio del rango modificado. Por eso,
+deshacer no tiene por qué recuperar la posición exacta dentro del texto borrado.
+Reemplazar todo el contenido del editor, desactivar el modo Vim o cerrar el
+documento borra sus marcas. No se ha validado el IME de escritorio ni la
+interfaz renderizada.
+
 Todo lo demás en modo Normal:
 
 | Entrada | Comportamiento en modo Normal |
@@ -755,7 +768,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
   admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
   el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
   `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
-  No se admiten `c`, `r` / `R`, marcas, objetos de texto, registros,
+  No se admiten `c`, `r` / `R`, otras marcas, objetos de texto, registros,
   macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
   completo.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así

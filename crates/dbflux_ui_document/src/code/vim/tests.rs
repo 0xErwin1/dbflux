@@ -363,6 +363,170 @@ impl Fixture<'_> {
 }
 
 #[gpui::test]
+fn mark_prefixes_do_not_interrupt_operator_or_g(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.set_cursor(8);
+    editor.keys("d m a");
+    assert_eq!(editor.text(), "first\nsecond");
+    editor.keys("g g ` a");
+    assert_eq!(editor.cursor(), 0);
+    editor.set_cursor(8);
+    editor.keys("g m a");
+    editor.keys("g g ` a");
+    assert_eq!(editor.cursor(), 0);
+}
+
+#[gpui::test]
+fn invalid_mark_names_do_not_dispatch_commands(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.set_cursor(8);
+    for name in ["D", "é", "1"] {
+        editor.keys("m");
+        editor.keys(name);
+        assert_eq!(editor.text(), "first\nsecond", "{name}");
+        editor.keys("g g ` a");
+        assert_eq!(editor.cursor(), 0, "{name}");
+        editor.set_cursor(8);
+    }
+}
+
+#[gpui::test]
+fn replacing_editor_value_invalidates_mark(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.set_cursor(8);
+    editor.keys("m a");
+    let document = editor.document.clone();
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| state.set_value("new\ntext", window, cx));
+    });
+    editor.set_cursor(0);
+    editor.keys("` a");
+    assert_eq!(editor.cursor(), 0);
+}
+
+#[gpui::test]
+fn disabling_vim_removes_registered_mark_anchors(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.set_cursor(8);
+    editor.keys("m a");
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let handle = document.read(cx).vim.marks[0].expect("mark a was created");
+        document.update(cx, |document, cx| document.set_vim_enabled(false, cx));
+        let input = document.read(cx).editor.input_state.clone();
+        assert_eq!(input.read(cx).resolve_edit_anchor(handle), None);
+    });
+}
+
+#[gpui::test]
+fn disabling_vim_discards_mark_prefix(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\nsecond", true);
+    editor.keys("m");
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.set_vim_enabled(false, cx);
+            document.set_vim_enabled(true, cx);
+        });
+    });
+    editor.set_cursor(8);
+    editor.keys("a escape g g ` a");
+    assert_eq!(editor.cursor(), 0);
+}
+
+#[gpui::test]
+fn marks_follow_edits_and_jump_by_line_or_exact_character(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\r\n  é中 last", true);
+    editor.set_cursor(11);
+    editor.keys("m a g g ` a");
+    assert_eq!(editor.cursor(), 11);
+    editor.keys("g g ' a");
+    assert_eq!(editor.cursor(), 9);
+    editor.keys("g g i");
+    editor.ime_compose("X", "X");
+    editor.keys("escape");
+    editor.keys("` a");
+    assert_eq!(editor.cursor(), 12);
+}
+
+#[gpui::test]
+fn marks_overwrite_collapse_undo_and_remain_document_local(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\n  end", true);
+    editor.keys("m a");
+    editor.set_cursor(7);
+    editor.keys("m a g g ` a");
+    assert_eq!(editor.cursor(), 7);
+    editor.keys("' a");
+    assert_eq!(editor.cursor(), 6);
+    let second = editor.open_second_document("other");
+    editor.focus_document(&second);
+    editor.keys("` a");
+    let second_cursor = editor
+        .window
+        .update(|_, cx| second.read(cx).editor.input_state.read(cx).cursor());
+    assert_eq!(second_cursor, 0);
+    editor.focus_document(&editor.document.clone());
+    editor.keys("g g d d ` a");
+    assert_eq!(editor.text(), "  end");
+    assert_eq!(editor.cursor(), 3);
+    editor.keys("u ` a");
+    assert_eq!(editor.text(), "abc\n  end");
+    assert_eq!(editor.cursor(), 7);
+}
+
+#[gpui::test]
+fn mark_resolves_after_undo_and_redo(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\n  end", true);
+    editor.set_cursor(7);
+    editor.keys("m a g g d d");
+    assert_eq!(editor.text(), "  end");
+    editor.keys("u");
+    assert_eq!(editor.text(), "abc\n  end");
+    #[cfg(target_os = "macos")]
+    editor.keys("cmd-shift-z");
+    #[cfg(not(target_os = "macos"))]
+    editor.keys("ctrl-y");
+    assert_eq!(editor.text(), "  end");
+    editor.keys("g g ` a");
+    assert_eq!(editor.cursor(), 3);
+}
+
+#[gpui::test]
+fn mark_prefix_interruptions_and_readonly_do_not_edit(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "  one\n  two",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    editor
+        .window
+        .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into())));
+    editor.set_cursor(8);
+    editor.keys("m a g g ' a");
+    assert_eq!(editor.cursor(), 8);
+    assert_eq!(editor.selected_query(), None);
+    for interruption in ["escape", "tab", "ctrl-s", "1"] {
+        editor.keys("g g m");
+        editor.keys(interruption);
+        editor.keys("z");
+        editor.keys("` a");
+        assert_eq!(editor.cursor(), 8, "{interruption}");
+    }
+    editor.keys("g g m");
+    editor.focus_other_input();
+    editor.focus_document(&editor.document.clone());
+    editor.keys("z ` a");
+    assert_eq!(editor.cursor(), 8);
+    assert_eq!(editor.text(), "  one\n  two");
+    assert_eq!(editor.clipboard_text().as_deref(), Some("sentinel"));
+}
+
+#[gpui::test]
 fn search_prompt_survives_document_focus_and_bypasses_normal_history(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "alpha beta alpha", true);
     let second = editor.open_second_document("other");

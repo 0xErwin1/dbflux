@@ -24,6 +24,7 @@ mod machine;
 
 use super::*;
 use dbflux_core::LogErr;
+use gpui_base::input::{EditAnchor, EditAnchorAffinity};
 use gpui_component::input::{Redo, Undo};
 use machine::{VimCommand, VimKey};
 
@@ -54,6 +55,8 @@ pub(super) struct VimState {
     /// Raw command keys, bounded independently of the saturating numeric count.
     pub(super) pending_keys: String,
     pending_g: bool,
+    pending_mark: Option<char>,
+    marks: [Option<EditAnchor>; 26],
     pending_operator: Option<(char, Option<usize>)>,
     visual_anchor: Option<usize>,
     visual_cursor: Option<usize>,
@@ -79,6 +82,15 @@ impl CodeDocument {
             self.editor
                 .input_state
                 .update(cx, |state, cx| state.set_selected_range(cursor..cursor, cx));
+        }
+
+        if !enabled {
+            let marks = std::mem::take(&mut self.vim.marks);
+            self.editor.input_state.update(cx, |state, _cx| {
+                for anchor in marks.into_iter().flatten() {
+                    state.remove_edit_anchor(anchor);
+                }
+            });
         }
 
         self.vim = VimState {
@@ -179,11 +191,58 @@ impl CodeDocument {
         } else {
             machine::command_for(self.vim.mode, key)
         };
+        if let Some(prefix) = self.vim.pending_mark.take() {
+            self.vim.pending_keys.clear();
+            cx.notify();
+            if !key.command_modifier && !key.shift && key.key.len() == 1 {
+                let letter = key.key.as_bytes()[0];
+                if letter.is_ascii_lowercase() {
+                    let index = usize::from(letter - b'a');
+                    if prefix == 'm' {
+                        let cursor = self.editor_cursor(cx);
+                        self.editor.input_state.update(cx, |state, _| {
+                            if let Some(previous) = self.vim.marks[index].take() {
+                                state.remove_edit_anchor(previous);
+                            }
+                            self.vim.marks[index] =
+                                state.create_edit_anchor(cursor, EditAnchorAffinity::Right);
+                        });
+                    } else {
+                        let destination = {
+                            let target = self.editor.input_state.read(cx);
+                            self.vim.marks[index]
+                                .and_then(|anchor| target.resolve_edit_anchor(anchor))
+                                .map(|offset| {
+                                    if prefix == '\'' {
+                                        machine::line_first_nonblank(target.text(), offset)
+                                    } else {
+                                        machine::clamp_to_character(target.text(), offset)
+                                    }
+                                })
+                        };
+                        if let Some(destination) = destination {
+                            self.vim.vertical_goal = None;
+                            self.set_editor_cursor(destination, cx);
+                        }
+                    }
+                }
+            }
+            self.clear_vim_count_and_notify(cx);
+            return !key.command_modifier && key.key != "escape" && key.key != "tab";
+        }
         let Some(command) = command else {
             self.clear_vim_count_and_notify(cx);
             return false;
         };
-
+        if let VimCommand::PendingMark(prefix) = command {
+            let interrupted = self.vim.pending_g || self.vim.pending_operator.is_some();
+            self.clear_vim_count_and_notify(cx);
+            self.vim.pending_mark = Some(if interrupted { '\0' } else { prefix });
+            if !interrupted {
+                self.push_pending_key(prefix, cx);
+            }
+            return true;
+        }
         if self.vim.pending_g {
             self.vim.pending_g = false;
             self.vim.pending_keys.clear();
@@ -300,7 +359,7 @@ impl CodeDocument {
         let count = explicit_count.unwrap_or(1);
         match command {
             VimCommand::Digit(0) => self.move_cursor_with(machine::line_start, cx),
-            VimCommand::Digit(_) | VimCommand::PendingG => {}
+            VimCommand::Digit(_) | VimCommand::PendingG | VimCommand::PendingMark(_) => {}
             VimCommand::FirstLine | VimCommand::LastLine => {
                 let target = {
                     let state = self.editor.input_state.read(cx);
@@ -506,6 +565,7 @@ impl CodeDocument {
     pub(super) fn clear_vim_count(&mut self) {
         self.vim.count = None;
         self.vim.pending_g = false;
+        self.vim.pending_mark = None;
         self.vim.pending_operator = None;
         self.vim.pending_keys.clear();
     }

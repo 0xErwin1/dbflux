@@ -29,6 +29,7 @@ pub(crate) enum VimCommand {
     MoveUp,
     MoveDown,
     PendingG,
+    PendingMark(char),
     FirstLine,
     LastLine,
     EnterInsert,
@@ -117,6 +118,9 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 
             match key.key {
                 "g" => Some(VimCommand::PendingG),
+                "m" | "'" | "`" if !visual => {
+                    Some(VimCommand::PendingMark(key.key.chars().next()?))
+                }
                 "/" if !visual => Some(VimCommand::OpenSearch),
                 "n" if !visual => Some(VimCommand::RepeatSearch(false)),
                 "h" => Some(VimCommand::MoveLeft),

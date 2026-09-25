@@ -607,6 +607,8 @@ status bar.
 | Normal | `Enter` | Move one line down |
 | Normal | `/` | Open the native text-search prompt |
 | Normal | `n` / `N` | Repeat the last search forward / backward (accepts a prefix count) |
+| Normal | `m{a-z}` | Set or overwrite a lowercase local mark at the cursor |
+| Normal | `'{a-z}` / `` `{a-z} `` | Jump to the marked line's first non-blank character / the exact marked position (clamped to a Normal-mode cursor) |
 | Normal / Visual / Visual Line / Visual Block | `gg` / `G` / `Ngg` / `NG` | Go to the first / last / 1-based absolute logical line (clamped to the buffer); Visual extends the selection |
 | Normal | `i` | Insert before the cursor |
 | Normal | `a` / `A` / `I` | Insert after the cursor / at the end of the line / at the first non-blank character of the line |
@@ -656,6 +658,15 @@ nothing and leave focus in the prompt. This is literal text search, not regex;
 Vim-style search highlighting is not provided. Desktop IME behavior and the
 rendered UI have not been validated.
 
+**Local marks.** Marks belong to the current code document, not other tabs or
+sessions. Setting a mark also works in a read-only editor. Native text edits,
+including Insert-mode input and IME commits, move marks with their text through
+undo and redo. Insertion at a mark moves it after the inserted text; deleting
+or replacing marked text moves it to the start of the changed range, so undo
+need not recover its exact former position inside deleted text. Replacing the
+entire editor value, disabling Vim mode, or closing the document clears its
+marks. Desktop IME behavior and the rendered UI have not been validated.
+
 Everything else in Normal mode:
 
 | Input | Behavior in Normal mode |
@@ -700,7 +711,7 @@ A read-only delete does not change the clipboard.
   `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` and `b` / `B` exclude the
   destination character, while `e` / `E` include it. Horizontal operator
   motions `h` / `l` are characterwise; vertical `j` / `k` are linewise.
-  `c`, `r` / `R`, marks, text objects, registers, macros, `.` repeat,
+  `c`, `r` / `R`, other marks, text objects, registers, macros, `.` repeat,
   `:` commands, and a redo key are unsupported. This is not full Vim.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

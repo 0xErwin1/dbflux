@@ -6,6 +6,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim local marks in code editors** — Normal-mode `m{a-z}` sets or
+  overwrites a per-document lowercase mark; `'{a-z}` jumps to its line's first
+  non-blank character, while backtick followed by the letter jumps to its exact
+  position, clamped to a Normal cursor. Marks work in read-only editors and
+  follow native edits, IME commits, undo, and redo. Insertions at a mark move
+  it after inserted text; deletion or replacement of marked content collapses
+  it to the changed range's start, so undo need not restore the deleted-interior
+  position. Wholesale value replacement, disabling Vim, or closing the document
+  clears marks; they are not shared across tabs or sessions. Desktop IME and
+  rendered UI validation remain pending.
+
 * **Vim literal search in code editors** — In Normal mode, `/` opens a native
   text prompt; `Enter` searches forward from the cursor with wrap and
   case-sensitive literal matching. `Escape` cancels without changing the cursor
@@ -40,7 +51,7 @@ All notable changes to DBFlux will be documented in this file.
   accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
   Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
   the system clipboard; read-only deletes do nothing, and each delete is
-  one undo step. `c`, search, `r`/`R`, and marks remain unsupported; this
+  one undo step. `c` and `r`/`R` remain unsupported; this
   is not full Vim compatibility.
 
 * **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,
