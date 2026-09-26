@@ -6,6 +6,36 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Bolt Byzantium redesign** — New look across the whole app in dark and light: Archivo and JetBrains Mono type, byzantium accent, chamfered controls, and an islands layout where the sidebar, documents, inspectors and side panels float as separate panels. Settings and the Connection Manager follow the same layout. The theme choices are Follow system, Dark and Light.
+
+* **Notifications center** — The title-bar bell opens a popover with pending MCP approvals, user-facing errors, available updates and finished long tasks, with an unread badge colored by urgency. Approvals are reviewed in the approvals tab; the bell never approves anything.
+
+* **MCP approvals and Migrate data as tabs** — Both open as document tabs instead of overlays, so the app stays usable while they are open. Rejecting an MCP request can carry a reason that the agent reads back and the audit log records. One migration runs at a time.
+
+* **Editor run markers** — Each statement gets a run marker in the gutter, the statement under the cursor is highlighted, and the toolbar shows the statement count and the last run time. File-backed scripts show their path and saved state. Results gain a Data / JSON / Chart switch, a search box that filters rows, content-sized columns and a read-only footer.
+
+* **Query history as a side panel** — History opens as a panel next to the editor instead of a modal.
+
+* **Aggregate view for document collections** — Collections on drivers that support it (MongoDB) gain an Aggregate view with a JSON pipeline editor and read-only results. Pipelines with `$out` or `$merge` go through the dangerous-query confirmation and are recorded in the audit log.
+
+* **Redis key list** — Keys can be browsed as a namespace tree or a list with TTL and size columns, filtered by type on the server, and deleted in bulk by pattern with a preview. Key expiry can be edited, JSON and hex views are available for strings, sorted sets and streams have dedicated panes, and a command console runs against the open database.
+
+* **Document collections** — Collections open in the tree view, have a schema view sampled from the collection, and a Document side panel that shows the selected document as a typed tree with pending edits highlighted. The query bar slots have examples and tooltips.
+
+* **Editable keybindings** — Settings > Keybindings lists every command by context and records new chords, including multi-key sequences.
+
+* **Per-class MCP approvals** — Each policy sets Allow, Ask or Deny per execution class. New policies allow metadata and reads and ask for everything that changes data.
+
+* **Row inspector** — Fields show their type and a boxed value, the header shows the primary key, and references list incoming rows with their counts.
+
+* **Sidebar** — Connected profiles show their round-trip latency, object-storage profiles list their buckets, empty Redis databases fold into one row, and object menus are captioned with the qualified name.
+
+* **Object storage** — The buckets table has a details strip (region, versioning, encryption, public access, size) and the object browser selects the first object on open.
+
+* **Update checks and What's new** — Settings > Updates checks GitHub releases on the chosen channel; available updates appear in the notifications center, and a welcome dialog and a What's new dialog show on first run and after an update.
+
+* **Schema diagram details** — The diagram fits every table on open, and selecting a table opens a panel with its indexes, foreign keys and the tables that reference it.
+
 * **Vim single-character replace** — Normal `r{char}` replaces the character under the cursor, and `Nr{char}` the next N characters on the line, as one undo step; the cursor stays on the first replaced character. It does nothing when fewer than N characters remain before the line ending, on an empty line, or in read-only editors. `r` with `Enter` replaces the characters with one line break that keeps the line's indentation, and `r` with `Tab` writes tabs. `Escape`, `Backspace`, `Delete`, the arrow keys, and leaving the editor cancel without editing; shortcuts cancel and still run. The character can come from an input method (IME). Live UI and IME validation are not claimed.
 
 * **Vim Replace mode** — `R` enters Replace mode, shown as `REPLACE`. Typed characters overwrite the character under the cursor and are appended at a line ending; `Backspace` restores what the session overwrote; `Escape` returns to Normal. The session is one undo step, and read-only editors ignore `R`. Text that arrives without a key press, such as an IME commit, is inserted rather than overwriting. A count before `R` is ignored.
@@ -99,6 +129,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Menu and command wording** — Menus and command names use sentence case, and `…` marks only items that open a dialog that asks for more input.
+
+* **Sidebar keys** — In the sidebar, `x` opens the drop confirmation for the selected table, collection or database, and `r` refreshes the selected object instead of the whole connection.
+
+* **MongoDB aggregate classification** — Aggregates with `$out` or `$merge` are classified as writes, which also applies to MCP policies.
+
+* **Background tasks panel** — The collapsed bar is gone; the status bar chip opens the panel, and focus cycling skips it while it is closed.
+
+* **Usage guide** — The usage guide is split into task pages (Getting started, Schema browser, Editor, Results, Key-value, Documents, Query builder) and a separate Keyboard reference.
+
 * **Editor queries now carry a row limit, and drivers that cannot enforce it
   refuse them.** Every query run from the query editor asks the driver for at
   most Settings → General → Execution Safety → **Editor row limit** rows
@@ -119,6 +159,10 @@ All notable changes to DBFlux will be documented in this file.
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
+
+* **Credentials in connection strings** — Passwords in `postgresql://`, `mongodb+srv://`, `rediss://` and other URLs, and `password=` or `token=` parameters, are now redacted in audit events and driver error messages. The previous pattern missed `postgresql://`.
+
+* **Quieter shutdown** — Closing the app no longer logs an error for drivers that cannot cancel a running query.
 
 * **Vim Visual selection caret** — Visual character and line selections retain
   their selected text while rendering the caret at the active head, including
