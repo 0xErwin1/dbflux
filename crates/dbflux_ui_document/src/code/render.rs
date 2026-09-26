@@ -328,16 +328,16 @@ impl CodeDocument {
                     cx.emit(DocumentEvent::RequestFocus);
                 }),
             )
-            .capture_action(cx.listener(
-                |this, _: &gpui_component::input::Escape, window, cx| {
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
                     this.clear_vim_count_and_notify(cx);
                     if this.cancel_vim_search(window, cx)
                         || this.handle_vim_escape_action(window, cx)
                     {
                         cx.stop_propagation();
                     }
-                },
-            ))
+                }),
+            )
             .capture_action(cx.listener(
                 |this, _: &gpui_component::input::IndentInline, _window, cx| {
                     if this.vim_swallows_indent_action(cx) {
