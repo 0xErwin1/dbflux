@@ -25,11 +25,10 @@ use dbflux_ui_base::{
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
 
-use crate::keymap::{
-    self, Command, CommandDispatcher, ContextId, FocusTarget, effective_keymap, key_chord_from_gpui,
-};
+use crate::keymap::{self, Command, CommandDispatcher, ContextId, FocusTarget};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
+use dbflux_ui_base::keymap::{RunCommand, run_command};
 
 #[cfg(feature = "mcp")]
 use crate::ui::document::McpApprovalsView;
@@ -1920,6 +1919,29 @@ impl Workspace {
         Self::default_commands()
     }
 
+    /// The key context of the workspace root: `Workspace`, the context that
+    /// owns the keyboard (see [`Workspace::active_context`]) and, while a
+    /// document owns it, the entries the document contributes.
+    fn root_key_context(&self, cx: &Context<Self>) -> gpui::KeyContext {
+        let context = self.active_context(cx);
+
+        let entries = if self.focus_target == FocusTarget::Document {
+            self.tab_manager
+                .read(cx)
+                .active_tab()
+                .map(|tab| tab.key_context_entries(cx))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        dbflux_ui_base::keymap::root_key_context(
+            dbflux_ui_base::keymap::WORKSPACE_KEY_CONTEXT,
+            context,
+            &entries,
+        )
+    }
+
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
         // A quit request can open the active-query prompt over any other
         // overlay, and the prompt is drawn above them, so it owns the keyboard
@@ -2338,6 +2360,7 @@ mod tab_close_request_tests {
     ) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
         let workspace_ref = holder.clone();
@@ -3888,6 +3911,88 @@ mod tab_close_request_tests {
             !approvals_overlay_is_open(window, &workspace),
             "Cancel must close the approvals overlay"
         );
+    }
+
+    /// The panel keys move keyboard focus between the workspace panels:
+    /// Tab and Shift+Tab cycle them, Ctrl+Shift+digit jumps to one.
+    #[gpui::test]
+    fn keyboard_moves_between_the_workspace_panels(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let target =
+            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("tab");
+        assert_eq!(target(window), FocusTarget::BackgroundTasks);
+
+        window.simulate_keystrokes("shift-tab");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+
+        window.simulate_keystrokes("ctrl-shift-4");
+        assert_eq!(target(window), FocusTarget::BackgroundTasks);
+
+        window.simulate_keystrokes("ctrl-shift-1");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+    }
+
+    /// Letters the sidebar binds (`q` switches its tab) are text while its
+    /// filter has focus; `/` is what puts focus there.
+    #[gpui::test]
+    fn the_sidebar_filter_keeps_the_letters_typed_into_it(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        let tab_before = window.update(|_, cx| sidebar.read(cx).active_tab());
+
+        window.simulate_keystrokes("/");
+        assert!(
+            window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)),
+            "`/` focuses the sidebar filter"
+        );
+
+        window.simulate_keystrokes("q");
+        assert_eq!(
+            window.update(|_, cx| sidebar.read(cx).active_tab()),
+            tab_before,
+            "`q` typed in the filter does not switch the sidebar tab"
+        );
+        assert!(window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)));
+    }
+
+    /// The palette opens from the keyboard and Escape closes it.
+    #[gpui::test]
+    fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let palette = window.update(|_, cx| workspace.read(cx).command_palette.clone());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        #[cfg(target_os = "macos")]
+        window.simulate_keystrokes("cmd-shift-p");
+        #[cfg(not(target_os = "macos"))]
+        window.simulate_keystrokes("ctrl-shift-p");
+        assert!(window.update(|_, cx| palette.read(cx).is_visible()));
+
+        window.simulate_keystrokes("escape");
+        assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
     }
 
     /// Escape travels the real key path: the workspace keymap resolves it to

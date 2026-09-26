@@ -262,6 +262,7 @@ impl Render for WorkspaceInspector {
         // Outer flex_row: grip (resize handle) + body (header + content host).
         div()
             .id("workspace-inspector")
+            .key_context(dbflux_components::key_contexts::ROW_INSPECTOR)
             .h_full()
             .w(self.width)
             .flex_shrink_0()

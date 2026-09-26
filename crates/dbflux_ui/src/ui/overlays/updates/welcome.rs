@@ -1,3 +1,4 @@
+use crate::keymap::{Command, ContextId};
 use dbflux_app::updates::{self, ChangelogRelease, SectionKind, changelog};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -285,7 +286,10 @@ impl WelcomeDialog {
                 )
                 .primary()
                 .icon(AppIcon::ChevronRight)
-                .kbd("Enter")
+                .when_some(
+                    dbflux_ui_base::keymap::shortcut_label(ContextId::Modal, Command::Execute),
+                    Button::kbd,
+                )
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
     }

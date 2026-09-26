@@ -90,6 +90,12 @@ impl Tab {
         }
     }
 
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(gpui::SharedString, gpui::SharedString)> {
+        match self {
+            Tab::Pane(p) => p.key_context_entries(cx),
+        }
+    }
+
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         match self {
             Tab::Pane(p) => p.change_summary(cx),

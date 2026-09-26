@@ -51,6 +51,20 @@ pub fn new_active_id(items: &[SegmentedItem], _current: &str, clicked: &str) -> 
         .unwrap_or_else(|| SharedString::from(clicked.to_string()))
 }
 
+/// The segment `step` places away from `active` in `ids` (negative steps go
+/// left), stopping at either end. `None` when `active` is not one of `ids`
+/// or the step does not move off it.
+///
+/// A segmented field that is a single stop in a form moves its choice with
+/// Left and Right through this, the way a radio group does.
+pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option<&'a str> {
+    let current = ids.iter().position(|id| *id == active)?;
+    let last = ids.len().checked_sub(1)?;
+    let target = current.saturating_add_signed(step).min(last);
+
+    (target != current).then(|| ids[target])
+}
+
 /// A horizontal row of mutually-exclusive segments.
 ///
 /// - Track: `ChamferCut::CONTROL`, `theme.background` fill, 1 px `theme.border`
@@ -344,5 +358,22 @@ mod tests {
     fn active_id_not_in_items_returns_id_unchanged() {
         let result = new_active_id(&items(), "unknown", "allow");
         assert_eq!(result.as_ref(), "allow");
+    }
+
+    #[test]
+    fn stepping_moves_within_the_ends() {
+        let ids = ["blocking", "detached"];
+
+        assert_eq!(
+            super::stepped_segment(&ids, "blocking", 1),
+            Some("detached")
+        );
+        assert_eq!(
+            super::stepped_segment(&ids, "detached", -1),
+            Some("blocking")
+        );
+        assert_eq!(super::stepped_segment(&ids, "detached", 1), None);
+        assert_eq!(super::stepped_segment(&ids, "blocking", -1), None);
+        assert_eq!(super::stepped_segment(&ids, "missing", 1), None);
     }
 }

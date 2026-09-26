@@ -15,12 +15,13 @@ impl Migration for MigrationImpl {
     /// command and the keys the default keymap gives it. Only overrides are
     /// stored: a binding without a row keeps its default.
     ///
-    /// `context` is free text: today it holds a keymap context id
-    /// (`editor`), and it can hold a context predicate expression later
-    /// without a schema change. `default_keys` and `keys` are key sequences:
-    /// chords separated by single spaces (`ctrl+k ctrl+s`), so multi-key
-    /// bindings need no schema change either. `keys` is NULL when the user
-    /// removed the shortcut.
+    /// `context` is the keymap context id of the default binding the row
+    /// replaces (`editor`), so a binding moved to another context predicate
+    /// still finds its default. `predicate` holds that new predicate in
+    /// GPUI's key context language (`Editor && vim_mode == normal`); NULL
+    /// keeps the default binding's own context. `default_keys` and `keys` are
+    /// key sequences: chords separated by single spaces (`ctrl+k ctrl+s`).
+    /// `keys` is NULL when the user removed the shortcut.
     fn run(&self, tx: &Transaction) -> Result<(), MigrationError> {
         tx.execute_batch(
             "
@@ -29,6 +30,7 @@ impl Migration for MigrationImpl {
                 command_id   TEXT NOT NULL,
                 default_keys TEXT NOT NULL,
                 keys         TEXT,
+                predicate    TEXT,
                 updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (context, command_id, default_keys)
             );

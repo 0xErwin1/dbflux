@@ -523,6 +523,7 @@ mod active_query_prompt_tests {
     fn new_harness(cx: &mut TestAppContext) -> Harness<'_> {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {

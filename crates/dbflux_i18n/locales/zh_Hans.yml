@@ -939,6 +939,11 @@ document:
       visual: "可视"
       visual_line: "可视行"
       visual_block: "可视块"
+      search:
+        label: "Vim 搜索"
+        placeholder: "向前搜索"
+        run: "搜索"
+        cancel: "取消"
     output:
       running: 正在执行…
       stopped: 已停止
@@ -3185,6 +3190,7 @@ settings:
     recording:
       prompt: "请按下新的快捷键…"
       cancel_hint: "取消"
+      pause_hint: "停顿即可保存"
     action:
       edit: "更改快捷键"
       reset: "恢复默认"
@@ -3192,6 +3198,7 @@ settings:
       cancel: "取消"
       replace: "替换"
       reset_all: "全部恢复默认"
+      edit_context: "编辑上下文"
     conflict:
       title: "%{chord} 已被 %{bindings} 使用"
       holder: "%{command}（%{context}）"
@@ -3205,6 +3212,15 @@ settings:
         one: "1 个已修改"
         many: "%{count} 个已修改"
     save_error: "无法保存键盘快捷键：%{error}"
+    context_editor:
+      label: "上下文"
+      placeholder: "Editor && vim_mode == normal"
+      save: "保存"
+      invalid: "上下文无效：%{error}"
+      unknown: "永不匹配：应用中没有名为 %{names} 的内容"
+    warning:
+      prefix: "共用按键序列"
+      typed_text: "会拦截输入的文字"
     command:
       toggle_command_palette: 切换命令面板
       new_query_tab: 新建查询标签页
@@ -3313,6 +3329,25 @@ settings:
       layout_left_right: 左右布局
       layout_snowflake: 雪花布局
       layout_compact: 紧凑布局
+      extend_select_left: 向左扩展选区
+      extend_select_right: 向右扩展选区
+      move_to_row_start: 移到行首
+      move_to_row_end: 移到行尾
+      extend_select_row_start: 扩展选区到行首
+      extend_select_row_end: 扩展选区到行尾
+      extend_select_first: 扩展选区到第一行
+      extend_select_last: 扩展选区到最后一行
+      select_all: 全选
+      save_row: 保存行更改
+      undo: 撤销
+      redo: 重做
+      toggle_column_group: 展开或折叠列
+      step_out: 退出嵌套值
+      trigger_completion: 显示补全
+      close_window: 关闭窗口
+      toggle_console: 显示或隐藏控制台
+      load_more: 加载更多
+      edit_expiry: 编辑过期时间
     context:
       global: 全局
       sidebar: 侧边栏
@@ -3335,6 +3370,11 @@ settings:
       event_streams_picker: 事件流选择器
       schema_viz: 架构可视化
       document_tree: 文档树
+      data_table: 数据表
+      input: 文本框
+      modal: 模态对话框
+      key_value: 键值浏览器
+      settings: 设置窗口
     category:
       global: 全局
       focus: 聚焦

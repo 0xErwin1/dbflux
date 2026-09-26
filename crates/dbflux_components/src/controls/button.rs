@@ -689,6 +689,8 @@ mod tests {
         });
     }
 
+    gpui::actions!(button_test, [HarnessEnter]);
+
     struct ToolbarHarness {
         focus_handle: FocusHandle,
         renders: usize,
@@ -705,9 +707,12 @@ mod tests {
 
             let first_clicks = self.clicks.clone();
             let second_clicks = self.clicks.clone();
+            let parent_actions = self.clicks.clone();
 
             div()
                 .track_focus(&self.focus_handle)
+                .key_context("ToolbarHarness")
+                .on_action(move |_: &HarnessEnter, _, _| parent_actions.borrow_mut().push("parent"))
                 .flex()
                 .child(
                     div().debug_selector(|| "first-button".to_string()).child(
@@ -872,5 +877,29 @@ mod tests {
             window.update(|_, cx| harness.read(cx).renders) > after_press,
             "releasing Enter must repaint the button with its rest fill"
         );
+    }
+
+    /// A focused button answers Enter and Space itself even when an ancestor
+    /// binds the same keys (the keymap binds Enter in many window contexts);
+    /// with focus on the ancestor, the binding runs.
+    #[gpui::test]
+    fn a_focused_button_takes_enter_before_ancestor_bindings(cx: &mut gpui::TestAppContext) {
+        let (harness, clicks, window) = open_toolbar(cx);
+        window.update(|_, cx| {
+            cx.bind_keys([
+                gpui::KeyBinding::new("enter", HarnessEnter, Some("ToolbarHarness")),
+                gpui::KeyBinding::new("space", HarnessEnter, Some("ToolbarHarness")),
+            ])
+        });
+
+        window.simulate_keystrokes("tab");
+        press(window, "enter");
+        press(window, "space");
+        assert_eq!(*clicks.borrow(), vec!["first", "first"]);
+
+        window.update(|window, cx| harness.read(cx).focus_handle.clone().focus(window, cx));
+        window.run_until_parked();
+        press(window, "enter");
+        assert_eq!(*clicks.borrow(), vec!["first", "first", "parent"]);
     }
 }

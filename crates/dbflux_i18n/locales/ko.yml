@@ -939,6 +939,11 @@ document:
       visual: "비주얼"
       visual_line: "비주얼 줄"
       visual_block: "비주얼 블록"
+      search:
+        label: "Vim 검색"
+        placeholder: "앞으로 검색"
+        run: "검색"
+        cancel: "취소"
     output:
       running: "실행 중..."
       stopped: 중지됨
@@ -3185,6 +3190,7 @@ settings:
     recording:
       prompt: "새 단축키를 누르세요…"
       cancel_hint: "취소"
+      pause_hint: "잠시 멈추면 저장됩니다"
     action:
       edit: "단축키 변경"
       reset: "기본값으로 재설정"
@@ -3192,6 +3198,7 @@ settings:
       cancel: "취소"
       replace: "바꾸기"
       reset_all: "기본값으로 재설정"
+      edit_context: "컨텍스트 편집"
     conflict:
       title: "%{chord}은(는) 이미 %{bindings}에서 사용 중입니다"
       holder: "%{command} (%{context})"
@@ -3205,6 +3212,15 @@ settings:
         one: "변경됨 1개"
         many: "변경됨 %{count}개"
     save_error: "키보드 단축키를 저장할 수 없습니다: %{error}"
+    context_editor:
+      label: "컨텍스트"
+      placeholder: "Editor && vim_mode == normal"
+      save: "저장"
+      invalid: "잘못된 컨텍스트: %{error}"
+      unknown: "일치하지 않음: 앱에 %{names} 이름이 없습니다"
+    warning:
+      prefix: "키 시퀀스를 공유함"
+      typed_text: "입력한 텍스트를 가로챔"
     command:
       toggle_command_palette: 명령 팔레트 전환
       new_query_tab: 새 쿼리 탭
@@ -3313,6 +3329,25 @@ settings:
       layout_left_right: 왼쪽-오른쪽 레이아웃
       layout_snowflake: 스노우플레이크 레이아웃
       layout_compact: 컴팩트 레이아웃
+      extend_select_left: 왼쪽으로 선택 확장
+      extend_select_right: 오른쪽으로 선택 확장
+      move_to_row_start: 행 시작으로 이동
+      move_to_row_end: 행 끝으로 이동
+      extend_select_row_start: 행 시작까지 선택 확장
+      extend_select_row_end: 행 끝까지 선택 확장
+      extend_select_first: 첫 행까지 선택 확장
+      extend_select_last: 마지막 행까지 선택 확장
+      select_all: 모두 선택
+      save_row: 행 변경 사항 저장
+      undo: 실행 취소
+      redo: 다시 실행
+      toggle_column_group: 열 펼치기 또는 접기
+      step_out: 중첩 값에서 나가기
+      trigger_completion: 자동 완성 표시
+      close_window: 창 닫기
+      toggle_console: 콘솔 표시/숨기기
+      load_more: 더 불러오기
+      edit_expiry: 만료 편집
     context:
       global: 전역
       sidebar: 사이드바
@@ -3334,6 +3369,11 @@ settings:
       audit: 감사 뷰어
       event_streams_picker: 이벤트 스트림 선택기
       document_tree: 문서 트리
+      data_table: 데이터 표
+      input: 텍스트 필드
+      modal: 모달 대화상자
+      key_value: 키-값 브라우저
+      settings: 설정 창
     category:
       global: 전역
       focus: 포커스

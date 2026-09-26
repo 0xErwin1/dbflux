@@ -10,9 +10,9 @@ use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
-    IntoElement, KeyBinding, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    Window, actions, canvas, div, px, uniform_list,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
+    uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
@@ -40,127 +40,64 @@ impl Default for ScrollSyncState {
     }
 }
 
-actions!(
-    data_table,
-    [
-        MoveUp,
-        MoveDown,
-        MoveLeft,
-        MoveRight,
-        SelectUp,
-        SelectDown,
-        SelectLeft,
-        SelectRight,
-        MoveToLineStart,
-        MoveToLineEnd,
-        MoveToTop,
-        MoveToBottom,
-        SelectToLineStart,
-        SelectToLineEnd,
-        SelectToTop,
-        SelectToBottom,
-        SelectAll,
-        ClearSelection,
-        Copy,
-        CopyRow,
-        StartEdit,
-        ConfirmEdit,
-        CancelEdit,
-        SaveRow,
-        // Row operations (vim-style)
-        DeleteRow,
-        AddRow,
-        DuplicateRow,
-        SetNull,
-        // Undo/Redo
-        Undo,
-        Redo,
-        // Document grids
-        ToggleColumnGroup,
-        StepOut,
-    ]
-);
-
-/// Key context for DataTable - matches ContextId::Results.as_gpui_context().
-const CONTEXT: &str = "Results";
-/// Key binding context for DataTable actions when no nested input is focused.
-const CONTEXT_WITHOUT_INPUT: &str = "Results && !Input";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        // Navigation
-        KeyBinding::new("up", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("down", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("left", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("right", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("k", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("j", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("h", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("l", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-up", SelectUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-down", SelectDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-right", SelectRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("home", MoveToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("end", MoveToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-home", MoveToTop, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-end", MoveToBottom, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-home", SelectToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new(
-            "ctrl-shift-end",
+/// Actions of the data table. The keymap binds them in the table's
+/// [`CONTEXT`] (see `dbflux_ui_base::keymap`).
+pub mod actions {
+    gpui::actions!(
+        data_table,
+        [
+            MoveUp,
+            MoveDown,
+            MoveLeft,
+            MoveRight,
+            SelectUp,
+            SelectDown,
+            SelectLeft,
+            SelectRight,
+            MoveToLineStart,
+            MoveToLineEnd,
+            MoveToTop,
+            MoveToBottom,
+            SelectToLineStart,
+            SelectToLineEnd,
+            SelectToTop,
             SelectToBottom,
-            Some(CONTEXT_WITHOUT_INPUT),
-        ),
-        // `secondary-*` is GPUI's platform-aware modifier: Cmd on macOS,
-        // Ctrl elsewhere. Use it for the system-standard commands so macOS
-        // gets the expected Cmd shortcut without binding the literal Ctrl
-        // chord too (which would shadow editor interrupt semantics on Mac).
-        //
-        // Scope this to "table without an active Input" so that ctrl-a /
-        // cmd-a inside an inline cell editor (or any other Input nested in
-        // the table) selects the input's text instead of all rows.
-        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("escape", ClearSelection, Some(CONTEXT_WITHOUT_INPUT)),
-        // Copy
-        KeyBinding::new("secondary-c", Copy, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("y y", Copy, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // Edit mode
-        KeyBinding::new("enter", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("f2", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // Commit (Ctrl+S / Cmd+S) saves every staged edit, as Save does.
-        KeyBinding::new("secondary-s", SaveRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // Row operations (vim-style)
-        KeyBinding::new("d d", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("delete", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("a a", AddRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // SetNull — local mnemonic ("N" for NULL). Kept as literal Ctrl on
-        // every platform; this isn't a system-standard shortcut and reusing
-        // Cmd+N on macOS would clash with NewQueryTab.
-        KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT_WITHOUT_INPUT)),
-        // Undo/Redo: standard Cmd/Ctrl variants via `secondary-`, plus
-        // vim-style `u` / `ctrl-r` kept literal as familiar editor aliases.
-        KeyBinding::new("u", Undo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-z", Undo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-r", Redo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT_WITHOUT_INPUT)),
-        // Document grids: `e` expands an object column in place, Backspace
-        // leaves a nested value. Relational grids ignore both.
-        KeyBinding::new("e", ToggleColumnGroup, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("backspace", StepOut, Some(CONTEXT_WITHOUT_INPUT)),
-    ]);
+            SelectAll,
+            ClearSelection,
+            Copy,
+            CopyRow,
+            StartEdit,
+            ConfirmEdit,
+            CancelEdit,
+            SaveRow,
+            // Row operations (vim-style)
+            DeleteRow,
+            AddRow,
+            DuplicateRow,
+            SetNull,
+            // Undo/Redo
+            Undo,
+            Redo,
+            // Document grids
+            ToggleColumnGroup,
+            StepOut,
+        ]
+    );
 }
+
+use actions::*;
+
+/// Key context of the data table element. It is its own identifier rather
+/// than the `Results` context a window root sets, so the table's keys never
+/// match on the window root and a root binding never matches on the table.
+pub const CONTEXT: &str = "DataTable";
 
 /// The single-keystroke binding of the table action behind a context-menu
 /// action, shown as the shortcut on that menu row.
 ///
 /// Multi-keystroke vim sequences (`y y`, `d d`) are skipped, so an action
 /// bound only to a sequence has no shortcut. Among single keystrokes the
-/// first binding registered by [`init`] wins.
+/// first binding registered wins.
 pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Keystroke> {
     let table_action: Box<dyn Action> = match action {
         ContextMenuAction::Copy => Box::new(Copy),

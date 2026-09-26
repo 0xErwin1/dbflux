@@ -589,14 +589,6 @@ impl ObjectBrowserDocument {
                             cx.stop_propagation();
                         }),
                     )
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                        let modifiers = modifiers_from_gpui(&event.keystroke.modifiers);
-
-                        if event.keystroke.key == "s" && modifiers == Modifiers::primary() {
-                            this.save_object_edits(cx);
-                            cx.stop_propagation();
-                        }
-                    }))
                     .child(
                         ReadOnlyEditor::new(&editor.input)
                             .appearance(false)

@@ -1,3 +1,4 @@
+use crate::keymap::{Command, ContextId};
 use dbflux_app::updates::{self, ChangelogRelease, changelog};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -193,7 +194,10 @@ impl WhatsNewDialog {
                     dbflux_i18n::t!("updates.whats_new.close"),
                 )
                 .primary()
-                .kbd("Esc")
+                .when_some(
+                    dbflux_ui_base::keymap::shortcut_label(ContextId::Modal, Command::Cancel),
+                    Button::kbd,
+                )
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),
             )
             .into_any_element()

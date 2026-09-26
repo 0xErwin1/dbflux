@@ -1,7 +1,7 @@
 use crate::settings::layout;
 use crate::ssh_shared::SshAuthSelection;
 use crate::tokens::{ConnectionFormMetrics, FormMetrics};
-use dbflux_app::keymap::ContextId;
+use dbflux_app::keymap::Command;
 use dbflux_components::components::form_renderer;
 use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
@@ -12,6 +12,9 @@ use dbflux_components::primitives::{
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Heights};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
+use dbflux_ui_base::keymap::{
+    CONNECTION_MANAGER_WINDOW_KEY_CONTEXT, RunCommand, root_key_context, run_command,
+};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
@@ -360,7 +363,7 @@ impl ConnectionManagerWindow {
                         )
                         .primary()
                         .icon(AppIcon::Check)
-                        .kbd("Ctrl S")
+                        .when_some(Self::shortcut(Command::SaveQuery), Button::kbd)
                         .focused(save_focused)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.save_profile(window, cx);
@@ -1339,7 +1342,11 @@ impl Render for ConnectionManagerWindow {
 
         div()
             .id("connection-manager")
-            .key_context(ContextId::ConnectionManager.as_gpui_context())
+            .key_context(root_key_context(
+                CONNECTION_MANAGER_WINDOW_KEY_CONTEXT,
+                self.active_context(),
+                &[],
+            ))
             .track_focus(&self.focus_handle)
             .on_mouse_down(
                 MouseButton::Left,
@@ -1355,9 +1362,12 @@ impl Render for ConnectionManagerWindow {
                     }
                 }),
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.handle_key_event(event, window, cx) {
-                    cx.stop_propagation();
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let handled = run_command(action)
+                    .is_some_and(|command| this.dispatch_command(command, window, cx));
+
+                if !handled {
+                    cx.propagate();
                 }
             }))
             .size_full()

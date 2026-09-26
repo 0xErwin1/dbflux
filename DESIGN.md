@@ -469,7 +469,8 @@ Use one primary button per toolbar or dialog.
 
 ### Focus
 
-- **Focus-visible only.** Focus indication shows only after keyboard input and disappears on the next pointer press (`is_keyboard_modality`, `is_focus_visible`, `WhenFocusVisible` in `primitives/focus_ring.rs`).
+- **Focus-visible only.** Focus indication shows only after keyboard input, stays while the pointer moves, and disappears on the next pointer press (`is_keyboard_modality`, `is_focus_visible`, `WhenFocusVisible` in `primitives/focus_ring.rs`, backed by the window's `keyboard_focus_visible`).
+- **A focused control owns Enter and Space.** A focused button, checkbox or list row answers them itself, ahead of the shortcuts of the panel around it.
 - **The ring:** 1.5 px (`Borders::FOCUS_RING`) in the tint, tracing the full cut outline, diagonals included. It sits **outside, 2 px from the edge** on filled controls (primary, danger, checked checkbox) and **inset** on everything else (`ChamferFillKind::Filled` vs `Surface`, `FocusShape::FilledChamfer` vs `Chamfer`). Square data surfaces use `FocusShape::Rect`.
 - **Composite controls mark the focused item, never the container.** Segmented controls, chips and tabs draw a 2 px tint underline inside the item (`focus_underline`); lists and trees draw the tint wash plus a 2 px tint bar on the left (`ListRow`); menus use the row wash.
 - **Selection is fill only.** A selected item takes a wash or a raised thumb, never a ring. Focus and selection can coexist on the same item.
@@ -490,7 +491,7 @@ Use these. Never hand-roll a rounded `div`, a color literal or a one-off control
 | Toast | `Toast` (`::success/::info/::warning/::error`) | `dbflux_ui_base::toast` | transient feedback; errors go through `report_error` |
 | Spinner | `Spinner` | `primitives::loading_state` | work in progress |
 | Surface | `surface(SurfaceRole, cx)` | `primitives::surface` | any pane, card, raised block, overlay or modal frame |
-| Modal | `Modal`, `modal_field`, `modal_code`, `modal_lead` | `modals` | dialogs; handles Escape, Enter and focus |
+| Modal | `Modal`, `modal_field`, `modal_code`, `modal_lead` | `modals` | dialogs; the `Modal` key context takes Escape, Enter and the scroll keys; handles focus |
 | Headers | `panel_header`, `panel_header_with_actions`, `section_header`, `page_header`, `collapsible_bar` | `composites::header` | titles of panels, sections and pages |
 | Tabs | `document_tab`, `result_tab`, `inline_tab` (+ `*_tab_bar`) | `composites::tabs` | document tabs, result tabs, in-pane tab strips |
 | Focus | `focus_ring`, `focus_underline`, `WhenFocusVisible` | `primitives::focus_ring` | keyboard focus on anything that is not already a control |

@@ -1021,7 +1021,9 @@ impl Render for NewKeyModal {
             .id("new-key-modal")
             .focus_handle(&self.focus_handle)
             .on_close(close)
-            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
+            // Escape and Enter go through the form's own navigation: Escape
+            // leaves a field before it closes the modal.
+            .defer_keys_to_owner()
             .icon(AppIcon::Plus)
             .width(px(600.0))
             .max_height(px(500.0))

@@ -967,6 +967,27 @@ impl QueryLanguage {
         }
     }
 
+    /// Stable identifier of the language for keymap context predicates
+    /// (`language == mongo`).
+    pub fn context_id(&self) -> &'static str {
+        match self {
+            Self::Sql => "sql",
+            Self::CloudWatchLogsInsightsQl => "cloudwatch_insights",
+            Self::OpenSearchPpl => "opensearch_ppl",
+            Self::OpenSearchSql => "opensearch_sql",
+            Self::MongoQuery => "mongo",
+            Self::RedisCommands => "redis",
+            Self::Cypher => "cypher",
+            Self::InfluxQuery => "influxql",
+            Self::Flux => "flux",
+            Self::Cql => "cql",
+            Self::Lua => "lua",
+            Self::Python => "python",
+            Self::Bash => "bash",
+            Self::Custom(_) => "custom",
+        }
+    }
+
     /// Default file extension for "Save As" dialogs.
     pub fn default_extension(&self) -> &'static str {
         match self {

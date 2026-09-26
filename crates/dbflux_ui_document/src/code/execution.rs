@@ -2751,6 +2751,7 @@ mod rail_tests {
     fn init_test_runtime(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
         cx.update(gpui_component::init);
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host });
@@ -2928,6 +2929,7 @@ mod confirm_keyboard_tests {
         &mut VisualTestContext,
     ) {
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         let toasts = cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host: host.clone() });

@@ -12,6 +12,7 @@ use super::metadata::{format_ttl, ttl_tone};
 use super::parsing::{database_label, key_type_label, type_badge};
 use super::view::{render_delete_confirm_modal, render_kv_context_menu};
 use crate::handle::DocumentEvent;
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::composites::{
     Breadcrumb, BreadcrumbSegment, MenuItem, refresh_split_button, render_menu_items,
     render_menu_overlay,
@@ -25,6 +26,7 @@ use dbflux_components::primitives::{
 use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, KeyValueMetrics, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{KeyType, KeyValueFeatures};
+use dbflux_ui_base::keymap::RunCommand;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -186,9 +188,10 @@ impl Render for KeyValueDocument {
             .flex_col()
             .bg(theme.table)
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.handle_document_key(event, window, cx) {
-                    cx.stop_propagation();
+            .key_context(ContextId::KeyValue.as_gpui_context())
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if !this.handle_document_command(action, window, cx) {
+                    cx.propagate();
                 }
             }))
             .on_mouse_down(
@@ -252,18 +255,20 @@ impl KeyValueDocument {
     /// Document-level shortcuts that are not in the shared keymap: `t` for
     /// the expiry editor, `Ctrl+J` to load more keys and `Ctrl+\`` for the
     /// console. Keys typed into a field are left alone.
-    fn handle_document_key(
+    /// Runs the commands of the key-value layer of the keymap. The list
+    /// commands apply only while the document itself, not a field inside it,
+    /// has focus. Returns whether the command was handled.
+    fn handle_document_command(
         &mut self,
-        event: &KeyDownEvent,
+        action: &RunCommand,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let keystroke = &event.keystroke;
-        let modifiers = &keystroke.modifiers;
-        let only_control =
-            modifiers.control && !modifiers.alt && !modifiers.shift && !modifiers.platform;
+        let Some(command) = Command::from_action_id(&action.command) else {
+            return false;
+        };
 
-        if only_control && keystroke.key == "`" {
+        if command == Command::ToggleConsole {
             self.toggle_console(window, cx);
             return true;
         }
@@ -272,23 +277,17 @@ impl KeyValueDocument {
             return false;
         }
 
-        if only_control && keystroke.key == "j" {
-            self.load_more_keys(cx);
-            return true;
+        match command {
+            Command::LoadMore => {
+                self.load_more_keys(cx);
+                true
+            }
+            Command::EditExpiry if self.selected_value.is_some() => {
+                self.open_expiry_editor(window, cx);
+                true
+            }
+            _ => false,
         }
-
-        let no_modifiers = !modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-            && !modifiers.platform
-            && !modifiers.function;
-
-        if no_modifiers && keystroke.key == "t" && self.selected_value.is_some() {
-            self.open_expiry_editor(window, cx);
-            return true;
-        }
-
-        false
     }
 
     fn render_document_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -407,7 +406,13 @@ impl KeyValueDocument {
                             .size(KeyValueMetrics::FOLDER_ICON)
                             .color(theme.muted_foreground),
                     )
-                    .suffix(Kbd::new("/")),
+                    .when_some(
+                        dbflux_ui_base::keymap::shortcut_label(
+                            ContextId::Results,
+                            Command::FocusSearch,
+                        ),
+                        |input, label| input.suffix(Kbd::new(label)),
+                    ),
             );
 
         let type_control = self
@@ -821,7 +826,10 @@ impl KeyValueDocument {
             .danger()
             .icon(AppIcon::Delete)
             .width(KeyValueMetrics::BULK_MODAL_WIDTH)
-            .header_extra(Kbd::new("Esc"))
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(ContextId::Modal, Command::Cancel),
+                |modal, label| modal.header_extra(Kbd::new(label)),
+            )
             .on_close(close)
             .body(body)
             .footer(footer)

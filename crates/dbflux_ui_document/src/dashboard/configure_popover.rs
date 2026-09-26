@@ -426,6 +426,7 @@ mod keyboard_tests {
     /// without applying it yet.
     fn open_popover(cx: &mut TestAppContext) -> Setup<'_> {
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host });

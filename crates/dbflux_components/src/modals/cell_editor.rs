@@ -266,7 +266,13 @@ mod keyboard_tests {
     fn escape_closes_the_cell_editor(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_component::init(cx);
-            crate::modals::register_modal_keybindings(cx);
+            // The escape binding the app keymap gives the cell editor (see
+            // the cell editor layer in `dbflux_ui_base::keymap`).
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                crate::actions::Cancel,
+                Some(dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context()),
+            )]);
         });
 
         let (host, window) = cx.add_window_view(|window, cx| Host {

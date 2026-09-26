@@ -174,6 +174,39 @@ impl GeneralSection {
         self.gen_form_cursor = self.gen_form_rows().len().saturating_sub(1);
     }
 
+    /// Left and Right on a segmented row (theme, style, startup focus) move
+    /// its choice, stopping at either end. Returns whether the cursor was on
+    /// such a row.
+    pub(super) fn gen_step_segmented(&mut self, step: isize) -> bool {
+        let stepped = |current: usize, count: usize| {
+            current
+                .saturating_add_signed(step)
+                .min(count.saturating_sub(1))
+        };
+
+        match self.gen_current_row() {
+            Some(GeneralFormRow::Theme) => {
+                let next = stepped(Self::theme_index(self.gen_settings.theme), 3);
+                self.gen_settings.theme = Self::theme_for_index(next);
+                true
+            }
+            Some(GeneralFormRow::Style) => {
+                let next = stepped(Self::style_index(self.gen_settings.style), 2);
+                self.gen_settings.style = Self::style_for_index(next);
+                true
+            }
+            Some(GeneralFormRow::DefaultFocus) => {
+                let next = stepped(
+                    Self::startup_focus_index(self.gen_settings.default_focus_on_startup),
+                    2,
+                );
+                self.gen_settings.default_focus_on_startup = Self::startup_focus_for_index(next);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn gen_activate_current_field(
         &mut self,
         window: &mut Window,
@@ -416,9 +449,19 @@ impl GeneralSection {
                 self.gen_move_up();
                 cx.notify();
             }
-            ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
-                if modifiers == Modifiers::none() =>
+            ("left", modifiers)
+                if modifiers == Modifiers::none() && self.gen_step_segmented(-1) =>
             {
+                cx.notify();
+            }
+            ("right", modifiers) if modifiers == Modifiers::none() => {
+                if self.gen_step_segmented(1) {
+                    cx.notify();
+                } else {
+                    self.gen_activate_current_field(window, cx);
+                }
+            }
+            ("l", modifiers) | ("enter", modifiers) if modifiers == Modifiers::none() => {
                 self.gen_activate_current_field(window, cx);
             }
             ("tab", modifiers) if modifiers == Modifiers::none() => {
@@ -880,7 +923,10 @@ impl GeneralSection {
         )
         .primary()
         .icon(AppIcon::Save)
-        .kbd("Ctrl S")
+        .when_some(
+            crate::settings::save_shortcut(),
+            dbflux_components::controls::Button::kbd,
+        )
         .focused(is_save_focused)
         .on_click(cx.listener(|this, _, window, cx| {
             this.select_row(GeneralFormRow::SaveButton);

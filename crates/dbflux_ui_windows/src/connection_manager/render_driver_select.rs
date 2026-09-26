@@ -1,4 +1,5 @@
 use crate::tokens::ConnectionFormMetrics;
+use dbflux_app::keymap::Command;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
@@ -129,7 +130,11 @@ impl ConnectionManagerWindow {
                         .cleanable(true),
                 ),
             )
-            .when(query_is_empty, |field| field.child(Kbd::new("/")));
+            .when(query_is_empty, |field| {
+                field.when_some(Self::shortcut(Command::FocusSearch), |field, label| {
+                    field.child(Kbd::new(label))
+                })
+            });
 
         div()
             .flex()
@@ -317,7 +322,7 @@ impl ConnectionManagerWindow {
         let mut cta = Button::new("cm-driver-configure", cta_label)
             .primary()
             .icon(AppIcon::ChevronRight)
-            .kbd("↵");
+            .when_some(Self::shortcut(Command::Execute), Button::kbd);
         if cta_disabled {
             cta = cta.disabled(true);
         } else {
@@ -365,7 +370,7 @@ impl ConnectionManagerWindow {
                     dbflux_i18n::t!("connection_manager.driver_select.cancel"),
                 )
                 .secondary()
-                .kbd("Esc")
+                .when_some(Self::shortcut(Command::Cancel), Button::kbd)
                 .on_click(cx.listener(|_, _, window, cx| {
                     cx.emit(DismissEvent);
                     window.remove_window();

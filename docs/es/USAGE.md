@@ -678,6 +678,17 @@ qué panel tiene el foco. Los atajos escritos con el modificador **primary** usa
 `Ctrl` literal se mantienen como `Ctrl` en todas las plataformas (para evitar
 conflictos con los atajos del sistema en macOS).
 
+Cada atajo de abajo se puede cambiar en **Settings → Keybindings**: sus teclas
+(una combinación o una secuencia como `g g`) y el contexto en el que se aplica.
+Las teclas escritas con un espacio, como `y y`, se pulsan una tras otra; tras la
+primera, DBFlux espera hasta un segundo la siguiente. Mientras hay un diálogo
+abierto, los paneles detrás no reaccionan a sus teclas.
+
+El foco se muestra solo después de usar el teclado: el anillo de acento aparece
+en el control con foco tras pulsar una tecla, se mantiene mientras se mueve el
+puntero y se oculta con el siguiente clic. Un botón, casilla o fila de lista con
+foco toma `Enter` y `Space` para sí.
+
 ### Global (disponible sin importar el foco)
 
 | Teclas                                    | Acción                                 |
@@ -813,7 +824,8 @@ editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
 las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
 alinearse con las columnas en pantalla.
 
-En modo Normal, `/` abre un campo nativo de búsqueda de texto. Escribe una
+En modo Normal, `/` abre una barra de búsqueda bajo el editor: una `/` de acento
+junto al campo de búsqueda. Escribe una
 cadena literal, que distingue mayúsculas y minúsculas, y pulsa `Enter` para
 buscar hacia adelante desde el cursor, volviendo al inicio al llegar al final.
 `Escape` cancela sin mover el cursor ni sustituir la última búsqueda. `n`
@@ -946,11 +958,110 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 
 ### Command palette
 
-| Teclas                      | Acción                           |
-| --------------------------- | -------------------------------- |
-| `j` / `k` (o `Down` / `Up`) | Seleccionar siguiente / anterior |
-| `Enter`                     | Ejecutar                         |
-| `Escape`                    | Cancelar                         |
+| Teclas | Acción |
+|--------|--------|
+| `Down` / `Up` (o `Ctrl+j` / `Ctrl+k`) | Seleccionar siguiente / anterior |
+| `Enter` | Ejecutar |
+| `Escape` | Cancelar |
+
+Las letras quedan para el campo de búsqueda, así que escribir filtra la lista.
+
+### Tabla de datos
+
+Estas teclas se aplican mientras una grilla de resultados o una tabla tiene el
+foco y no se está editando ninguna celda.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` / `h` / `l` (o las flechas) | Mover el cursor |
+| `Shift` + flechas | Extender la selección |
+| `Home` / `End` | Primera / última celda de la fila |
+| `Ctrl+Home` / `Ctrl+End` | Primera / última fila |
+| `Shift+Home` / `Shift+End`, `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Extender la selección hasta el borde de la fila o de la tabla |
+| `Ctrl+a` / `Cmd+a` | Seleccionar todo |
+| `Escape` | Quitar la selección |
+| `Ctrl+c` / `Cmd+c`, `y y` | Copiar la selección |
+| `Shift+y Shift+y` | Copiar la fila |
+| `Enter` / `F2` | Editar la celda |
+| `Ctrl+Enter` / `Cmd+Enter`, `Ctrl+s` / `Cmd+s` | Guardar los cambios pendientes |
+| `d d` / `Delete` | Borrar la fila |
+| `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
+| `Ctrl+n` | Poner la celda en NULL |
+| `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
+| `e` | Expandir o contraer una columna anidada (grillas de documentos) |
+| `Backspace` | Salir de un valor anidado (grillas de documentos) |
+
+### Árbol de documentos
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Nodo siguiente / anterior |
+| `h` / `l` (o `Left` / `Right`) | Contraer / expandir, o ir al padre / primer hijo |
+| `g` / `Shift+g` (o `Home` / `End`) | Primer / último nodo |
+| `Ctrl+u` / `Ctrl+d` (o `PageUp` / `PageDown`) | Página arriba / abajo |
+| `Space` | Expandir / contraer |
+| `Enter` / `F2` | Editar el valor |
+| `e` | Vista previa del documento |
+| `d d` / `Delete` | Borrar el documento |
+| `t` | Cambiar la vista de datos |
+| `r` | Alternar la vista JSON sin formato |
+| `/` / `Ctrl+f` | Buscar; `n` / `Shift+n` coincidencia siguiente / anterior, `Escape` cierra |
+
+### Explorador clave-valor
+
+| Teclas | Acción |
+|--------|--------|
+| `` Ctrl+` `` | Mostrar u ocultar la consola de comandos, también desde su campo |
+| `Ctrl+j` | Cargar más claves |
+| `t` | Editar la expiración de la clave seleccionada |
+
+`Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
+un campo de texto.
+
+### Campos de texto
+
+| Teclas | Acción |
+|--------|--------|
+| `Ctrl+j` / `Ctrl+k` | Línea siguiente / anterior, o sugerencia siguiente / anterior |
+| `Ctrl+Space` | Mostrar sugerencias |
+| `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
+| `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
+
+### Diálogos
+
+| Teclas | Acción |
+|--------|--------|
+| `Escape` | Cerrar, o en diálogos con formulario salir primero del campo en edición |
+| `Enter` | Confirmar, cuando el botón principal está habilitado |
+| `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
+| `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+
+### Formularios y la ventana de Settings
+
+Estas teclas recorren los formularios de los diálogos y la ventana de Settings
+cuando no se está editando ningún campo de texto.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Campo siguiente / anterior |
+| `Left` / `Right` | Moverse dentro de una fila; cambiar la opción de un campo segmentado |
+| `h` / `l` | Volver a la lista / entrar al formulario |
+| `g` / `Shift+g` | Primer / último campo |
+| `Tab` / `Shift+Tab` | Campo siguiente / anterior |
+| `Space` | Alternar |
+| `Enter` | Activar o editar el campo |
+| `Escape` | Salir del campo o del formulario |
+| `/` | Enfocar la búsqueda |
+| `Ctrl+w` / `Ctrl+q` | Cerrar la ventana de Settings |
+| `Ctrl+s` | Guardar la sección |
+| `Ctrl+h` / `Ctrl+l` | Moverse entre la navegación y la sección |
+
+En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
+parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**
+y del método de autenticación SSH. En el visor de auditoría, `Left` / `Right`
+sobre los intervalos de tiempo cambian el intervalo.
 
 ### Menú contextual
 
@@ -987,8 +1098,9 @@ soporte de AI/MCP, que es el valor por defecto):
 - **MCP Clients / Roles / Policies** — gobernanza de clientes de AI (clientes
   confiables, roles, políticas). Ver `docs/MCP_AI_INTEGRATION.md`.
 - **Keybindings** — el keymap activo por contexto, con un filtro de texto y un
-  filtro de contexto. Graba un atajo nuevo para cualquier binding, quítalo o
-  restablécelo; los conflictos se muestran antes de guardar nada.
+  filtro de contexto. Graba teclas nuevas para cualquier binding (una
+  combinación o una secuencia), cambia el contexto en el que se aplica, quítalo
+  o restablécelo; los conflictos se muestran antes de guardar nada.
 - **Proxies** — perfiles de proxy SOCKS5 / HTTP CONNECT.
 - **SSH Tunnels** — perfiles de túnel SSH seleccionables por conexión.
 - **Auth Profiles** — perfiles de autenticación gestionados por un provider (AWS

@@ -5,12 +5,16 @@ use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::modals::{modal_code, modal_lead};
-use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Text};
+use dbflux_components::primitives::{
+    Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Kbd, Text,
+};
 use dbflux_components::tokens::{
-    ChamferCut, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
+    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand, last_keystroke};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
 
 /// Vertical line between two groups of the toolbar.
@@ -303,12 +307,19 @@ impl CodeDocument {
 
         // Focus inside the editor shows through its caret; the pane draws no
         // ring of its own.
+        let mut key_context = KeyContext::default();
+        key_context.add(CODE_EDITOR_KEY_CONTEXT);
+        for (key, value) in self.key_context_entries() {
+            key_context.set(key, value);
+        }
+
         div()
             .size_full()
             .flex()
             .flex_col()
             .min_h_0()
             .bg(bg)
+            .key_context(key_context)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -368,6 +379,34 @@ impl CodeDocument {
                     }
                 }),
             )
+            // A keymap binding runs before the key listeners below. Vim takes
+            // its own keys ahead of a default binding, as it did when the
+            // workspace resolved keys after them; a binding the user made
+            // wins over Vim. Any other command drops a half-typed count or
+            // operator, and Cancel keeps the editor focused, as the Escape
+            // key listener does when no binding takes the key.
+            .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if !action.from_user_binding
+                    && let Some(keystroke) = last_keystroke(cx)
+                    && this.handle_vim_key_down(
+                        &gpui::KeyDownEvent {
+                            keystroke,
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    )
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+
+                this.clear_vim_count_and_notify(cx);
+                if Command::from_action_id(&action.command) == Some(Command::Cancel) {
+                    this.schedule_editor_refocus(window, cx);
+                }
+            }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if this.handle_vim_key_down(event, window, cx) {
                     cx.stop_propagation();
@@ -395,18 +434,57 @@ impl CodeDocument {
                 ),
             )
             .when(self.vim.search_open, |el| {
-                el.child(
-                    div()
-                        .id("vim-search-prompt")
-                        .flex()
-                        .items_center()
-                        .child("/")
-                        .child(Input::new(&self.vim_search_input).id("vim-search-input")),
-                )
+                el.child(self.render_vim_search_prompt(cx))
             })
             .when_some(self.vim_mode(), |el, mode| {
                 el.child(self.render_vim_mode_indicator(mode, cx))
             })
+    }
+
+    /// The `/` prompt: a bar the height of the mode indicator above it, the
+    /// tinted slash, the frameless search field in the code face, and the
+    /// Enter and Escape hints the field answers.
+    fn render_vim_search_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+
+        div()
+            .id("vim-search-prompt")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(Spacing::SM)
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .font_family(AppFonts::MONO)
+            .child(Text::code("/").color(tint))
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.vim_search_input)
+                        .id("vim-search-input")
+                        .aria_label(dbflux_i18n::t!("document.code.vim.search.label"))
+                        .appearance(false)
+                        .small(),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Kbd::new("Enter"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.code.vim.search.run"
+                    )))
+                    .child(Kbd::new("Esc"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.code.vim.search.cancel"
+                    ))),
+            )
     }
 
     fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
@@ -840,7 +918,10 @@ impl CodeDocument {
             "dangerous-cancel-btn",
             dbflux_i18n::t!("document.code.dangerous_query.cancel"),
         )
-        .kbd("Esc")
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(ContextId::ConfirmModal, Command::Cancel),
+            Button::kbd,
+        )
         .on_click(move |_, window, cx| {
             entity_cancel.update(cx, |doc, cx| {
                 doc.cancel_dangerous_query(window, cx);
@@ -853,7 +934,10 @@ impl CodeDocument {
         )
         .danger()
         .icon(AppIcon::Play)
-        .kbd("\u{21B5}")
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(ContextId::ConfirmModal, Command::Execute),
+            Button::kbd,
+        )
         .on_click(move |_, window, cx| {
             entity_run.update(cx, |doc, cx| {
                 doc.confirm_dangerous_query(suppress, window, cx);

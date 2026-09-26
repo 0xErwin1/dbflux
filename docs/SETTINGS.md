@@ -126,31 +126,71 @@ the full event schema and redaction behavior see [Audit](AUDIT.md) and
 
 ## Keybindings
 
-This section lists the active keymap grouped by context. Filter it by command
-or key with the text field, or show one context with the context filter. A
-context that inherits from another (the Editor inherits from Global) also lists
-the inherited bindings it does not shadow. The full default keymap is documented
-in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+This section lists the active keymap grouped by context. Filter it by command,
+key or context predicate with the text field, or show one context with the
+context filter. A context that inherits from another (the Editor inherits from
+Global) also lists the inherited bindings it does not shadow. The full default
+keymap is documented in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
 
 **Changing a shortcut.** Press the pencil on a binding, or select it and press
-`Enter`, then press the new shortcut. `Esc` cancels. While recording, **Remove
-shortcut** leaves the binding with no key. Keys the settings window uses itself,
-such as `Ctrl+S` or `Tab`, can be recorded too. A shortcut is a single key with
-its modifiers; key sequences are not supported, and a bare `Esc` cannot be
-recorded because it cancels.
+`Enter`, then press the new keys. A shortcut can be one key with its modifiers
+or a sequence of up to four, such as `g g` or `Ctrl+K Ctrl+S`: press them one
+after the other, and the recording is saved after a one-second pause. `Esc`
+cancels. While recording, **Remove shortcut** leaves the binding with no key.
+Keys the settings window uses itself, such as `Ctrl+S` or `Tab`, can be recorded
+too. A bare `Esc` cannot be recorded because it cancels.
 
-**Conflicts.** If the new shortcut is already used by another binding in the same
-context, or in a context that inherits from it or that it inherits from, nothing
-is saved yet: a warning names the other command and its context. **Cancel** keeps
-everything as it was. **Replace** gives the shortcut to the binding you are
-editing and removes it from the other one, which keeps no shortcut until you
-reset it. A binding that collides with another shows a "conflicts with" badge,
-and the footer counts the conflicts.
+**Contexts.** Every binding applies in a context, written as a predicate in the
+same language Zed uses. Press the layers button on a binding, or select it and
+press `p`, to edit it; `Enter` saves and `Esc` cancels. A predicate combines
+names with `&&`, `||` and `!`, compares a value with `==` or `!=`, and uses
+`A > B` for "B inside A", with parentheses for grouping:
+
+| Predicate | Applies |
+|-----------|---------|
+| `Editor && !Modal` | in a code editor, not while a dialog is open |
+| `Editor && vim_mode == normal` | in a code editor in Vim Normal mode |
+| `Editor && language == mongo` | in a code editor for a MongoDB query |
+| `Results \|\| Audit` | in a result grid or the audit viewer |
+| `SidebarPanel && tab == scripts` | in the Scripts tab of the sidebar |
+| `CodeEditor > Input` | in the code editor's text buffer |
+
+The names are the context names shown by the context filter (`Global`,
+`Sidebar`, `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), the window
+names `Workspace`, `SettingsWindow` and `ConnectionManagerWindow`, and the
+panel names `ActivityRail`, `CommandSearch`, `SidebarPanel`, `CodeEditor`,
+`ResultPanel`, `RowInspector`, `KeyValueConsole`, `DocumentQueryBar`,
+`DocumentSchema`, `DashboardsPanel` and `SettingsSection`. The values are
+`vim_mode` (`normal`, `insert`, `replace`, `visual`, `visual_line`,
+`visual_block`, present only with Vim editing on), `language` (`sql`, `mongo`,
+`redis`, `lua`, `python`, `bash`, …), `tab`, `section` and `focus`. A predicate
+that does not parse is not saved; one that names something DBFlux never sets is
+saved with a warning, because it never matches.
+
+**Which binding wins.** A binding of an element that has focus (a text field,
+a data table, a dialog, the document tree) wins over a binding of the panel
+around it, and a binding you changed wins over a default bound to the same keys
+in the same place. With Vim editing on, a binding you made for a Vim mode, such
+as `space r` in `Editor && vim_mode == normal`, runs before Vim reads the key;
+the default bindings leave Vim's own keys to Vim. A focused button, checkbox or
+list row always takes `Enter` and `Space` itself.
+
+**Warnings and conflicts.** If the new keys are already used by another command
+in a context that can be active at the same time, nothing is saved yet: a
+warning names the other command and its context. **Cancel** keeps everything as
+it was. **Replace** gives the keys to the binding you are editing and removes
+them from the other one, which keeps no shortcut until you reset it. A binding
+that collides with another shows a "conflicts with" badge, and the footer counts
+the conflicts. Two badges warn without blocking: "shares a key sequence" when one
+binding's keys start another's (DBFlux then waits a second after the shorter one
+to see whether the longer one follows), and "takes typed text" when a plain
+letter is bound where text is typed, such as a text field or the code editor
+outside Vim's Normal and Visual modes.
 
 **Resetting.** An overridden binding shows a reset arrow that restores its
-default (`r` on a selected binding does the same, and `Delete` removes its
-shortcut). **Reset to defaults** in the footer drops every override. The footer
-also shows how many bindings are overridden.
+default keys and context (`r` on a selected binding does the same, and `Delete`
+removes its shortcut). **Reset to defaults** in the footer drops every override.
+The footer also shows how many bindings are overridden.
 
 Changes apply at once in every window, without a restart. Only your overrides
 are stored, in the `cfg_keybinding_overrides` table of `dbflux.db`, so bindings

@@ -1336,6 +1336,7 @@ pub struct Window {
     #[cfg(feature = "profiler")]
     window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
+    keyboard_focus_visible: bool,
     touch_gestures: TouchGestureRecognizer,
     touch_prediction_enabled: bool,
     long_press_timer: Option<Task<()>>,
@@ -1511,6 +1512,12 @@ pub(crate) enum DrawPhase {
 }
 
 pub(crate) const PENDING_INPUT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Whether `keystroke` activates a focused clickable element: Enter or
+/// Space without modifiers.
+fn is_activation_keystroke(keystroke: &Keystroke) -> bool {
+    (keystroke.key == "enter" || keystroke.key == "space") && !keystroke.modifiers.modified()
+}
 
 /// Pending input for a potential multi-stroke key binding.
 pub struct PendingInputStatus<'a> {
@@ -2287,6 +2294,7 @@ impl Window {
             #[cfg(feature = "profiler")]
             window_profiler: profiler::WindowProfiler::new(handle.window_id())?,
             last_input_modality: InputModality::Mouse,
+            keyboard_focus_visible: false,
             touch_gestures: TouchGestureRecognizer::new(
                 cx.platform
                     .gestures()
@@ -3471,6 +3479,14 @@ impl Window {
 
     pub(crate) fn last_input_was_touch(&self) -> bool {
         self.last_input_modality == InputModality::Touch
+    }
+
+    /// Whether keyboard focus indication should show: true after a key
+    /// press, false after a pointer press or a touch. Unlike
+    /// [`Window::last_input_was_keyboard`], moving the pointer leaves it as it
+    /// is, so a focus ring shown after Tab stays until the user clicks.
+    pub fn keyboard_focus_visible(&self) -> bool {
+        self.keyboard_focus_visible
     }
 
     /// The current state of the keyboard's capslock
@@ -5864,6 +5880,16 @@ impl Window {
             self.refresh();
         }
 
+        let old_focus_visible = self.keyboard_focus_visible;
+        self.keyboard_focus_visible = match &event {
+            PlatformInput::KeyDown(_) => true,
+            PlatformInput::MouseDown(_) | PlatformInput::Touch(_) => false,
+            _ => self.keyboard_focus_visible,
+        };
+        if self.keyboard_focus_visible != old_focus_visible {
+            self.refresh();
+        }
+
         // Handlers may set this to false by calling `stop_propagation`.
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
@@ -6319,6 +6345,22 @@ impl Window {
             return;
         }
 
+        // A focused clickable element answers an unmodified Enter or Space
+        // itself, the way a focused button does in a browser: its keyboard
+        // click needs the key to reach its key listeners, so bindings of its
+        // ancestors must not consume it first.
+        if self.pending_input.is_none()
+            && is_activation_keystroke(&keystroke)
+            && self
+                .rendered_frame
+                .dispatch_tree
+                .node(node_id)
+                .claims_activation_keys
+        {
+            self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
+            return;
+        }
+
         let mut currently_pending = self.pending_input.take().unwrap_or_default();
         if currently_pending.focus.is_some() && currently_pending.focus != self.focus {
             currently_pending = PendingInput::default();
@@ -6409,6 +6451,14 @@ impl Window {
         self.pending_input_changed(cx);
     }
 
+    /// Marks the element being painted as one that answers an unmodified
+    /// Enter or Space itself while it is focused, ahead of the key bindings
+    /// of its ancestors. Elements with click listeners call it while focused.
+    pub fn claim_activation_keys(&mut self) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.dispatch_tree.claim_activation_keys();
+    }
+
     fn new_pending_input_timeout(&self, duration: Duration, cx: &App) -> PendingInputTimeout {
         let (started_at, task) = self.start_pending_input_timeout(duration, cx);
         PendingInputTimeout {
@@ -6492,6 +6542,12 @@ impl Window {
         dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
         cx: &mut App,
     ) {
+        // A keystroke interceptor that stopped the key leaves every key
+        // listener out, not only the ones after the first.
+        if !cx.propagate_event {
+            return;
+        }
+
         // Capture phase
         for node_id in dispatch_path {
             let node = self.rendered_frame.dispatch_tree.node(*node_id);

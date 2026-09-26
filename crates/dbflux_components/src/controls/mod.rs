@@ -10,9 +10,9 @@ pub use button::{
 pub use checkbox::Checkbox;
 pub use dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 pub use input::{
-    CodeActionProvider, CompletionProvider, GpuiInput, Input, InputContentType, InputEnter,
-    InputEscape, InputEvent, InputIndentInline, InputMoveDown, InputMoveUp, InputOutdentInline,
-    InputPosition, InputSearch, InputState, ReadOnlyAccessibility, ReadOnlyEditor, Rope, RopeExt,
-    TriggerCompletion, register_input_overrides,
+    CodeActionProvider, CompletionProvider, GpuiInput, INPUT_CONTEXT, Input, InputContentType,
+    InputEnter, InputEscape, InputEvent, InputIndentInline, InputMoveDown, InputMoveUp,
+    InputOutdentInline, InputPosition, InputSearch, InputState, ReadOnlyAccessibility,
+    ReadOnlyEditor, Rope, RopeExt, TriggerCompletion,
 };
 pub use readonly_text_view::ReadonlyTextView;

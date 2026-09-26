@@ -3,7 +3,6 @@ use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::FormFieldKind;
-use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::*;
 
 use super::{
@@ -864,20 +863,9 @@ impl ConnectionManagerWindow {
         ContextId::ConnectionManager
     }
 
-    pub(super) fn handle_key_event(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let chord = key_chord_from_gpui(&event.keystroke);
-        let context = self.active_context();
-
-        if let Some(command) = dbflux_ui_base::keymap::effective_keymap().resolve(context, &chord) {
-            return self.dispatch_command(command, window, cx);
-        }
-
-        false
+    /// Keycap of the keys that run `command` in the connection manager.
+    pub(super) fn shortcut(command: Command) -> Option<gpui::SharedString> {
+        dbflux_ui_base::keymap::shortcut_label(ContextId::ConnectionManager, command)
     }
 
     pub(super) fn dispatch_command(
@@ -888,6 +876,10 @@ impl ConnectionManagerWindow {
     ) -> bool {
         match self.view {
             View::DriverSelect => self.handle_driver_select_command(command, window, cx),
+            View::EditForm if command == Command::SaveQuery => {
+                self.save_profile(window, cx);
+                true
+            }
             View::EditForm => self.handle_form_command(command, window, cx),
             View::Import => self.handle_import_command(command, window, cx),
         }
@@ -1413,6 +1405,12 @@ impl ConnectionManagerWindow {
                 cx.notify();
                 true
             }
+            Command::FocusLeft | Command::FocusRight
+                if self.step_segmented_field(command == Command::FocusRight, window, cx) =>
+            {
+                cx.notify();
+                true
+            }
             Command::FocusLeft => {
                 self.focus_left(cx);
                 true
@@ -1439,6 +1437,52 @@ impl ConnectionManagerWindow {
                 } else {
                     cx.emit(DismissEvent);
                     window.remove_window();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Left and Right on a segmented field move its choice: "Enter as"
+    /// between Fields and Connection URI, the SSH authentication method
+    /// between private key and password (with the cursor following the
+    /// choice). Returns whether the cursor was on such a field.
+    fn step_segmented_field(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.form_focus {
+            FormFocus::UseUri => {
+                let use_uri = self
+                    .form
+                    .checkbox_states
+                    .get("use_uri")
+                    .copied()
+                    .unwrap_or(false);
+
+                if use_uri != forward {
+                    self.form
+                        .checkbox_states
+                        .insert("use_uri".to_string(), forward);
+
+                    if forward {
+                        self.sync_fields_to_uri(window, cx);
+                    } else {
+                        self.sync_uri_to_fields(window, cx);
+                    }
+                }
+                true
+            }
+            FormFocus::SshAuthPrivateKey | FormFocus::SshAuthPassword => {
+                if forward {
+                    self.form_focus = FormFocus::SshAuthPassword;
+                    self.access.ssh_auth_method = SshAuthSelection::Password;
+                } else {
+                    self.form_focus = FormFocus::SshAuthPrivateKey;
+                    self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
                 }
                 true
             }

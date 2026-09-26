@@ -302,6 +302,7 @@ pub(crate) mod test_support {
 
     pub(crate) fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         cx.update(|cx| {
             cx.new(|_| {

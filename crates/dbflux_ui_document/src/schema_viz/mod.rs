@@ -41,7 +41,7 @@ use dbflux_components::tokens::{
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::keymap::{effective_keymap, key_chord_from_gpui};
+use dbflux_ui_base::keymap::{RunCommand, effective_keymap, run_command};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 
 /// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
@@ -1918,7 +1918,11 @@ impl SchemaVizDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
-        ContextId::SchemaViz
+        if self.context_menu.is_some() {
+            ContextId::ContextMenu
+        } else {
+            ContextId::SchemaViz
+        }
     }
 
     // ── Rendering helpers ──────────────────────────────────────────────────────
@@ -3008,21 +3012,35 @@ impl SchemaVizDocument {
                     this.open_context_menu(local, cx);
                 }),
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                // SchemaViz is a fully keyboard-driven context. Every key event is consumed
-                // here and must NOT propagate to the workspace, which would steal focus.
-                cx.stop_propagation();
-
-                let chord = key_chord_from_gpui(&event.keystroke);
-                let context = if this.context_menu.is_some() {
-                    ContextId::ContextMenu
-                } else {
-                    ContextId::SchemaViz
+            // The diagram's keys arrive as keymap commands in the SchemaViz and
+            // ContextMenu contexts (see `active_context`). A diagram command
+            // stays here even when it does nothing right now, so the
+            // workspace never takes focus away from the diagram; a command
+            // only the Global context binds (the palette, tab switching) goes
+            // on to the workspace.
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let Some(command) = run_command(action) else {
+                    return;
                 };
 
-                if let Some(command) = effective_keymap().resolve(context, &chord) {
-                    this.dispatch_command(command, window, cx);
+                if this.dispatch_command(command, window, cx) {
+                    return;
                 }
+
+                let keymap = effective_keymap();
+                let owned_here = [ContextId::SchemaViz, ContextId::ContextMenu]
+                    .into_iter()
+                    .filter_map(|context| keymap.layer(context))
+                    .any(|layer| layer.ordered_bindings().any(|(_, bound)| bound == command));
+
+                if !owned_here {
+                    cx.propagate();
+                }
+            }))
+            // Keys no binding takes stop here too, so nothing typed on the
+            // diagram reaches the workspace.
+            .on_key_down(cx.listener(|_this, _event: &KeyDownEvent, _window, cx| {
+                cx.stop_propagation();
             }))
             .child({
                 let entity_for_viewport = cx.entity().clone();
@@ -3303,16 +3321,12 @@ impl SchemaVizDocument {
             None
         };
 
-        let card_shape = if is_selected {
-            Chamfer::new(ChamferCut::INPUT)
-                .fill(theme.popover)
-                .border(theme.input)
-                .ring(ChamferRing::outline(tint))
-        } else {
-            Chamfer::new(ChamferCut::INPUT)
-                .fill(theme.popover)
-                .border(theme.input)
-        };
+        // A selected table shows selection the way the board draws it: its
+        // header takes the tinted fill and its edge the tint, with no focus
+        // ring, which stays reserved for keyboard focus.
+        let card_shape = Chamfer::new(ChamferCut::INPUT)
+            .fill(theme.popover)
+            .border(if is_selected { tint } else { theme.input });
 
         div()
             .absolute()

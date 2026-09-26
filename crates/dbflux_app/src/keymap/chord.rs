@@ -282,6 +282,82 @@ impl fmt::Display for KeyChord {
     }
 }
 
+/// The longest key sequence a binding may hold.
+pub const MAX_SEQUENCE_LENGTH: usize = 4;
+
+/// The keys of one binding: one chord, or several pressed one after the
+/// other (`g g`, `Ctrl+K Ctrl+S`). Never empty.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeySequence(Vec<KeyChord>);
+
+impl KeySequence {
+    /// A sequence of `chords`, or `None` when there are none.
+    pub fn new(chords: Vec<KeyChord>) -> Option<Self> {
+        (!chords.is_empty()).then_some(Self(chords))
+    }
+
+    pub fn chords(&self) -> &[KeyChord] {
+        &self.0
+    }
+
+    /// The first chord, the one the sequence starts with.
+    pub fn first(&self) -> &KeyChord {
+        &self.0[0]
+    }
+
+    /// Number of chords; a sequence always has at least one.
+    pub fn chord_count(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the sequence is a single chord.
+    pub fn is_single(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    /// Whether `self` is a strict prefix of `other`: pressing `self` leaves
+    /// the keyboard waiting to see whether `other` follows.
+    pub fn is_prefix_of(&self, other: &KeySequence) -> bool {
+        self.0.len() < other.0.len() && other.0.starts_with(&self.0)
+    }
+
+    /// Parses chords in [`KeyChord::parse`] form separated by whitespace
+    /// (`Ctrl+K Ctrl+S`, `g g`).
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        let chords = text
+            .split_whitespace()
+            .map(KeyChord::parse)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Self::new(chords).ok_or(ParseError::Empty)
+    }
+
+    /// Text form used to persist the sequence, see
+    /// [`KeyChord::sequence_to_storage_string`].
+    pub fn to_storage_string(&self) -> String {
+        KeyChord::sequence_to_storage_string(&self.0)
+    }
+
+    /// Parses the text produced by [`KeySequence::to_storage_string`].
+    pub fn from_storage_string(text: &str) -> Result<Self, ParseError> {
+        let chords = KeyChord::sequence_from_storage_string(text)?;
+        Self::new(chords).ok_or(ParseError::Empty)
+    }
+}
+
+impl From<KeyChord> for KeySequence {
+    fn from(chord: KeyChord) -> Self {
+        Self(vec![chord])
+    }
+}
+
+impl fmt::Display for KeySequence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let parts: Vec<String> = self.0.iter().map(KeyChord::to_string).collect();
+        write!(f, "{}", parts.join(" "))
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParseError {
@@ -398,6 +474,35 @@ mod tests {
             KeyChord::sequence_from_storage_string("ctrl+k  g"),
             Err(ParseError::Empty)
         );
+    }
+
+    #[test]
+    fn key_sequences_parse_display_and_round_trip() {
+        let sequence = KeySequence::parse("Ctrl+K  ctrl+s").expect("valid sequence");
+        assert_eq!(sequence.chord_count(), 2);
+        assert_eq!(sequence.to_string(), "Ctrl+k Ctrl+s");
+        assert_eq!(sequence.to_storage_string(), "ctrl+k ctrl+s");
+        assert_eq!(
+            KeySequence::from_storage_string("ctrl+k ctrl+s"),
+            Ok(sequence.clone())
+        );
+
+        let single = KeySequence::from(KeyChord::new("g", Modifiers::none()));
+        assert!(single.is_single());
+        assert_eq!(KeySequence::parse(""), Err(ParseError::Empty));
+        assert_eq!(KeySequence::new(Vec::new()), None);
+    }
+
+    #[test]
+    fn prefix_is_strict() {
+        let g = KeySequence::parse("g").expect("valid");
+        let g_g = KeySequence::parse("g g").expect("valid");
+        let g_h = KeySequence::parse("g h").expect("valid");
+
+        assert!(g.is_prefix_of(&g_g));
+        assert!(!g_g.is_prefix_of(&g_g));
+        assert!(!g_g.is_prefix_of(&g));
+        assert!(!g_h.is_prefix_of(&g_g));
     }
 
     #[test]

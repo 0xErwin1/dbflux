@@ -12,14 +12,15 @@ pub const FOCUS_RING_SELECTOR: &str = "focus-ring";
 /// (segment, chip, tab, list row) while it is shown.
 pub const FOCUS_MARKER_SELECTOR: &str = "focus-marker";
 
-/// Whether keyboard focus indication shows in `window`: true while the last
-/// input event was a key press, false after pointer input.
+/// Whether keyboard focus indication shows in `window`: true after a key
+/// press, false after a pointer press or a touch.
 ///
-/// This is the app's one focus-visible rule. The window tracks the modality
-/// itself and repaints when it changes, so a ring drawn after a Tab disappears
-/// on the next mouse press or move and comes back on the next key press.
+/// This is the app's one focus-visible rule. The window tracks it and
+/// repaints when it changes, so a ring drawn after a Tab stays while the
+/// pointer moves, disappears on the next mouse press and comes back on the
+/// next key press.
 pub fn is_keyboard_modality(window: &Window) -> bool {
-    window.last_input_was_keyboard()
+    window.keyboard_focus_visible()
 }
 
 /// Whether `focus_handle` should show its focus ring: it (or a descendant)
@@ -237,6 +238,28 @@ mod tests {
             focus_shown(&host, window),
             "the next key press shows it again"
         );
+    }
+
+    #[gpui::test]
+    fn moving_the_pointer_keeps_keyboard_focus_visible(cx: &mut TestAppContext) {
+        let (host, window) = open_host(cx);
+        let center = window
+            .debug_bounds("modality-host")
+            .expect("the host is laid out")
+            .center();
+
+        window.simulate_keystrokes("tab");
+        assert!(focus_shown(&host, window));
+
+        window.simulate_mouse_move(center, None, Modifiers::default());
+        window.run_until_parked();
+        assert!(
+            focus_shown(&host, window),
+            "moving the pointer leaves the ring on"
+        );
+
+        press_mouse(window);
+        assert!(!focus_shown(&host, window), "only a press hides it");
     }
 
     #[test]

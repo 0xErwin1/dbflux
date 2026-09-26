@@ -619,6 +619,17 @@ panel has focus. Bindings written with the **primary** modifier use `Cmd` on
 macOS and `Ctrl` on every other platform; bindings written with literal `Ctrl`
 stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 
+Every binding below can be changed in **Settings → Keybindings**: its keys (one
+chord or a sequence such as `g g`) and the context it applies in. Keys written
+with a space, such as `y y`, are pressed one after the other; after the first
+key DBFlux waits up to a second for the next. While a dialog is open, the panels
+behind it do not react to their keys.
+
+Focus is shown only after you use the keyboard: the tint ring appears on the
+focused control after a key press, stays while the pointer moves, and hides on
+the next click. A focused button, checkbox or list row takes `Enter` and
+`Space` itself.
+
 ### Global (available regardless of focus)
 
 | Keys | Action |
@@ -751,9 +762,9 @@ whitespace-only block selection uses the full buffer. Block columns count
 Unicode scalars, not visual cells: tabs, wide characters, and combining
 sequences may not align with on-screen columns.
 
-In Normal mode, `/` opens a native text prompt. Type a literal, case-sensitive
-query and press `Enter` to search forward from the cursor, wrapping at the end
-of the buffer. `Escape` cancels without moving the cursor or replacing the last
+In Normal mode, `/` opens a search bar under the editor, a tinted `/` next to
+the search field. Type a literal, case-sensitive query and press `Enter` to
+search forward from the cursor, wrapping at the end of the buffer. `Escape` cancels without moving the cursor or replacing the last
 query. Use `n` to repeat forward or `N` to repeat backward; a prefix count
 repeats the search that many times. Search works in read-only editors, and each
 tab keeps its own last query. While the prompt is open, `Tab` / `Shift+Tab` do
@@ -880,9 +891,107 @@ A read-only delete does not change the clipboard.
 
 | Keys | Action |
 |------|--------|
-| `j` / `k` (or `Down` / `Up`) | Select next / previous |
+| `Down` / `Up` (or `Ctrl+j` / `Ctrl+k`) | Select next / previous |
 | `Enter` | Execute |
 | `Escape` | Cancel |
+
+Letters are left to the search field, so typing filters the list.
+
+### Data table
+
+These keys apply while a result grid or table has focus and no cell is being
+edited.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` / `h` / `l` (or arrow keys) | Move the cursor |
+| `Shift` + arrow keys | Extend the selection |
+| `Home` / `End` | First / last cell of the row |
+| `Ctrl+Home` / `Ctrl+End` | First / last row |
+| `Shift+Home` / `Shift+End`, `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Extend the selection to the row or table edge |
+| `Ctrl+a` / `Cmd+a` | Select all |
+| `Escape` | Clear the selection |
+| `Ctrl+c` / `Cmd+c`, `y y` | Copy the selection |
+| `Shift+y Shift+y` | Copy the row |
+| `Enter` / `F2` | Edit the cell |
+| `Ctrl+Enter` / `Cmd+Enter`, `Ctrl+s` / `Cmd+s` | Save the pending changes |
+| `d d` / `Delete` | Delete the row |
+| `a a` / `Shift+a Shift+a` | Add / duplicate a row |
+| `Ctrl+n` | Set the cell to NULL |
+| `u` / `Ctrl+z` / `Cmd+z` | Undo |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
+| `e` | Expand or collapse a nested column (document grids) |
+| `Backspace` | Step out of a nested value (document grids) |
+
+### Document tree
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous node |
+| `h` / `l` (or `Left` / `Right`) | Collapse / expand, or go to the parent / first child |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last node |
+| `Ctrl+u` / `Ctrl+d` (or `PageUp` / `PageDown`) | Page up / down |
+| `Space` | Expand / collapse |
+| `Enter` / `F2` | Edit the value |
+| `e` | Preview the document |
+| `d d` / `Delete` | Delete the document |
+| `t` | Cycle the data view |
+| `r` | Toggle the raw JSON view |
+| `/` / `Ctrl+f` | Search; `n` / `Shift+n` next / previous match, `Escape` closes |
+
+### Key-value browser
+
+| Keys | Action |
+|------|--------|
+| `` Ctrl+` `` | Show or hide the command console, also from the console input |
+| `Ctrl+j` | Load more keys |
+| `t` | Edit the expiry of the selected key |
+
+`Ctrl+j` and `t` apply while the key list has focus, not inside a text field.
+
+### Text fields
+
+| Keys | Action |
+|------|--------|
+| `Ctrl+j` / `Ctrl+k` | Next / previous line, or the next / previous completion |
+| `Ctrl+Space` | Show completions |
+| `Ctrl+Enter` / `Cmd+Enter` | Run the query |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
+| `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
+
+### Dialogs
+
+| Keys | Action |
+|------|--------|
+| `Escape` | Close, or leave the field being edited first in form dialogs |
+| `Enter` | Confirm, when the primary button is enabled |
+| `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Scroll a long dialog body |
+| `Escape` / `Ctrl+s` / `Cmd+s` | Close / save the cell editor and the document preview |
+
+### Forms and the settings window
+
+These keys move through the forms of dialogs and through the settings window
+when no text field is being edited.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous field |
+| `Left` / `Right` | Move within a row; change the choice of a segmented field |
+| `h` / `l` | Back to the list / into the form |
+| `g` / `Shift+g` | First / last field |
+| `Tab` / `Shift+Tab` | Next / previous field |
+| `Space` | Toggle |
+| `Enter` | Activate or edit the field |
+| `Escape` | Leave the field or the form |
+| `/` | Focus the search |
+| `Ctrl+w` / `Ctrl+q` | Close the settings window |
+| `Ctrl+s` | Save the section |
+| `Ctrl+h` / `Ctrl+l` | Move between the navigation and the section |
+
+In the Connection Manager, `Ctrl+s` / `Cmd+s` saves the connection from
+anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
+of the SSH authentication method. In the audit viewer, `Left` / `Right` on the
+time presets change the preset.
 
 ### Context menu
 
@@ -918,8 +1027,9 @@ support, which is the default):
 - **MCP Clients / Roles / Policies** — AI client governance (trusted clients,
   roles, policies). See `docs/MCP_AI_INTEGRATION.md`.
 - **Keybindings** — the active keymap by context, with a text filter and a
-  context filter. Record a new shortcut for any binding, remove it, or reset
-  it; conflicts are shown before anything is saved.
+  context filter. Record new keys for any binding (one chord or a sequence),
+  change the context it applies in, remove it, or reset it; conflicts are shown
+  before anything is saved.
 - **Proxies** — SOCKS5 / HTTP CONNECT proxy profiles.
 - **SSH Tunnels** — SSH tunnel profiles selectable per connection.
 - **Auth Profiles** — provider-driven authentication profiles (AWS SSO / shared

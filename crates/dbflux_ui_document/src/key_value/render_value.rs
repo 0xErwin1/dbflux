@@ -2109,7 +2109,13 @@ impl KeyValueDocument {
                             .child(dbflux_i18n::t!("document.key_value.expiry.title")),
                     )
                     .child(div().flex_1())
-                    .child(Kbd::new("t")),
+                    .when_some(
+                        dbflux_ui_base::keymap::shortcut_label(
+                            dbflux_app::keymap::ContextId::KeyValue,
+                            dbflux_app::keymap::Command::EditExpiry,
+                        ),
+                        |header, label| header.child(Kbd::new(label)),
+                    ),
             )
             .child(mode_control)
             .child(fields)

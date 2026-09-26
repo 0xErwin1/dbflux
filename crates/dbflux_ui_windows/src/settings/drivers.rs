@@ -891,7 +891,7 @@ impl DriversSection {
         )
         .primary()
         .icon(AppIcon::Save)
-        .kbd("Ctrl S")
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
         .focused(editor_focused && self.drv_editor_field == DriverEditorField::Save)
         .on_click(cx.listener(|this, _, window, cx| {
             this.save_driver_settings(window, cx);

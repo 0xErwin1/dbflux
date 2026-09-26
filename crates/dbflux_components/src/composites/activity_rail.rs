@@ -202,6 +202,7 @@ impl RenderOnce for ActivityRail {
 
         div()
             .id(self.id)
+            .key_context(crate::key_contexts::ACTIVITY_RAIL)
             .flex()
             .flex_col()
             .flex_shrink_0()

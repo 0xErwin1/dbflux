@@ -939,6 +939,11 @@ document:
       visual: "VISUAL"
       visual_line: "VISUAL LINE"
       visual_block: "VISUAL BLOCK"
+      search:
+        label: "Vim search"
+        placeholder: "Search forward"
+        run: "search"
+        cancel: "cancel"
     output:
       running: "Running..."
       stopped: Stopped
@@ -3185,6 +3190,7 @@ settings:
     recording:
       prompt: "Press the new shortcut…"
       cancel_hint: "to cancel"
+      pause_hint: "Pause to save"
     action:
       edit: "Change shortcut"
       reset: "Reset to default"
@@ -3192,6 +3198,7 @@ settings:
       cancel: "Cancel"
       replace: "Replace"
       reset_all: "Reset to defaults"
+      edit_context: "Edit context"
     conflict:
       title: "%{chord} is already used by %{bindings}"
       holder: "%{command} (%{context})"
@@ -3205,6 +3212,15 @@ settings:
         one: "1 overridden"
         many: "%{count} overridden"
     save_error: "Could not save the keyboard shortcuts: %{error}"
+    context_editor:
+      label: "Context"
+      placeholder: "Editor && vim_mode == normal"
+      save: "Save"
+      invalid: "Invalid context: %{error}"
+      unknown: "Never matches: nothing in the app is named %{names}"
+    warning:
+      prefix: "shares a key sequence"
+      typed_text: "takes typed text"
     command:
       toggle_command_palette: Toggle Command Palette
       new_query_tab: New Query Tab
@@ -3313,6 +3329,25 @@ settings:
       layout_left_right: Left-Right Layout
       layout_snowflake: Snowflake Layout
       layout_compact: Compact Layout
+      extend_select_left: Extend Selection Left
+      extend_select_right: Extend Selection Right
+      move_to_row_start: Move to Row Start
+      move_to_row_end: Move to Row End
+      extend_select_row_start: Extend Selection to Row Start
+      extend_select_row_end: Extend Selection to Row End
+      extend_select_first: Extend Selection to First Row
+      extend_select_last: Extend Selection to Last Row
+      select_all: Select All
+      save_row: Save Row Changes
+      undo: Undo
+      redo: Redo
+      toggle_column_group: Expand or Collapse Column
+      step_out: Step Out of Nested Value
+      trigger_completion: Show Completions
+      close_window: Close Window
+      toggle_console: Toggle Console
+      load_more: Load More
+      edit_expiry: Edit Expiry
     context:
       global: Global
       sidebar: Sidebar
@@ -3335,6 +3370,11 @@ settings:
       event_streams_picker: Event Streams Picker
       schema_viz: Schema Viz
       document_tree: Document Tree
+      data_table: Data Table
+      input: Text Field
+      modal: Modal Dialog
+      key_value: Key-Value Browser
+      settings: Settings Window
     category:
       global: Global
       focus: Focus

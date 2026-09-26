@@ -4,6 +4,7 @@ use dbflux_components::composites::ListRow;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ShellMetrics};
+use dbflux_ui_base::keymap::{RunCommand, run_command};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
@@ -260,6 +261,15 @@ impl Render for SettingsCoordinator {
             .flex()
             .flex_col()
             .track_focus(&self.focus_handle)
+            .key_context(self.root_key_context())
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let handled = run_command(action)
+                    .is_some_and(|command| this.handle_command(command, window, cx));
+
+                if !handled {
+                    cx.propagate();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_event(event, window, cx);
             }))
@@ -409,7 +419,7 @@ impl SettingsCoordinator {
             .child(
                 Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
                     .secondary()
-                    .kbd("Ctrl W")
+                    .when_some(super::close_shortcut(), Button::kbd)
                     .on_click(cx.listener(|this, _, window, _cx| {
                         this.try_close(window);
                     })),

@@ -829,7 +829,7 @@ impl SshTunnelsSection {
                 )
                 .primary()
                 .icon(AppIcon::Check)
-                .kbd("Ctrl S")
+                .when_some(crate::settings::save_shortcut(), Button::kbd)
                 .focused(self.is_cursor_on(SshFormField::SaveButton))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.save_tunnel(window, cx);

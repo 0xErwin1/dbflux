@@ -615,6 +615,7 @@ mod keyboard_tests {
         Rc<RefCell<Vec<ActiveQueryOutcome>>>,
     ) {
         cx.update(gpui_component::init);
+        crate::modals::modal::bind_modal_keys_for_tests(cx);
 
         let (host, window) = cx.add_window_view(|_, cx| Host {
             modal: cx.new(ModalActiveQuery::new),

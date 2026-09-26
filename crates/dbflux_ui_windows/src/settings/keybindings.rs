@@ -1,7 +1,7 @@
 use super::layout;
 use crate::tokens::SettingsMetrics;
 use dbflux_app::keymap::{
-    BindingSlot, ContextId, KeyChord, KeymapOverrides, RecordingState, default_slots,
+    BindingSlot, ContextId, KeySequence, KeymapOverrides, RecordingState, default_slots,
 };
 use dbflux_components::composites::ListRow;
 use dbflux_components::controls::{Button, Input};
@@ -11,7 +11,9 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, ChamferRing, Icon as FluxIcon, Kbd,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, Spacing};
-use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
+use dbflux_ui_base::keymap::{
+    binds_typed_text, chord_display_parts, default_keymap, key_sequence_label, validate_predicate,
+};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -19,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use super::keybindings_section::{
-    BindingEntry, KeybindingsListItem, KeybindingsSection, KeybindingsSelection,
+    BindingEntry, KeybindingsListItem, KeybindingsSection, KeybindingsSelection, PredicateEditing,
 };
 
 /// Height of a binding row. (36 px plus its 1 px divider)
@@ -52,41 +54,40 @@ static DEFAULT_SLOTS: LazyLock<Vec<BindingSlot>> =
 /// Rows of `context`: its own bindings, unbound ones included so they can be
 /// rebound or reset, then the bindings it inherits from its parent contexts
 /// that are still bound and not shadowed by a nearer binding of the same
-/// chord.
+/// keys.
 pub(super) fn entries_for_context(
     slots: &[BindingSlot],
     overrides: &KeymapOverrides,
     context: ContextId,
 ) -> Vec<BindingEntry> {
+    let entry = |slot: &BindingSlot, keys: Option<KeySequence>, is_inherited: bool| BindingEntry {
+        slot: slot.clone(),
+        keys,
+        custom_predicate: overrides.custom_predicate(slot).map(str::to_string),
+        is_inherited,
+    };
+
     let mut entries: Vec<BindingEntry> = slots
         .iter()
         .filter(|slot| slot.context == context)
-        .map(|slot| BindingEntry {
-            slot: slot.clone(),
-            chord: overrides.effective_chord(slot),
-            is_inherited: false,
-        })
+        .map(|slot| entry(slot, overrides.effective_keys(slot), false))
         .collect();
 
-    let mut taken: HashSet<KeyChord> = entries
+    let mut taken: HashSet<KeySequence> = entries
         .iter()
-        .filter_map(|entry| entry.chord.clone())
+        .filter_map(|entry| entry.keys.clone())
         .collect();
 
     let mut ancestor = context.parent();
 
     while let Some(parent) = ancestor {
         for slot in slots.iter().filter(|slot| slot.context == parent) {
-            let Some(chord) = overrides.effective_chord(slot) else {
+            let Some(keys) = overrides.effective_keys(slot) else {
                 continue;
             };
 
-            if taken.insert(chord.clone()) {
-                entries.push(BindingEntry {
-                    slot: slot.clone(),
-                    chord: Some(chord),
-                    is_inherited: true,
-                });
+            if taken.insert(keys.clone()) {
+                entries.push(entry(slot, Some(keys), true));
             }
         }
 
@@ -101,15 +102,31 @@ fn entry_matches_filter(entry: &BindingEntry, filter: &str) -> bool {
         return true;
     }
 
-    let chord_matches = entry
-        .chord
+    let keys_match = entry
+        .keys
         .as_ref()
-        .is_some_and(|chord| chord.to_string().to_lowercase().contains(filter));
+        .is_some_and(|keys| keys.to_string().to_lowercase().contains(filter));
 
-    chord_matches
+    let predicate_matches = entry
+        .custom_predicate
+        .as_ref()
+        .is_some_and(|predicate| predicate.to_lowercase().contains(filter));
+
+    keys_match
+        || predicate_matches
         || crate::labels::keybinding_command_name(&entry.slot.command)
             .to_lowercase()
             .contains(filter)
+}
+
+/// Keycaps for `keys`: one keycap row per chord, the chords of a sequence
+/// side by side.
+fn key_sequence_keycaps(keys: &KeySequence) -> Div {
+    div().flex().items_center().gap(Spacing::XS).children(
+        keys.chords()
+            .iter()
+            .map(|chord| Kbd::chord(chord_display_parts(chord))),
+    )
 }
 
 impl KeybindingsSection {
@@ -137,9 +154,13 @@ impl KeybindingsSection {
 
         let conflicts_by_slot: HashMap<BindingSlot, Vec<BindingSlot>> = self
             .overrides
-            .existing_conflicts(default_keymap())
+            .existing_conflicts(default_keymap(), &self.overlap)
             .into_iter()
             .collect();
+        let predicate_target = self
+            .predicate_editing
+            .as_ref()
+            .map(|editing| editing.slot.clone());
         let recording_target = self.recorder.target().cloned();
 
         // Flat list required for scroll_to_item to work correctly
@@ -178,6 +199,9 @@ impl KeybindingsSection {
                 let is_recording = recording_target.as_ref() == Some(&entry.slot)
                     && self.recording_group == Some(*context);
                 let is_overridden = self.overrides.is_overridden(&entry.slot);
+                let edits_predicate =
+                    !entry.is_inherited && predicate_target.as_ref() == Some(&entry.slot);
+                let warning = self.binding_warning(&entry);
                 let conflict_context = conflicts_by_slot
                     .get(&entry.slot)
                     .and_then(|others| others.first())
@@ -187,10 +211,10 @@ impl KeybindingsSection {
                     match self.recorder.state() {
                         RecordingState::Conflict {
                             slot,
-                            chord,
+                            keys,
                             conflicts,
                         } => Some(KeybindingsListItem::PendingConflict {
-                            chord: chord.clone(),
+                            keys: keys.clone(),
                             target: slot.clone(),
                             conflicts: conflicts.clone(),
                         }),
@@ -200,18 +224,25 @@ impl KeybindingsSection {
                     None
                 };
 
+                let predicate_editor_slot = edits_predicate.then(|| entry.slot.clone());
+
                 flat_items.push(KeybindingsListItem::Binding {
                     entry,
                     is_selected: is_binding_selected,
                     is_recording,
                     is_overridden,
                     conflict_context,
+                    warning,
                     ctx_idx: idx,
                     binding_idx,
                 });
 
                 if let Some(item) = pending_conflict {
                     flat_items.push(item);
+                }
+
+                if let Some(slot) = predicate_editor_slot {
+                    flat_items.push(KeybindingsListItem::PredicateEditor { slot });
                 }
             }
         }
@@ -299,6 +330,7 @@ impl KeybindingsSection {
                                 is_recording,
                                 is_overridden,
                                 conflict_context,
+                                warning,
                                 ctx_idx,
                                 binding_idx,
                             } => self
@@ -309,6 +341,7 @@ impl KeybindingsSection {
                                         is_recording,
                                         is_overridden,
                                         conflict_context,
+                                        warning,
                                     },
                                     ctx_idx,
                                     binding_idx,
@@ -318,11 +351,15 @@ impl KeybindingsSection {
                                 .into_any_element(),
 
                             KeybindingsListItem::PendingConflict {
-                                chord,
+                                keys,
                                 target,
                                 conflicts,
-                            } => Self::render_pending_conflict(&chord, &target, &conflicts, cx)
+                            } => Self::render_pending_conflict(&keys, &target, &conflicts, cx)
                                 .into_any_element(),
+
+                            KeybindingsListItem::PredicateEditor { slot } => {
+                                self.render_predicate_editor(&slot, cx).into_any_element()
+                            }
                         }
                     })),
             )
@@ -416,12 +453,17 @@ impl KeybindingsSection {
         let row_id = format!("keybinding-{ctx_idx}-{binding_idx}");
 
         let keycaps: AnyElement = if state.is_recording {
-            Text::body(dbflux_i18n::t!("settings.keybindings.recording.prompt"))
-                .text_color(tint)
-                .into_any_element()
+            let captured = KeySequence::new(self.recorder.captured().to_vec());
+
+            match captured {
+                Some(keys) => key_sequence_keycaps(&keys).into_any_element(),
+                None => Text::body(dbflux_i18n::t!("settings.keybindings.recording.prompt"))
+                    .text_color(tint)
+                    .into_any_element(),
+            }
         } else {
-            match &entry.chord {
-                Some(chord) => Kbd::chord(chord_display_parts(chord)).into_any_element(),
+            match &entry.keys {
+                Some(keys) => key_sequence_keycaps(keys).into_any_element(),
                 None => Text::body(dbflux_i18n::t!("settings.keybindings.no_shortcut"))
                     .muted_foreground()
                     .into_any_element(),
@@ -434,6 +476,22 @@ impl KeybindingsSection {
             Text::body(command_name)
         };
 
+        let command_cell = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .child(command_text)
+            .when_some(entry.custom_predicate.clone(), |cell, predicate| {
+                cell.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(Text::code(predicate).color(muted_foreground)),
+                )
+            });
+
         let badge: Option<AnyElement> = if let Some(other_context) = state.conflict_context {
             Some(
                 Badge::new(
@@ -444,6 +502,12 @@ impl KeybindingsSection {
                 )
                 .icon(AppIcon::TriangleAlert)
                 .into_any_element(),
+            )
+        } else if let Some(warning) = state.warning {
+            Some(
+                Badge::new(warning, BadgeTone::Warning)
+                    .icon(AppIcon::TriangleAlert)
+                    .into_any_element(),
             )
         } else if entry.is_inherited {
             Some(Badge::new(inherited_label.to_string(), BadgeTone::Neutral).into_any_element())
@@ -480,7 +544,7 @@ impl KeybindingsSection {
                     .flex_shrink_0()
                     .child(keycaps),
             )
-            .child(div().flex_1().min_w_0().child(command_text))
+            .child(command_cell)
             .when(state.is_recording, |row| {
                 row.child(self.render_recording_controls(&entry, &row_id, cx))
             })
@@ -496,7 +560,32 @@ impl KeybindingsSection {
             })
     }
 
-    /// Reset arrow (overridden bindings only) and the edit pencil.
+    /// Why a binding may not behave as its keys suggest: its keys start or
+    /// continue another binding's sequence, or they take typed text from a
+    /// text field. `None` when neither applies.
+    fn binding_warning(&self, entry: &BindingEntry) -> Option<String> {
+        let keys = entry.keys.as_ref()?;
+        let predicate = self.overrides.effective_predicate(&entry.slot);
+
+        if binds_typed_text(keys, &predicate) {
+            return Some(dbflux_i18n::t!("settings.keybindings.warning.typed_text"));
+        }
+
+        let is_user_binding = self.overrides.is_overridden(&entry.slot);
+        let prefixes = self.overrides.prefix_conflicts_for(
+            default_keymap(),
+            &entry.slot,
+            keys,
+            &predicate,
+            &self.overlap,
+        );
+
+        (is_user_binding && !prefixes.is_empty())
+            .then(|| dbflux_i18n::t!("settings.keybindings.warning.prefix"))
+    }
+
+    /// Reset arrow (overridden bindings only), the context editor and the
+    /// edit pencil.
     fn render_row_actions(
         &self,
         entry: &BindingEntry,
@@ -507,6 +596,7 @@ impl KeybindingsSection {
     ) -> impl IntoElement {
         let edit_slot = entry.slot.clone();
         let reset_slot = entry.slot.clone();
+        let predicate_slot = entry.slot.clone();
         let group = ContextId::all_variants().get(ctx_idx).copied();
 
         div()
@@ -531,6 +621,24 @@ impl KeybindingsSection {
                     ),
                 )
             })
+            .child(
+                div().w(KEYBINDING_ACTION_WIDTH).child(
+                    Button::new(
+                        SharedString::from(format!("{row_id}-context")),
+                        dbflux_i18n::t!("settings.keybindings.action.edit_context"),
+                    )
+                    .ghost()
+                    .inline()
+                    .icon(AppIcon::Layers)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.keybindings_selection =
+                            KeybindingsSelection::Binding(ctx_idx, binding_idx);
+                        this.start_predicate_editing(predicate_slot.clone(), window, cx);
+                    })),
+                ),
+            )
             .child(
                 div().w(KEYBINDING_ACTION_WIDTH).child(
                     Button::new(
@@ -568,6 +676,9 @@ impl KeybindingsSection {
             .flex_shrink_0()
             .items_center()
             .gap(Spacing::SM)
+            .child(Text::caption(dbflux_i18n::t!(
+                "settings.keybindings.recording.pause_hint"
+            )))
             .child(
                 div()
                     .flex()
@@ -578,7 +689,7 @@ impl KeybindingsSection {
                         "settings.keybindings.recording.cancel_hint"
                     ))),
             )
-            .when(entry.chord.is_some(), |controls| {
+            .when(entry.keys.is_some(), |controls| {
                 controls.child(
                     Button::new(
                         SharedString::from(format!("{row_id}-remove")),
@@ -610,10 +721,10 @@ impl KeybindingsSection {
             )
     }
 
-    /// Warning under the recorded row when its new chord is taken: names
-    /// every binding that holds it and offers Cancel or Replace.
+    /// Warning under the recorded row when its new keys are taken: names
+    /// every binding that holds them and offers Cancel or Replace.
     fn render_pending_conflict(
-        chord: &KeyChord,
+        keys: &KeySequence,
         target: &BindingSlot,
         conflicts: &[BindingSlot],
         cx: &mut Context<Self>,
@@ -629,11 +740,7 @@ impl KeybindingsSection {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let chord_label = chord_display_parts(chord)
-            .iter()
-            .map(|part| part.to_string())
-            .collect::<Vec<_>>()
-            .join("+");
+        let chord_label = key_sequence_label(keys).to_string();
 
         let actions = div()
             .flex()
@@ -676,13 +783,116 @@ impl KeybindingsSection {
         )
     }
 
+    /// Editor of the context predicate of `slot`, under its row: the
+    /// predicate field, Save and Cancel, and the reason the predicate cannot
+    /// be saved or never matches.
+    fn render_predicate_editor(&self, slot: &BindingSlot, cx: &mut Context<Self>) -> AnyElement {
+        let Some(PredicateEditing { input, error, .. }) = self.predicate_editing.as_ref() else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
+        let text = input.read(cx).value().to_string();
+        let row_id = format!(
+            "keybinding-context-{}-{}",
+            slot.context.id(),
+            slot.command.action_id()
+        );
+
+        let message: Option<(String, Hsla)> = match error {
+            Some(error) => Some((
+                dbflux_i18n::t!(
+                    "settings.keybindings.context_editor.invalid",
+                    error = error.0.clone()
+                ),
+                theme.danger,
+            )),
+            None => match validate_predicate(&text) {
+                Ok(unknown) if !unknown.is_empty() => Some((
+                    dbflux_i18n::t!(
+                        "settings.keybindings.context_editor.unknown",
+                        names = unknown.join(", ")
+                    ),
+                    theme.warning,
+                )),
+                _ => None,
+            },
+        };
+
+        div()
+            .id(SharedString::from(row_id.clone()))
+            .pl(KEYBINDING_ROW_INDENT)
+            .py(Spacing::SM)
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.table_row_border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .child(
+                        div()
+                            .w(SettingsMetrics::FORM_LABEL_WIDTH)
+                            .flex_shrink_0()
+                            .child(Text::label(dbflux_i18n::t!(
+                                "settings.keybindings.context_editor.label"
+                            ))),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(input)
+                                .id(SharedString::from(format!("{row_id}-input")))
+                                .aria_label(dbflux_i18n::t!(
+                                    "settings.keybindings.context_editor.label"
+                                ))
+                                .small(),
+                        ),
+                    )
+                    .child(
+                        Button::new(
+                            SharedString::from(format!("{row_id}-cancel")),
+                            dbflux_i18n::t!("settings.keybindings.action.cancel"),
+                        )
+                        .secondary()
+                        .inline()
+                        .kbd("Esc")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_predicate_editing(cx);
+                        })),
+                    )
+                    .child(
+                        Button::new(
+                            SharedString::from(format!("{row_id}-save")),
+                            dbflux_i18n::t!("settings.keybindings.context_editor.save"),
+                        )
+                        .primary()
+                        .inline()
+                        .kbd("Enter")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.save_predicate(cx);
+                        })),
+                    ),
+            )
+            .when_some(message, |editor, (message, color)| {
+                editor.child(
+                    div()
+                        .pl(SettingsMetrics::FORM_LABEL_WIDTH + Spacing::SM)
+                        .child(Text::caption(message).color(color)),
+                )
+            })
+            .into_any_element()
+    }
+
     /// Left side of the footer: the conflict count in the warning color and
     /// the number of overridden bindings. Nothing while both are zero.
     pub(super) fn render_footer_summary(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme();
         let conflict_count = self
             .overrides
-            .existing_conflicts(default_keymap())
+            .existing_conflicts(default_keymap(), &self.overlap)
             .iter()
             .map(|(_, others)| others.len())
             .sum::<usize>()
@@ -951,19 +1161,36 @@ impl KeybindingsSection {
                 Vec::new()
             };
             let banner_after = self.pending_conflict_position(&entries);
+            let editor_after = self.predicate_editor_position(&entries);
+            let extra_rows_before = |row: usize| {
+                usize::from(banner_after.is_some_and(|after| after < row))
+                    + usize::from(editor_after.is_some_and(|after| after < row))
+            };
 
             match self.keybindings_selection {
                 KeybindingsSelection::Context(sel) if sel == ctx_idx => return flat_idx,
                 KeybindingsSelection::Binding(sel, bi) if sel == ctx_idx => {
-                    let banner_rows = usize::from(banner_after.is_some_and(|row| row < bi));
-                    return flat_idx + 1 + bi + banner_rows;
+                    return flat_idx + 1 + bi + extra_rows_before(bi);
                 }
                 _ => {}
             }
 
-            flat_idx += 1 + entries.len() + usize::from(banner_after.is_some());
+            flat_idx += 1
+                + entries.len()
+                + usize::from(banner_after.is_some())
+                + usize::from(editor_after.is_some());
         }
         flat_idx
+    }
+
+    /// Index in `entries` of the row whose context editor is shown right
+    /// after it, if any.
+    fn predicate_editor_position(&self, entries: &[BindingEntry]) -> Option<usize> {
+        let editing = self.predicate_editing.as_ref()?;
+
+        entries
+            .iter()
+            .position(|entry| !entry.is_inherited && entry.slot == editing.slot)
     }
 
     /// Index in `entries` of the row whose pending conflict banner is shown
@@ -983,6 +1210,7 @@ struct BindingRowState {
     is_recording: bool,
     is_overridden: bool,
     conflict_context: Option<ContextId>,
+    warning: Option<String>,
 }
 
 #[cfg(test)]
@@ -993,7 +1221,7 @@ mod tests {
         keybindings_conflict_title, keybindings_inherits_from, keybindings_overridden_count,
     };
     use dbflux_app::keymap::{
-        BindingSlot, Command, ContextId, KeyChord, KeymapOverrides, Modifiers,
+        BindingSlot, Command, ContextId, KeyChord, KeySequence, KeymapOverrides, Modifiers,
     };
 
     const KEYBINDINGS_CATALOG_KEYS: &[&str] = &[
@@ -1008,6 +1236,15 @@ mod tests {
         "settings.keybindings.no_shortcut",
         "settings.keybindings.recording.prompt",
         "settings.keybindings.recording.cancel_hint",
+        "settings.keybindings.recording.pause_hint",
+        "settings.keybindings.action.edit_context",
+        "settings.keybindings.context_editor.label",
+        "settings.keybindings.context_editor.placeholder",
+        "settings.keybindings.context_editor.save",
+        "settings.keybindings.context_editor.invalid",
+        "settings.keybindings.context_editor.unknown",
+        "settings.keybindings.warning.prefix",
+        "settings.keybindings.warning.typed_text",
         "settings.keybindings.action.edit",
         "settings.keybindings.action.reset",
         "settings.keybindings.action.remove",
@@ -1152,7 +1389,7 @@ mod tests {
 
         let editor = entries_for_context(&slots, &overrides, ContextId::Editor);
         assert_eq!(editor[0].slot.command, Command::SaveQuery);
-        assert_eq!(editor[0].chord, None);
+        assert_eq!(editor[0].keys, None);
         assert!(
             editor
                 .iter()
@@ -1162,23 +1399,28 @@ mod tests {
 
         let global = entries_for_context(&slots, &overrides, ContextId::Global);
         assert_eq!(global.len(), 2);
-        assert_eq!(global[0].chord, None);
+        assert_eq!(global[0].keys, None);
     }
 
     #[test]
     fn filter_matches_chord_or_command_name() {
         let entry = BindingEntry {
             slot: test_slots()[0].clone(),
-            chord: Some(KeyChord::new("n", Modifiers::ctrl())),
+            keys: Some(KeySequence::from(KeyChord::new("n", Modifiers::ctrl()))),
+            custom_predicate: Some("Global && !Input".to_string()),
             is_inherited: false,
         };
 
         assert!(entry_matches_filter(&entry, ""));
         assert!(entry_matches_filter(&entry, "ctrl+n"));
         assert!(!entry_matches_filter(&entry, "ctrl+q"));
+        assert!(
+            entry_matches_filter(&entry, "!input"),
+            "a custom predicate is searchable"
+        );
 
         let unbound = BindingEntry {
-            chord: None,
+            keys: None,
             ..entry
         };
         assert!(!entry_matches_filter(&unbound, "ctrl+n"));

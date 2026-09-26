@@ -1,11 +1,12 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus six patches. It exists so the
+This directory is the published `gpui-pre` crate source plus seven patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
-The sixth adds letter spacing to text styles.
+The sixth adds letter spacing to text styles. The seventh adjusts key dispatch and focus
+visibility for the app keymap.
 
 ## Why
 
@@ -135,6 +136,40 @@ has to truncate is cut slightly late and relies on its container's `overflow_hid
 shaped directly through `shape_line` or `shape_text` (canvas painting, the input editor)
 ignores the style.
 
+### Keyboard dispatch
+
+The app keymap registers every shortcut as a native GPUI key binding (see
+`crates/dbflux_ui_base/src/keymap/mod.rs`). Three behaviours of upstream dispatch get in the
+way of that, and the patch changes each of them:
+
+- **A focused clickable element answers Enter and Space.** GPUI turns Enter or Space on a
+  focused element with click listeners into a click, but only when the key reaches the
+  element's key listeners, and key bindings run before key listeners. A binding for Enter in
+  an ancestor context (the keymap binds Enter in many panels) would consume the key first,
+  so a focused button could no longer be pressed from the keyboard. The element now marks
+  its dispatch node while it is focused and clickable (`Window::claim_activation_keys`), and
+  `dispatch_key_event` skips key bindings for an unmodified Enter or Space when the focused
+  node carries that mark, the way a focused button behaves in a browser. Keystroke
+  interceptors still run first, and a pending key sequence is left alone.
+- **An interceptor that stops a key stops every key listener.** When a keystroke
+  interceptor calls `stop_propagation`, upstream still calls the first key listener on the
+  focus path before it checks the flag. The workspace used to own that first listener, which
+  hid the problem; without it, the code editor's Vim key listener saw keys its own
+  interceptor had already consumed (Replace mode and a pending `r`). `dispatch_key_down_up_event`
+  now returns at once when propagation is already stopped.
+- **Focus stays visible while the pointer moves.** `Window::last_input_was_keyboard` flips
+  to mouse on every pointer move, which is right for hover suppression but made keyboard
+  focus rings disappear as soon as the mouse moved. `Window::keyboard_focus_visible` is set
+  by a key press and cleared only by a pointer press or a touch, and the window repaints when
+  it changes. `last_input_was_keyboard` and hover behave as before;
+  `dbflux_components::primitives::is_keyboard_modality` reads the new flag.
+
+The vendored crate's own test suite does not build outside Zed's tree (it reads assets from
+the Zed repository), so the behaviour is covered by DBFlux tests instead:
+`controls::button::tests::a_focused_button_takes_enter_before_ancestor_bindings` and
+`primitives::focus_ring::tests::moving_the_pointer_keeps_keyboard_focus_visible` in
+`dbflux_components`, and the Replace-mode tests in `dbflux_ui_document`'s Vim suite.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -164,6 +199,8 @@ delta to this directory.
   patches 1 to 4 applied — three files, 108 diff lines. It has no upstream counterpart.
 - Patch 6: `letter-spacing.patch`, written for DBFlux against this directory with
   patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
+- Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
+  patches 1 to 6 applied — three files, 164 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 

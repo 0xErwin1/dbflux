@@ -852,47 +852,37 @@ mod tests {
         }
     }
 
-    // ---- T18.2: Cmd/Ctrl+Enter triggers Apply ----
+    // ---- T18.2: the Run Query keys apply the picker ----
 
-    /// Helper: test the keystroke condition used in the picker's `on_key_down`
-    /// handler. Mirrors the logic in `metric_picker_render.rs::render()`.
-    fn is_apply_shortcut(key: &str, platform: bool, control: bool, shift: bool, alt: bool) -> bool {
-        key == "return" && !shift && !alt && (platform || control)
-    }
-
-    /// T18.2: Cmd+Enter (platform modifier) must trigger Apply.
+    /// The picker applies on the keymap's Run Query command, whose default
+    /// keys are the primary modifier + Enter; plain Enter and Shift+primary+
+    /// Enter stay with the dropdowns and Run in New Tab.
     #[test]
-    fn cmd_enter_invokes_apply_from_anywhere() {
-        assert!(
-            is_apply_shortcut("return", true, false, false, false),
-            "Cmd+Enter must trigger Apply"
+    fn run_query_keys_are_primary_enter_only() {
+        use dbflux_app::keymap::{Command, ContextId, KeyChord, Modifiers};
+
+        let keymap = dbflux_ui_base::keymap::default_keymap();
+
+        assert_eq!(
+            keymap.resolve(
+                ContextId::Global,
+                &KeyChord::new("enter", Modifiers::primary())
+            ),
+            Some(Command::RunQuery)
         );
-    }
-
-    /// T18.2: Ctrl+Enter must also trigger Apply (Linux/Windows).
-    #[test]
-    fn ctrl_enter_invokes_apply() {
-        assert!(
-            is_apply_shortcut("return", false, true, false, false),
-            "Ctrl+Enter must trigger Apply"
+        assert_ne!(
+            keymap.resolve(
+                ContextId::Global,
+                &KeyChord::new("enter", Modifiers::primary_shift())
+            ),
+            Some(Command::RunQuery)
         );
-    }
-
-    /// T18.2: Plain Enter must NOT trigger Apply (reserved for dropdown/selection).
-    #[test]
-    fn plain_enter_does_not_trigger_apply() {
-        assert!(
-            !is_apply_shortcut("return", false, false, false, false),
-            "Plain Enter must not trigger Apply"
-        );
-    }
-
-    /// T18.2: Shift+Cmd+Enter must NOT trigger Apply.
-    #[test]
-    fn shift_cmd_enter_does_not_trigger_apply() {
-        assert!(
-            !is_apply_shortcut("return", true, false, true, false),
-            "Shift+Cmd+Enter must not trigger Apply"
+        assert_eq!(
+            keymap.resolve(
+                ContextId::Global,
+                &KeyChord::new("enter", Modifiers::none())
+            ),
+            None
         );
     }
 }

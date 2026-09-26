@@ -211,6 +211,11 @@ impl CodeDocument {
             Box::new(move |cx| e.read(cx).status_segments(cx))
         });
 
+        handle.key_context_entries = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).key_context_entries())
+        });
+
         handle.tab_tooltip = Some({
             let e = entity.clone();
             Box::new(move |cx| {

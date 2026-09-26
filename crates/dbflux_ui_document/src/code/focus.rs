@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_ui_base::keymap::{LANGUAGE_KEY, VIM_MODE_KEY};
 
 impl CodeDocument {
     pub(super) fn enter_editor_mode(&mut self, cx: &mut Context<Self>) {
@@ -22,6 +23,25 @@ impl CodeDocument {
                 .input_state
                 .update(cx, |state, cx| state.focus(window, cx));
         }
+    }
+
+    /// Key context entries the keymap sees while this editor owns the
+    /// keyboard: the query language and, with Vim editing on, the Vim mode.
+    /// The mode is left out while the `/` search prompt is open, because the
+    /// prompt takes every key as typed text.
+    pub fn key_context_entries(&self) -> Vec<(SharedString, SharedString)> {
+        let mut entries: Vec<(SharedString, SharedString)> = vec![(
+            LANGUAGE_KEY.into(),
+            self.effective_language().context_id().into(),
+        )];
+
+        if let Some(mode) = self.vim_mode()
+            && !self.vim.search_open
+        {
+            entries.push((VIM_MODE_KEY.into(), mode.context_id().into()));
+        }
+
+        entries
     }
 
     /// Returns the active context for keyboard handling based on internal focus.

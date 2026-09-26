@@ -37,7 +37,7 @@ impl KeybindingOverridesRepository {
             .conn()
             .prepare(
                 r#"
-                SELECT context, command_id, default_keys, keys
+                SELECT context, command_id, default_keys, keys, predicate
                 FROM cfg_keybinding_overrides
                 ORDER BY context, command_id, default_keys
                 "#,
@@ -51,6 +51,7 @@ impl KeybindingOverridesRepository {
                     command_id: row.get(1)?,
                     default_keys: row.get(2)?,
                     keys: row.get(3)?,
+                    predicate: row.get(4)?,
                 })
             })
             .map_err(Self::sqlite_error)?;
@@ -76,14 +77,15 @@ impl KeybindingOverridesRepository {
                 .execute(
                     r#"
                     INSERT INTO cfg_keybinding_overrides (
-                        context, command_id, default_keys, keys, updated_at
-                    ) VALUES (?1, ?2, ?3, ?4, datetime('now'))
+                        context, command_id, default_keys, keys, predicate, updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
                     "#,
                     params![
                         keybinding_override.context,
                         keybinding_override.command_id,
                         keybinding_override.default_keys,
                         keybinding_override.keys,
+                        keybinding_override.predicate,
                     ],
                 )
                 .map_err(Self::sqlite_error)?;
@@ -95,16 +97,19 @@ impl KeybindingOverridesRepository {
 
 /// Row shape of `cfg_keybinding_overrides`.
 ///
-/// `context` is free text (a context id today, a predicate expression
-/// later). `default_keys` and `keys` are key sequences in the keymap's
-/// storage form, chords separated by single spaces. `keys` is `None` when
-/// the user removed the shortcut of the binding.
+/// `context`, `command_id` and `default_keys` identify the default binding
+/// the row replaces. `default_keys` and `keys` are key sequences in the
+/// keymap's storage form, chords separated by single spaces. `keys` is
+/// `None` when the user removed the shortcut of the binding. `predicate` is
+/// the context predicate the binding applies in, `None` for the default
+/// binding's own context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeybindingOverrideDto {
     pub context: String,
     pub command_id: String,
     pub default_keys: String,
     pub keys: Option<String>,
+    pub predicate: Option<String>,
 }
 
 #[cfg(test)]
@@ -130,6 +135,7 @@ mod tests {
             command_id: "run_query".to_string(),
             default_keys: default_keys.to_string(),
             keys: keys.map(str::to_string),
+            predicate: None,
         }
     }
 
@@ -146,9 +152,12 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp dir");
         let repository = migrated_repository(&directory);
 
+        let mut with_predicate = dto("editor", "g g", Some("ctrl+k ctrl+s"));
+        with_predicate.predicate = Some("Editor && vim_mode == normal".to_string());
+
         let written = vec![
-            dto("Editor && !Modal", "g g", Some("ctrl+k ctrl+s")),
             dto("editor", "ctrl+enter", None),
+            with_predicate,
             dto("global", "ctrl+enter", Some("ctrl+shift+r")),
         ];
         repository.replace_all(&written).expect("should write");

@@ -455,6 +455,7 @@ impl Render for ResultPanel {
         // space and chrome's wrap rows render behind the view content.
         div()
             .track_focus(&focus_handle)
+            .key_context(crate::key_contexts::RESULT_PANEL)
             .flex()
             .flex_col()
             .size_full()

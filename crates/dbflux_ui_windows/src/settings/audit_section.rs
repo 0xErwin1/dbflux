@@ -726,7 +726,10 @@ impl AuditSection {
         )
         .primary()
         .icon(AppIcon::Save)
-        .kbd("Ctrl S")
+        .when_some(
+            crate::settings::save_shortcut(),
+            dbflux_components::controls::Button::kbd,
+        )
         .focused(is_save_focused)
         .on_click(cx.listener(|this, _, window, cx| {
             this.select_audit_row(AuditFormRow::SaveButton);

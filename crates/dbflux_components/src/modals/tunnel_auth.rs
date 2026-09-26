@@ -292,7 +292,15 @@ impl Render for ModalTunnelAuth {
                 )
                 .primary()
                 .icon(AppIcon::Plug)
-                .kbd("\u{21B5}")
+                .when_some(
+                    crate::actions::shortcut_label(
+                        cx,
+                        dbflux_core::keymap_types::ContextId::Modal.id(),
+                        dbflux_core::keymap_types::Command::Execute.id(),
+                        "\u{21B5}",
+                    ),
+                    Button::kbd,
+                )
                 .disabled(!connect_enabled)
                 .on_click(on_connect),
             );

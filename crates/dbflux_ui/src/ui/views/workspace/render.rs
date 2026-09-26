@@ -1,5 +1,4 @@
 use super::*;
-use crate::keymap::ContextId;
 use dbflux_components::composites::collapsible_bar;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
@@ -310,6 +309,7 @@ impl Render for Workspace {
             .child(self.render_tasks_dock(cx));
 
         let focus_handle = self.focus_handle.clone();
+        let root_key_context = self.root_key_context(cx);
 
         div()
             .id("workspace-root")
@@ -334,6 +334,7 @@ impl Render for Workspace {
                 }),
             )
             .track_focus(&focus_handle)
+            .key_context(root_key_context)
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleCommandPalette, window, cx| {
                     this.toggle_command_palette(window, cx);
@@ -538,14 +539,13 @@ impl Render for Workspace {
                     cx.propagate();
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let chord = key_chord_from_gpui(&event.keystroke);
-                let context = this.active_context(cx);
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let Some(command) = run_command(action) else {
+                    return;
+                };
 
-                if let Some(cmd) = effective_keymap().resolve(context, &chord)
-                    && this.dispatch(cmd, window, cx)
-                {
-                    cx.stop_propagation();
+                if !this.dispatch(command, window, cx) {
+                    cx.propagate();
                 }
             }))
             .child(
@@ -679,9 +679,22 @@ impl Render for Workspace {
                             }
                         };
 
+                        let workspace_for_cancel = cx.entity().clone();
+
+                        // The overlay is a modal: the `Modal` key context keeps
+                        // the panels behind it from seeing the keys, and the
+                        // keymap's modal Escape closes it.
                         root.child(
                             div()
                                 .id("governance-overlay")
+                                .key_context(dbflux_components::modals::MODAL_KEY_CONTEXT)
+                                .on_action(
+                                    move |_: &dbflux_components::actions::Cancel, window, cx| {
+                                        workspace_for_cancel.update(cx, |workspace, cx| {
+                                            workspace.close_governance_panel(window, cx);
+                                        });
+                                    },
+                                )
                                 .absolute()
                                 .inset_0()
                                 .bg(theme.overlay.opacity(0.45))
@@ -739,7 +752,9 @@ impl Render for Workspace {
                                 sidebar.close_child_picker(cx);
                             });
                         })
-                        .key_context(ContextId::EventStreamsPicker.as_gpui_context())
+                        // The workspace answers the picker's Escape and Enter:
+                        // Escape in the filter returns to the list first.
+                        .defer_keys_to_owner()
                         .icon(AppIcon::ScrollText)
                         .width(px(1000.0))
                         .height(px(720.0))
@@ -1287,6 +1302,7 @@ mod inline_delete_keyboard_tests {
     fn open_confirmation(cx: &mut TestAppContext) -> Harness<'_> {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {

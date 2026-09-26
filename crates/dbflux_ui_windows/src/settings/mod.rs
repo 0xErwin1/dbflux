@@ -11,6 +11,8 @@ mod hooks;
 mod hooks_section;
 mod keybindings;
 mod keybindings_section;
+#[cfg(test)]
+mod keyboard_tests;
 pub(crate) mod layout;
 mod lifecycle;
 mod open_window;
@@ -85,6 +87,23 @@ enum ActiveSettingsSection {
     Services(Entity<ServicesSection>),
     SshTunnels(Entity<SshTunnelsSection>),
     Updates(Entity<UpdatesSection>),
+}
+
+/// Keycap of the settings window's Save shortcut, from the keymap; `None`
+/// when the user removed it.
+pub(crate) fn save_shortcut() -> Option<SharedString> {
+    dbflux_ui_base::keymap::shortcut_label(
+        dbflux_app::keymap::ContextId::Settings,
+        dbflux_app::keymap::Command::SaveQuery,
+    )
+}
+
+/// Keycap of the settings window's Close shortcut, from the keymap.
+pub(crate) fn close_shortcut() -> Option<SharedString> {
+    dbflux_ui_base::keymap::shortcut_label(
+        dbflux_app::keymap::ContextId::Settings,
+        dbflux_app::keymap::Command::CloseWindow,
+    )
 }
 
 impl ActiveSettingsSection {

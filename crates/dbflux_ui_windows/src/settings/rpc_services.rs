@@ -1024,7 +1024,7 @@ impl ServicesSection {
         )
         .primary()
         .icon(AppIcon::Check)
-        .kbd("Ctrl S")
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
         .focused(self.svc_cursor_on(ServiceFormRow::SaveButton, 0))
         .on_click(cx.listener(|this, _, window, cx| {
             this.save_service(window, cx);

@@ -21,11 +21,7 @@ use super::{CollectionTab, SchemaLoad};
 use crate::data_grid_panel::DataGridPanel;
 use crate::data_view::DataViewMode;
 
-/// Mongo-style shortcut labels shown on the Find and Commit buttons.
-#[cfg(target_os = "macos")]
-const FIND_SHORTCUT: &str = "Cmd \u{21b5}";
-#[cfg(not(target_os = "macos"))]
-const FIND_SHORTCUT: &str = "Ctrl \u{21b5}";
+/// Mongo-style shortcut label shown on the Commit button.
 #[cfg(target_os = "macos")]
 const COMMIT_SHORTCUT: &str = "Cmd S";
 #[cfg(not(target_os = "macos"))]
@@ -145,6 +141,7 @@ impl DataGridPanel {
         };
 
         div()
+            .key_context(dbflux_components::key_contexts::DOCUMENT_QUERY_BAR)
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -178,7 +175,13 @@ impl DataGridPanel {
                 )
                 .primary()
                 .icon(AppIcon::Play)
-                .kbd(FIND_SHORTCUT)
+                .when_some(
+                    dbflux_ui_base::keymap::shortcut_label(
+                        dbflux_app::keymap::ContextId::Input,
+                        dbflux_app::keymap::Command::RunQuery,
+                    ),
+                    Button::kbd,
+                )
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.find_documents(window, cx);
@@ -677,6 +680,7 @@ impl DataGridPanel {
         });
 
         div()
+            .key_context(dbflux_components::key_contexts::DOCUMENT_SCHEMA)
             .flex()
             .flex_col()
             .size_full()

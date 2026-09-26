@@ -123,7 +123,15 @@ impl Sidebar {
                             .min_w_0()
                             .child(Input::new(input).xsmall().appearance(false).cleanable(true)),
                     )
-                    .when(query_is_empty, |field| field.child(Kbd::new("/"))),
+                    .when(query_is_empty, |field| {
+                        field.when_some(
+                            dbflux_ui_base::keymap::shortcut_label(
+                                dbflux_app::keymap::ContextId::Sidebar,
+                                dbflux_app::keymap::Command::FocusSearch,
+                            ),
+                            |field, label| field.child(Kbd::new(label)),
+                        )
+                    }),
             )
     }
 
@@ -490,20 +498,34 @@ impl Render for Sidebar {
             SidebarTab::Scripts => self
                 .render_scripts_content(filter_field, cx)
                 .into_any_element(),
-            SidebarTab::Dashboards => self
-                .render_dashboards_content(filter_field, cx)
+            SidebarTab::Dashboards => div()
+                .size_full()
+                .key_context(dbflux_components::key_contexts::DASHBOARDS_PANEL)
+                .child(self.render_dashboards_content(filter_field, cx))
                 .into_any_element(),
         };
 
         // No right border here — the outer `SidebarDock` already paints
         // `border_r_1`. A second border on this inner container produced the
         // visible double-line between the sidebar and the workspace.
+        let mut key_context = gpui::KeyContext::default();
+        key_context.add(dbflux_components::key_contexts::SIDEBAR_PANEL);
+        key_context.set(
+            "tab",
+            match active_tab {
+                SidebarTab::Connections => "connections",
+                SidebarTab::Scripts => "scripts",
+                SidebarTab::Dashboards => "dashboards",
+            },
+        );
+
         div()
             .relative()
             .flex()
             .flex_col()
             .size_full()
             .bg(sidebar_background)
+            .key_context(key_context)
             .child(
                 // Header: clear row hover when mouse enters this region.
                 div()

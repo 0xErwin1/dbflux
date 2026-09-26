@@ -1649,6 +1649,7 @@ mod keyboard_tests {
         Events,
     ) {
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         let app_state = cx.new(|_| {
             AppStateEntity::new_with_storage_runtime(
                 StorageRuntime::in_memory().expect("in-memory storage"),

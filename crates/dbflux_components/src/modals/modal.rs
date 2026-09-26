@@ -1,13 +1,15 @@
+use crate::actions::{RunCommand, shortcut_label};
 use crate::controls::Button;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, Icon, Kbd, SurfaceRole, Text, inspect_surface_role, overlay_bg};
 use crate::tokens::{ChamferCut, ChromeColors, ModalMetrics};
 use dbflux_core::LogErr;
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, AnyWindowHandle, App, ElementId, FocusHandle, Hsla, KeyDownEvent, Keystroke,
-    MouseButton, Pixels, ScrollHandle, SharedString, Window, div, point, px,
+    AnyElement, AnyWindowHandle, App, Div, ElementId, FocusHandle, Hsla, KeyContext, MouseButton,
+    Pixels, ScrollHandle, SharedString, Stateful, Window, div, point, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
@@ -36,31 +38,16 @@ const MAX_VIEWPORT_HEIGHT: f32 = 0.9;
 /// Share of the viewport width a modal may take.
 const MAX_VIEWPORT_WIDTH: f32 = 0.95;
 
+/// Key context identifier every modal backdrop carries. The keymap's modal
+/// keys are bound in it, and `!Modal` in a predicate keeps a binding away from
+/// the panels behind an open modal.
+pub const MODAL_KEY_CONTEXT: &str = "Modal";
+
 /// Distance one arrow key press scrolls a [`Modal::scroll_with_keys`] region.
 const KEY_SCROLL_STEP: Pixels = px(40.0);
 
-/// A key the modal answers while focus is inside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModalKey {
-    Cancel,
-    Confirm,
-}
-
-/// Maps a keystroke to the modal action it triggers. Only the bare keys
-/// count: a chord such as Ctrl+Enter belongs to whatever binds it.
-fn modal_key(keystroke: &Keystroke) -> Option<ModalKey> {
-    if keystroke.modifiers.modified() {
-        return None;
-    }
-
-    match keystroke.key.as_str() {
-        "escape" => Some(ModalKey::Cancel),
-        "enter" => Some(ModalKey::Confirm),
-        _ => None,
-    }
-}
-
-/// A scroll a key asks of a [`Modal::scroll_with_keys`] region.
+/// A scroll a key asks of a [`Modal::scroll_with_keys`] region, from the
+/// scroll actions the keymap binds in the modal's key context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScrollKey {
     LineUp,
@@ -69,23 +56,6 @@ enum ScrollKey {
     PageDown,
     Top,
     Bottom,
-}
-
-/// Maps a bare arrow, Page Up/Down, Home or End keystroke to a scroll.
-fn scroll_key(keystroke: &Keystroke) -> Option<ScrollKey> {
-    if keystroke.modifiers.modified() {
-        return None;
-    }
-
-    match keystroke.key.as_str() {
-        "up" => Some(ScrollKey::LineUp),
-        "down" => Some(ScrollKey::LineDown),
-        "pageup" => Some(ScrollKey::PageUp),
-        "pagedown" => Some(ScrollKey::PageDown),
-        "home" => Some(ScrollKey::Top),
-        "end" => Some(ScrollKey::Bottom),
-        _ => None,
-    }
 }
 
 /// The vertical offset `key` moves a region to, clamped to its content.
@@ -106,6 +76,49 @@ fn scrolled_offset(key: ScrollKey, offset: Pixels, max_offset: Pixels, viewport:
     };
 
     target.min(Pixels::ZERO).max(-max_offset)
+}
+
+/// Key context of a modal backdrop: `Modal`, plus the owner's identifier.
+fn modal_key_context(owner: Option<&SharedString>) -> KeyContext {
+    let mut context = KeyContext::default();
+    context.add(MODAL_KEY_CONTEXT);
+
+    if let Some(owner) = owner {
+        match KeyContext::parse(owner) {
+            Ok(owner_context) => context.extend(&owner_context),
+            Err(error) => log::error!("Invalid modal key context `{owner}`: {error}"),
+        }
+    }
+
+    context
+}
+
+/// Scrolls the [`Modal::scroll_with_keys`] region on the scroll action `A`,
+/// or lets the action through when the modal has no such region.
+fn on_scroll_action<A: gpui::Action>(
+    backdrop: Stateful<Div>,
+    key: ScrollKey,
+    scroll: Option<ScrollHandle>,
+) -> Stateful<Div> {
+    backdrop.on_action(move |_: &A, window, cx| {
+        let Some(scroll) = scroll.as_ref() else {
+            cx.propagate();
+            return;
+        };
+
+        let offset = scroll.offset();
+        let target = scrolled_offset(
+            key,
+            offset.y,
+            scroll.max_offset().y,
+            scroll.bounds().size.height,
+        );
+
+        if target != offset.y {
+            scroll.set_offset(point(offset.x, target));
+            window.refresh();
+        }
+    })
 }
 
 /// Tone of a modal.
@@ -181,6 +194,7 @@ pub struct Modal {
     confirm_enabled: bool,
     focus_handle: Option<FocusHandle>,
     key_context: Option<SharedString>,
+    defer_keys: bool,
     block_scroll: bool,
     cut: Pixels,
     fill: Option<Hsla>,
@@ -209,6 +223,7 @@ impl Modal {
             confirm_enabled: true,
             focus_handle: None,
             key_context: None,
+            defer_keys: false,
             block_scroll: false,
             cut: ChamferCut::MODAL,
             fill: None,
@@ -325,10 +340,18 @@ impl Modal {
         self
     }
 
-    /// Key context of the backdrop. Escape is then left to that context's
-    /// keymap and the modal closes on `actions::Cancel`.
+    /// Extra key context identifier of the backdrop, next to `Modal`, for
+    /// keymap bindings that belong to this modal only.
     pub fn key_context(mut self, key_context: impl Into<SharedString>) -> Self {
         self.key_context = Some(key_context.into());
+        self
+    }
+
+    /// Leave Escape and Enter to the owner: instead of closing or confirming,
+    /// the modal runs the keymap's Cancel or Execute command, so the owner
+    /// can first leave a field or a nested state before closing.
+    pub fn defer_keys_to_owner(mut self) -> Self {
+        self.defer_keys = true;
         self
     }
 
@@ -376,7 +399,7 @@ impl Modal {
 
 /// Keyboard focus for a modal rendered in a [`Modal`].
 ///
-/// The modal only hears Escape and Enter while focus is inside it, so a modal
+/// The modal only hears its keys while focus is inside it, so a modal
 /// moves focus in when it opens and gives it back when it closes. Without the
 /// hand-back, closing the modal would leave focus on an element that is no
 /// longer rendered and the keyboard would stop responding until a click.
@@ -483,6 +506,7 @@ impl RenderOnce for Modal {
         let viewport = window.viewport_size();
 
         let close_handler = self.on_close;
+        let escape_label = shortcut_label(cx, ContextId::Modal.id(), Command::Cancel.id(), "Esc");
 
         let close_control = close_handler.as_ref().map(|handler| {
             let handler = handler.clone();
@@ -491,7 +515,9 @@ impl RenderOnce for Modal {
                 .flex()
                 .items_center()
                 .gap(ModalMetrics::FOOTER_GAP)
-                .child(Kbd::new("Esc"))
+                .when_some(escape_label.clone(), |control, label| {
+                    control.child(Kbd::new(label))
+                })
                 .child(
                     Button::new(MODAL_CLOSE_ID, "")
                         .ghost()
@@ -590,11 +616,10 @@ impl RenderOnce for Modal {
         }
 
         let close_for_backdrop = close_handler.clone();
-        let close_for_keys = close_handler.clone();
-        let close_for_action = close_handler;
-        let confirm_for_keys = self.on_confirm;
+        let close_for_keys = close_handler;
+        let confirm_for_keys: Option<Rc<ConfirmHandler>> = self.on_confirm.map(Rc::new);
         let confirm_enabled = self.confirm_enabled;
-        let keymap_owns_escape = self.key_context.is_some();
+        let defer_keys = self.defer_keys;
         let key_scroll = self.key_scroll;
 
         let mut backdrop = div()
@@ -604,6 +629,7 @@ impl RenderOnce for Modal {
             .bg(overlay_bg(theme))
             .flex()
             .justify_center()
+            .key_context(modal_key_context(self.key_context.as_ref()))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 // Nothing behind the modal may react to a click on the scrim.
                 cx.stop_propagation();
@@ -620,68 +646,71 @@ impl RenderOnce for Modal {
 
         if let Some(handle) = self.focus_handle {
             backdrop = backdrop.track_focus(&handle);
-
-            if let Some(scroll) = key_scroll {
-                backdrop = backdrop.on_key_down(move |event: &KeyDownEvent, window, cx| {
-                    let Some(key) = scroll_key(&event.keystroke) else {
-                        return;
-                    };
-
-                    cx.stop_propagation();
-
-                    let offset = scroll.offset();
-                    let target = scrolled_offset(
-                        key,
-                        offset.y,
-                        scroll.max_offset().y,
-                        scroll.bounds().size.height,
-                    );
-
-                    if target != offset.y {
-                        scroll.set_offset(point(offset.x, target));
-                        window.refresh();
-                    }
-                });
-            }
-
-            if !keymap_owns_escape {
-                // Bubble phase: a multi-line editor has already consumed its
-                // own Enter by the time the event reaches the backdrop, while
-                // a single-line input lets Enter through.
-                backdrop = backdrop.on_key_down(move |event: &KeyDownEvent, window, cx| {
-                    let Some(key) = modal_key(&event.keystroke) else {
-                        return;
-                    };
-
-                    // The modal owns these keys while it has focus; nothing
-                    // behind it may act on them.
-                    cx.stop_propagation();
-
-                    match key {
-                        ModalKey::Cancel => {
-                            if let Some(handler) = close_for_keys.as_ref() {
-                                (handler)(window, cx);
-                            }
-                        }
-                        ModalKey::Confirm => {
-                            if confirm_enabled && let Some(handler) = confirm_for_keys.as_ref() {
-                                (handler)(window, cx);
-                            }
-                        }
-                    }
-                });
-            }
         }
 
-        if let Some(key_context) = self.key_context {
-            backdrop = backdrop.key_context(key_context.as_ref()).on_action(
-                move |_: &crate::actions::Cancel, window, cx| {
-                    if let Some(handler) = close_for_action.as_ref() {
-                        (handler)(window, cx);
+        // The keymap binds Escape, Enter and the scroll keys in the `Modal`
+        // key context. The backdrop sits below the window root, so these
+        // bindings win over the panels behind the modal, and a focused input
+        // inside the modal still answers its own keys first: a multi-line
+        // editor keeps its Enter, a single-line input lets it through.
+        backdrop = backdrop
+            .on_action(move |_: &crate::actions::Cancel, window, cx| {
+                if defer_keys {
+                    window.dispatch_action(Box::new(RunCommand::new(Command::Cancel.id())), cx);
+                    return;
+                }
+
+                match close_for_keys.as_ref() {
+                    Some(handler) => (handler)(window, cx),
+                    None => cx.propagate(),
+                }
+            })
+            .on_action(move |_: &crate::actions::Execute, window, cx| {
+                if defer_keys {
+                    window.dispatch_action(Box::new(RunCommand::new(Command::Execute.id())), cx);
+                    return;
+                }
+
+                match confirm_for_keys.as_ref() {
+                    Some(handler) => {
+                        if confirm_enabled {
+                            (handler)(window, cx);
+                        }
                     }
-                },
-            );
-        }
+                    None => cx.propagate(),
+                }
+            });
+
+        backdrop = on_scroll_action::<crate::actions::ScrollUp>(
+            backdrop,
+            ScrollKey::LineUp,
+            key_scroll.clone(),
+        );
+        backdrop = on_scroll_action::<crate::actions::ScrollDown>(
+            backdrop,
+            ScrollKey::LineDown,
+            key_scroll.clone(),
+        );
+        backdrop = on_scroll_action::<crate::actions::ScrollPageUp>(
+            backdrop,
+            ScrollKey::PageUp,
+            key_scroll.clone(),
+        );
+        backdrop = on_scroll_action::<crate::actions::ScrollPageDown>(
+            backdrop,
+            ScrollKey::PageDown,
+            key_scroll.clone(),
+        );
+        backdrop = on_scroll_action::<crate::actions::ScrollToTop>(
+            backdrop,
+            ScrollKey::Top,
+            key_scroll.clone(),
+        );
+        backdrop = on_scroll_action::<crate::actions::ScrollToBottom>(
+            backdrop,
+            ScrollKey::Bottom,
+            key_scroll,
+        );
 
         if self.block_scroll {
             backdrop = backdrop.on_scroll_wheel(|_, _, cx| {
@@ -693,20 +722,43 @@ impl RenderOnce for Modal {
     }
 }
 
+/// The modal keys the app keymap binds in the `Modal` context (see the modal
+/// layer in `dbflux_ui_base::keymap`), for component tests that run without
+/// the app keymap.
+#[cfg(test)]
+pub(crate) fn bind_modal_keys_for_tests(cx: &mut gpui::TestAppContext) {
+    use crate::actions;
+    use gpui::KeyBinding;
+
+    let context = Some(MODAL_KEY_CONTEXT);
+    cx.update(|cx| {
+        cx.bind_keys([
+            KeyBinding::new("escape", actions::Cancel, context),
+            KeyBinding::new("enter", actions::Execute, context),
+            KeyBinding::new("up", actions::ScrollUp, context),
+            KeyBinding::new("down", actions::ScrollDown, context),
+            KeyBinding::new("pageup", actions::ScrollPageUp, context),
+            KeyBinding::new("pagedown", actions::ScrollPageDown, context),
+            KeyBinding::new("home", actions::ScrollToTop, context),
+            KeyBinding::new("end", actions::ScrollToBottom, context),
+        ]);
+    });
+}
+
 #[cfg(test)]
 mod tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::{
-        KEY_SCROLL_STEP, MODAL_BACKDROP_ID, MODAL_CLOSE_ID, Modal, ModalFocus, ModalKey, ScrollKey,
-        modal_key, scroll_key, scrolled_offset,
+        KEY_SCROLL_STEP, MODAL_BACKDROP_ID, MODAL_CLOSE_ID, Modal, ModalFocus, ScrollKey,
+        scrolled_offset,
     };
     use crate::controls::{Input, InputState};
     use gpui::{
         AccessibilityFrame, AppContext as _, Bounds, Context, Entity, FocusHandle, FrameObserver,
-        InteractiveElement as _, IntoElement, Keystroke, Modifiers, ParentElement as _, Pixels,
-        Render, Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
     };
     use gpui_component::input::{Editor, EditorState};
     use std::sync::{Arc, Mutex};
@@ -782,6 +834,7 @@ mod tests {
 
     fn setup(cx: &mut TestAppContext, confirm_enabled: bool) -> Setup<'_> {
         cx.update(gpui_component::init);
+        super::bind_modal_keys_for_tests(cx);
 
         let log: Log = Arc::default();
         let capture = Arc::new(FrameCapture::default());
@@ -848,20 +901,6 @@ mod tests {
     }
 
     #[test]
-    fn scroll_keys_are_bare_navigation_keys() {
-        let parse = |text: &str| Keystroke::parse(text).expect("valid keystroke");
-
-        assert_eq!(scroll_key(&parse("down")), Some(ScrollKey::LineDown));
-        assert_eq!(scroll_key(&parse("up")), Some(ScrollKey::LineUp));
-        assert_eq!(scroll_key(&parse("pagedown")), Some(ScrollKey::PageDown));
-        assert_eq!(scroll_key(&parse("pageup")), Some(ScrollKey::PageUp));
-        assert_eq!(scroll_key(&parse("home")), Some(ScrollKey::Top));
-        assert_eq!(scroll_key(&parse("end")), Some(ScrollKey::Bottom));
-        assert_eq!(scroll_key(&parse("ctrl-down")), None);
-        assert_eq!(scroll_key(&parse("enter")), None);
-    }
-
-    #[test]
     fn scrolling_by_key_stays_inside_the_content() {
         let max = px(500.0);
         let viewport = px(200.0);
@@ -894,17 +933,6 @@ mod tests {
             scrolled_offset(ScrollKey::LineDown, Pixels::ZERO, Pixels::ZERO, viewport),
             Pixels::ZERO
         );
-    }
-
-    #[test]
-    fn only_bare_escape_and_enter_are_modal_keys() {
-        let parse = |text: &str| Keystroke::parse(text).expect("valid keystroke");
-
-        assert_eq!(modal_key(&parse("escape")), Some(ModalKey::Cancel));
-        assert_eq!(modal_key(&parse("enter")), Some(ModalKey::Confirm));
-        assert_eq!(modal_key(&parse("ctrl-enter")), None);
-        assert_eq!(modal_key(&parse("shift-enter")), None);
-        assert_eq!(modal_key(&parse("a")), None);
     }
 
     #[gpui::test]

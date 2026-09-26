@@ -50,14 +50,6 @@ actions!(
 /// never hard-codes those keys.
 pub const CONTEXT: &str = "DocumentTree";
 
-/// Registers the keybindings the app keymap cannot express.
-///
-/// `d d` is a two-keystroke sequence, and a keymap chord describes a single
-/// keystroke, so the sequence stays a native GPUI binding here.
-pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("d d", DeleteDocument, Some(CONTEXT))]);
-}
-
 /// Document tree component for displaying MongoDB documents.
 pub struct DocumentTree {
     id: ElementId,

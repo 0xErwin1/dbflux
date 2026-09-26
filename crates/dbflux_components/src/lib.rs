@@ -22,6 +22,7 @@ pub mod composites;
 pub mod controls;
 pub mod highlighting;
 pub mod icons;
+pub mod key_contexts;
 pub mod modals;
 pub mod primitives;
 pub mod result_panel;

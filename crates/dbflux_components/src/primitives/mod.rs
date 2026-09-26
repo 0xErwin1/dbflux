@@ -32,7 +32,7 @@ pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone};
 pub use label::Label;
 pub use loading_state::{LoadingState, Spinner};
-pub use segmented_control::{SegmentedControl, SegmentedItem, new_active_id};
+pub use segmented_control::{SegmentedControl, SegmentedItem, new_active_id, stepped_segment};
 pub use status::{Status, StatusIndicator, format_latency, status_diamond};
 pub use surface::{SurfaceInspection, SurfaceRole, inspect_surface_role, overlay_bg, surface};
 pub use text::{

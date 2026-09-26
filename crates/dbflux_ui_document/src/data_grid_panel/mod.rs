@@ -5511,6 +5511,109 @@ mod tests {
         assert_eq!(source.total_rows(), None);
     }
 
+    /// The table view's keys go through the keymap: the table's own keys
+    /// move the selection inside the table, and a key of the Results panel
+    /// (Ctrl+Space, the row inspector) reaches the grid as a command.
+    #[gpui::test]
+    fn table_keys_move_the_selection_and_open_the_row_inspector(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let source = DataSource::Table {
+                        profile_id: Uuid::nil(),
+                        database: Some("app".to_string()),
+                        table: TableRef::with_schema("public", "users"),
+                        pagination: Pagination::default(),
+                        order_by: Vec::new(),
+                        total_rows: Some(3),
+                    };
+
+                    let mut panel = DataGridPanel::new_internal(
+                        source,
+                        app_state.clone(),
+                        vec!["id".to_string()],
+                        window,
+                        cx,
+                    );
+                    panel.set_result(
+                        QueryResult::table(
+                            vec![key_column("id", true)],
+                            (1..=3)
+                                .map(|id| vec![dbflux_core::Value::Int(id)])
+                                .collect(),
+                            None,
+                            Duration::ZERO,
+                        ),
+                        cx,
+                    );
+                    panel
+                })
+            },
+            |panel, cx| panel.active_context(cx),
+            DataGridPanel::dispatch_command,
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+        let inspector_requests = Rc::new(RefCell::new(0usize));
+        window.update(|window, cx| {
+            let inspector_requests = inspector_requests.clone();
+            cx.subscribe(&panel, move |_, event: &DataGridEvent, _| {
+                if matches!(event, DataGridEvent::OpenInspector { .. }) {
+                    *inspector_requests.borrow_mut() += 1;
+                }
+            })
+            .detach();
+
+            let table_state = panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("the result builds a table");
+            let focus_handle = table_state.read(cx).focus_handle().clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        let active_row = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                panel
+                    .read(cx)
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active)
+                    .map(|coord| coord.row)
+            })
+        };
+
+        window.simulate_keystrokes("j");
+        let first = active_row(window).expect("`j` selects a row");
+        window.simulate_keystrokes("j");
+        assert_eq!(active_row(window), Some(first + 1), "`j` moves down");
+        window.simulate_keystrokes("k");
+        assert_eq!(active_row(window), Some(first), "`k` moves up");
+
+        window.simulate_keystrokes("ctrl-space");
+        assert!(
+            window
+                .update(|_, cx| host.read(cx).commands.clone())
+                .contains(&Command::ToggleRowInspector),
+            "Ctrl+Space reaches the grid as the row inspector command"
+        );
+        assert_eq!(
+            *inspector_requests.borrow(),
+            1,
+            "the grid opens the inspector"
+        );
+    }
+
     #[gpui::test]
     fn filtered_empty_table_runtime_keeps_header_and_active_filter(cx: &mut TestAppContext) {
         init_test_runtime(cx);

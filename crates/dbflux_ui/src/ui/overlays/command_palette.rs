@@ -9,7 +9,9 @@ use dbflux_components::primitives::{
 use dbflux_components::tokens::{ChamferCut, ChromeColors, PaletteMetrics};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{CollectionRef, TableRef};
-use dbflux_ui_base::keymap::{chord_display_parts, default_keymap, effective_keymap};
+use dbflux_ui_base::keymap::{
+    RunCommand, chord_display_parts, default_keymap, effective_keymap, run_command,
+};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
@@ -18,20 +20,6 @@ use gpui_component::ActiveTheme;
 use std::ops::Range;
 use std::path::PathBuf;
 use uuid::Uuid;
-
-actions!(command_palette, [SelectNext, SelectPrev, Close, Execute]);
-
-pub fn command_palette_keybindings() -> Vec<KeyBinding> {
-    let ctx = Some(ContextId::CommandPalette.as_gpui_context());
-    vec![
-        KeyBinding::new("up", SelectPrev, ctx),
-        KeyBinding::new("down", SelectNext, ctx),
-        KeyBinding::new("ctrl-k", SelectPrev, ctx),
-        KeyBinding::new("ctrl-j", SelectNext, ctx),
-        KeyBinding::new("escape", Close, ctx),
-        KeyBinding::new("enter", Execute, ctx),
-    ]
-}
 
 /// A searchable item in the command palette.
 #[derive(Clone)]
@@ -570,11 +558,18 @@ const PALETTE_SHORTCUT_CONTEXTS: [ContextId; 5] = [
     ContextId::BackgroundTasks,
 ];
 
+/// Keycap of the keys that run `command` inside the palette.
+fn palette_shortcut(command: Command) -> Option<SharedString> {
+    dbflux_ui_base::keymap::shortcut_label(ContextId::CommandPalette, command)
+}
+
 /// Keycaps of a palette command.
 ///
-/// A command the default keymap binds shows the chord the effective keymap
+/// A command the default keymap binds shows the keys the effective keymap
 /// gives it, so a rebinding shows at once and a removed shortcut shows
-/// none. Any other command shows its explicit `shortcut`, if it has one.
+/// none: one keycap per key of a single chord, one keycap per chord of a
+/// key sequence. Any other command shows its explicit `shortcut`, if it has
+/// one.
 fn palette_command_keycaps(id: &str, shortcut: Option<&str>) -> Vec<SharedString> {
     let command = Command::from_palette_id(id).or_else(|| {
         Command::all_variants()
@@ -594,8 +589,17 @@ fn palette_command_keycaps(id: &str, shortcut: Option<&str>) -> Vec<SharedString
 
             PALETTE_SHORTCUT_CONTEXTS
                 .iter()
-                .find_map(|context| keymap.chord_for_command(*context, command))
-                .map(chord_display_parts)
+                .find_map(|context| keymap.keys_for_command(*context, command))
+                .map(|keys| {
+                    if keys.is_single() {
+                        chord_display_parts(keys.first())
+                    } else {
+                        keys.chords()
+                            .iter()
+                            .map(|chord| chord_display_parts(chord).join(" ").into())
+                            .collect()
+                    }
+                })
                 .unwrap_or_default()
         }
         _ => shortcut.map(palette_shortcut_parts).unwrap_or_default(),
@@ -1108,11 +1112,20 @@ impl CommandPalette {
                     .text_color(theme.muted_foreground)
                     .child(format!("{} / {}", self.filtered.len(), self.items.len())),
             )
-            .child(Kbd::new("Esc"))
+            .when_some(palette_shortcut(Command::Cancel), |header, label| {
+                header.child(Kbd::new(label))
+            })
     }
 
     fn render_footer(cx: &App) -> Div {
         let theme = cx.theme();
+        let navigate_keys: Option<Vec<SharedString>> = match (
+            palette_shortcut(Command::SelectPrev),
+            palette_shortcut(Command::SelectNext),
+        ) {
+            (None, None) => None,
+            (previous, next) => Some(previous.into_iter().chain(next).collect()),
+        };
 
         let hint = |label: String| div().flex_shrink_0().child(label);
 
@@ -1127,10 +1140,16 @@ impl CommandPalette {
             .border_color(theme.border)
             .text_size(PaletteMetrics::FOOTER_FONT)
             .text_color(theme.muted_foreground)
-            .child(Kbd::new("\u{2191}\u{2193}"))
-            .child(hint(dbflux_i18n::t!("palette.footer.navigate")))
-            .child(Kbd::new("\u{21B5}"))
-            .child(hint(dbflux_i18n::t!("palette.footer.run")))
+            .when_some(navigate_keys, |footer, keys| {
+                footer
+                    .child(Kbd::chord(keys))
+                    .child(hint(dbflux_i18n::t!("palette.footer.navigate")))
+            })
+            .when_some(palette_shortcut(Command::Execute), |footer, label| {
+                footer
+                    .child(Kbd::new(label))
+                    .child(hint(dbflux_i18n::t!("palette.footer.run")))
+            })
             .child(div().flex_1())
             .child(Kbd::new(">"))
             .child(hint(dbflux_i18n::t!("palette.footer.commands_only")))
@@ -1237,17 +1256,16 @@ impl Render for CommandPalette {
                     this.hide(cx);
                 }),
             )
-            .on_action(cx.listener(|this, _: &SelectPrev, _window, cx| {
-                this.select_prev(cx);
-            }))
-            .on_action(cx.listener(|this, _: &SelectNext, _window, cx| {
-                this.select_next(cx);
-            }))
-            .on_action(cx.listener(|this, _: &Close, _window, cx| {
-                this.hide(cx);
-            }))
-            .on_action(cx.listener(|this, _: &Execute, window, cx| {
-                this.execute_selected(window, cx);
+            // The keymap's CommandPalette layer binds its keys to these
+            // commands; anything else goes on to the workspace.
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                match run_command(action) {
+                    Some(Command::SelectPrev) => this.select_prev(cx),
+                    Some(Command::SelectNext) => this.select_next(cx),
+                    Some(Command::Cancel) => this.hide(cx),
+                    Some(Command::Execute) => this.execute_selected(window, cx),
+                    _ => cx.propagate(),
+                }
             }))
             .child(
                 div()

@@ -1,17 +1,28 @@
 use super::SettingsSection;
 use super::SettingsSectionId;
+use super::section_trait::SectionFocusEvent;
 use dbflux_app::keymap::{
-    BindingSlot, ContextId, KeyChord, KeybindingRecorder, KeymapOverrides, Modifiers,
+    BindingSlot, ContextId, KeyChord, KeySequence, KeybindingRecorder, KeymapOverrides, Modifiers,
     RecordingOutcome, RecordingState, save_keymap_overrides,
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_core::LogErr;
 use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::keymap::{apply_keymap_overrides, key_chord_from_gpui, keymap_overrides};
+use dbflux_ui_base::keymap::{
+    GpuiPredicateOverlap, PredicateError, apply_keymap_overrides, key_chord_from_gpui,
+    keymap_overrides, validate_predicate,
+};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
 use gpui::*;
 use std::collections::HashSet;
+use std::time::Duration;
+
+/// How long the recorder waits after the last key before it saves the
+/// sequence, the same pause after which GPUI stops waiting for the next key
+/// of a sequence.
+const RECORDING_PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum KeybindingsSelection {
@@ -27,13 +38,16 @@ impl KeybindingsSelection {
     }
 }
 
-/// One row of a context group: a default binding with the chord it has once
-/// the user's overrides apply.
+/// One row of a context group: a default binding with the keys and the
+/// context predicate it has once the user's overrides apply.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct BindingEntry {
     pub(super) slot: BindingSlot,
     /// `None` when the user removed the binding's shortcut.
-    pub(super) chord: Option<KeyChord>,
+    pub(super) keys: Option<KeySequence>,
+    /// The predicate the user gave the binding; `None` keeps the context's
+    /// default predicate.
+    pub(super) custom_predicate: Option<String>,
     /// The binding is declared by a parent context and reaches this one.
     pub(super) is_inherited: bool,
 }
@@ -53,16 +67,28 @@ pub(super) enum KeybindingsListItem {
         is_overridden: bool,
         /// Context of a binding the row collides with, for its badge.
         conflict_context: Option<ContextId>,
+        /// Why the binding may not behave as its keys suggest.
+        warning: Option<String>,
         ctx_idx: usize,
         binding_idx: usize,
     },
-    /// Decision banner under the row whose new chord collides with other
+    /// Decision banner under the row whose new keys collide with other
     /// bindings: cancel, or replace them.
     PendingConflict {
-        chord: KeyChord,
+        keys: KeySequence,
         target: BindingSlot,
         conflicts: Vec<BindingSlot>,
     },
+    /// Context predicate editor under the row whose predicate is edited.
+    PredicateEditor { slot: BindingSlot },
+}
+
+/// State of the context predicate editor open under one binding row.
+pub(super) struct PredicateEditing {
+    pub(super) slot: BindingSlot,
+    pub(super) input: Entity<InputState>,
+    /// Why the last attempt to save could not be accepted.
+    pub(super) error: Option<PredicateError>,
 }
 
 pub(super) struct KeybindingsSection {
@@ -83,6 +109,12 @@ pub(super) struct KeybindingsSection {
     /// Context group whose row started the recording. A binding inherited
     /// by several contexts shows the recording only in that group.
     pub(super) recording_group: Option<ContextId>,
+    /// Ends the recorded sequence after a pause; replaced on every key.
+    recording_pause: Option<Task<()>>,
+    /// The context predicate editor, while one is open.
+    pub(super) predicate_editing: Option<PredicateEditing>,
+    /// Evaluates predicates for conflict detection; built once.
+    pub(super) overlap: GpuiPredicateOverlap,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -134,12 +166,15 @@ impl KeybindingsSection {
             overrides: keymap_overrides(),
             recorder: KeybindingRecorder::new(),
             recording_group: None,
+            recording_pause: None,
+            predicate_editing: None,
+            overlap: GpuiPredicateOverlap::new(),
             _subscriptions: vec![context_subscription, recording_interceptor],
         }
     }
 
     /// Captures every key press of this window while a shortcut is being
-    /// recorded, before key bindings and key listeners see it, so chords the
+    /// recorded, before key bindings and key listeners see it, so keys the
     /// settings window or the app already use (Ctrl+S, Ctrl+W, Tab) can be
     /// recorded too.
     fn intercept_recording_keys(window: &mut Window, cx: &mut Context<Self>) -> Subscription {
@@ -165,7 +200,7 @@ impl KeybindingsSection {
         })
     }
 
-    /// Starts recording a new chord for `slot`, from its row in the `group`
+    /// Starts recording new keys for `slot`, from its row in the `group`
     /// context group.
     pub(super) fn start_recording(
         &mut self,
@@ -174,12 +209,17 @@ impl KeybindingsSection {
         cx: &mut Context<Self>,
     ) {
         self.keybindings_editing_filter = false;
+        self.predicate_editing = None;
         self.recording_group = Some(group);
-        self.recorder.start(slot);
+
+        let predicate = self.overrides.effective_predicate(&slot).into_owned();
+        self.recorder.start(slot, predicate);
         cx.notify();
     }
 
     pub(super) fn cancel_recording(&mut self, cx: &mut Context<Self>) {
+        self.recording_pause = None;
+
         if self.recorder.is_active() {
             self.recorder.cancel();
             cx.notify();
@@ -198,26 +238,116 @@ impl KeybindingsSection {
             chord,
             dbflux_ui_base::keymap::default_keymap(),
             &self.overrides,
+            &self.overlap,
         );
 
-        if let RecordingOutcome::Commit { slot, chord } = outcome {
-            let mut overrides = self.overrides.clone();
-            overrides.set(slot, Some(chord));
-            self.save_overrides(overrides, cx);
+        self.apply_recording_outcome(outcome, cx);
+    }
+
+    /// Saves a finished sequence, or arms the pause that finishes it when
+    /// the key just captured may be followed by another one.
+    fn apply_recording_outcome(&mut self, outcome: RecordingOutcome, cx: &mut Context<Self>) {
+        match outcome {
+            RecordingOutcome::Captured => {
+                self.recording_pause = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(RECORDING_PAUSE).await;
+                    this.update(cx, |this, cx| this.finish_recording(cx))
+                        .log_err();
+                }));
+            }
+            RecordingOutcome::Commit { slot, keys } => {
+                self.recording_pause = None;
+                let mut overrides = self.overrides.clone();
+                overrides.set(slot, Some(keys));
+                self.save_overrides(overrides, cx);
+            }
+            RecordingOutcome::ConflictFound | RecordingOutcome::Cancelled => {
+                self.recording_pause = None;
+            }
+            RecordingOutcome::Ignored => {}
         }
 
         cx.notify();
     }
 
-    /// Gives the chord to the recorded binding and removes it from the
-    /// bindings it collided with.
+    /// Ends the sequence being recorded after the pause.
+    fn finish_recording(&mut self, cx: &mut Context<Self>) {
+        let outcome = self.recorder.finish(
+            dbflux_ui_base::keymap::default_keymap(),
+            &self.overrides,
+            &self.overlap,
+        );
+        self.apply_recording_outcome(outcome, cx);
+    }
+
+    /// Gives the keys to the recorded binding and removes them from the
+    /// bindings they collided with.
     pub(super) fn replace_conflicting(&mut self, cx: &mut Context<Self>) {
         if let Some(replacement) = self.recorder.confirm_replace() {
             let mut overrides = self.overrides.clone();
-            overrides.rebind(replacement.slot, replacement.chord, &replacement.replaced);
+            overrides.rebind(replacement.slot, replacement.keys, &replacement.replaced);
             self.save_overrides(overrides, cx);
         }
         cx.notify();
+    }
+
+    /// Opens the context predicate editor under the row of `slot`, filled
+    /// with the binding's current predicate.
+    pub(super) fn start_predicate_editing(
+        &mut self,
+        slot: BindingSlot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_recording(cx);
+
+        let predicate = self.overrides.effective_predicate(&slot).into_owned();
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!(
+                    "settings.keybindings.context_editor.placeholder"
+                ))
+                .default_value(predicate)
+        });
+        input.update(cx, |state, cx| state.focus(window, cx));
+
+        self.predicate_editing = Some(PredicateEditing {
+            slot,
+            input,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn cancel_predicate_editing(&mut self, cx: &mut Context<Self>) {
+        if self.predicate_editing.take().is_some() {
+            cx.emit(SectionFocusEvent::RequestFocusReturn);
+            cx.notify();
+        }
+    }
+
+    /// Saves the predicate typed in the editor when it parses; otherwise
+    /// keeps the editor open with the parse error.
+    pub(super) fn save_predicate(&mut self, cx: &mut Context<Self>) {
+        let Some(editing) = self.predicate_editing.as_mut() else {
+            return;
+        };
+
+        let text = editing.input.read(cx).value().trim().to_string();
+
+        if let Err(error) = validate_predicate(&text) {
+            editing.error = Some(error);
+            cx.notify();
+            return;
+        }
+
+        let slot = editing.slot.clone();
+        self.predicate_editing = None;
+
+        let mut overrides = self.overrides.clone();
+        overrides.set_predicate(slot, Some(text));
+        self.save_overrides(overrides, cx);
+        cx.emit(SectionFocusEvent::RequestFocusReturn);
     }
 
     /// Removes the shortcut of `slot`.
@@ -229,7 +359,7 @@ impl KeybindingsSection {
         self.save_overrides(overrides, cx);
     }
 
-    /// Restores the default chord of `slot`.
+    /// Restores the default keys and predicate of `slot`.
     pub(super) fn reset_binding(&mut self, slot: &BindingSlot, cx: &mut Context<Self>) {
         if !self.overrides.is_overridden(slot) {
             return;
@@ -291,6 +421,8 @@ impl KeybindingsSection {
     }
 }
 
+impl EventEmitter<SectionFocusEvent> for KeybindingsSection {}
+
 /// Items of the context filter: "All contexts", then every context.
 fn context_filter_items() -> Vec<DropdownItem> {
     std::iter::once(DropdownItem::with_value(
@@ -329,6 +461,17 @@ impl SettingsSection for KeybindingsSection {
         }
 
         let chord = key_chord_from_gpui(&event.keystroke);
+
+        if self.predicate_editing.is_some() {
+            match (chord.key.as_str(), chord.modifiers) {
+                ("enter", modifiers) if modifiers == Modifiers::none() => self.save_predicate(cx),
+                ("escape", modifiers) if modifiers == Modifiers::none() => {
+                    self.cancel_predicate_editing(cx)
+                }
+                _ => {}
+            }
+            return;
+        }
 
         if self.keybindings_editing_filter {
             if chord.key == "escape" && chord.modifiers == Modifiers::none() {
@@ -394,7 +537,7 @@ impl SettingsSection for KeybindingsSection {
             }
             ("delete", modifiers) | ("backspace", modifiers) if modifiers == Modifiers::none() => {
                 if let Some(entry) = self.selected_entry(cx)
-                    && entry.chord.is_some()
+                    && entry.keys.is_some()
                 {
                     self.remove_shortcut(entry.slot, cx);
                 }
@@ -402,6 +545,11 @@ impl SettingsSection for KeybindingsSection {
             ("r", modifiers) if modifiers == Modifiers::none() => {
                 if let Some(entry) = self.selected_entry(cx) {
                     self.reset_binding(&entry.slot, cx);
+                }
+            }
+            ("p", modifiers) if modifiers == Modifiers::none() => {
+                if let Some(entry) = self.selected_entry(cx) {
+                    self.start_predicate_editing(entry.slot, window, cx);
                 }
             }
             ("/", modifiers) | ("f", modifiers) if modifiers == Modifiers::none() => {
@@ -423,6 +571,7 @@ impl SettingsSection for KeybindingsSection {
     fn focus_out(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.content_focused = false;
         self.keybindings_editing_filter = false;
+        self.predicate_editing = None;
         self.cancel_recording(cx);
         cx.notify();
     }

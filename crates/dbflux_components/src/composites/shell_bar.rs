@@ -97,6 +97,7 @@ impl RenderOnce for CommandSearch {
 
         div()
             .id(self.id)
+            .key_context(crate::key_contexts::COMMAND_SEARCH)
             .aria_label(self.placeholder.clone())
             .relative()
             .flex()

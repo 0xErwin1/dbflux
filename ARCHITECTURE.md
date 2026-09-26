@@ -170,7 +170,7 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested events, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # Keymap engine: default layers, overrides, native GPUI bindings
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
       user_error/           # Centralized user-facing error reporting (UserFacingError,
@@ -948,10 +948,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ## Keyboard & Focus Architecture
 
-- Keymap system: `crates/dbflux_ui/src/keymap/` (stays in `dbflux_ui`) defines keymap glue (`actions.rs`, `dispatcher.rs`). Keymap helpers (`default_keymap`, `key_chord_from_gpui`) live in `crates/dbflux_ui_base/src/keymap.rs`. Domain command types (`Command`, `ContextId`) are defined in `dbflux_core::keymap_types` and re-exported through `crates/dbflux_app/src/keymap/`.
-- Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks).
+- Keymap engine: `crates/dbflux_ui_base/src/keymap/` holds the default layers (`defaults.rs`, one per `ContextId`) and turns the effective keymap (defaults plus the user's overrides from `dbflux_app::keymap`) into native GPUI key bindings. Each binding has a key sequence and a context predicate in GPUI's language (`Editor && vim_mode == normal`), so GPUI resolves precedence, sequences and their timeout. Domain command types (`Command`, `ContextId`) are defined in `dbflux_core::keymap_types` and re-exported through `crates/dbflux_app/src/keymap/`, which also holds the override model, its storage and the recorder behind the settings editor.
+- Key contexts: a window root (workspace, settings window, connection manager) sets the identifier of the context that owns the keyboard, computed from its focus model, plus `Global` when that context inherits the global bindings and entries from the active document (`vim_mode`, `language`). Bindings of these contexts dispatch `RunCommand`, which the root handles. Elements set their own contexts (`DataTable`, `Input`, `Modal`, `DocumentTree`, the modal editors, `KeyValueView`); their bindings dispatch the element's actions and win because they sit deeper. Containers add descriptive identifiers (`SidebarPanel`, `CodeEditor`, `ResultPanel`, …) for user predicates only. The vendored GPUI carries the dispatch changes the engine needs (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks). A document that owns some commands handles `RunCommand` on its own root first and lets the others through.
 - Document-focused design: FocusTarget was simplified from Editor/Results/Sidebar/BackgroundTasks to Document/Sidebar/BackgroundTasks, letting documents manage their own internal focus state.
-- Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation).
+- Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation); the contexts that inherit the global bindings require `!Modal`, so an open dialog captures the keyboard.
 - Panel focus modes: Complex panels like data tables have internal focus state machines (`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`) to handle nested keyboard navigation.
 - Mouse/keyboard sync: Mouse handlers update focus state to keep keyboard and mouse navigation consistent; a `switching_input` flag prevents race conditions during input blur events.
 

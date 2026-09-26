@@ -12,5 +12,5 @@ pub use document::{ColumnGroupHeader, DocumentColumnHeader, DocumentPresentation
 pub use events::{ContextMenuAction, DataTableEvent, Direction, Edge, FilterOperator, SortState};
 pub use model::TableModel;
 pub use state::{DataTableState, ModelSwap};
-pub use table::{DataTable, context_menu_keystroke, init};
+pub use table::{CONTEXT, DataTable, actions, context_menu_keystroke};
 pub use theme::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};

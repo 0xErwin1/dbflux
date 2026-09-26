@@ -494,10 +494,17 @@ impl super::KeyValueDocument {
                 .color(muted),
             )
             .child(div().flex_1())
-            .child(Kbd::chord(["Ctrl", "`"]));
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(
+                    dbflux_app::keymap::ContextId::KeyValue,
+                    dbflux_app::keymap::Command::ToggleConsole,
+                ),
+                |header, label| header.child(Kbd::new(label)),
+            );
 
         let mut container = div()
             .id("kv-console")
+            .key_context(dbflux_components::key_contexts::KEY_VALUE_CONSOLE)
             .flex()
             .flex_col()
             .flex_none()
@@ -817,5 +824,79 @@ mod tests {
         }
         assert_eq!(history.len(), HISTORY_LIMIT);
         assert_eq!(history.last().map(String::as_str), Some("GET 99"));
+    }
+
+    /// The key-value keys come from the keymap: the console toggle works
+    /// from the document and from the console input, and a letter the
+    /// document binds is typed into a text field instead of running.
+    #[gpui::test]
+    fn key_value_keys_run_from_the_keymap(cx: &mut gpui::TestAppContext) {
+        use crate::key_value::KeyValueDocument;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::{AppContext as _, Focusable as _};
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    KeyValueDocument::new(uuid::Uuid::nil(), "0".to_string(), app_state, window, cx)
+                })
+            },
+            |document, cx| document.active_context(cx),
+            KeyValueDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| document.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+
+        window.simulate_keystrokes("ctrl-`");
+        assert!(
+            window.update(|_, cx| document.read(cx).console.open),
+            "Ctrl+` opens the console"
+        );
+        let console_focused = window.update(|window, cx| {
+            document
+                .read(cx)
+                .console
+                .input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        });
+        assert!(console_focused, "the console input takes focus");
+
+        window.simulate_keystrokes("ctrl-`");
+        assert!(
+            !window.update(|_, cx| document.read(cx).console.open),
+            "Ctrl+` closes it again from its input"
+        );
+
+        window.update(|window, cx| {
+            let filter = document.read(cx).filter_input.clone();
+            filter.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("t");
+
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).filter_input.read(cx).value().to_string()),
+            "t",
+            "`t` in the filter is text, not the expiry editor"
+        );
+        assert!(
+            window.update(|_, cx| document.read(cx).expiry_editor.is_none()),
+            "the expiry editor stays closed"
+        );
     }
 }

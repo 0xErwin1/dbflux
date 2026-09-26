@@ -20,9 +20,7 @@ use dbflux_ipc::{
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
-use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
-use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
 use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
@@ -355,8 +353,6 @@ fn run_gui() {
     let application = gpui_platform::application().with_assets(Assets);
     application.run(|cx: &mut App| {
         dbflux_ui::theme::init(cx);
-        dbflux_ui::ui::components::data_table::init(cx);
-        dbflux_ui_base::keymap::init_document_tree_keybindings(cx);
 
         let app_state_inner = match AppStateEntity::new() {
             Ok(state) => state,
@@ -376,6 +372,7 @@ fn run_gui() {
             dbflux_ui_base::keymap::default_keymap(),
         );
         dbflux_ui_base::keymap::apply_keymap_overrides(keymap_overrides, cx);
+        dbflux_ui_base::keymap::init_keymap(cx);
 
         // Wire the bridge into the audit service before cloning it out.
         // `attach_tracing_bridge` must be called on the owned `AppState`
@@ -432,10 +429,6 @@ fn run_gui() {
 
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
-                cx.bind_keys(command_palette_keybindings());
-                dbflux_ui_base::keymap::register_derived_keybindings(input_context_keybindings, cx);
-                dbflux_ui_base::keymap::register_derived_keybindings(workspace_keybindings, cx);
-
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
                 workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
 

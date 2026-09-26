@@ -5,7 +5,7 @@ use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text,
+    BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text, stepped_segment,
 };
 use dbflux_components::tokens::{ChamferCut, ChromeColors};
 use dbflux_components::typography::AppFonts;
@@ -1589,6 +1589,50 @@ impl HooksSection {
         }
     }
 
+    /// Left and Right on a segmented field that is one stop of the form
+    /// (execution mode, on failure) move its choice. Returns whether the
+    /// cursor was on such a field.
+    pub(super) fn step_segmented_field(&mut self, step: isize, cx: &mut Context<Self>) -> bool {
+        match self.hook_form_field {
+            HookFormField::ExecutionMode => {
+                let active = match self.hook_execution_mode {
+                    HookExecutionMode::Blocking => "blocking",
+                    HookExecutionMode::Detached => "detached",
+                };
+
+                if let Some(next) = stepped_segment(&["blocking", "detached"], active, step) {
+                    let mode = if next == "detached" {
+                        HookExecutionMode::Detached
+                    } else {
+                        HookExecutionMode::Blocking
+                    };
+                    self.set_hook_execution_mode_dropdown(mode, cx);
+                    self.validate_form_field();
+                }
+                true
+            }
+            HookFormField::OnFailure => {
+                let active = match self.selected_failure_mode(cx) {
+                    HookFailureMode::Disconnect => "disconnect",
+                    HookFailureMode::Warn => "warn",
+                    HookFailureMode::Ignore => "ignore",
+                };
+
+                if let Some(next) = stepped_segment(&["disconnect", "warn", "ignore"], active, step)
+                {
+                    let mode = match next {
+                        "warn" => HookFailureMode::Warn,
+                        "ignore" => HookFailureMode::Ignore,
+                        _ => HookFailureMode::Disconnect,
+                    };
+                    self.set_failure_mode(mode, cx);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn set_failure_mode(&mut self, mode: HookFailureMode, cx: &mut Context<Self>) {
         let index = match mode {
             HookFailureMode::Disconnect => 0,
@@ -2026,7 +2070,7 @@ impl HooksSection {
         )
         .primary()
         .icon(AppIcon::Check)
-        .kbd("Ctrl S")
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
         .focused(self.is_cursor_on(HookFormField::SaveButton))
         .on_click(cx.listener(|this, _, window, cx| {
             this.save_hook(window, cx);
@@ -2122,10 +2166,18 @@ impl HooksSection {
                     cx.notify();
                 }
                 ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_left();
+                    if !self.step_segmented_field(-1, cx) {
+                        self.move_left();
+                    }
                     cx.notify();
                 }
-                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                ("right", modifiers) if modifiers == Modifiers::none() => {
+                    if !self.step_segmented_field(1, cx) {
+                        self.move_right();
+                    }
+                    cx.notify();
+                }
+                ("l", modifiers) if modifiers == Modifiers::none() => {
                     self.move_right();
                     cx.notify();
                 }

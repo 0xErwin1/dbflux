@@ -170,7 +170,7 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity 包装器（Deref + EventEmitter）、AppStateGlobal、
                             # UserErrorReported + OpenAuditRequested 事件、unread_error_count
-      keymap.rs             # default_keymap、key_chord_from_gpui
+      keymap/               # 键位映射引擎：默认层、覆盖设置、原生 GPUI 绑定
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast 提示 + ToastHost，带按严重级别区分的令牌桶节流
       user_error/           # 集中式面向用户的错误上报（UserFacingError、
@@ -939,10 +939,11 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 ## 键盘与焦点架构
 
-- 键位映射系统：`crates/dbflux_ui/src/keymap/`（留在 `dbflux_ui`）定义键位映射胶水层（`actions.rs`、`dispatcher.rs`）。键位映射辅助函数（`default_keymap`、`key_chord_from_gpui`）位于 `crates/dbflux_ui_base/src/keymap.rs`。领域命令类型（`Command`、`ContextId`）定义在 `dbflux_core::keymap_types` 中，并通过 `crates/dbflux_app/src/keymap/` 重新导出。
-- 命令分发：`Workspace` 实现 `CommandDispatcher` trait；`views/workspace/dispatch.rs` 中的 `dispatch()` 依据 `focus_target`（Document、Sidebar、BackgroundTasks）路由命令。
+- 键位映射引擎：`crates/dbflux_ui_base/src/keymap/` 存放默认层（`defaults.rs`，每个 `ContextId` 一层），并把生效的键位映射（默认值加上 `dbflux_app::keymap` 中的用户覆盖设置）转换为原生 GPUI 键绑定。每个绑定都有一个按键序列和一个使用 GPUI 语言的上下文谓词（`Editor && vim_mode == normal`），因此优先级、按键序列及其超时都由 GPUI 处理。领域命令类型（`Command`、`ContextId`）定义在 `dbflux_core::keymap_types` 中，并通过 `crates/dbflux_app/src/keymap/` 重新导出；该模块还包含覆盖模型、其存储以及设置编辑器背后的录制器。
+- 键上下文：每个窗口的根（工作区、设置窗口、连接管理器）设置拥有键盘的上下文的标识符（由其焦点模型计算），当该上下文继承全局绑定时再加上 `Global`，以及活动文档提供的条目（`vim_mode`、`language`）。这些上下文的绑定分发由根处理的 `RunCommand`。元素设置自己的上下文（`DataTable`、`Input`、`Modal`、`DocumentTree`、模态编辑器、`KeyValueView`）；它们的绑定分发元素自身的 action，并因层级更深而优先。容器添加仅供用户谓词使用的描述性标识符（`SidebarPanel`、`CodeEditor`、`ResultPanel`……）。内置的 GPUI 带有引擎所需的分发改动（`vendor/gpui-pre/VENDOR.md`，keyboard dispatch）。
+- 命令分发：`Workspace` 实现 `CommandDispatcher` trait；`views/workspace/dispatch.rs` 中的 `dispatch()` 依据 `focus_target`（Document、Sidebar、BackgroundTasks）路由命令。拥有部分命令的文档会先在自己的根上处理 `RunCommand`，其余的放行。
 - 以文档为中心的设计：FocusTarget 从 Editor/Results/Sidebar/BackgroundTasks 简化为 Document/Sidebar/BackgroundTasks，让文档自行管理其内部焦点状态。
-- 焦点层：每个上下文都有自己的键位映射层，带 vim 风格绑定（j/k/h/l 导航）。
+- 焦点层：每个上下文都有自己的键位映射层，带 vim 风格绑定（j/k/h/l 导航）；继承全局绑定的上下文要求 `!Modal`，因此打开的对话框会接管键盘。
 - 面板焦点模式：数据表格这类复杂面板有内部的焦点状态机（`FocusMode::Table`/`Toolbar`、`EditState::Navigating`/`Editing`），以处理嵌套的键盘导航。
 - 鼠标/键盘同步：鼠标处理函数会更新焦点状态，以保持键盘与鼠标导航一致；`switching_input` 标志用于防止输入框失焦事件期间的竞态。
 

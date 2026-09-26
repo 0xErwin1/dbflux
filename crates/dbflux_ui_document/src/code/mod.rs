@@ -932,7 +932,10 @@ impl CodeDocument {
                     "document.code.context_bar.fallback.sources"
                 ))
         });
-        let vim_search_input = cx.new(|cx| InputState::new(window, cx));
+        let vim_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.code.vim.search.placeholder"))
+        });
         let vim_search_subscription = cx.subscribe_in(
             &vim_search_input,
             window,

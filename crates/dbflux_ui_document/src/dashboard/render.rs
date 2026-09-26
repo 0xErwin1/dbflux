@@ -580,7 +580,8 @@ impl Render for DashboardDocument {
         //   - Enter                 : open Configure popover for focused panel
         //   - F2                    : start inline title edit on focused panel
         //   - Delete / Backspace    : remove focused panel
-        //   - Escape                : close any open popover / menu
+        // Escape runs the keymap's Cancel, which closes an open popover or
+        // menu (see `dispatch_command`).
         let focus_handle = self.focus_handle.clone();
         let on_key_down = cx.listener(
             |this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
@@ -612,13 +613,6 @@ impl Render for DashboardDocument {
                     "delete" | "backspace" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.remove_panel(idx, cx);
-                        }
-                    }
-                    "escape" => {
-                        if this.panel_context_menu.is_some() {
-                            this.close_panel_context_menu(cx);
-                        } else if this.pending_configure_panel_index.is_some() {
-                            this.close_configure_panel(cx);
                         }
                     }
                     _ => {}

@@ -572,7 +572,13 @@ impl KeyValueDocument {
                     )
                     .inline()
                     .icon(AppIcon::ChevronDown)
-                    .kbd("Ctrl J")
+                    .when_some(
+                        dbflux_ui_base::keymap::shortcut_label(
+                            dbflux_app::keymap::ContextId::KeyValue,
+                            dbflux_app::keymap::Command::LoadMore,
+                        ),
+                        Button::kbd,
+                    )
                     .disabled(!self.can_load_more_keys())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.load_more_keys(cx);

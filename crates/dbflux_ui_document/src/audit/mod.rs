@@ -2300,6 +2300,81 @@ mod tests {
         (document, app_state, window)
     }
 
+    /// With the toolbar ring on the time presets, Right and Left move the
+    /// selected preset instead of the ring, and Right on the last preset
+    /// moves the ring on to the next toolbar item.
+    #[gpui::test]
+    fn arrows_step_the_time_presets_in_the_toolbar(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let audit_repo = app_state
+                    .read(cx)
+                    .storage_runtime()
+                    .audit()
+                    .expect("audit repo should open in test");
+                cx.new(|cx| AuditDocument::new(audit_repo, app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            AuditDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            let focus_handle = document.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        let preset = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                document
+                    .read(cx)
+                    .selected_time_range
+                    .map(crate::chrome::time_preset_index)
+            })
+        };
+        let ring_on_time = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| document.read(cx).slot_has_ring(super::ToolbarSlot::Time))
+        };
+
+        window.simulate_keystrokes("f");
+        window.simulate_keystrokes("right");
+        assert!(
+            ring_on_time(window),
+            "the ring moves from search to the presets"
+        );
+
+        window.update(|_, cx| document.update(cx, |doc, cx| doc.select_time_preset(1, cx)));
+        window.simulate_keystrokes("right");
+        assert_eq!(preset(window), Some(2), "Right selects the next preset");
+        assert!(ring_on_time(window), "the ring stays on the presets");
+
+        window.simulate_keystrokes("left");
+        assert_eq!(preset(window), Some(1), "Left selects the previous preset");
+
+        window.update(|_, cx| document.update(cx, |doc, cx| doc.select_time_preset(5, cx)));
+        window.simulate_keystrokes("right");
+        assert_eq!(preset(window), Some(5), "the last preset stays selected");
+        assert!(
+            !ring_on_time(window),
+            "Right on the last preset moves the ring on"
+        );
+    }
+
     /// In the audit viewer `r` resolves to the refresh command, and the
     /// document handles it by reloading the event list.
     #[gpui::test]

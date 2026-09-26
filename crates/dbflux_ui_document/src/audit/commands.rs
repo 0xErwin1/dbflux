@@ -342,6 +342,31 @@ impl AuditDocument {
         }
     }
 
+    /// Left and Right on the time presets move the selected preset; at
+    /// either end they leave the presets for the neighbouring toolbar item.
+    /// Returns whether the step stayed inside the presets.
+    fn step_time_preset(&mut self, step: isize, cx: &mut Context<Self>) -> bool {
+        if self.toolbar_index(ToolbarSlot::Time) != Some(self.filter_bar.focused_index()) {
+            return false;
+        }
+
+        let Some(current) = self
+            .selected_time_range
+            .map(crate::chrome::time_preset_index)
+        else {
+            self.select_time_preset(0, cx);
+            return true;
+        };
+
+        match current.checked_add_signed(step).filter(|next| *next <= 5) {
+            Some(next) => {
+                self.select_time_preset(next, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Execute the button action for the currently focused FilterBar item.
     /// Only called when `activate_input` returned `false` (Button variant).
     pub(super) fn execute_filter_bar_button(
@@ -448,12 +473,16 @@ impl AuditDocument {
             // Navigating mode: ring is visible, no input has GPUI focus.
             return match cmd {
                 Command::ColumnLeft | Command::FocusLeft => {
-                    self.filter_bar.move_left();
+                    if !self.step_time_preset(-1, cx) {
+                        self.filter_bar.move_left();
+                    }
                     cx.notify();
                     true
                 }
                 Command::ColumnRight | Command::FocusRight => {
-                    self.filter_bar.move_right();
+                    if !self.step_time_preset(1, cx) {
+                        self.filter_bar.move_right();
+                    }
                     cx.notify();
                     true
                 }

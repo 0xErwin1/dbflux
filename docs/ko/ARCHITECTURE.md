@@ -170,7 +170,7 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity 래퍼 (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested 이벤트, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # 키맵 엔진: 기본 레이어, 오버라이드, 네이티브 GPUI 바인딩
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # 심각도 인식 토큰 버킷 스로틀이 있는 Toast + ToastHost
       user_error/           # 중앙화된 사용자 대면 오류 보고 (UserFacingError,
@@ -940,10 +940,11 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 
 ## 키보드 및 포커스 아키텍처
 
-- 키맵 시스템: `crates/dbflux_ui/src/keymap/`(`dbflux_ui`에 유지됨)은 키맵 접착 코드(`actions.rs`, `dispatcher.rs`)를 정의합니다. 키맵 헬퍼(`default_keymap`, `key_chord_from_gpui`)는 `crates/dbflux_ui_base/src/keymap.rs`에 있습니다. 도메인 명령 타입(`Command`, `ContextId`)은 `dbflux_core::keymap_types`에 정의되어 `crates/dbflux_app/src/keymap/`을 통해 다시 내보내집니다(re-export).
-- 명령 디스패치: `Workspace`는 `CommandDispatcher` 트레이트를 구현하며, `views/workspace/dispatch.rs`의 `dispatch()`는 `focus_target`(Document, Sidebar, BackgroundTasks)에 따라 명령을 라우팅합니다.
+- 키맵 엔진: `crates/dbflux_ui_base/src/keymap/`은 기본 레이어(`defaults.rs`, `ContextId`마다 하나)를 담고, 유효 키맵(기본값과 `dbflux_app::keymap`의 사용자 오버라이드)을 네이티브 GPUI 키 바인딩으로 바꿉니다. 각 바인딩은 키 시퀀스와 GPUI 언어로 된 컨텍스트 조건식(`Editor && vim_mode == normal`)을 가지므로, 우선순위와 시퀀스, 그 대기 시간은 GPUI가 처리합니다. 도메인 명령 타입(`Command`, `ContextId`)은 `dbflux_core::keymap_types`에 정의되어 `crates/dbflux_app/src/keymap/`을 통해 다시 내보내지며(re-export), 이 모듈에는 오버라이드 모델과 저장소, 설정 편집기의 녹화기도 있습니다.
+- 키 컨텍스트: 각 창의 루트(워크스페이스, 설정 창, 연결 관리자)는 포커스 모델로 계산한, 키보드를 가진 컨텍스트의 식별자를 설정하고, 그 컨텍스트가 전역 바인딩을 상속하면 `Global`과 활성 문서의 항목(`vim_mode`, `language`)도 추가합니다. 이 컨텍스트들의 바인딩은 루트가 처리하는 `RunCommand`를 디스패치합니다. 요소는 자신의 컨텍스트(`DataTable`, `Input`, `Modal`, `DocumentTree`, 모달 편집기, `KeyValueView`)를 설정하며, 그 바인딩은 요소의 액션을 디스패치하고 더 깊이 있으므로 우선합니다. 컨테이너는 사용자 조건식 전용의 설명적 식별자(`SidebarPanel`, `CodeEditor`, `ResultPanel`, …)를 추가합니다. 벤더링된 GPUI에는 엔진에 필요한 디스패치 변경이 들어 있습니다(`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- 명령 디스패치: `Workspace`는 `CommandDispatcher` 트레이트를 구현하며, `views/workspace/dispatch.rs`의 `dispatch()`는 `focus_target`(Document, Sidebar, BackgroundTasks)에 따라 명령을 라우팅합니다. 일부 명령을 소유한 문서는 자신의 루트에서 `RunCommand`를 먼저 처리하고 나머지는 통과시킵니다.
 - 문서 중심 설계: FocusTarget은 Editor/Results/Sidebar/BackgroundTasks에서 Document/Sidebar/BackgroundTasks로 단순화되어, 문서가 자체 내부 포커스 상태를 관리하도록 했습니다.
-- 포커스 레이어: 각 컨텍스트는 vim 스타일 바인딩(j/k/h/l 탐색)이 있는 자체 키맵 레이어를 갖습니다.
+- 포커스 레이어: 각 컨텍스트는 vim 스타일 바인딩(j/k/h/l 탐색)이 있는 자체 키맵 레이어를 갖습니다. 전역 바인딩을 상속하는 컨텍스트는 `!Modal`을 요구하므로, 열린 대화상자가 키보드를 가져갑니다.
 - 패널 포커스 모드: 데이터 테이블 같은 복잡한 패널은 중첩된 키보드 탐색을 처리하기 위해 내부 포커스 상태 머신(`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`)을 갖습니다.
 - 마우스/키보드 동기화: 마우스 핸들러는 키보드와 마우스 탐색의 일관성을 유지하기 위해 포커스 상태를 갱신하며, `switching_input` 플래그가 입력 블러 이벤트 중 경쟁 상태를 방지합니다.
 

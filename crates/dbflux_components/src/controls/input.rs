@@ -3,8 +3,8 @@ use std::panic::Location;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId, Pixels,
-    SharedString, StyleRefinement, Window, actions, div,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, SharedString,
+    StyleRefinement, Window, actions, div,
 };
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
 use gpui_component::{ActiveTheme, Sizable};
@@ -29,24 +29,10 @@ actions!(
     ]
 );
 
-/// Key context for `gpui-component`'s `InputState` element.
-const INPUT_CONTEXT: &str = "Input";
-
-/// Register DBFlux-specific keybindings that complement the defaults from
-/// `gpui_component::init`. Call this once at app startup, after
-/// `gpui_component::init`.
-///
-/// Adds vim-style `ctrl-j` / `ctrl-k` chords as aliases for `MoveDown` /
-/// `MoveUp` inside any focused input. When a completion menu is open on an
-/// `EditorState`, the engine routes these actions to the menu first, so the
-/// chords navigate suggestions too.
-pub fn register_input_overrides(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-j", InputMoveDown, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-k", InputMoveUp, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-space", TriggerCompletion, Some(INPUT_CONTEXT)),
-    ]);
-}
+/// Key context of `gpui-component`'s input element. The keymap binds
+/// [`InputMoveDown`], [`InputMoveUp`] and [`TriggerCompletion`] in it (see
+/// `dbflux_ui_base::keymap`).
+pub const INPUT_CONTEXT: &str = "Input";
 
 /// Text field built on `gpui_component::input::Input`.
 ///

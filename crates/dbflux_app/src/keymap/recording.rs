@@ -1,11 +1,16 @@
 //! State machine behind the "record a new shortcut" interaction.
 //!
-//! The recorder captures one chord. A bare Escape cancels, so Escape itself
-//! cannot be recorded. A chord that collides with other bindings stops in the
-//! conflict state until the user cancels or replaces them.
+//! The recorder captures a key sequence: one chord, or several pressed one
+//! after the other. The caller ends the sequence with
+//! [`KeybindingRecorder::finish`], after a pause or when the user confirms; a
+//! sequence of [`MAX_SEQUENCE_LENGTH`] chords ends on its own. A bare Escape
+//! cancels, so Escape itself cannot be recorded. Keys that collide with other
+//! bindings stop in the conflict state until the user cancels or replaces
+//! them.
 
-use super::overrides::{BindingSlot, KeymapOverrides};
-use super::{KeyChord, KeymapStack, Modifiers};
+use super::chord::MAX_SEQUENCE_LENGTH;
+use super::overrides::{BindingSlot, KeymapOverrides, PredicateOverlap};
+use super::{KeyChord, KeySequence, KeymapStack, Modifiers};
 
 /// Keys that only report a modifier being pressed; they never finish a chord.
 const MODIFIER_KEYS: &[&str] = &[
@@ -16,37 +21,47 @@ const MODIFIER_KEYS: &[&str] = &[
 pub enum RecordingState {
     #[default]
     Idle,
-    /// Waiting for the new chord of `slot`.
-    Recording { slot: BindingSlot },
-    /// `chord` collides with `conflicts`; waiting for cancel or replace.
+    /// Waiting for the keys of `slot`, which applies under `predicate`.
+    /// `captured` holds the chords pressed so far.
+    Recording {
+        slot: BindingSlot,
+        predicate: String,
+        captured: Vec<KeyChord>,
+    },
+    /// `keys` collide with `conflicts`; waiting for cancel or replace.
     Conflict {
         slot: BindingSlot,
-        chord: KeyChord,
+        keys: KeySequence,
         conflicts: Vec<BindingSlot>,
     },
 }
 
-/// What a key press did to the recorder.
+/// What a key press, or the end of a sequence, did to the recorder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordingOutcome {
     /// The key was not part of a recording (idle, modifier only, or a key
     /// other than Escape while a conflict waits for a decision).
     Ignored,
+    /// The chord was added to the sequence; more may follow.
+    Captured,
     /// The recording was cancelled; nothing changes.
     Cancelled,
-    /// `chord` is free: save it for `slot`.
-    Commit { slot: BindingSlot, chord: KeyChord },
-    /// The chord collides with other bindings; the recorder now waits in
+    /// `keys` are free: save them for `slot`.
+    Commit {
+        slot: BindingSlot,
+        keys: KeySequence,
+    },
+    /// The keys collide with other bindings; the recorder now waits in
     /// [`RecordingState::Conflict`].
     ConflictFound,
 }
 
-/// A decided replacement: `slot` takes `chord` and every binding in
+/// A decided replacement: `slot` takes `keys` and every binding in
 /// `replaced` loses its shortcut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replacement {
     pub slot: BindingSlot,
-    pub chord: KeyChord,
+    pub keys: KeySequence,
     pub replaced: Vec<BindingSlot>,
 }
 
@@ -72,16 +87,28 @@ impl KeybindingRecorder {
     pub fn target(&self) -> Option<&BindingSlot> {
         match &self.state {
             RecordingState::Idle => None,
-            RecordingState::Recording { slot } | RecordingState::Conflict { slot, .. } => {
+            RecordingState::Recording { slot, .. } | RecordingState::Conflict { slot, .. } => {
                 Some(slot)
             }
         }
     }
 
-    /// Starts recording a new chord for `slot`, abandoning any other
-    /// recording in progress.
-    pub fn start(&mut self, slot: BindingSlot) {
-        self.state = RecordingState::Recording { slot };
+    /// The chords captured so far while recording.
+    pub fn captured(&self) -> &[KeyChord] {
+        match &self.state {
+            RecordingState::Recording { captured, .. } => captured,
+            _ => &[],
+        }
+    }
+
+    /// Starts recording new keys for `slot`, which will apply under
+    /// `predicate`, abandoning any other recording in progress.
+    pub fn start(&mut self, slot: BindingSlot, predicate: impl Into<String>) {
+        self.state = RecordingState::Recording {
+            slot,
+            predicate: predicate.into(),
+            captured: Vec::new(),
+        };
     }
 
     pub fn cancel(&mut self) {
@@ -89,15 +116,19 @@ impl KeybindingRecorder {
     }
 
     /// Feeds one key press to the recorder.
+    ///
+    /// A chord that fills the sequence to [`MAX_SEQUENCE_LENGTH`] ends it at
+    /// once, as [`KeybindingRecorder::finish`] would.
     pub fn handle_chord(
         &mut self,
         chord: KeyChord,
         defaults: &KeymapStack,
         overrides: &KeymapOverrides,
+        overlap: &dyn PredicateOverlap,
     ) -> RecordingOutcome {
         let is_cancel = chord.key == "escape" && chord.modifiers == Modifiers::none();
 
-        match &self.state {
+        match &mut self.state {
             RecordingState::Idle => RecordingOutcome::Ignored,
             RecordingState::Conflict { .. } => {
                 if is_cancel {
@@ -107,7 +138,7 @@ impl KeybindingRecorder {
                     RecordingOutcome::Ignored
                 }
             }
-            RecordingState::Recording { slot } => {
+            RecordingState::Recording { captured, .. } => {
                 if is_cancel {
                     self.cancel();
                     return RecordingOutcome::Cancelled;
@@ -117,21 +148,52 @@ impl KeybindingRecorder {
                     return RecordingOutcome::Ignored;
                 }
 
-                let slot = slot.clone();
-                let conflicts = overrides.conflicts_for(defaults, &slot, &chord);
+                captured.push(chord);
 
-                if conflicts.is_empty() {
-                    self.cancel();
-                    RecordingOutcome::Commit { slot, chord }
+                if captured.len() >= MAX_SEQUENCE_LENGTH {
+                    self.finish(defaults, overrides, overlap)
                 } else {
-                    self.state = RecordingState::Conflict {
-                        slot,
-                        chord,
-                        conflicts,
-                    };
-                    RecordingOutcome::ConflictFound
+                    RecordingOutcome::Captured
                 }
             }
+        }
+    }
+
+    /// Ends the sequence being recorded: commits it when it is free, or
+    /// waits in the conflict state when it collides. Does nothing while no
+    /// chord has been captured.
+    pub fn finish(
+        &mut self,
+        defaults: &KeymapStack,
+        overrides: &KeymapOverrides,
+        overlap: &dyn PredicateOverlap,
+    ) -> RecordingOutcome {
+        let RecordingState::Recording {
+            slot,
+            predicate,
+            captured,
+        } = &self.state
+        else {
+            return RecordingOutcome::Ignored;
+        };
+
+        let Some(keys) = KeySequence::new(captured.clone()) else {
+            return RecordingOutcome::Ignored;
+        };
+
+        let slot = slot.clone();
+        let conflicts = overrides.conflicts_for(defaults, &slot, &keys, predicate, overlap);
+
+        if conflicts.is_empty() {
+            self.cancel();
+            RecordingOutcome::Commit { slot, keys }
+        } else {
+            self.state = RecordingState::Conflict {
+                slot,
+                keys,
+                conflicts,
+            };
+            RecordingOutcome::ConflictFound
         }
     }
 
@@ -141,11 +203,11 @@ impl KeybindingRecorder {
         match std::mem::take(&mut self.state) {
             RecordingState::Conflict {
                 slot,
-                chord,
+                keys,
                 conflicts,
             } => Some(Replacement {
                 slot,
-                chord,
+                keys,
                 replaced: conflicts,
             }),
             other => {
@@ -159,7 +221,7 @@ impl KeybindingRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::{Command, ContextId, KeymapLayer};
+    use crate::keymap::{Command, ContextId, ContextTreeOverlap, KeymapLayer};
 
     fn defaults() -> KeymapStack {
         let mut global = KeymapLayer::new(ContextId::Global);
@@ -194,99 +256,142 @@ mod tests {
         KeyChord::new("escape", Modifiers::none())
     }
 
+    fn press(recorder: &mut KeybindingRecorder, chord: KeyChord) -> RecordingOutcome {
+        recorder.handle_chord(
+            chord,
+            &defaults(),
+            &KeymapOverrides::new(),
+            &ContextTreeOverlap,
+        )
+    }
+
+    fn finish(recorder: &mut KeybindingRecorder) -> RecordingOutcome {
+        recorder.finish(&defaults(), &KeymapOverrides::new(), &ContextTreeOverlap)
+    }
+
     #[test]
     fn idle_recorder_ignores_keys() {
         let mut recorder = KeybindingRecorder::new();
 
-        let outcome = recorder.handle_chord(
-            KeyChord::new("t", Modifiers::ctrl()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
+        let outcome = press(&mut recorder, KeyChord::new("t", Modifiers::ctrl()));
 
         assert_eq!(outcome, RecordingOutcome::Ignored);
+        assert_eq!(finish(&mut recorder), RecordingOutcome::Ignored);
         assert!(!recorder.is_active());
     }
 
     #[test]
-    fn free_chord_commits_and_returns_to_idle() {
+    fn free_chord_commits_when_the_sequence_ends() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
         assert_eq!(recorder.target(), Some(&new_query_tab()));
 
-        let outcome = recorder.handle_chord(
-            KeyChord::new("t", Modifiers::ctrl()),
-            &defaults(),
-            &KeymapOverrides::new(),
+        let outcome = press(&mut recorder, KeyChord::new("t", Modifiers::ctrl()));
+        assert_eq!(outcome, RecordingOutcome::Captured);
+        assert_eq!(
+            recorder.captured(),
+            &[KeyChord::new("t", Modifiers::ctrl())]
         );
 
         assert_eq!(
-            outcome,
+            finish(&mut recorder),
             RecordingOutcome::Commit {
                 slot: new_query_tab(),
-                chord: KeyChord::new("t", Modifiers::ctrl()),
+                keys: KeySequence::from(KeyChord::new("t", Modifiers::ctrl())),
             }
         );
         assert_eq!(recorder.state(), &RecordingState::Idle);
     }
 
     #[test]
+    fn several_chords_record_a_sequence() {
+        let mut recorder = KeybindingRecorder::new();
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
+
+        press(&mut recorder, KeyChord::new("k", Modifiers::ctrl()));
+        press(&mut recorder, KeyChord::new("t", Modifiers::ctrl()));
+
+        assert_eq!(
+            finish(&mut recorder),
+            RecordingOutcome::Commit {
+                slot: new_query_tab(),
+                keys: KeySequence::parse("ctrl+k ctrl+t").expect("valid sequence"),
+            }
+        );
+    }
+
+    #[test]
+    fn a_full_sequence_ends_on_its_own() {
+        let mut recorder = KeybindingRecorder::new();
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
+
+        for _ in 0..MAX_SEQUENCE_LENGTH - 1 {
+            assert_eq!(
+                press(&mut recorder, KeyChord::new("g", Modifiers::none())),
+                RecordingOutcome::Captured
+            );
+        }
+
+        let outcome = press(&mut recorder, KeyChord::new("g", Modifiers::none()));
+        assert!(
+            matches!(outcome, RecordingOutcome::Commit { keys, .. } if keys.chord_count() == MAX_SEQUENCE_LENGTH)
+        );
+    }
+
+    #[test]
     fn escape_cancels_and_modifier_keys_wait() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
 
-        let modifier_only = recorder.handle_chord(
-            KeyChord::new("shift", Modifiers::shift()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
+        let modifier_only = press(&mut recorder, KeyChord::new("shift", Modifiers::shift()));
         assert_eq!(modifier_only, RecordingOutcome::Ignored);
         assert!(recorder.is_active());
 
-        let cancelled = recorder.handle_chord(escape(), &defaults(), &KeymapOverrides::new());
+        press(&mut recorder, KeyChord::new("k", Modifiers::ctrl()));
+        let cancelled = press(&mut recorder, escape());
         assert_eq!(cancelled, RecordingOutcome::Cancelled);
         assert!(!recorder.is_active());
     }
 
     #[test]
-    fn modified_escape_is_recorded() {
+    fn finishing_without_keys_keeps_recording() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
 
-        let outcome = recorder.handle_chord(
-            KeyChord::new("escape", Modifiers::shift()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
-
-        assert!(matches!(outcome, RecordingOutcome::Commit { .. }));
+        assert_eq!(finish(&mut recorder), RecordingOutcome::Ignored);
+        assert!(recorder.is_active());
     }
 
     #[test]
-    fn taken_chord_waits_for_a_decision_then_replaces() {
+    fn modified_escape_is_recorded() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
 
-        let outcome = recorder.handle_chord(
-            KeyChord::new("w", Modifiers::ctrl()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
-        assert_eq!(outcome, RecordingOutcome::ConflictFound);
+        press(&mut recorder, KeyChord::new("escape", Modifiers::shift()));
+
+        assert!(matches!(
+            finish(&mut recorder),
+            RecordingOutcome::Commit { .. }
+        ));
+    }
+
+    #[test]
+    fn taken_keys_wait_for_a_decision_then_replace() {
+        let mut recorder = KeybindingRecorder::new();
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
+
+        press(&mut recorder, KeyChord::new("w", Modifiers::ctrl()));
+        assert_eq!(finish(&mut recorder), RecordingOutcome::ConflictFound);
         assert_eq!(
             recorder.state(),
             &RecordingState::Conflict {
                 slot: new_query_tab(),
-                chord: KeyChord::new("w", Modifiers::ctrl()),
+                keys: KeySequence::from(KeyChord::new("w", Modifiers::ctrl())),
                 conflicts: vec![close_tab()],
             }
         );
 
-        let other_key = recorder.handle_chord(
-            KeyChord::new("x", Modifiers::ctrl()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
+        let other_key = press(&mut recorder, KeyChord::new("x", Modifiers::ctrl()));
         assert_eq!(
             other_key,
             RecordingOutcome::Ignored,
@@ -301,16 +406,26 @@ mod tests {
     }
 
     #[test]
+    fn a_predicate_elsewhere_avoids_the_conflict() {
+        let mut recorder = KeybindingRecorder::new();
+        recorder.start(new_query_tab(), "Editor && vim_mode == normal");
+
+        press(&mut recorder, KeyChord::new("w", Modifiers::ctrl()));
+
+        assert!(matches!(
+            finish(&mut recorder),
+            RecordingOutcome::Commit { .. }
+        ));
+    }
+
+    #[test]
     fn escape_cancels_a_pending_conflict() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
-        recorder.handle_chord(
-            KeyChord::new("w", Modifiers::ctrl()),
-            &defaults(),
-            &KeymapOverrides::new(),
-        );
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
+        press(&mut recorder, KeyChord::new("w", Modifiers::ctrl()));
+        finish(&mut recorder);
 
-        let outcome = recorder.handle_chord(escape(), &defaults(), &KeymapOverrides::new());
+        let outcome = press(&mut recorder, escape());
 
         assert_eq!(outcome, RecordingOutcome::Cancelled);
         assert_eq!(recorder.confirm_replace(), None);
@@ -319,14 +434,12 @@ mod tests {
     #[test]
     fn confirm_replace_keeps_a_running_recording() {
         let mut recorder = KeybindingRecorder::new();
-        recorder.start(new_query_tab());
+        recorder.start(new_query_tab(), ContextId::Global.default_predicate());
 
         assert_eq!(recorder.confirm_replace(), None);
-        assert_eq!(
+        assert!(matches!(
             recorder.state(),
-            &RecordingState::Recording {
-                slot: new_query_tab()
-            }
-        );
+            RecordingState::Recording { slot, .. } if *slot == new_query_tab()
+        ));
     }
 }

@@ -30,6 +30,8 @@ pub mod history_modal;
 pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
+#[cfg(test)]
+mod keyboard_test_support;
 mod labels;
 pub mod migrate_wizard;
 mod new_key_modal;

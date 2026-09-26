@@ -1612,7 +1612,7 @@ impl McpSection {
         Button::new("mcp-client-save", save_label)
             .primary()
             .icon(AppIcon::Check)
-            .kbd("Ctrl S")
+            .when_some(crate::settings::save_shortcut(), Button::kbd)
             .focused(is_form_focused && field == McpFormField::SaveButton)
             .on_click(cx.listener(|this, _, window, cx| {
                 this.save_client(window, cx);
@@ -1671,7 +1671,7 @@ impl McpSection {
         Button::new("mcp-role-save", save_label)
             .primary()
             .icon(AppIcon::Check)
-            .kbd("Ctrl S")
+            .when_some(crate::settings::save_shortcut(), Button::kbd)
             .focused(is_form_focused && field == McpFormField::SaveButton)
             .disabled(role_is_builtin)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -1701,7 +1701,7 @@ impl McpSection {
         Button::new("mcp-policy-save", save_label)
             .primary()
             .icon(AppIcon::Check)
-            .kbd("Ctrl S")
+            .when_some(crate::settings::save_shortcut(), Button::kbd)
             .focused(is_form_focused && field == McpFormField::SaveButton)
             .disabled(policy_is_builtin)
             .on_click(cx.listener(|this, _, window, cx| {

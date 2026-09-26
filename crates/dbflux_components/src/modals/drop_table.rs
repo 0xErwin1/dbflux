@@ -784,6 +784,7 @@ mod keyboard_tests {
         Rc<RefCell<Vec<DropTableOutcome>>>,
     ) {
         cx.update(gpui_component::init);
+        crate::modals::modal::bind_modal_keys_for_tests(cx);
 
         let (host, window) = cx.add_window_view(|window, cx| Host {
             modal: cx.new(|cx| ModalDropTable::new(window, cx)),

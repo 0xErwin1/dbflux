@@ -195,7 +195,7 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested events, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # Motor del keymap: capas por defecto, overrides, bindings nativos de GPUI
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
       user_error/           # Centralized user-facing error reporting (UserFacingError,
@@ -1621,20 +1621,39 @@ IA con una capa completa de gobernanza:
 
 ## Arquitectura de Teclado y Foco
 
-- Sistema de keymap: `crates/dbflux_ui/src/keymap/` (permanece en `dbflux_ui`)
-  define el keymap glue (`actions.rs`, `dispatcher.rs`). Los keymap helpers
-  (`default_keymap`, `key_chord_from_gpui`) viven en
-  `crates/dbflux_ui_base/src/keymap.rs`. Los tipos de comando de dominio
-  (`Command`, `ContextId`) se definen en `dbflux_core::keymap_types` y se
-  re-exportan a través de `crates/dbflux_app/src/keymap/`.
+- Motor del keymap: `crates/dbflux_ui_base/src/keymap/` contiene las capas por
+  defecto (`defaults.rs`, una por `ContextId`) y convierte el keymap efectivo
+  (los valores por defecto más los overrides del usuario de
+  `dbflux_app::keymap`) en key bindings nativos de GPUI. Cada binding tiene una
+  secuencia de teclas y un predicado de contexto en el lenguaje de GPUI
+  (`Editor && vim_mode == normal`), así que GPUI resuelve la precedencia, las
+  secuencias y su timeout. Los tipos de comando de dominio (`Command`,
+  `ContextId`) se definen en `dbflux_core::keymap_types` y se re-exportan a
+  través de `crates/dbflux_app/src/keymap/`, que además contiene el modelo de
+  overrides, su almacenamiento y el grabador del editor de settings.
+- Contextos de teclas: la raíz de cada ventana (workspace, ventana de settings,
+  connection manager) fija el identificador del contexto dueño del teclado,
+  calculado con su modelo de foco, más `Global` cuando ese contexto hereda los
+  bindings globales y las entradas del document activo (`vim_mode`,
+  `language`). Los bindings de esos contextos despachan `RunCommand`, que maneja
+  la raíz. Los elementos fijan sus propios contextos (`DataTable`, `Input`,
+  `Modal`, `DocumentTree`, los editores modales, `KeyValueView`); sus bindings
+  despachan las actions del elemento y ganan porque están más adentro. Los
+  contenedores agregan identificadores descriptivos (`SidebarPanel`,
+  `CodeEditor`, `ResultPanel`, …) solo para predicados del usuario. El GPUI
+  vendorizado trae los cambios de dispatch que necesita el motor
+  (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
 - Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`;
   `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según
-  `focus_target` (Document, Sidebar, BackgroundTasks).
+  `focus_target` (Document, Sidebar, BackgroundTasks). Un document dueño de
+  algunos comandos maneja `RunCommand` primero en su propia raíz y deja pasar
+  los demás.
 - Diseño centrado en el document: FocusTarget se simplificó de
   Editor/Results/Sidebar/BackgroundTasks a Document/Sidebar/BackgroundTasks,
   dejando que los documents gestionen su propio estado de foco interno.
 - Capas de foco: cada contexto tiene su propia capa de keymap con bindings de
-  estilo vim (navegación j/k/h/l).
+  estilo vim (navegación j/k/h/l); los contextos que heredan los bindings
+  globales requieren `!Modal`, así que un diálogo abierto captura el teclado.
 - Modos de foco de panel: paneles complejos como las data tables tienen máquinas
   de estado de foco interno (`FocusMode::Table`/`Toolbar`,
   `EditState::Navigating`/`Editing`) para manejar navegación por teclado

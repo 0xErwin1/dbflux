@@ -86,6 +86,9 @@ pub(crate) struct DispatchNode {
     pub modifiers_changed_listeners: Vec<ModifiersChangedListener>,
     pub context: Option<KeyContext>,
     pub focus_id: Option<FocusId>,
+    /// The element of this node is focused and clickable, so it answers an
+    /// unmodified Enter or Space itself (see `Window::claim_activation_keys`).
+    pub claims_activation_keys: bool,
     view_id: Option<EntityId>,
     parent: Option<DispatchNodeId>,
 }
@@ -259,6 +262,7 @@ impl DispatchTree {
         target.key_listeners = mem::take(&mut source.key_listeners);
         target.action_listeners = mem::take(&mut source.action_listeners);
         target.modifiers_changed_listeners = mem::take(&mut source.modifiers_changed_listeners);
+        target.claims_activation_keys = source.claims_activation_keys;
     }
 
     pub fn reuse_subtree(
@@ -322,6 +326,10 @@ impl DispatchTree {
 
     pub fn on_key_event(&mut self, listener: KeyListener) {
         self.active_node().key_listeners.push(listener);
+    }
+
+    pub fn claim_activation_keys(&mut self) {
+        self.active_node().claims_activation_keys = true;
     }
 
     pub fn on_modifiers_changed(&mut self, listener: ModifiersChangedListener) {

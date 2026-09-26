@@ -492,7 +492,7 @@ impl SettingsSection for UpdatesSection {
             Button::new("updates-save", dbflux_i18n::t!("updates.settings.save"))
                 .primary()
                 .icon(AppIcon::Save)
-                .kbd("Ctrl S")
+                .when_some(crate::settings::save_shortcut(), Button::kbd)
                 .focused(self.is_at(UpdatesRow::Save))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.select(UpdatesRow::Save);

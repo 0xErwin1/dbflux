@@ -871,19 +871,18 @@ impl DataGridPanel {
                 .left_0()
                 .size_full()
                 .track_focus(&self.focus.context_menu_focus)
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    use dbflux_app::keymap::KeyChord;
-                    use dbflux_ui_base::keymap::{effective_keymap, key_chord_from_gpui};
+                // The grid reports the ContextMenu context while the menu is
+                // open, so the keymap's menu keys arrive here first.
+                .on_action(cx.listener(
+                    |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
+                        let handled = dbflux_ui_base::keymap::run_command(action)
+                            .is_some_and(|command| this.dispatch_menu_command(command, window, cx));
 
-                    let chord = key_chord_from_gpui(&event.keystroke);
-                    let keymap = effective_keymap();
-
-                    if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord)
-                        && this.dispatch_menu_command(cmd, window, cx)
-                    {
-                        cx.stop_propagation();
-                    }
-                }))
+                        if !handled {
+                            cx.propagate();
+                        }
+                    },
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| this.dismiss_context_menu(window, cx)),

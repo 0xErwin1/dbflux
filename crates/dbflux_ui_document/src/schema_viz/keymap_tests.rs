@@ -10,9 +10,30 @@ use dbflux_schema_viz::graph::SchemaGraph;
 use dbflux_schema_viz::layout::LayoutFormat;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::keymap::{WORKSPACE_KEY_CONTEXT, init_keymap, root_key_context};
 use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-use gpui::{AppContext as _, Entity, Pixels, Point, TestAppContext, VisualTestContext, px};
+use gpui::{
+    AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Point, Render, Styled as _, TestAppContext, VisualTestContext, Window, div, px,
+};
 use uuid::Uuid;
+
+/// Stands in for the workspace root: it carries the key context the
+/// workspace reports for the diagram, as it does in the app.
+struct Host {
+    document: Entity<SchemaVizDocument>,
+}
+
+impl Render for Host {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let context = self.document.read(cx).active_context();
+
+        div()
+            .size_full()
+            .key_context(root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]))
+            .child(self.document.clone())
+    }
+}
 
 fn table(name: &str) -> TableInfo {
     TableInfo {
@@ -41,6 +62,7 @@ fn table(name: &str) -> TableInfo {
 fn focused_diagram(cx: &mut TestAppContext) -> (Entity<SchemaVizDocument>, &mut VisualTestContext) {
     cx.update(gpui_component::init);
     cx.update(theme::init);
+    cx.update(init_keymap);
     cx.update(|cx| {
         let host = cx.new(|_| ToastHost::new());
         cx.set_global(ToastGlobal { host });
@@ -53,17 +75,20 @@ fn focused_diagram(cx: &mut TestAppContext) -> (Entity<SchemaVizDocument>, &mut 
         })
     });
 
-    let (document, window) = cx.add_window_view(|window, cx| {
-        SchemaVizDocument::new(
-            Uuid::nil(),
-            None,
-            SchemaVizMode::Global,
-            app_state,
-            window,
-            cx,
-        )
+    let (host, window) = cx.add_window_view(|window, cx| Host {
+        document: cx.new(|cx| {
+            SchemaVizDocument::new(
+                Uuid::nil(),
+                None,
+                SchemaVizMode::Global,
+                app_state,
+                window,
+                cx,
+            )
+        }),
     });
     window.run_until_parked();
+    let document = window.update(|_, cx| host.read(cx).document.clone());
 
     // The test profile has no connection, so the tab's own load fails; the
     // graph is installed directly once that load has settled.

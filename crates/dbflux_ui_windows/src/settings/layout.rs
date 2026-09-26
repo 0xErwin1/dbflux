@@ -9,6 +9,7 @@ use gpui_component::scroll::ScrollableElement;
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
     div()
+        .key_context(dbflux_components::key_contexts::SETTINGS_SECTION)
         .flex_1()
         .min_h_0()
         .flex()

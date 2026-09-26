@@ -146,6 +146,27 @@ pub enum Command {
     LayoutLeftRight,
     LayoutSnowflake,
     LayoutCompact,
+
+    // === Grids, inputs and windows ===
+    ExtendSelectLeft,
+    ExtendSelectRight,
+    MoveToRowStart,
+    MoveToRowEnd,
+    ExtendSelectRowStart,
+    ExtendSelectRowEnd,
+    ExtendSelectFirst,
+    ExtendSelectLast,
+    SelectAll,
+    SaveRow,
+    Undo,
+    Redo,
+    ToggleColumnGroup,
+    StepOut,
+    TriggerCompletion,
+    CloseWindow,
+    ToggleConsole,
+    LoadMore,
+    EditExpiry,
 }
 
 impl Command {
@@ -313,6 +334,25 @@ impl Command {
             Command::LayoutLeftRight => "Left-Right Layout",
             Command::LayoutSnowflake => "Snowflake Layout",
             Command::LayoutCompact => "Compact Layout",
+            Command::ExtendSelectLeft => "Extend Selection Left",
+            Command::ExtendSelectRight => "Extend Selection Right",
+            Command::MoveToRowStart => "Move to Row Start",
+            Command::MoveToRowEnd => "Move to Row End",
+            Command::ExtendSelectRowStart => "Extend Selection to Row Start",
+            Command::ExtendSelectRowEnd => "Extend Selection to Row End",
+            Command::ExtendSelectFirst => "Extend Selection to First Row",
+            Command::ExtendSelectLast => "Extend Selection to Last Row",
+            Command::SelectAll => "Select All",
+            Command::SaveRow => "Save Row Changes",
+            Command::Undo => "Undo",
+            Command::Redo => "Redo",
+            Command::ToggleColumnGroup => "Expand or Collapse Column",
+            Command::StepOut => "Step Out of Nested Value",
+            Command::TriggerCompletion => "Show Completions",
+            Command::CloseWindow => "Close Window",
+            Command::ToggleConsole => "Toggle Console",
+            Command::LoadMore => "Load More",
+            Command::EditExpiry => "Edit Expiry",
         }
     }
 
@@ -444,6 +484,25 @@ impl Command {
             Command::LayoutLeftRight => "layout_left_right",
             Command::LayoutSnowflake => "layout_snowflake",
             Command::LayoutCompact => "layout_compact",
+            Command::ExtendSelectLeft => "extend_select_left",
+            Command::ExtendSelectRight => "extend_select_right",
+            Command::MoveToRowStart => "move_to_row_start",
+            Command::MoveToRowEnd => "move_to_row_end",
+            Command::ExtendSelectRowStart => "extend_select_row_start",
+            Command::ExtendSelectRowEnd => "extend_select_row_end",
+            Command::ExtendSelectFirst => "extend_select_first",
+            Command::ExtendSelectLast => "extend_select_last",
+            Command::SelectAll => "select_all",
+            Command::SaveRow => "save_row",
+            Command::Undo => "undo",
+            Command::Redo => "redo",
+            Command::ToggleColumnGroup => "toggle_column_group",
+            Command::StepOut => "step_out",
+            Command::TriggerCompletion => "trigger_completion",
+            Command::CloseWindow => "close_window",
+            Command::ToggleConsole => "toggle_console",
+            Command::LoadMore => "load_more",
+            Command::EditExpiry => "edit_expiry",
         }
     }
 
@@ -452,6 +511,29 @@ impl Command {
     ///
     /// Intended for exhaustive coverage in tests (id uniqueness, translation
     /// coverage) across `dbflux_core` and downstream UI crates.
+    /// Identifier that names this exact command, argument included, for
+    /// data-carrying key actions: [`Command::id`] except for
+    /// [`Command::SwitchToTab`], which appends its tab number
+    /// (`switch_to_tab_3`).
+    pub fn action_id(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Command::SwitchToTab(index) => format!("switch_to_tab_{index}").into(),
+            command => command.id().into(),
+        }
+    }
+
+    /// The command named by `action_id`, the inverse of [`Command::action_id`].
+    pub fn from_action_id(action_id: &str) -> Option<Self> {
+        if let Some(index) = action_id.strip_prefix("switch_to_tab_") {
+            return index.parse().ok().map(Command::SwitchToTab);
+        }
+
+        Self::all_variants()
+            .into_iter()
+            .filter(|command| !matches!(command, Command::SwitchToTab(_)))
+            .find(|command| command.id() == action_id)
+    }
+
     pub fn all_variants() -> Vec<Command> {
         #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
         let mut variants = vec![
@@ -560,6 +642,25 @@ impl Command {
             Command::LayoutLeftRight,
             Command::LayoutSnowflake,
             Command::LayoutCompact,
+            Command::ExtendSelectLeft,
+            Command::ExtendSelectRight,
+            Command::MoveToRowStart,
+            Command::MoveToRowEnd,
+            Command::ExtendSelectRowStart,
+            Command::ExtendSelectRowEnd,
+            Command::ExtendSelectFirst,
+            Command::ExtendSelectLast,
+            Command::SelectAll,
+            Command::SaveRow,
+            Command::Undo,
+            Command::Redo,
+            Command::ToggleColumnGroup,
+            Command::StepOut,
+            Command::TriggerCompletion,
+            Command::CloseWindow,
+            Command::ToggleConsole,
+            Command::LoadMore,
+            Command::EditExpiry,
         ];
 
         #[cfg(feature = "mcp")]
@@ -694,6 +795,26 @@ impl Command {
             | Command::MoveTableRight
             | Command::MoveTableUp
             | Command::MoveTableDown => "Navigation",
+
+            Command::ExtendSelectLeft
+            | Command::ExtendSelectRight
+            | Command::MoveToRowStart
+            | Command::MoveToRowEnd
+            | Command::ExtendSelectRowStart
+            | Command::ExtendSelectRowEnd
+            | Command::ExtendSelectFirst
+            | Command::ExtendSelectLast => "Navigation",
+
+            Command::SelectAll | Command::Undo | Command::Redo => "Actions",
+
+            Command::SaveRow | Command::ToggleColumnGroup | Command::StepOut => "Results",
+
+            Command::TriggerCompletion => "Editor",
+
+            Command::CloseWindow => "Global",
+            Command::ToggleConsole => "View",
+            Command::LoadMore => "Navigation",
+            Command::EditExpiry => "Actions",
         }
     }
 
@@ -815,6 +936,21 @@ pub enum ContextId {
 
     /// Document tree view (document databases and JSON values).
     DocumentTree,
+
+    /// Data table grid (results, table documents, audit rows).
+    DataTable,
+
+    /// Any focused text input or code editor buffer.
+    Input,
+
+    /// Any modal dialog.
+    Modal,
+
+    /// Key-value document (keys list, value panel, console).
+    KeyValue,
+
+    /// Settings window.
+    Settings,
 }
 
 impl ContextId {
@@ -845,6 +981,11 @@ impl ContextId {
             ContextId::Audit => Some(ContextId::Global),
             ContextId::SchemaViz => Some(ContextId::Global),
             ContextId::DocumentTree => Some(ContextId::Global),
+            ContextId::DataTable => None,
+            ContextId::Input => None,
+            ContextId::Modal => None,
+            ContextId::KeyValue => None,
+            ContextId::Settings => None,
         }
     }
 
@@ -899,6 +1040,11 @@ impl ContextId {
             ContextId::EventStreamsPicker => "Event Streams Picker",
             ContextId::SchemaViz => "Schema Viz",
             ContextId::DocumentTree => "Document Tree",
+            ContextId::DataTable => "Data Table",
+            ContextId::Input => "Text Field",
+            ContextId::Modal => "Modal Dialog",
+            ContextId::KeyValue => "Key-Value Browser",
+            ContextId::Settings => "Settings Window",
         }
     }
 
@@ -926,6 +1072,11 @@ impl ContextId {
             ContextId::EventStreamsPicker => "event_streams_picker",
             ContextId::SchemaViz => "schema_viz",
             ContextId::DocumentTree => "document_tree",
+            ContextId::DataTable => "data_table",
+            ContextId::Input => "input",
+            ContextId::Modal => "modal",
+            ContextId::KeyValue => "key_value",
+            ContextId::Settings => "settings",
         }
     }
 
@@ -953,6 +1104,11 @@ impl ContextId {
             ContextId::EventStreamsPicker,
             ContextId::SchemaViz,
             ContextId::DocumentTree,
+            ContextId::DataTable,
+            ContextId::Input,
+            ContextId::Modal,
+            ContextId::KeyValue,
+            ContextId::Settings,
         ]
     }
 
@@ -980,7 +1136,54 @@ impl ContextId {
             ContextId::EventStreamsPicker => "EventStreamsPicker",
             ContextId::SchemaViz => "SchemaViz",
             ContextId::DocumentTree => "DocumentTree",
+            ContextId::DataTable => "DataTable",
+            ContextId::Input => "Input",
+            ContextId::Modal => "Modal",
+            ContextId::KeyValue => "KeyValueView",
+            ContextId::Settings => "Settings",
         }
+    }
+
+    /// The context predicate the default bindings of this context use, in
+    /// GPUI's key context predicate language.
+    ///
+    /// A window root adds the identifier of the context that owns the
+    /// keyboard, plus `Global` when that context inherits the global
+    /// bindings. The contexts that inherit them also require `!Modal`: while
+    /// focus is inside a modal dialog, the panels behind it do not see the
+    /// keys. A few contexts belong to an element instead (the data table,
+    /// text inputs, modals, the document tree and the modal editors) and
+    /// match that element's own key context, which sits deeper than the
+    /// window root and therefore takes precedence over it.
+    pub fn default_predicate(&self) -> &'static str {
+        match self {
+            ContextId::Global => "Global && !Modal",
+            ContextId::Sidebar => "Sidebar && !Modal",
+            ContextId::Editor => "Editor && !Modal",
+            ContextId::Results => "Results && !Modal",
+            ContextId::BackgroundTasks => "BackgroundTasks && !Modal",
+            ContextId::Audit => "Audit && !Modal",
+            ContextId::SchemaViz => "SchemaViz && !Modal",
+            ContextId::DataTable => "DataTable && !Input",
+            ContextId::KeyValue => "KeyValueView && !Input",
+            ContextId::FormNavigation => "FormNavigation && !Input",
+            context => context.as_gpui_context(),
+        }
+    }
+
+    /// Whether this context's identifier is set by one element on itself
+    /// rather than by a window root for the context owning the keyboard.
+    pub fn is_element_context(&self) -> bool {
+        matches!(
+            self,
+            ContextId::DocumentTree
+                | ContextId::DataTable
+                | ContextId::Input
+                | ContextId::Modal
+                | ContextId::KeyValue
+                | ContextId::CellEditorModal
+                | ContextId::DocumentPreviewModal
+        )
     }
 }
 
@@ -1056,6 +1259,37 @@ mod tests {
                 command.id(),
                 *palette_id,
                 "Command::id() must reuse the palette id for {palette_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn action_ids_round_trip_every_command() {
+        for command in Command::all_variants() {
+            assert_eq!(
+                Command::from_action_id(&command.action_id()),
+                Some(command),
+                "{command:?} must round-trip through its action id"
+            );
+        }
+
+        assert_eq!(Command::SwitchToTab(7).action_id(), "switch_to_tab_7");
+        assert_eq!(
+            Command::from_action_id("switch_to_tab_7"),
+            Some(Command::SwitchToTab(7))
+        );
+        assert_eq!(Command::from_action_id("switch_to_tab"), None);
+        assert_eq!(Command::from_action_id("no_such_command"), None);
+    }
+
+    #[test]
+    fn element_contexts_match_their_own_predicate() {
+        for context in ContextId::all_variants() {
+            assert!(
+                context
+                    .default_predicate()
+                    .starts_with(context.as_gpui_context()),
+                "{context:?} default predicate must name its own identifier"
             );
         }
     }

@@ -211,6 +211,12 @@ pub struct PaneHandle {
     /// extra for it, unchanged from today's behavior.
     pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
 
+    /// Returns key=value entries the workspace adds to its root key context
+    /// while this document owns the keyboard (`vim_mode=normal`,
+    /// `language=sql`), so keymap predicates can name them.
+    pub key_context_entries:
+        Option<Box<dyn Fn(&App) -> Vec<(gpui::SharedString, gpui::SharedString)>>>,
+
     /// Returns the text of the tab's hover tooltip (a script's file path).
     /// `None`, or a closure returning `None`, shows no tooltip.
     pub tab_tooltip: Option<Box<dyn Fn(&App) -> Option<gpui::SharedString>>>,
@@ -316,6 +322,7 @@ impl PaneHandle {
             value_panel_is_open: None,
             set_value_panel_open: None,
             status_segments: None,
+            key_context_entries: None,
             tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
@@ -513,6 +520,15 @@ impl PaneHandle {
         self.status_segments
             .as_ref()
             .map(|f| f(cx))
+            .unwrap_or_default()
+    }
+
+    /// Key context entries the document contributes while it owns the
+    /// keyboard; empty for documents that contribute none.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(gpui::SharedString, gpui::SharedString)> {
+        self.key_context_entries
+            .as_ref()
+            .map(|entries| entries(cx))
             .unwrap_or_default()
     }
 

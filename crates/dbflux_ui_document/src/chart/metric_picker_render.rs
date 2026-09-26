@@ -18,12 +18,14 @@
 use super::metric_picker::{DimensionsState, MetricPickerState};
 use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
+use dbflux_app::keymap::Command;
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
 use dbflux_components::primitives::{Text, hdivider};
 use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::DimensionFilter;
+use dbflux_ui_base::keymap::RunCommand;
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Entity, KeyDownEvent, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, Entity, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
@@ -91,14 +93,15 @@ impl<'a> MetricPickerView<'a> {
             // Track focus so on_key_down receives keyboard events when the rail
             // is active. Clicking inside the picker focuses this handle.
             .track_focus(&focus_handle)
-            // Cmd/Ctrl+Enter from anywhere in the picker triggers Apply.
-            .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
-                let ks = &event.keystroke;
-                let is_apply = ks.key == "return"
-                    && !ks.modifiers.shift
-                    && !ks.modifiers.alt
-                    && (ks.modifiers.platform || ks.modifiers.control);
-                if is_apply && let Some(picker) = &mut shell.metric_picker {
+            // The keymap's Run Query keys (Cmd/Ctrl+Enter by default) apply
+            // the picker from anywhere inside it.
+            .on_action(cx.listener(|shell, action: &RunCommand, _window, cx| {
+                if Command::from_action_id(&action.command) != Some(Command::RunQuery) {
+                    cx.propagate();
+                    return;
+                }
+
+                if let Some(picker) = &mut shell.metric_picker {
                     // Flush any pending Custom… inputs so the user does not
                     // need to press Enter inside the input before Apply.
                     // If validation fails the inline error is shown and Apply
