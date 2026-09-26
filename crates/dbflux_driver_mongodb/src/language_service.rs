@@ -124,6 +124,10 @@ pub(crate) fn detect_dangerous_mongo(query: &str) -> Option<DangerousQueryKind> 
         return Some(DangerousQueryKind::MongoDropCollection);
     }
 
+    if dbflux_core::aggregate_writes_output(&normalized) {
+        return Some(DangerousQueryKind::MongoAggregateWrite);
+    }
+
     if let Some(pos) = normalized.find(".deletemany(") {
         let after_paren = &normalized[pos + 12..];
         if is_empty_filter(after_paren) {
@@ -241,6 +245,36 @@ mod tests {
         assert_eq!(
             MongoLanguageService.detect_dangerous(
                 r#"db.users.updateMany({"active": true}, {"$set": {"active": false}})"#,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn mongo_aggregate_with_out_is_dangerous() {
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(
+                r#"db.orders.aggregate([{ "$match": {} }, { "$out": "archive" }])"#
+            ),
+            Some(DangerousQueryKind::MongoAggregateWrite)
+        );
+    }
+
+    #[test]
+    fn mongo_aggregate_with_merge_is_dangerous() {
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(
+                "db.orders.aggregate([{ $group: { _id: '$region' } }, { $merge: { into: 'totals' } }])"
+            ),
+            Some(DangerousQueryKind::MongoAggregateWrite)
+        );
+    }
+
+    #[test]
+    fn mongo_read_only_aggregate_is_not_dangerous() {
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(
+                r#"db.orders.aggregate([{ "$match": { "status": "paid" } }, { "$project": { "o": "$outcome" } }])"#
             ),
             None
         );

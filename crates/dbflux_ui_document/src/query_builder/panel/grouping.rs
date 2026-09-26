@@ -196,6 +196,44 @@ impl QueryBuilderPanel {
     /// an aggregate alias. If the column is not in the valid set, the entry is
     /// rejected and `sort_validation_error` is set for the view to display.
     pub fn add_sort(&mut self, source_alias: &str, column: &str, cx: &mut Context<Self>) {
+        if !self.accepts_sort_column(column) {
+            cx.notify();
+            return;
+        }
+
+        self.sort_rows.push(SortRow {
+            source_alias: source_alias.to_string(),
+            column: column.to_string(),
+            direction: VisualSortDirection::Asc,
+        });
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Points the sort row at `index` to another column, keeping its direction.
+    ///
+    /// The column is checked the way [`Self::add_sort`] checks it.
+    pub fn set_sort_column(
+        &mut self,
+        index: usize,
+        option: SortColumnOption,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.sort_rows.len() || !self.accepts_sort_column(&option.column) {
+            cx.notify();
+            return;
+        }
+
+        if let Some(row) = self.sort_rows.get_mut(index) {
+            row.source_alias = option.source_alias;
+            row.column = option.column;
+        }
+        self.rebuild_spec_and_notify(cx);
+    }
+
+    /// Whether `column` may be sorted on: any column of an ungrouped query, a
+    /// group-by column or an aggregate alias of a grouped one. A rejected
+    /// column sets `sort_validation_error`; an accepted one clears it.
+    fn accepts_sort_column(&mut self, column: &str) -> bool {
         if self.current_spec.is_grouped() {
             let valid: HashSet<String> = self
                 .group_by_rows
@@ -209,19 +247,161 @@ impl QueryBuilderPanel {
                     "document.query_builder.sort.invalid_column",
                     column = column
                 ));
-                cx.notify();
-                return;
+                return false;
             }
         }
 
         self.sort_validation_error = None;
+        true
+    }
 
-        self.sort_rows.push(SortRow {
-            source_alias: source_alias.to_string(),
-            column: column.to_string(),
-            direction: VisualSortDirection::Asc,
-        });
-        self.rebuild_spec_and_notify(cx);
+    /// The columns a sort can use: the group-by columns and aggregate aliases
+    /// of a grouped query, otherwise the source table's columns followed by
+    /// the columns of each joined table whose metadata has loaded.
+    pub(crate) fn sort_column_options(&self) -> Vec<SortColumnOption> {
+        if self.current_spec.is_grouped() {
+            let group_columns = self.group_by_rows.iter().map(|row| SortColumnOption {
+                source_alias: row.source_alias.clone(),
+                column: row.column.clone(),
+            });
+
+            let aggregate_aliases = self
+                .aggregate_rows
+                .iter()
+                .filter(|row| !row.alias.is_empty())
+                .map(|row| SortColumnOption {
+                    source_alias: String::new(),
+                    column: row.alias.clone(),
+                });
+
+            return group_columns.chain(aggregate_aliases).collect();
+        }
+
+        let source_alias = self.current_spec.source.alias.clone();
+        let mut options: Vec<SortColumnOption> = self
+            .available_columns
+            .iter()
+            .map(|column| SortColumnOption {
+                source_alias: source_alias.clone(),
+                column: column.clone(),
+            })
+            .collect();
+
+        let cache = self.schema_cache.borrow();
+        for join in self.join_rows.iter().filter(|row| !row.to_table.is_empty()) {
+            use crate::completion_support::normalize_identifier;
+
+            let key = (
+                join.to_schema.as_deref().map(normalize_identifier),
+                normalize_identifier(&join.to_table),
+            );
+
+            if let Some(columns) = cache.joined_columns.get(&key) {
+                options.extend(columns.iter().map(|column| SortColumnOption {
+                    source_alias: join.to_alias.clone(),
+                    column: column.name.clone(),
+                }));
+            }
+        }
+
+        options
+    }
+
+    /// The dropdown label of a sort column: bare for the source table and
+    /// aggregate aliases, `alias.column` for a joined table.
+    pub(crate) fn sort_option_label(&self, option: &SortColumnOption) -> String {
+        if option.source_alias.is_empty() || option.source_alias == self.current_spec.source.alias {
+            option.column.clone()
+        } else {
+            format!("{}.{}", option.source_alias, option.column)
+        }
+    }
+
+    /// Brings the sort dropdowns in line with `sort_rows` and the columns
+    /// on offer: one column dropdown per row, each showing its row's column,
+    /// and the dropdown that appends a row.
+    ///
+    /// Called from render. Dropdowns are rebuilt when the row count changes
+    /// and refreshed in place when only the offered columns change.
+    pub(crate) fn sync_sort_dropdowns(&mut self, cx: &mut Context<Self>) {
+        let options = self.sort_column_options();
+        let items: Vec<DropdownItem> = options
+            .iter()
+            .map(|option| DropdownItem::new(self.sort_option_label(option)))
+            .collect();
+        let options_changed = options != self.sort_dropdown_options;
+
+        if self.sort_column_dropdowns.len() != self.sort_rows.len()
+            || self.sort_add_dropdown.is_none()
+        {
+            self.sort_column_dropdowns.clear();
+            self._sort_dropdown_subs.clear();
+
+            for index in 0..self.sort_rows.len() {
+                let dropdown = cx.new(|_cx| {
+                    Dropdown::new(("qb-sort-column", index))
+                        .items(items.clone())
+                        .chevron_trigger(dbflux_components::controls::ButtonVariant::Secondary)
+                });
+
+                let subscription = cx.subscribe(
+                    &dropdown,
+                    move |this, _dropdown, event: &DropdownSelectionChanged, cx| {
+                        if let Some(option) = this.sort_dropdown_options.get(event.index).cloned() {
+                            this.set_sort_column(index, option, cx);
+                        }
+                    },
+                );
+
+                self.sort_column_dropdowns.push(dropdown);
+                self._sort_dropdown_subs.push(subscription);
+            }
+
+            let add_dropdown = cx.new(|_cx| {
+                Dropdown::new("qb-sort-add")
+                    .items(items.clone())
+                    .placeholder(dbflux_i18n::t!("document.query_builder.sort.add"))
+                    .chevron_trigger(dbflux_components::controls::ButtonVariant::Secondary)
+            });
+
+            let subscription = cx.subscribe(
+                &add_dropdown,
+                |this, dropdown, event: &DropdownSelectionChanged, cx| {
+                    if let Some(option) = this.sort_dropdown_options.get(event.index).cloned() {
+                        this.add_sort(&option.source_alias, &option.column, cx);
+                    }
+                    dropdown.update(cx, |dropdown, cx| dropdown.set_selected_index(None, cx));
+                },
+            );
+
+            self.sort_add_dropdown = Some(add_dropdown);
+            self._sort_dropdown_subs.push(subscription);
+        } else if options_changed {
+            for dropdown in self
+                .sort_column_dropdowns
+                .iter()
+                .chain(self.sort_add_dropdown.iter())
+            {
+                dropdown.update(cx, |dropdown, cx| dropdown.set_items(items.clone(), cx));
+            }
+        }
+
+        self.sort_dropdown_options = options;
+
+        for (row, dropdown) in self.sort_rows.iter().zip(&self.sort_column_dropdowns) {
+            let selected = self.sort_dropdown_options.iter().position(|option| {
+                option.column == row.column
+                    && (option.source_alias == row.source_alias || option.source_alias.is_empty())
+            });
+
+            let expected_label = selected
+                .and_then(|index| items.get(index))
+                .map(|item| item.label.clone());
+
+            if dropdown.read(cx).selected_label() != expected_label {
+                dropdown.update(cx, |dropdown, cx| dropdown.set_selected_index(selected, cx));
+            }
+        }
     }
 
     /// Removes a sort row by index.

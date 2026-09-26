@@ -13,7 +13,7 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 ## Features
 
 - Object-storage driver classified as `DatabaseCategory::ObjectStorage`, connecting to AWS S3 and to S3-compatible endpoints (Cloudflare R2, MinIO) via either an AWS profile/SSO `AuthProfileRef` or static access-key credentials, with endpoint override and path-style addressing.
-- Bucket browsing: a dedicated buckets table (name, region, object count, size, versioning, created) with search, refresh, and bucket creation; the sidebar lists buckets flat, one level deep.
+- Bucket browsing: a dedicated buckets table (name, region, object count, size, versioning, created) with search, refresh, and bucket creation; the sidebar lists buckets flat, one level deep. The selected bucket's details strip also shows its default encryption (SSE-S3, SSE-KMS, or None) and its public-access blocking (Blocked, Partial, or Open) when the endpoint reports them.
 - Paginated per-level object navigation by default (AWS-console style, using the driver-returned continuation token), with an optional tree-mode toggle for non-paginated full expansion.
 - Split tree/preview layout in the object browser: object rows show key, size, storage class, and last-modified; directory rows show child object counts.
 - Preview matrix: images render natively via `img()`; text-like objects (txt, md, json, csv, log, ...) open in an inline editable buffer with a dirty badge, Ctrl+S save-back (`put_object`), Discard, and an unsaved-edits confirmation on navigate-away; PDF and other binary objects fall back to metadata plus download/open-externally, with no in-app PDF rendering.
@@ -34,4 +34,5 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 - `delete_bucket` only succeeds on an empty bucket; deleting a non-empty bucket is rejected client-side with a message pointing at the recursive prefix/bucket delete flow instead.
 - Preview and metadata display are HEAD-gated: an object's size and storage class are always fetched via `head_object` before any body preview is attempted.
 - MinIO-backed live integration tests require Docker and run with `cargo nextest run -p dbflux_driver_s3 --run-ignored all`.
+- Encryption and public access are read with `GetBucketEncryption` and `GetPublicAccessBlock` and are hidden from the details strip when the call is denied (`AccessDenied`) or unsupported (for example on some MinIO or R2 builds). A bucket without a public-access block configuration also shows no value. Public access reflects the bucket-level block settings only; account-level blocks, bucket policies, and ACLs are not evaluated.
 - No write-privilege probe: `Connection::probe_write_privilege` intentionally stays at the trait default (`WritePrivilege::Unknown`), since a reliable check would need `iam:SimulatePrincipalPolicy`, a permission the connecting role typically lacks.

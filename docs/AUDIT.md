@@ -100,7 +100,7 @@ connections, hooks, scripts, config changes, and AI/MCP governance decisions.
 ### Open it
 
 - Keyboard: **Ctrl+Shift+A** (**Cmd+Shift+A** on macOS).
-- Command palette: **Open Audit Viewer**.
+- Command palette: **Open audit viewer**.
 
 There's one audit tab; reopening focuses the existing one.
 
@@ -141,8 +141,8 @@ switches between the event list and a chart of the events grouped by category,
 outcome, or level. From the keyboard, activating the time presets moves to the
 next one.
 
-A row's context menu adds **Copy Row as CSV**, **Copy Summary**, and — when the
-event has a correlation id — **Filter by Correlation**.
+A row's context menu adds **Copy row as CSV**, **Copy summary**, and — when the
+event has a correlation id — **Filter by correlation**.
 
 ### Follow an error to its audit row
 

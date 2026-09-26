@@ -211,12 +211,12 @@ en su primer render.
 
 ### Open chart...
 
-El comando "Open chart..." lista los saved charts (construidos por
+El comando "Open chart…" lista los saved charts (construidos por
 `build_saved_chart_palette_items`) para el perfil activo, y abre el chart
 seleccionado a través de `open_saved_chart` como se describió arriba.
 
 Los gráficos se pueden guardar por perfil de conexión. Para reabrir un gráfico
-guardado, ejecuta **Open Chart...** desde el command palette (`OpenSavedChart`),
+guardado, ejecuta **Open chart…** desde el command palette (`OpenSavedChart`),
 que lista los gráficos guardados del perfil actual en un overlay de búsqueda
 difusa.
 

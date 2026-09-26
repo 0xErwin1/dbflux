@@ -12,8 +12,10 @@
 //! whole-document replacement from the JSON view), each checked against the
 //! server copy before it is written.
 
+pub(super) mod aggregate;
 pub(super) mod columns;
 pub(super) mod completion;
+pub(super) mod inspector;
 mod render;
 
 use std::cell::RefCell;
@@ -54,12 +56,30 @@ pub(super) const SAMPLE_SIZES: [u32; 4] = [100, 500, 1_000, 5_000];
 /// Query history entries kept per collection tab.
 const HISTORY_LIMIT: usize = 20;
 
-/// Documents or Schema, the two views of a collection.
+/// Documents, Schema or Aggregate, the views of a collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum CollectionTab {
     #[default]
     Documents,
     Schema,
+    Aggregate,
+}
+
+/// The collection views a driver's document features offer, in header
+/// order: Documents always, Schema with the query slots, Aggregate with
+/// aggregation pipelines.
+pub(super) fn available_collection_tabs(features: DocumentFeatures) -> Vec<CollectionTab> {
+    let mut tabs = vec![CollectionTab::Documents];
+
+    if features.contains(DocumentFeatures::QUERY_SLOTS) {
+        tabs.push(CollectionTab::Schema);
+    }
+
+    if features.contains(DocumentFeatures::AGGREGATE) {
+        tabs.push(CollectionTab::Aggregate);
+    }
+
+    tabs
 }
 
 /// Progress of the schema sample.
@@ -198,6 +218,11 @@ pub(super) struct CollectionViewState {
     pub json_draft: JsonDraft,
     /// JSON text the editor was last loaded with.
     json_baseline: String,
+    /// The Aggregate view, held apart from the Documents page.
+    pub aggregate: aggregate::AggregateViewState,
+    /// Refreshes the Document panel's pending-edit highlight when the grid's
+    /// staged edits change.
+    inspector_edits_observation: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -305,6 +330,8 @@ impl CollectionViewState {
             json_editor,
             json_draft: JsonDraft::default(),
             json_baseline: String::new(),
+            aggregate: aggregate::AggregateViewState::new(window, cx),
+            inspector_edits_observation: None,
             _subscriptions: subscriptions,
         }
     }
@@ -355,6 +382,49 @@ fn document_label(document: &Value, order: &[String], identity: &DocumentIdentit
         .map(|(_, value)| value.as_display_string_truncated(24))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Table model for flattened documents: missing fields and nested values get
+/// their own cells.
+pub(super) fn flat_table_model(flat: &FlatView) -> TableModel {
+    let columns = flat
+        .columns
+        .iter()
+        .map(|column| ColumnSpec {
+            id: column.dotted().into(),
+            title: column.label.as_str().into(),
+            kind: match column.type_label.as_str() {
+                "int" => ColumnKind::Integer,
+                "dbl" | "dec" => ColumnKind::Float,
+                "bool" => ColumnKind::Bool,
+                "obj" | "arr" => ColumnKind::Json,
+                _ => ColumnKind::Text,
+            },
+            align: TextAlign::Left,
+            type_name: column.type_label.as_str().into(),
+        })
+        .collect();
+
+    let rows = flat
+        .rows
+        .iter()
+        .map(|row| RowData {
+            cells: row
+                .cells
+                .iter()
+                .map(|cell| match cell {
+                    FlatCell::Missing => CellValue::missing(),
+                    FlatCell::Value(Value::Array(items)) => CellValue::nested(true, items.len()),
+                    FlatCell::Value(Value::Document(fields)) => {
+                        CellValue::nested(false, fields.len())
+                    }
+                    FlatCell::Value(value) => CellValue::from(value),
+                })
+                .collect(),
+        })
+        .collect();
+
+    TableModel::new(columns, rows)
 }
 
 impl DataGridPanel {
@@ -456,8 +526,16 @@ impl DataGridPanel {
         self.set_document_view_mode(next, cx);
     }
 
+    /// The collection views this connection offers.
+    pub(super) fn collection_tabs(&self, cx: &App) -> Vec<CollectionTab> {
+        match self.collection_capabilities(cx) {
+            Some((DatabaseCategory::Document, features)) => available_collection_tabs(features),
+            _ => vec![CollectionTab::Documents],
+        }
+    }
+
     pub(super) fn set_collection_tab(&mut self, tab: CollectionTab, cx: &mut Context<Self>) {
-        if self.collection.tab == tab {
+        if self.collection.tab == tab || !self.collection_tabs(cx).contains(&tab) {
             return;
         }
 
@@ -573,51 +651,7 @@ impl DataGridPanel {
     /// their own cells. `None` when the grid does not show documents.
     pub(super) fn document_table_model(&self) -> Option<TableModel> {
         self.collection.raw.as_ref()?;
-
-        let columns = self
-            .collection
-            .flat
-            .columns
-            .iter()
-            .map(|column| ColumnSpec {
-                id: column.dotted().into(),
-                title: column.label.as_str().into(),
-                kind: match column.type_label.as_str() {
-                    "int" => ColumnKind::Integer,
-                    "dbl" | "dec" => ColumnKind::Float,
-                    "bool" => ColumnKind::Bool,
-                    "obj" | "arr" => ColumnKind::Json,
-                    _ => ColumnKind::Text,
-                },
-                align: TextAlign::Left,
-                type_name: column.type_label.as_str().into(),
-            })
-            .collect();
-
-        let rows = self
-            .collection
-            .flat
-            .rows
-            .iter()
-            .map(|row| RowData {
-                cells: row
-                    .cells
-                    .iter()
-                    .map(|cell| match cell {
-                        FlatCell::Missing => CellValue::missing(),
-                        FlatCell::Value(Value::Array(items)) => {
-                            CellValue::nested(true, items.len())
-                        }
-                        FlatCell::Value(Value::Document(fields)) => {
-                            CellValue::nested(false, fields.len())
-                        }
-                        FlatCell::Value(value) => CellValue::from(value),
-                    })
-                    .collect(),
-            })
-            .collect();
-
-        Some(TableModel::new(columns, rows))
+        Some(flat_table_model(&self.collection.flat))
     }
 
     /// Header extras for the document grid: groups and presence from the
@@ -1806,6 +1840,202 @@ impl DataGridPanel {
     }
 
     // === Document preview ===
+
+    // === Document panel ===
+
+    /// Opens the Document panel on the document behind grid row `row`: the
+    /// side panel a collection shows where a table shows the row inspector.
+    ///
+    /// Follows the row inspector's bookkeeping, so selection changes, tab
+    /// activation and refreshes move it the same way. A row outside the
+    /// loaded page closes it.
+    pub(super) fn open_document_inspector(
+        &mut self,
+        row: usize,
+        col: usize,
+        cx: &mut Context<Self>,
+    ) {
+        use self::inspector::{DocumentInspectorContent, DocumentInspectorSnapshot};
+
+        let document = self
+            .collection
+            .flat
+            .rows
+            .get(row)
+            .map(|flat_row| flat_row.document)
+            .and_then(|index| {
+                self.collection
+                    .documents
+                    .get(index)
+                    .map(|document| (index, document.clone()))
+            });
+
+        let Some((document_index, document)) = document else {
+            self.inspector.follow_selection = false;
+            self.inspector.pinned = false;
+            self.inspector.inspector_row = None;
+            self.inspector.document_inspector_content = None;
+            self.inspector._document_inspector_subscription = None;
+            cx.emit(super::DataGridEvent::CloseInspector);
+            return;
+        };
+
+        let snapshot = DocumentInspectorSnapshot {
+            document_index,
+            document,
+            field_order: self.collection.top_order.clone(),
+            pending: self.staged_document_edits(document_index, cx),
+        };
+
+        let content = match &self.inspector.document_inspector_content {
+            Some(existing) => {
+                existing.update(cx, |content, cx| content.open(snapshot, cx));
+                existing.clone()
+            }
+            None => {
+                let content = cx.new(|cx| DocumentInspectorContent::new(snapshot, cx));
+                self.inspector._document_inspector_subscription =
+                    Some(cx.subscribe(&content, |this, content, event, cx| {
+                        this.handle_document_inspector_event(content, *event, cx);
+                    }));
+                self.inspector.document_inspector_content = Some(content.clone());
+                content
+            }
+        };
+
+        self.inspector.follow_selection = true;
+        self.inspector.inspector_row = Some((row, col));
+
+        // The grid notifies when an edit is staged, reverted or committed;
+        // the panel re-reads the staged edits of its document then.
+        self.collection.inspector_edits_observation =
+            self.grid_table.table_state.as_ref().map(|table_state| {
+                cx.observe(table_state, |this, _, cx| {
+                    this.refresh_document_inspector_edits(cx);
+                })
+            });
+
+        cx.emit(super::DataGridEvent::OpenInspector {
+            title: SharedString::from(dbflux_i18n::t!("document.collection.inspector.title")),
+            content: AnyView::from(content),
+            content_has_header: true,
+        });
+        cx.notify();
+    }
+
+    /// The grid edits staged on document `document` of the page, as the
+    /// Document panel shows them: each edited field path with the value it
+    /// takes on commit. A value that does not parse as its field's type is
+    /// shown as typed; the commit reports it.
+    pub(super) fn staged_document_edits(
+        &self,
+        document: usize,
+        cx: &App,
+    ) -> self::inspector::PendingFieldEdits {
+        use self::inspector::PendingFieldEdit;
+
+        let Some(table_state) = &self.grid_table.table_state else {
+            return Vec::new();
+        };
+        let buffer = table_state.read(cx).edit_buffer();
+
+        let mut edits = Vec::new();
+        for row in buffer.dirty_rows() {
+            let Some(flat_row) = self
+                .collection
+                .flat
+                .rows
+                .get(row)
+                .filter(|flat_row| flat_row.document == document)
+            else {
+                continue;
+            };
+
+            for (col, cell) in buffer.row_changes(row) {
+                let Some(column) = self.collection.flat.columns.get(col) else {
+                    continue;
+                };
+
+                let mut path = flat_row.base_path.clone();
+                path.extend(column.path.iter().cloned());
+
+                let edit = if cell.is_missing() {
+                    PendingFieldEdit::Unset
+                } else if cell.is_null() {
+                    PendingFieldEdit::Set(Value::Null)
+                } else {
+                    let original = flat_row.cells.get(col).and_then(FlatCell::value);
+                    let text = cell.edit_text();
+                    PendingFieldEdit::Set(
+                        coerce_edited_value(original, &text).unwrap_or(Value::Text(text)),
+                    )
+                };
+
+                edits.push((path, edit));
+            }
+        }
+
+        edits
+    }
+
+    /// Shows the current staged edits in the open Document panel.
+    fn refresh_document_inspector_edits(&mut self, cx: &mut Context<Self>) {
+        let Some(content) = self.inspector.document_inspector_content.clone() else {
+            return;
+        };
+
+        let document = content.read(cx).document_index();
+        let pending = self.staged_document_edits(document, cx);
+        content.update(cx, |content, cx| content.set_pending(pending, cx));
+    }
+
+    /// Carries out a request from the Document panel's buttons: close the
+    /// panel, or open its document in the JSON editor.
+    fn handle_document_inspector_event(
+        &mut self,
+        content: Entity<self::inspector::DocumentInspectorContent>,
+        event: self::inspector::DocumentInspectorEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use self::inspector::DocumentInspectorEvent;
+
+        match event {
+            DocumentInspectorEvent::Close => {
+                self.clear_inspector_state(cx);
+                cx.emit(super::DataGridEvent::CloseInspector);
+            }
+            DocumentInspectorEvent::Expand => {
+                let doc_index = content.read(cx).document_index();
+                let Some(document) = self.collection.documents.get(doc_index) else {
+                    return;
+                };
+
+                let document_json =
+                    match serde_json::to_string_pretty(&value_to_document_json(document)) {
+                        Ok(json) => json,
+                        Err(error) => {
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::User,
+                                    crate::labels::collection_inspector_json_failed(
+                                        &error.to_string(),
+                                    ),
+                                ),
+                                cx,
+                            );
+                            return;
+                        }
+                    };
+
+                self.pending.document_preview = Some(super::PendingDocumentPreview {
+                    doc_index,
+                    document_json,
+                });
+            }
+        }
+
+        cx.notify();
+    }
 
     /// The loaded document `document` as document JSON for the preview
     /// editor, when edits go through field patches.

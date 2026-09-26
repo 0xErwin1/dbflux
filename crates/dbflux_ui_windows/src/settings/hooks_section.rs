@@ -303,7 +303,7 @@ impl HooksSection {
                 .selected_index(Some(0))
         });
         let input_hook_command = cx.new(|cx| InputState::new(window, cx).placeholder("command"));
-        let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 ..."));
+        let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 …"));
         let script_language_dropdown = cx.new(|_cx| {
             let items = ScriptLanguage::available()
                 .into_iter()

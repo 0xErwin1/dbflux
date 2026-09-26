@@ -14,26 +14,26 @@ compone queries sin escribir SQL.
 Una pestaña de query nueva (`Ctrl+n`) queda respaldada por un archivo real en tu
 carpeta de scripts, igual que un script abierto con `Ctrl+o`. Los editores
 abiertos se auto-guardan en ese archivo según el intervalo configurado, y
-`Ctrl+s` / **Save File As** usan la misma cola. El auto-guardado y el cierre
+`Ctrl+s` / **Save file as…** usan la misma cola. El auto-guardado y el cierre
 nunca sobrescriben un archivo que cambió fuera de DBFlux: tu versión sigue en
-el editor y DBFlux informa de la escritura rechazada. `Ctrl+s` y **Save File As**
+el editor y DBFlux informa de la escritura rechazada. `Ctrl+s` y **Save file as…**
 son deliberados y escriben el archivo incluso entonces.
 
 Cerrar una pestaña con ediciones pendientes las guarda primero y después la
 cierra; si la escritura no puede aterrizar (por ejemplo, el archivo cambió
 fuera de DBFlux o es read-only), la pestaña queda abierta con tus cambios y
-DBFlux te indica `Ctrl+s` / **Save File As** como la escritura deliberada. Un
+DBFlux te indica `Ctrl+s` / **Save file as…** como la escritura deliberada. Un
 buffer que todavía no tiene archivo es la excepción: al cerrarlo se te pregunta
 primero, así que puedes guardarlo, cerrarlo sin guardar o cancelar. Al salir,
 DBFlux guarda las ediciones pendientes de la misma forma antes de apagarse. Si
 la carpeta de scripts no pudo crearse al arrancar, las queries
-nuevas se conservan en el session store y **Save File As** se ofrece al
+nuevas se conservan en el session store y **Save file as…** se ofrece al
 cerrarlas.
 
 ## Ejecutar
 
-- `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.
-- `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run Query in New Tab**.
+- `Ctrl+Enter` (`Cmd+Enter`) — **Run query**.
+- `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 Si existe una selección de texto no vacía, solo se ejecuta el texto
 seleccionado. Sin selección, se usa el buffer completo del editor.
@@ -82,7 +82,7 @@ queries con nombre.
 - `Alt+h` (en el editor), o el botón History de la barra de herramientas, abre y
   cierra el panel de historial de queries junto al editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** la query actual.
-- `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save File As**.
+- `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, en el editor) — abre el explorador de queries guardadas.
 
 El panel de historial lista las queries recientes y guardadas y queda abierto

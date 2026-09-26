@@ -115,7 +115,7 @@ governance de AI/MCP.
 ### Abrirlo
 
 - Teclado: **Ctrl+Shift+A** (**Cmd+Shift+A** en macOS).
-- Command palette: **Open Audit Viewer**.
+- Command palette: **Open audit viewer**.
 
 Hay una única pestaña de audit; reabrirla enfoca la existente.
 
@@ -157,8 +157,8 @@ Chart** alterna entre la lista de eventos y un chart de los eventos agrupados
 por category, outcome o level. Desde el teclado, activar los presets de tiempo
 pasa al siguiente.
 
-El menú contextual de una fila añade **Copy Row as CSV**, **Copy Summary** y —
-cuando el evento tiene un correlation id — **Filter by Correlation**.
+El menú contextual de una fila añade **Copy row as CSV**, **Copy summary** y —
+cuando el evento tiene un correlation id — **Filter by correlation**.
 
 ### Seguir un error hasta su fila de audit
 

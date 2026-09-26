@@ -361,6 +361,51 @@ fn minio_estimate_bucket_size_and_list_object_versions() -> Result<(), DbError> 
 }
 
 #[test]
+#[ignore = "requires Docker daemon"]
+fn minio_bucket_details_report_encryption_and_tolerate_unsupported_calls() -> Result<(), DbError> {
+    containers::with_minio_endpoint(|minio| {
+        let store = connect_minio(&minio)?;
+
+        let plain_bucket = "dbflux-details-plain-test";
+        create_bucket(store.as_ref(), plain_bucket)?;
+
+        let plain_details = store.get_bucket_details(plain_bucket)?;
+        assert!(
+            matches!(
+                plain_details.encryption,
+                None | Some(BucketEncryption::None)
+            ),
+            "a bucket created without encryption reported {:?}",
+            plain_details.encryption
+        );
+
+        let encrypted_bucket = "dbflux-details-encrypted-test";
+        let outcome = store.create_bucket(
+            encrypted_bucket,
+            BucketCreateOptions {
+                region: "us-east-1".to_string(),
+                versioning: false,
+                block_public_access: false,
+                object_lock: false,
+                encryption: BucketEncryption::SseS3,
+            },
+        )?;
+
+        let encryption_applied = !outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.to_lowercase().contains("encryption"));
+
+        let encrypted_details = store.get_bucket_details(encrypted_bucket)?;
+        if encryption_applied {
+            assert_eq!(encrypted_details.encryption, Some(BucketEncryption::SseS3));
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
 fn minio_endpoint_failures_are_actionable() {
     let driver = S3Driver::new();
     let profile = ConnectionProfile::new_with_driver(

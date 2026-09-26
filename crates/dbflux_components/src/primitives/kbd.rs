@@ -17,6 +17,65 @@ pub enum KbdTone {
     OnFill,
 }
 
+/// Modifier names a key label can start with, compared case-insensitively.
+const MODIFIER_NAMES: [&str; 8] = [
+    "ctrl", "control", "alt", "option", "shift", "cmd", "super", "meta",
+];
+
+fn is_modifier(word: &str) -> bool {
+    MODIFIER_NAMES
+        .iter()
+        .any(|modifier| modifier.eq_ignore_ascii_case(word))
+}
+
+/// `word` uppercased when it is a single lowercase ASCII letter.
+fn uppercase_lone_letter(word: &str) -> String {
+    let is_lone_letter = word.len() == 1 && word.chars().all(|c| c.is_ascii_lowercase());
+
+    if is_lone_letter {
+        word.to_ascii_uppercase()
+    } else {
+        word.to_string()
+    }
+}
+
+/// The display form of a key label: a letter pressed together with a
+/// modifier reads uppercase (`Ctrl c` and `ctrl+c` become `Ctrl C` and
+/// `ctrl+C`), the way the keycaps are printed. A bare letter keeps its case,
+/// because `r` and `R` (Shift R) are different keys.
+pub fn key_label(label: &str) -> SharedString {
+    let mut output = String::with_capacity(label.len());
+    let mut word = String::new();
+    let mut after_modifier = false;
+
+    for character in label.chars().chain(std::iter::once(' ')) {
+        let is_separator = character == ' ' || character == '+';
+
+        if !is_separator || (word.is_empty() && character == '+') {
+            word.push(character);
+            continue;
+        }
+
+        if word.is_empty() {
+            after_modifier = false;
+        } else {
+            if after_modifier {
+                output.push_str(&uppercase_lone_letter(&word));
+            } else {
+                output.push_str(&word);
+            }
+
+            after_modifier = is_modifier(&word);
+            word.clear();
+        }
+
+        output.push(character);
+    }
+
+    output.pop();
+    output.into()
+}
+
 /// Keyboard shortcut: one keycap per key, keys of a chord joined by a thin
 /// plus. JetBrains Mono, cut 4, bottom edge.
 ///
@@ -35,15 +94,33 @@ impl Kbd {
     /// A single keycap.
     pub fn new(key: impl Into<SharedString>) -> Self {
         Self {
-            keys: vec![key.into()],
+            keys: vec![key_label(&key.into())],
             tone: KbdTone::Default,
         }
     }
 
     /// One keycap per key, joined by a plus.
     pub fn chord(keys: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        let mut after_modifier = false;
+
+        let keys = keys
+            .into_iter()
+            .map(|key| {
+                let key: SharedString = key.into();
+
+                let label = if after_modifier {
+                    uppercase_lone_letter(&key).into()
+                } else {
+                    key_label(&key)
+                };
+
+                after_modifier = is_modifier(&key);
+                label
+            })
+            .collect();
+
         Self {
-            keys: keys.into_iter().map(Into::into).collect(),
+            keys,
             tone: KbdTone::Default,
         }
     }
@@ -128,6 +205,28 @@ mod tests {
         let chord = Kbd::chord(["Ctrl", "Shift", "P"]);
         assert_eq!(chord.keys(), ["Ctrl", "Shift", "P"]);
         assert_eq!(chord.tone, KbdTone::Default);
+    }
+
+    #[test]
+    fn letters_pressed_with_a_modifier_read_uppercase() {
+        assert_eq!(key_label("Ctrl c"), "Ctrl C");
+        assert_eq!(key_label("Ctrl+c"), "Ctrl+C");
+        assert_eq!(key_label("Ctrl Shift p"), "Ctrl Shift P");
+        assert_eq!(key_label("Ctrl k  Ctrl s"), "Ctrl K  Ctrl S");
+        assert_eq!(Kbd::new("Ctrl n").keys(), ["Ctrl N"]);
+        assert_eq!(Kbd::chord(["Ctrl", "e"]).keys(), ["Ctrl", "E"]);
+    }
+
+    #[test]
+    fn bare_keys_and_named_keys_keep_their_text() {
+        assert_eq!(key_label("r"), "r");
+        assert_eq!(key_label("x"), "x");
+        assert_eq!(key_label("Ctrl ↵"), "Ctrl ↵");
+        assert_eq!(key_label("Esc"), "Esc");
+        assert_eq!(key_label("Shift R"), "Shift R");
+        assert_eq!(key_label("+"), "+");
+        assert_eq!(key_label("Ctrl +"), "Ctrl +");
+        assert_eq!(Kbd::chord(["g", "g"]).keys(), ["g", "g"]);
     }
 
     #[test]

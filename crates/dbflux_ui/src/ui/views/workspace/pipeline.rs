@@ -197,7 +197,7 @@ impl Render for PipelineProgress {
                 el.child(
                     div()
                         .italic()
-                        .child(Text::caption("Waiting for login in browser...")),
+                        .child(Text::caption("Waiting for login in browser…")),
                 )
             })
     }
@@ -229,21 +229,19 @@ fn active_stage_label(state: &PipelineState) -> Option<String> {
     match state {
         PipelineState::Idle => None,
         PipelineState::Authenticating { provider_name } => {
-            Some(format!("Authenticating ({})...", provider_name))
+            Some(format!("Authenticating ({})…", provider_name))
         }
         PipelineState::WaitingForLogin { provider_name, .. } => {
-            Some(format!("Waiting for {} login...", provider_name))
+            Some(format!("Waiting for {} login…", provider_name))
         }
         PipelineState::ResolvingValues { total, resolved } => {
-            Some(format!("Resolving values ({}/{})...", resolved, total))
+            Some(format!("Resolving values ({}/{})…", resolved, total))
         }
-        PipelineState::OpeningAccess { method_label } => {
-            Some(format!("Opening {}...", method_label))
-        }
+        PipelineState::OpeningAccess { method_label } => Some(format!("Opening {}…", method_label)),
         PipelineState::Connecting { driver_name } => {
-            Some(format!("Connecting to {}...", driver_name))
+            Some(format!("Connecting to {}…", driver_name))
         }
-        PipelineState::FetchingSchema => Some("Fetching schema...".to_string()),
+        PipelineState::FetchingSchema => Some("Fetching schema…".to_string()),
         PipelineState::Connected | PipelineState::Failed { .. } | PipelineState::Cancelled => None,
     }
 }
@@ -266,7 +264,7 @@ mod tests {
         );
         assert_eq!(
             active_stage_label(&state).as_deref(),
-            Some("Waiting for Custom Auth login...")
+            Some("Waiting for Custom Auth login…")
         );
     }
 }

@@ -28,8 +28,11 @@ The SELECT body has sections you fill in top to bottom:
   groups, so you can build complex conditions visually.
 - **Joins** — additional tables with an alias and an `ON` condition.
 - **Group By / Aggregates** — see below.
-- **Sort** — `ORDER BY` entries.
-- **Limit & Offset** — paging bounds.
+- **Sort and limit** — `ORDER BY` entries and the paging bounds. Each sort row
+  is a column picked from a dropdown (source columns, then the columns of joined
+  tables) and an ASC/DESC switch; the first row also holds the limit. The last
+  line adds another sort column and holds the offset. Drivers that cannot sort
+  show only the limit and offset.
 
 The SQL preview is parameterized: literal values are emitted as placeholders for
 the active dialect (SQLite, PostgreSQL, MySQL/MariaDB, or SQL Server).
@@ -47,15 +50,14 @@ Once the query is grouped:
   `SELECT` (group columns followed by aggregate aliases).
 - A **Having** section appears, using the same predicate editor as Filters but
   applied to `HAVING`.
-- **Sort** entries are restricted to group columns and aggregate aliases;
-  invalid entries are rejected with a visible error.
+- The **Sort** dropdowns offer only group columns and aggregate aliases.
 
 How grouped results behave in the data grid is described under
 [Aggregated results](RESULTS.md#aggregated-results).
 
 ## Schema-aware autocomplete
 
-The builder's single-line inputs (filter, sort, projected columns, the join
+The builder's single-line inputs (filter, projected columns, the join
 target table, and both sides of a join `ON`) offer inline suggestions sourced
 from the live schema and the builder's own spec: source-table columns, declared
 join aliases, and joined-table columns (fetched lazily in the background). Typing

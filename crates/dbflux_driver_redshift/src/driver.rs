@@ -159,6 +159,7 @@ pub static REDSHIFT_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
             sections: vec![
                 FormSection {
                     title: "Server".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Server),
                     fields: vec![
                         field_use_uri(),
                         when_checked(
@@ -197,6 +198,7 @@ pub static REDSHIFT_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
                 },
                 FormSection {
                     title: "Authentication".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Authentication),
                     fields: vec![
                         when_unchecked(
                             with_default(
@@ -238,6 +240,10 @@ impl DbDriver for RedshiftDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    fn picker_rank(&self) -> u16 {
+        5
     }
 
     fn driver_key(&self) -> DriverKey {

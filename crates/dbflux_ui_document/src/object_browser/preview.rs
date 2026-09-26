@@ -287,7 +287,6 @@ impl ObjectBrowserDocument {
         let name = object_display_name(key);
         let icon = object_icon(name);
         let icon_color = object_icon_color(icon, cx);
-        let shows_image = matches!(self.preview_content(), PreviewContentState::Image(_));
         let is_dirty = self.editor_for(key).is_some_and(|editor| editor.dirty);
         // The pinned pane is narrow by design; the same buffer can be taken to
         // a full-size tab. Offered only once the object has actually decoded
@@ -309,7 +308,7 @@ impl ObjectBrowserDocument {
                 }))
         });
 
-        let open_external = shows_image.then(|| {
+        let open_external = {
             let key = key.to_string();
 
             Button::new("object-browser-open-external", "")
@@ -322,7 +321,7 @@ impl ObjectBrowserDocument {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open_object_externally(key.clone(), cx);
                 }))
-        });
+        };
 
         div()
             .flex()
@@ -350,7 +349,7 @@ impl ObjectBrowserDocument {
             .when(is_dirty, |this| this.child(self.render_dirty_badge(cx)))
             .child(div().flex_1())
             .children(open_in_editor)
-            .children(open_external)
+            .child(open_external)
             .child(
                 Button::new("object-browser-preview-close", "")
                     .icon(AppIcon::X)
@@ -872,14 +871,15 @@ impl ObjectBrowserDocument {
             .child(Text::caption(format_modified(version.last_modified)).muted_foreground())
     }
 
-    /// Action bar (S3-3 footer). Download, Open externally, and Copy S3 URI act
-    /// immediately; the remaining actions raise intents drained by their flow
-    /// owners.
+    /// Action bar (S3-3 footer): Download, Copy URI, Presign and Delete, the
+    /// four that fit one row at the pane's default width. Download and Copy
+    /// URI act immediately; the others raise intents drained by their flow
+    /// owners. Opening in the system viewer lives in the header.
     ///
-    /// The row wraps instead of clipping: at the pane's minimum width five
-    /// labelled buttons do not fit on one line, and a clipped Delete is worse
-    /// than a two-line bar. `w_full` is required for the wrap to trigger at
-    /// all — see `dbflux_components::result_panel`'s chrome row.
+    /// The row still wraps instead of clipping at the pane's minimum width: a
+    /// clipped Delete is worse than a two-line bar. `w_full` is required for
+    /// the wrap to trigger at all — see `dbflux_components::result_panel`'s
+    /// chrome row.
     fn render_preview_actions(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
@@ -932,17 +932,6 @@ impl ObjectBrowserDocument {
                     cx.listener(move |this, _, _, cx| {
                         this.request_object_action(ObjectAction::Presign { key: key.clone() }, cx)
                     })
-                }),
-            )
-            .child(
-                action(
-                    "object-browser-open-externally",
-                    AppIcon::ExternalLink,
-                    dbflux_i18n::t!("document.object_browser.preview.action.open"),
-                )
-                .on_click({
-                    let key = key.to_string();
-                    cx.listener(move |this, _, _, cx| this.open_object_externally(key.clone(), cx))
                 }),
             )
             .child(

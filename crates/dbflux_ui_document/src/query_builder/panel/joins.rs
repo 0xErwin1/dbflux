@@ -205,11 +205,6 @@ impl QueryBuilderPanel {
             let p = refreshed_provider.clone();
             col_input.update(cx, |s, _| s.lsp_mut().completion_provider = Some(p));
         }
-
-        if let Some(sort_input) = &self.add_sort_input_state {
-            let p = refreshed_provider.clone();
-            sort_input.update(cx, |s, _| s.lsp_mut().completion_provider = Some(p));
-        }
     }
 
     pub(crate) fn next_comparator(current: Comparator) -> Comparator {

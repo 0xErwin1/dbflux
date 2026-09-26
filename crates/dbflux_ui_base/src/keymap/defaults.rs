@@ -589,6 +589,12 @@ fn command_palette_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::SelectPrev);
 
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    // Opens the chosen table or collection in another tab instead of the
+    // one already showing it.
+    layer.bind(
+        KeyChord::new("enter", Modifiers::primary()),
+        Command::RunQueryInNewTab,
+    );
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     layer

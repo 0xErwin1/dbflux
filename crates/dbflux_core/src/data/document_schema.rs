@@ -27,6 +27,10 @@ bitflags::bitflags! {
         /// `fetch_document` work. Gates per-field document edits and the
         /// server-change check made before they are written.
         const FIELD_PATCH = 1 << 1;
+
+        /// `Connection::aggregate_collection` runs aggregation pipelines.
+        /// Gates the Aggregate view of a collection.
+        const AGGREGATE = 1 << 2;
     }
 }
 

@@ -175,6 +175,9 @@ pub enum DangerousQueryKind {
     MongoDropCollection,
     /// db.dropDatabase()
     MongoDropDatabase,
+    /// aggregate() with an `$out` or `$merge` stage, which writes its result
+    /// into a collection
+    MongoAggregateWrite,
 
     // Redis patterns
     /// FLUSHALL — wipes all databases
@@ -205,6 +208,9 @@ impl DangerousQueryKind {
             Self::MongoUpdateMany => "updateMany with empty filter will update all documents",
             Self::MongoDropCollection => "drop() will permanently remove the collection",
             Self::MongoDropDatabase => "dropDatabase() will permanently remove the entire database",
+            Self::MongoAggregateWrite => {
+                "aggregate() with $out or $merge will write its result into a collection"
+            }
             Self::RedisFlushAll => "FLUSHALL will delete all keys in all databases",
             Self::RedisFlushDb => "FLUSHDB will delete all keys in the current database",
             Self::RedisMultiDelete => "DEL with multiple keys will delete them all",
@@ -369,6 +375,10 @@ fn classify_mongo_query(query: &str) -> ExecutionClassification {
         if is_empty_filter(after_paren) {
             return ExecutionClassification::Write;
         }
+    }
+
+    if aggregate_writes_output(&normalized) {
+        return ExecutionClassification::Write;
     }
 
     if normalized.contains(".find(") || normalized.contains(".aggregate(") {
@@ -1216,6 +1226,41 @@ fn strip_single_quoted_literals(sql: &str) -> String {
     result
 }
 
+/// Whether a MongoDB shell `aggregate(...)` call carries an `$out` or
+/// `$merge` stage, which writes the pipeline's result into a collection.
+///
+/// Only a stage key counts: `$out` or `$merge` directly followed (after an
+/// optional closing quote and whitespace) by `:`. A field reference such as
+/// `"$outcome"` in a `$project` value does not match.
+pub fn aggregate_writes_output(query: &str) -> bool {
+    let normalized = query.to_ascii_lowercase();
+    if !normalized.contains(".aggregate(") {
+        return false;
+    }
+
+    ["$out", "$merge"]
+        .iter()
+        .any(|operator| contains_stage_key(&normalized, operator))
+}
+
+fn contains_stage_key(text: &str, operator: &str) -> bool {
+    text.match_indices(operator).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let opens_key = matches!(before, Some('{' | ',' | '"' | '\'' | '`'))
+            || before.is_some_and(char::is_whitespace);
+        if !opens_key {
+            return false;
+        }
+
+        let rest = &text[start + operator.len()..];
+        let rest = rest
+            .strip_prefix(['"', '\'', '`'])
+            .unwrap_or(rest)
+            .trim_start();
+        rest.starts_with(':')
+    })
+}
+
 fn is_empty_filter(args_start: &str) -> bool {
     let trimmed = args_start.trim();
 
@@ -1717,6 +1762,7 @@ mod tests {
         assert!(!DangerousQueryKind::MongoUpdateMany.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropCollection.message().is_empty());
         assert!(!DangerousQueryKind::MongoDropDatabase.message().is_empty());
+        assert!(!DangerousQueryKind::MongoAggregateWrite.message().is_empty());
         assert!(!DangerousQueryKind::RedisFlushAll.message().is_empty());
         assert!(!DangerousQueryKind::RedisFlushDb.message().is_empty());
         assert!(!DangerousQueryKind::RedisMultiDelete.message().is_empty());
@@ -2067,6 +2113,36 @@ END $$;"#;
             ),
             ExecutionClassification::Read
         );
+    }
+
+    #[test]
+    fn mongo_aggregate_with_out_or_merge_classifies_as_write() {
+        let classify = |query: &str| classify_query_for_language(&QueryLanguage::MongoQuery, query);
+
+        assert_eq!(
+            classify(r#"db.orders.aggregate([{ "$match": {} }, { "$out": "archive" }])"#),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify("db.orders.aggregate([{ $merge: { into: 'totals' } }])"),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify(r#"db.orders.aggregate([{ "$project": { "o": "$outcome" } }])"#),
+            ExecutionClassification::Read,
+            "a field reference that starts with $out is not an $out stage"
+        );
+    }
+
+    #[test]
+    fn aggregate_writes_output_needs_an_aggregate_call() {
+        assert!(aggregate_writes_output(
+            r#"db.getCollection("orders").aggregate([{"$out":"archive"}])"#
+        ));
+        assert!(!aggregate_writes_output(r#"db.orders.find({ "$out": 1 })"#));
+        assert!(!aggregate_writes_output(
+            r#"db.orders.aggregate([{ "$group": { "_id": "$merged_at" } }])"#
+        ));
     }
 
     #[test]

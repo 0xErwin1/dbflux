@@ -105,6 +105,23 @@ impl QueryGenerator for MongoShellGenerator {
         })
     }
 
+    fn aggregate_query(
+        &self,
+        request: &dbflux_core::CollectionAggregateRequest,
+    ) -> Option<GeneratedQuery> {
+        let pipeline =
+            serde_json::to_string_pretty(&Value::Array(request.pipeline.clone())).ok()?;
+
+        Some(GeneratedQuery {
+            language: QueryLanguage::MongoQuery,
+            text: format!(
+                "{}.aggregate({})",
+                collection_accessor(&request.collection.name),
+                pipeline
+            ),
+        })
+    }
+
     fn generate_read_from_spec(
         &self,
         spec: &VisualQuerySpec,
@@ -539,6 +556,35 @@ mod tests {
             query.text,
             "db.products.updateOne({ _id: ObjectId(\"6ab43361d1f8e4b0c2a1e4b0\") }, \
              { $set: { \"price.amount\": Decimal128(\"119.00\") }, $unset: { legacy: \"\" } })"
+        );
+    }
+
+    #[test]
+    fn aggregate_query_renders_the_pipeline_on_the_collection() {
+        use dbflux_core::LanguageService;
+
+        let request = dbflux_core::CollectionAggregateRequest::new(
+            dbflux_core::CollectionRef::new("shop", "order-lines"),
+            vec![
+                json!({ "$match": { "paid": true } }),
+                json!({ "$out": "archive" }),
+            ],
+            100,
+        );
+
+        let query = MongoShellGenerator
+            .aggregate_query(&request)
+            .expect("a pipeline renders");
+
+        assert!(
+            query.text.starts_with("db[\"order-lines\"].aggregate([") && query.text.ends_with("])"),
+            "unexpected text: {}",
+            query.text
+        );
+        assert!(dbflux_core::aggregate_writes_output(&query.text));
+        assert_eq!(
+            crate::language_service::MongoLanguageService.detect_dangerous(&query.text),
+            Some(dbflux_core::DangerousQueryKind::MongoAggregateWrite)
         );
     }
 

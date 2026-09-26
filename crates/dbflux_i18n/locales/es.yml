@@ -34,7 +34,7 @@ access:
   ssh_tunnel_label: Túnel SSH
   ssh_server_saved: Servidor SSH (túnel guardado)
   test_ssh: Probar SSH
-  testing_ssh: Probando conexión SSH...
+  testing_ssh: Probando conexión SSH…
   ssh_success: Conexión SSH correcta
   ssh_failed: Fallo en la conexión SSH
   save_as_tunnel: Guardar como túnel
@@ -54,6 +54,9 @@ chart:
       avg: promedio
       min: mín
       max: máx
+  legend:
+    hide_series: "Clic para ocultar esta serie"
+    show_series: "Clic para mostrar esta serie"
   engine:
     no_data: Sin datos
   point_inspector:
@@ -245,7 +248,7 @@ connection_manager:
     new: "Nueva conexión %{driver}"
   connection_overrides_title: Anulaciones de conexión
   connection_hooks_title: Hooks de conexión
-  new_auth_profile: "Nuevo perfil de autenticación..."
+  new_auth_profile: "Nuevo perfil de autenticación…"
   aws_sso_wizard_title: Asistente de AWS SSO
   aws_sso_open_failed: No se pudo abrir el asistente de AWS SSO
   select_ssh_key_title: Seleccionar clave privada SSH
@@ -258,11 +261,11 @@ connection_manager:
   auth:
     profile_created_sso: Perfil seleccionado creado por el asistente de AWS SSO.
     profile_created_wizard: Perfil seleccionado creado por el asistente.
-    refreshing_sessions: Actualizando sesiones de perfiles de autenticación...
+    refreshing_sessions: Actualizando sesiones de perfiles de autenticación…
     select_before_login: Selecciona un perfil de autenticación antes de iniciar sesión.
     provider_unavailable: "El proveedor de autenticación '%{provider_id}' no está disponible."
     interactive_login_unavailable: El inicio de sesión interactivo no está disponible para este perfil.
-    login_starting: "Iniciando sesión del proveedor de autenticación para '%{name}'..."
+    login_starting: "Iniciando sesión del proveedor de autenticación para '%{name}'…"
     login_completed: Inicio de sesión del proveedor completado.
     login_failed: "Error al iniciar sesión con el proveedor: %{error}"
     session_status_valid_expires: "Estado de la sesión: válida (expira el %{expires_at})"
@@ -334,6 +337,14 @@ connection_manager:
     cancel: Cancelar
     configure: Configurar
     configure_named: "Configurar %{name}"
+    section:
+      relational: "Relacional"
+      document: "Documentos"
+      key_value: "Clave-valor"
+      wide_column: "Columnas anchas"
+      time_series_and_logs: "Series temporales y logs"
+      graph: "Grafos"
+      object_storage: "Almacenamiento de objetos"
   export:
     target:
       connection: conexión
@@ -534,9 +545,9 @@ connections:
   toast:
     export_from_menu: "Exporta una conexión desde su menú"
     export_from_menu_body: "Haz clic derecho en una conexión de la barra lateral y elige Exportar."
-    disconnecting: "Desconectando de %{name}..."
+    disconnecting: "Desconectando de %{name}…"
     no_active_connection: No hay conexión activa
-    refreshing_schema: Actualizando esquema...
+    refreshing_schema: Actualizando esquema…
   error:
     refresh_schema_failed: "No se pudo actualizar el esquema: %{error}"
 diagnostics:
@@ -550,6 +561,11 @@ diagnostics:
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
   collection:
+    inspector:
+      title: "Documento"
+      expand: "Abrir editor JSON"
+      json_failed: "No se pudo generar el JSON del documento: %{error}"
+      missing: "ausente"
     menu:
       unset_field: "Quitar campo"
       revert_change: "Revertir cambio"
@@ -560,6 +576,25 @@ document:
     tab:
       documents: "Documentos"
       schema: "Esquema"
+      aggregate: "Agregación"
+    aggregate:
+      placeholder: "[{ \"$match\": { \"status\": \"paid\" } }, { \"$group\": { \"_id\": \"$region\", \"total\": { \"$sum\": \"$amount\" } } }]"
+      run: "Ejecutar"
+      history: "Historial de pipelines"
+      read_only_hint: "Los resultados son de solo lectura"
+      empty: "Escribe un pipeline y ejecútalo para ver sus documentos de resultado"
+      running: "Ejecutando el pipeline…"
+      no_results: "El pipeline no devolvió documentos"
+      capped: "Se muestran los primeros %{count} documentos"
+      failed: "La agregación falló: %{error}"
+      read_only_edit: "Los resultados de la agregación son de solo lectura"
+      task: "Agregación en %{collection}"
+      error:
+        syntax: "JSON no válido: %{error}"
+        not_array: "El pipeline debe ser un arreglo de etapas"
+        stage_not_document: "La etapa %{stage} debe ser un documento"
+        stage_field_count: "La etapa %{stage} debe nombrar exactamente un operador de etapa"
+        stage_not_operator: "Etapa %{stage}: %{name} no es un operador de etapa"
     hint:
       steps_in: "sobre un objeto o arreglo entra en él, con una ruta de navegación"
       steps_out: "sale"
@@ -709,8 +744,8 @@ document:
       group_label: "Agrupar:"
       loading: "Cargando…"
       placeholder:
-        search_events: "Buscar eventos..."
-        filter_events: "Filtrar eventos..."
+        search_events: "Buscar eventos…"
+        filter_events: "Filtrar eventos…"
         all_time: "Todo el período"
         last_12_hours: "Últimas 12 h"
         local: Local
@@ -779,10 +814,16 @@ document:
       size: Tamaño
       versioning: Versionado
       created: Creado
+      encryption: Cifrado
+      public_access: Acceso público
     versioning:
       on: Activado
       suspended: Suspendido
       off: Desactivado
+    public_access:
+      blocked: Bloqueado
+      partial: Parcial
+      open: Abierto
     details:
       calculate_size: Calcular tamaño
       calculating: "Calculando…"
@@ -914,6 +955,8 @@ document:
         connection_not_found: Conexión no encontrada o inactiva
         catalog_unsupported: La conexión no admite el catálogo de métricas
   code:
+    gutter:
+      run_statement: Ejecutar esta sentencia
     history:
       title: Historial
       search: Buscar en el historial
@@ -924,6 +967,9 @@ document:
         days: "hace %{count} d"
       duration_ms: "%{count} ms"
     toolbar:
+      statements:
+        one: "%{count} sentencia"
+        many: "%{count} sentencias"
       refresh: Actualizar
       cancel: Cancelar
       checking: "Verificando…"
@@ -950,7 +996,7 @@ document:
         run: "buscar"
         cancel: "cancelar"
     output:
-      running: "Ejecutando..."
+      running: "Ejecutando…"
       stopped: Detenido
       output: Salida
       lines:
@@ -958,6 +1004,8 @@ document:
         many: "%{count} líneas"
       truncated: "(truncado a %{limit} líneas)"
     result:
+      statement_lines: "Sentencia L%{start}–%{end}"
+      search_placeholder: Buscar en los resultados
       count:
         one: "%{count} resultado"
         many: "%{count} resultados"
@@ -1013,6 +1061,9 @@ document:
         mongo_drop_database:
           title: dropDatabase()
           body: dropDatabase() eliminará permanentemente toda la base de datos
+        mongo_aggregate_write:
+          title: "aggregate() escribe en una colección"
+          body: "aggregate() con $out o $merge escribirá su resultado en una colección"
         redis_flush_all:
           title: FLUSHALL
           body: FLUSHALL eliminará todas las claves en todas las bases de datos
@@ -1029,6 +1080,9 @@ document:
           title: Expresión SQL cruda en SET
           body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
     context_bar:
+      file:
+        saved: guardado
+        unsaved: sin guardar
       placeholder:
         connection: Sin conexión
         database: Base de datos
@@ -1057,7 +1111,7 @@ document:
         enter_query_to_explain: Escribe una consulta para analizar con Explain
         enter_script_content: Escribe contenido del script para ejecutar
         write_query_first: Escribe primero una consulta para abrirla en una gráfica
-        connecting: "Conectando a la base de datos '%{database}', espera..."
+        connecting: "Conectando a la base de datos '%{database}', espera…"
         redis_flush_disabled: FLUSHALL / FLUSHDB está deshabilitado en la configuración
       result_title:
         query_failed: Consulta fallida
@@ -1221,7 +1275,7 @@ document:
         delete_document: Eliminar documento
         paste: Pegar
         edit: Editar
-        edit_in_modal: Editar en modal
+        edit_in_modal: Editar en modal…
         set_default: Establecer valor predeterminado
         set_null: Establecer NULL
         add_row: Agregar fila
@@ -1322,6 +1376,7 @@ document:
         empty: "(vacío)"
         both: "Ambos"
       status:
+        read_only: resultado de solo lectura
         rows:
           one: "%{count} fila"
           many: "%{count} filas"
@@ -1454,6 +1509,7 @@ document:
           many: "Mutación cancelada después de procesar %{count} filas"
     row_inspector:
       action:
+        copy: "Copiar fila como JSON"
         pin: "Fijar esta fila"
         unpin: "Seguir la selección"
         close: "Cerrar"
@@ -1865,8 +1921,8 @@ document:
         sorted_set: Agregar miembros de conjunto ordenado
         stream: Agregar entrada de stream
     context_menu:
-      add_entry: Agregar entrada
-      add_member: Agregar miembro
+      add_entry: Agregar entrada…
+      add_member: Agregar miembro…
       copy_as_command: Copiar como comando
       copy_entry: Copiar entrada
       copy_key: Copiar clave
@@ -1877,7 +1933,7 @@ document:
       delete_member: Eliminar miembro
       edit_member: Editar miembro
       edit_value: Editar valor
-      new_key: Nueva clave
+      new_key: Nueva clave…
       rename: Renombrar
     history_modal:
       empty:
@@ -1888,7 +1944,7 @@ document:
         name_required: Ingresa un nombre para la consulta
         success_toast: Consulta guardada
         title: Guardar consulta
-      search_placeholder: "Buscar..."
+      search_placeholder: "Buscar…"
       tabs:
         recent: Recientes
         saved: Guardadas
@@ -1962,7 +2018,7 @@ document:
       select_key_prompt: Selecciona una clave para inspeccionar
       filter:
         keys_placeholder: "Patrón, por ejemplo user:*"
-        members_placeholder: "Filtrar miembros..."
+        members_placeholder: "Filtrar miembros…"
       ttl:
         no_limit: Sin límite
         missing: Ausente
@@ -2097,15 +2153,15 @@ document:
       item:
         preview: Vista previa
         open_in_editor: Abrir en el editor
-        download: Descargar
-        rename: Renombrar
+        download: Descargar…
+        rename: Renombrar…
         presign: Prefirmar
         copy_uri: Copiar URI de S3
         delete: Eliminar
         collapse: Colapsar
         expand: Expandir
         open: Abrir
-        new_folder_inside: Nueva carpeta dentro
+        new_folder_inside: Nueva carpeta dentro…
         delete_folder: Eliminar carpeta
     create_folder:
       cancel: Cancelar
@@ -2222,7 +2278,6 @@ document:
         copy_uri: Copiar URI
         delete: Eliminar
         download: Descargar
-        open: Abrir
         presign: Prefirmar
       body:
         text_kind:
@@ -2422,7 +2477,7 @@ document:
       execution: EJECUCIÓN
       filters: FILTROS
       filters_where: FILTROS (WHERE)
-      sort: ORDEN
+      sort_limit: "ORDEN Y LÍMITE"
       sql_preview: VISTA PREVIA SQL
     sort:
       direction:
@@ -2432,8 +2487,7 @@ document:
       key_order_named: "Orden de la clave de ordenamiento (%{name})"
       key_limited_hint: El ordenamiento está limitado a la clave de ordenamiento para este controlador.
       invalid_column: "\"%{column}\" no está en las columnas de GROUP BY ni en los alias de agregación"
-      move_up: "Subir"
-      move_down: "Bajar"
+      add: "+ Orden"
     status:
       limit: Límite
       offset: Desplazamiento
@@ -2528,15 +2582,23 @@ document:
       no_database: No se especificó ninguna base de datos
       no_layout: No se calculó ningún diseño
     inspector:
-      columns: COLUMNAS
+      count:
+        columns:
+          one: "%{count} columna"
+          many: "%{count} columnas"
+        foreign_keys:
+          one: "%{count} clave foránea"
+          many: "%{count} claves foráneas"
+        indexes:
+          one: "%{count} índice"
+          many: "%{count} índices"
       foreign_keys: CLAVES FORÁNEAS
       indexes: ÍNDICES
-      summary_full: "%{columns} columnas · %{indexes} índices · %{foreign_keys} claves foráneas · referenciada por %{referenced_by}"
-      unique: "única"
       referenced_by: "Referenciada por"
+      summary_full: "%{columns} · %{indexes} · %{foreign_keys} · referenciada por %{referenced_by}"
     layout:
       compact: Compacto
-      left_right: Izquierda-Derecha
+      left_right: De izquierda a derecha
       snowflake: Copo de nieve
     menu:
       copy_as: Copiar como
@@ -2573,7 +2635,7 @@ document:
       zoom_in: "Acercar"
       zoom_out: "Alejar"
     view:
-      title: "Esquema: %{name}"
+      title: "%{name} · esquema"
       title_default_database: base de datos
   shared:
     add: Agregar
@@ -2608,7 +2670,7 @@ document:
     new: Nueva pestaña
     unsaved_changes: Cambios sin guardar
 document_tree:
-  search_placeholder: Buscar...
+  search_placeholder: Buscar…
   view:
     tree: Vista de árbol
     raw_json: JSON sin formato
@@ -2687,7 +2749,7 @@ hooks:
   source:
     file: Archivo
   script:
-    placeholder: "Escribe el contenido del script..."
+    placeholder: "Escribe el contenido del script…"
   execution:
     blocking: Bloqueante
     detached: Independiente
@@ -2732,7 +2794,7 @@ login:
   banner:
     connection_failed: Fallo en la conexión
     completed: Inicio de sesión completado
-    closing: Autenticación correcta. Cerrando este diálogo...
+    closing: Autenticación correcta. Cerrando este diálogo…
   body:
     sign_in_prompt: 'Inicia sesión con %{provider} para abrir %{profile}.'
     waiting: Esperando al navegador
@@ -2765,7 +2827,7 @@ modals:
     saved:
       empty: 'No hay gráficos guardados en esta conexión. Usa "Desde consulta" o "Desde métrica" para crear uno directamente.'
       search_label: Buscar
-      search_placeholder: Buscar gráficos...
+      search_placeholder: Buscar gráficos…
     tab:
       saved: Gráficos guardados
       query: Desde consulta
@@ -2926,6 +2988,7 @@ palette:
   footer:
     navigate: "mover"
     run: "ejecutar"
+    open_in_new_tab: "abrir en una pestaña nueva"
     commands_only: "solo comandos"
     tables_only: "solo tablas"
   connection:
@@ -2937,7 +3000,7 @@ palette:
     connections: Conexiones
     commands: Comandos
     charts: Gráficos
-    tables: Tablas
+    tables: Tablas y colecciones
     scripts: Scripts
   kind:
     connection: Conexión
@@ -2962,9 +3025,9 @@ palette:
     save_query:
       name: Guardar consulta
     save_file_as:
-      name: Guardar archivo como
+      name: Guardar archivo como…
     open_script_file:
-      name: Abrir archivo de script
+      name: Abrir archivo de script…
     toggle_comment:
       name: Alternar comentario
     open_history:
@@ -3014,9 +3077,9 @@ palette:
     open_audit_viewer:
       name: Abrir visor de auditoría
     open_saved_chart:
-      name: "Abrir gráfico..."
+      name: "Abrir gráfico…"
     new_dashboard:
-      name: "Nuevo dashboard..."
+      name: "Nuevo dashboard…"
     analyze_dump_file:
       name: "Analizar volcado de base de datos…"
   category:
@@ -3224,6 +3287,7 @@ settings:
     warning:
       prefix: "comparte una secuencia de teclas"
       typed_text: "captura texto escrito"
+    switch_to_tab_indexed: "Cambiar a la pestaña %{index}"
     command:
       toggle_command_palette: Mostrar u ocultar la paleta de comandos
       new_query_tab: Nueva pestaña de consulta
@@ -3268,8 +3332,8 @@ settings:
       open_history: Mostrar u ocultar historial
       open_saved_queries: Abrir consultas guardadas
       save_query: Guardar
-      save_file_as: Guardar archivo como
-      open_script_file: Abrir archivo de script
+      save_file_as: Guardar archivo como…
+      open_script_file: Abrir archivo de script…
       toggle_comment: Alternar comentario
       export_results: Exportar resultados
       results_next_page: "Resultados: página siguiente"
@@ -3294,7 +3358,7 @@ settings:
       sidebar_next_tab: "Barra lateral: siguiente pestaña"
       refresh_schema: Actualizar schema
       open_connection_manager: Abrir gestor de conexiones
-      export_connections: "Exportar conexiones…"
+      export_connections: "Exportar conexiones"
       disconnect: Desconectar
       open_item_menu: Abrir menú del elemento
       create_folder: Crear carpeta
@@ -3308,9 +3372,9 @@ settings:
       open_audit_viewer: Abrir visor de auditoría
       open_mcp_approvals: Abrir aprobaciones de MCP
       refresh_mcp_governance: Actualizar gobernanza de MCP
-      open_saved_chart: "Abrir gráfico..."
-      import_dashboard: "Importar dashboard desde JSON..."
-      new_dashboard: "Nuevo dashboard..."
+      open_saved_chart: "Abrir gráfico…"
+      import_dashboard: "Importar dashboard desde JSON…"
+      new_dashboard: "Nuevo dashboard…"
       preview_document: Vista previa del documento
       toggle_raw_view: Alternar vista JSON sin formato
       next_match: Siguiente coincidencia
@@ -3329,9 +3393,9 @@ settings:
       move_table_right: Mover tabla a la derecha
       move_table_up: Mover tabla arriba
       move_table_down: Mover tabla abajo
-      layout_left_right: Diseño Izquierda-Derecha
-      layout_snowflake: Diseño Copo de nieve
-      layout_compact: Diseño Compacto
+      layout_left_right: Diseño izquierda-derecha
+      layout_snowflake: Diseño copo de nieve
+      layout_compact: Diseño compacto
       extend_select_left: Extender selección a la izquierda
       extend_select_right: Extender selección a la derecha
       move_to_row_start: Ir al inicio de la fila
@@ -3350,7 +3414,7 @@ settings:
       close_window: Cerrar ventana
       toggle_console: Mostrar u ocultar consola
       load_more: Cargar más
-      edit_expiry: Editar expiración
+      edit_expiry: Editar expiración…
     context:
       global: Global
       sidebar: Barra lateral
@@ -3487,7 +3551,7 @@ settings:
     provider_label: Proveedor
     placeholder_name: Nombre del perfil
     select_provider_ellipsis: "Seleccionar proveedor…"
-    select_ellipsis: "Seleccionar..."
+    select_ellipsis: "Seleccionar…"
     select_none: "— Ninguno —"
     enabled: Habilitado
     export: Exportar
@@ -3503,7 +3567,7 @@ settings:
     select_before_login: Selecciona un proveedor antes de iniciar sesión.
     interactive_login_unavailable: El inicio de sesión interactivo no está disponible para este proveedor.
     fields_required_before_login: Completa el nombre del perfil y los campos del proveedor antes de iniciar sesión.
-    starting_login: "Iniciando sesión del proveedor de autenticación para el perfil '%{name}'..."
+    starting_login: "Iniciando sesión del proveedor de autenticación para el perfil '%{name}'…"
     login_completed: "Inicio de sesión del proveedor de autenticación completado para el perfil '%{name}'."
     login_failed: "Error al iniciar sesión del proveedor de autenticación para el perfil '%{name}': %{error}"
     login_cancelled: Inicio de sesión cancelado por el usuario.
@@ -3511,7 +3575,7 @@ settings:
     open_browser: Abrir navegador
     copy_url: Copiar URL
     login_action: "Iniciar sesión"
-    logging_in: "Iniciando sesión..."
+    logging_in: "Iniciando sesión…"
     runs_interactive_login_hint: Ejecuta el inicio de sesión interactivo de este perfil
     update: Actualizar
     create: Crear
@@ -3643,8 +3707,9 @@ settings:
     roles_title: Roles
     roles_description: Gestiona paquetes de roles con nombre para la gobernanza de MCP
     roles_form_description: Agrupa políticas en roles con nombre asignados a actores por conexión
-    policies_title: Políticas
-    policies_description: Gestiona las reglas de política de herramientas y clases de ejecución para la gobernanza de MCP
+    policies_title: Políticas MCP
+    policies_description: "Lo que cada rol puede ejecutar mediante MCP, por clase de ejecución: permitido, sujeto a aprobación o denegado."
+    policies_defaults_hint: "Valores por defecto: Permitir para Metadata y Read, Preguntar para cada clase que modifica datos. Preguntar espera en Aprobaciones; un agente nunca puede aprobar su propia solicitud."
     policies_form_description: "Define qué herramientas cubre la política y si cada clase de ejecución se permite, requiere aprobación o se deniega"
     new_client: Nuevo cliente de confianza
     new_role: Nuevo rol
@@ -3700,7 +3765,7 @@ settings:
       ask: "Preguntar"
       deny: "Denegar"
     warning:
-      allow_all_without_approval: "El agente podrá ejecutar cualquier llamada que modifique datos, incluido DROP DATABASE, sin preguntar."
+      allow_all_without_approval: "Convierte cada Preguntar en Permitir para esta política. El agente podría ejecutar DROP DATABASE sin preguntar."
     action:
       update_client: Actualizar cliente
       create_client: Crear cliente
@@ -3712,6 +3777,7 @@ settings:
       update_policy: Actualizar política
       create_policy: Crear política
       allow_all_without_approval: "Permitir todo sin aprobación"
+      allow_all: "Permitir todo"
   drivers:
     section_title: Drivers
     section_description: "Reemplazos por driver y ajustes que declara el driver."
@@ -3971,10 +4037,10 @@ settings:
     mcp_policies: Políticas
 
 shutdown:
-  signal_sent: Cerrando la aplicación...
-  cancelling_tasks: Cancelando tareas...
-  closing_connections: Cerrando conexiones...
-  flushing_logs: Guardando registros...
+  signal_sent: Cerrando la aplicación…
+  cancelling_tasks: Cancelando tareas…
+  closing_connections: Cerrando conexiones…
+  flushing_logs: Guardando registros…
   complete: Cierre completado
   failed: Error al cerrar
 
@@ -4006,10 +4072,10 @@ sidebar:
     cannot_load_schema_foreign_keys: No se pueden cargar las claves foráneas del esquema
     cannot_load_schema_routines: No se pueden cargar las rutinas del esquema
   filter:
-    dashboards_placeholder: "Filtrar dashboards..."
-    connections_placeholder: Filtrar conexiones y esquema...
-    scripts_placeholder: Filtrar scripts...
-    stream_placeholder: Filtrar nombres de streams...
+    dashboards_placeholder: "Filtrar dashboards…"
+    connections_placeholder: Filtrar conexiones y esquema…
+    scripts_placeholder: Filtrar scripts…
+    stream_placeholder: Filtrar nombres de streams…
   menu:
     open: Abrir
     browse_event_streams: Explorar flujos de eventos
@@ -4036,7 +4102,7 @@ sidebar:
     export_ellipsis: Exportar…
     import_ellipsis: Importar…
     compare_schema: Comparar esquema…
-    move_to: Mover a...
+    move_to: Mover a
     delete: Eliminar
     delete_count: "Eliminar %{count} elementos"
     close: Cerrar
@@ -4050,10 +4116,9 @@ sidebar:
     reveal_file_manager: Mostrar en el explorador de archivos
     copy_path: Copiar ruta
     schema_diff_unsupported: La comparación de esquemas solo está disponible para conexiones relacionales.
-    new_dashboard: Nuevo dashboard...
-    import_dashboard: Importar dashboard desde JSON...
-    rename_ellipsis: Renombrar...
-    delete_ellipsis: Eliminar...
+    new_dashboard: Nuevo dashboard…
+    import_dashboard: Importar dashboard desde JSON…
+    rename_ellipsis: Renombrar…
     copy_metric_id: Copiar ID de métrica
     copy_inspector_id: Copiar ID de inspector
   overlay:
@@ -4142,7 +4207,7 @@ sidebar:
       routines: "Error al cargar las rutinas: %{error}"
     list_buckets_failed: "Error al listar buckets: %{error}"
     code_generation_failed: "Error al generar el código: %{error}"
-    loading_event_streams: Cargando flujos de eventos...
+    loading_event_streams: Cargando flujos de eventos…
     load_schema_failed: "Error al cargar el esquema: %{error}"
     connect_database_failed: "Error al conectar a la base de datos: %{error}"
     refresh_database_failed: "Error al actualizar la base de datos: %{error}"
@@ -4176,6 +4241,7 @@ sidebar:
         one: "%{count} base de datos vacía"
         many: "%{count} bases de datos vacías"
       databases: Bases de datos
+      buckets: Buckets
       new_default: Nueva carpeta
       fields: "Campos (%{count})"
       indexes: "Índices (%{count})"
@@ -4278,11 +4344,11 @@ sso_wizard:
     account_id: ID de cuenta
     role_name: Nombre del rol
   account:
-    discovering: Descubriendo cuentas...
+    discovering: Descubriendo cuentas…
     discover_button: Iniciar sesión y descubrir cuentas
     no_matches: No hay cuentas que coincidan con el filtro actual
   role:
-    discovering: Descubriendo roles...
+    discovering: Descubriendo roles…
     discover_button: Descubrir roles para la cuenta seleccionada
     no_matches: No hay roles que coincidan con el filtro actual
   back: Atrás
@@ -4291,17 +4357,18 @@ sso_wizard:
   status:
     missing_required: El nombre de perfil, la URL de inicio y la región son obligatorios
     fill_before_account_discovery: Completa el nombre de perfil, la URL de inicio y la región antes de descubrir
-    discovering_accounts: Iniciando sesión y obteniendo cuentas de SSO...
+    discovering_accounts: Iniciando sesión y obteniendo cuentas de SSO…
     accounts_discovered: Descubrimiento de cuentas de SSO completado
     accounts_failed: "Error al descubrir cuentas: %{error}"
     fill_before_role_discovery: Completa perfil, región y URL de inicio, y selecciona una cuenta primero
-    discovering_roles: Obteniendo roles de SSO...
+    discovering_roles: Obteniendo roles de SSO…
     roles_discovered: Descubrimiento de roles de SSO completado
     roles_failed: "Error al descubrir roles: %{error}"
     profile_created: Perfil de autenticación de AWS SSO creado
 status_bar:
   no_connection: "Sin conexión"
   ready: "Listo"
+  connected_to: "Conectado a %{name}"
   tasks_failed: "%{count} con error"
   background_tasks:
     one: "1 tarea en segundo plano"
@@ -4329,7 +4396,7 @@ tasks_panel:
   cancel: "Cancelar tarea"
   dismiss: "Descartar"
   empty: No hay tareas en segundo plano
-  output_truncated: ... salida truncada en el panel
+  output_truncated: "… salida truncada en el panel"
 toast:
   action:
     copy: Copiar

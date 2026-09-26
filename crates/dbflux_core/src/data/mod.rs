@@ -1,4 +1,5 @@
 pub(crate) mod crud;
+pub(crate) mod document_aggregate;
 pub(crate) mod document_edit;
 pub(crate) mod document_schema;
 pub(crate) mod key_value;
@@ -9,6 +10,9 @@ pub use crud::{
     ColumnAssignment, CrudResult, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
     MutationRequest, RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState,
     SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
+};
+pub use document_aggregate::{
+    AggregatePipelineError, CollectionAggregateRequest, parse_aggregate_pipeline,
 };
 pub use document_edit::{
     DocumentFetchRequest, DocumentIdentity, DocumentPatch, DocumentPatchRequest,

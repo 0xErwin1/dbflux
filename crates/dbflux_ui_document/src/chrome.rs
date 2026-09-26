@@ -11,7 +11,9 @@ use dbflux_components::icons::{AppIcon, DriverIconTone};
 use dbflux_components::primitives::{
     Chamfer, ChamferRing, Icon, Kbd, SegmentedControl, SegmentedItem,
 };
-use dbflux_components::tokens::{ChamferCut, ChromeColors, DocumentMetrics, Fields, ResultMetrics};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, DocumentMetrics, Fields, FontSizes, ResultMetrics,
+};
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateEntity;
 use gpui::prelude::*;
@@ -61,11 +63,13 @@ pub(crate) fn document_title(
         )
 }
 
-/// The muted one-line description after a document title.
+/// The muted one-line description after a document title, at the 13 px
+/// body size rather than whatever the host inherits.
 pub(crate) fn document_subtitle(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .min_w_0()
         .truncate()
+        .text_size(FontSizes::BASE)
         .text_color(cx.theme().muted_foreground)
         .child(text.into())
 }

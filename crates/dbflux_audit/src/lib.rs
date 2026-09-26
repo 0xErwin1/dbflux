@@ -75,6 +75,26 @@ impl From<RepositoryError> for AuditError {
     }
 }
 
+/// What the panic hook knows about one panic: the payload message, where it
+/// was raised (`file:line:column`) and the name of the panicking thread.
+#[derive(Debug, Clone, Copy)]
+pub struct PanicReport<'a> {
+    pub message: &'a str,
+    pub location: Option<&'a str>,
+    pub thread: Option<&'a str>,
+}
+
+impl PanicReport<'_> {
+    /// Message and location as one line, e.g. `index out of bounds at
+    /// src/main.rs:12:5`.
+    pub fn combined(&self) -> String {
+        match self.location {
+            Some(location) => format!("{} at {}", self.message, location),
+            None => self.message.to_string(),
+        }
+    }
+}
+
 /// Audit service for recording and querying audit events.
 ///
 /// This is the central event bus for DBFlux's global audit system.
@@ -664,37 +684,55 @@ impl AuditService {
 
     /// Records a panic event without blocking.
     ///
-    /// This is the public entry point for the global panic hook.
-    /// It creates a `system_panic` event from the provided panic info string
-    /// and attempts a non-blocking write through the store layer.
-    ///
-    /// If audit is disabled, returns `Ok(None)` silently.
-    /// If the store mutex is held by another thread, logs to stderr and returns `Ok(None)`.
-    /// If an actual storage error occurs, logs to stderr and returns `Ok(None)`.
-    ///
-    /// This function is designed to be called from a panic hook without risking
-    /// deadlock or double-panic.
-    ///
-    /// # Arguments
-    ///
-    /// * `panic_info` — A string describing the panic (message + location).
-    ///
-    /// # Returns
-    ///
-    /// `Ok(Some(record))` if the panic was recorded.
-    /// `Ok(None)` if recording failed or was not possible (no error returned to caller).
+    /// Same as [`AuditService::record_panic_report_best_effort`] for a panic
+    /// known only by one string (message and location already joined).
     pub fn record_panic_best_effort(&self, panic_info: &str) -> Option<EventRecord> {
+        self.record_panic_report_best_effort(&PanicReport {
+            message: panic_info,
+            location: None,
+            thread: None,
+        })
+    }
+
+    /// Records a panic event without blocking.
+    ///
+    /// This is the entry point for the global panic hook. It creates a
+    /// `system_panic` event whose details carry the panic message, its
+    /// `file:line:column` location and the panicking thread, redacted and
+    /// capped like every other event, and attempts a non-blocking write
+    /// through the store layer.
+    ///
+    /// Returns `None` when audit is disabled, when the store mutex is held
+    /// by another thread, or when storage fails (the last two are logged to
+    /// stderr). It never blocks or panics, so it is safe inside a panic hook.
+    pub fn record_panic_report_best_effort(&self, report: &PanicReport<'_>) -> Option<EventRecord> {
         use dbflux_core::observability::types::EventSeverity;
 
         if !self.is_enabled() {
             return None;
         }
 
-        // Use current time from std::time if chrono is not available as a direct dep
         let ts_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
+
+        let panic_info = report.combined();
+
+        let sanitize = |text: &str| {
+            if self.redact_sensitive() {
+                redact_error_message(text, true).redacted
+            } else {
+                text.to_string()
+            }
+        };
+
+        let sanitized_panic_info = sanitize(&panic_info);
+
+        let summary = match report.location {
+            Some(location) => format!("Application panic at {location}"),
+            None => "Application panic captured".to_string(),
+        };
 
         let panic_event = EventRecord::new(
             ts_ms,
@@ -703,19 +741,33 @@ impl AuditService {
             dbflux_core::observability::types::EventOutcome::Failure,
         )
         .with_typed_action(dbflux_core::observability::actions::SYSTEM_PANIC)
-        .with_summary("Application panic captured")
-        .with_error("panic", panic_info);
+        .with_summary(summary)
+        .with_actor_id("system")
+        .with_error("panic", sanitized_panic_info.clone());
 
-        let sanitized_panic_info = if self.redact_sensitive() {
-            redact_error_message(panic_info, true).redacted
-        } else {
-            panic_info.to_string()
-        };
+        let mut details = serde_json::Map::new();
+        details.insert(
+            "panic_info".to_string(),
+            serde_json::Value::String(sanitized_panic_info.clone()),
+        );
+        details.insert(
+            "message".to_string(),
+            serde_json::Value::String(sanitize(report.message)),
+        );
+        if let Some(location) = report.location {
+            details.insert(
+                "location".to_string(),
+                serde_json::Value::String(location.to_string()),
+            );
+        }
+        if let Some(thread) = report.thread {
+            details.insert(
+                "thread".to_string(),
+                serde_json::Value::String(thread.to_string()),
+            );
+        }
 
-        // Build panic details JSON using the sanitized version
-        let details = serde_json::json!({
-            "panic_info": sanitized_panic_info,
-        });
+        let details = serde_json::Value::Object(details);
         let panic_event =
             match Self::normalize_details_json(panic_event.with_details_json(details.to_string()))
                 .and_then(|event| self.preprocess_event_for_storage(event))

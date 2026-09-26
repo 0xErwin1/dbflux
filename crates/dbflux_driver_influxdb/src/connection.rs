@@ -612,8 +612,8 @@ impl Connection for InfluxConnection {
         };
 
         let targets_placeholder = match self.version {
-            InfluxVersion::V1 => "Select database...".to_string(),
-            InfluxVersion::V2 => "Select bucket...".to_string(),
+            InfluxVersion::V1 => "Select database…".to_string(),
+            InfluxVersion::V2 => "Select bucket…".to_string(),
         };
 
         Some(SourceContextSpec {

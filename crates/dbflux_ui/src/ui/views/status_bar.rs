@@ -5,7 +5,7 @@ use dbflux_components::composites::island_fill;
 use dbflux_components::primitives::{Chamfer, Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
 use dbflux_components::typography::AppFonts;
-use dbflux_core::{TaskSnapshot, TaskStatus};
+use dbflux_core::{TaskKind, TaskSnapshot, TaskStatus};
 use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -136,9 +136,26 @@ impl StatusBar {
         )
     }
 
+    /// The text of a finished task. A connect that succeeded reads
+    /// "Connected to <profile> · 87 ms" instead of the "Connecting to" it ran
+    /// under, when `profile_name` names its profile.
+    fn finished_text(task: &TaskSnapshot, profile_name: Option<&str>) -> String {
+        match (task.kind, &task.status, profile_name) {
+            (TaskKind::Connect, TaskStatus::Completed, Some(name)) => format!(
+                "{} \u{b7} {}",
+                dbflux_i18n::t!("status_bar.connected_to", name = name),
+                Self::format_elapsed(task.elapsed_secs)
+            ),
+            _ => Self::statement_text(task),
+        }
+    }
+
+    /// `finished_profile_name` is the name of the profile `last_finished`
+    /// ran for, when it ran for one.
     fn statement_summary(
         running: Option<&TaskSnapshot>,
         last_finished: Option<&TaskSnapshot>,
+        finished_profile_name: Option<&str>,
     ) -> StatementSummary {
         if let Some(task) = running {
             return StatementSummary::Running(Self::statement_text(task));
@@ -147,7 +164,7 @@ impl StatusBar {
         match last_finished {
             Some(task) => StatementSummary::Finished {
                 status: task.status.clone(),
-                text: Self::statement_text(task),
+                text: Self::finished_text(task, finished_profile_name),
             },
             None => StatementSummary::Ready,
         }
@@ -402,7 +419,21 @@ impl Render for StatusBar {
 
         let running_tasks = app_state.tasks().running_tasks();
         let last_finished = app_state.tasks().last_completed_task();
-        let summary = Self::statement_summary(running_tasks.first(), last_finished.as_ref());
+        let finished_profile_name = last_finished
+            .as_ref()
+            .and_then(|task| task.profile_id)
+            .and_then(|profile_id| {
+                app_state
+                    .profiles()
+                    .iter()
+                    .find(|profile| profile.id == profile_id)
+                    .map(|profile| profile.name.clone())
+            });
+        let summary = Self::statement_summary(
+            running_tasks.first(),
+            last_finished.as_ref(),
+            finished_profile_name.as_deref(),
+        );
         let counts = Self::task_counts(&app_state.tasks().recent_tasks(usize::MAX));
         let unread = app_state.unread_error_count;
         let approvals = self.pending_approvals_count(cx);
@@ -550,19 +581,57 @@ mod tests {
         let finished = task(TaskStatus::Completed, "SELECT 1", 1.1);
 
         assert_eq!(
-            StatusBar::statement_summary(Some(&running), Some(&finished)),
+            StatusBar::statement_summary(Some(&running), Some(&finished), None),
             StatementSummary::Running("SELECT * FROM tasks \u{b7} 250 ms".into())
         );
         assert_eq!(
-            StatusBar::statement_summary(None, Some(&finished)),
+            StatusBar::statement_summary(None, Some(&finished), None),
             StatementSummary::Finished {
                 status: TaskStatus::Completed,
                 text: "SELECT 1 \u{b7} 1.1 s".into(),
             }
         );
         assert_eq!(
-            StatusBar::statement_summary(None, None),
+            StatusBar::statement_summary(None, None, None),
             StatementSummary::Ready
+        );
+    }
+
+    fn connect_task(status: TaskStatus, elapsed_secs: f64) -> TaskSnapshot {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::Connect, "Connecting to shop-pg");
+        let mut snapshot = manager.get(id).expect("started task");
+        snapshot.status = status;
+        snapshot.elapsed_secs = elapsed_secs;
+        snapshot
+    }
+
+    #[test]
+    fn a_finished_connect_reads_connected_with_its_duration() {
+        let connected = connect_task(TaskStatus::Completed, 0.087);
+
+        assert_eq!(
+            StatusBar::statement_summary(None, Some(&connected), Some("shop-pg")),
+            StatementSummary::Finished {
+                status: TaskStatus::Completed,
+                text: format!(
+                    "{} \u{b7} 87 ms",
+                    dbflux_i18n::t!("status_bar.connected_to", name = "shop-pg")
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn a_failed_connect_keeps_its_connecting_text() {
+        let failed = connect_task(TaskStatus::Failed("refused".into()), 0.087);
+
+        assert_eq!(
+            StatusBar::statement_summary(None, Some(&failed), Some("shop-pg")),
+            StatementSummary::Finished {
+                status: TaskStatus::Failed("refused".into()),
+                text: "Connecting to shop-pg \u{b7} 87 ms".into(),
+            }
         );
     }
 

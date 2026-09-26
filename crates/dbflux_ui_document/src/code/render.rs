@@ -86,6 +86,11 @@ impl CodeDocument {
 
         let show_run_group = !is_read_only && is_db_language && !is_executing;
 
+        let run_summary = super::statements::run_summary_label(
+            self.statement_count().filter(|_| is_db_language),
+            execution_time.map(|duration| duration.as_secs_f64()),
+        );
+
         div()
             .id("sql-toolbar")
             .flex()
@@ -155,9 +160,10 @@ impl CodeDocument {
                 ))
             })
             .child(div().flex_1())
-            .when_some(execution_time, |el, duration| {
+            .when_some(run_summary, |el, summary| {
                 el.child(
                     div()
+                        .id("toolbar-run-summary")
                         .flex()
                         .flex_shrink_0()
                         .items_center()
@@ -170,12 +176,11 @@ impl CodeDocument {
                                 .size(EditorMetrics::LAST_RUN_ICON)
                                 .color(theme.muted_foreground),
                         )
-                        .child(crate::labels::code_toolbar_last_run_label(
-                            duration.as_secs_f64(),
-                        )),
+                        .child(summary),
                 )
             })
-            .when(self.session.show_saved_label, |el| {
+            // A query buffer shows its file state in the context bar.
+            .when(self.session.show_saved_label && !is_db_language, |el| {
                 el.child(
                     div()
                         .flex()
@@ -421,6 +426,8 @@ impl CodeDocument {
                     gpui_component::input::Editor::new(&self.editor.input_state)
                         .appearance(false)
                         .readonly(self.editor_input_locked())
+                        .text_size(EditorMetrics::CODE_FONT)
+                        .line_height(EditorMetrics::CODE_LINE_HEIGHT)
                         .w_full()
                         .h_full(),
                 ),
@@ -966,6 +973,8 @@ impl CodeDocument {
 
 impl Render for CodeDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_statement_gutter_style(cx);
+
         self.process_pending_result(window, cx);
 
         self.process_pending_set_query(window, cx);

@@ -376,6 +376,8 @@ pub struct ContextMenuItem {
     pub action: ContextMenuAction,
     pub icon: Option<AppIcon>,
     pub is_separator: bool,
+    /// The mono caption at the top of a menu naming what it acts on.
+    pub is_header: bool,
     pub is_danger: bool,
 }
 
@@ -386,6 +388,7 @@ impl ContextMenuItem {
             action,
             icon: None,
             is_separator: false,
+            is_header: false,
             is_danger: false,
         }
     }
@@ -396,7 +399,21 @@ impl ContextMenuItem {
             action,
             icon: None,
             is_separator: false,
+            is_header: false,
             is_danger: true,
+        }
+    }
+
+    /// A non-selectable caption row, for example the qualified name of the
+    /// table a menu acts on.
+    pub fn header(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            action: ContextMenuAction::Open,
+            icon: None,
+            is_separator: false,
+            is_header: true,
+            is_danger: false,
         }
     }
 
@@ -411,12 +428,13 @@ impl ContextMenuItem {
             action: ContextMenuAction::Open,
             icon: None,
             is_separator: true,
+            is_header: false,
             is_danger: false,
         }
     }
 
     pub fn is_selectable(&self) -> bool {
-        !self.is_separator
+        !self.is_separator && !self.is_header
     }
 
     pub fn to_menu_items(
@@ -429,7 +447,19 @@ impl ContextMenuItem {
                     return dbflux_components::composites::MenuItem::separator();
                 }
 
+                if item.is_header {
+                    return dbflux_components::composites::MenuItem::header(item.label.clone());
+                }
+
                 let mut mi = dbflux_components::composites::MenuItem::new(item.label.clone());
+
+                if let Some(shortcut) = item
+                    .action
+                    .shortcut_command()
+                    .and_then(sidebar_shortcut_label)
+                {
+                    mi = mi.shortcut(shortcut);
+                }
 
                 if let Some(icon) = item.icon.or_else(|| item.action.icon()) {
                     mi = mi.icon(icon);
@@ -567,7 +597,51 @@ pub enum CollectionCodeKind {
     DeleteOne,
 }
 
+/// The keys that run `command` in the sidebar, as a menu hint (`r`, `x`,
+/// `Shift R`). A bare Enter reads `↵`, the way P1Sidebar draws `Open ↵`.
+fn sidebar_shortcut_label(command: dbflux_app::keymap::Command) -> Option<String> {
+    let keymap = dbflux_ui_base::keymap::effective_keymap();
+    let keys = keymap.keys_for_command(dbflux_app::keymap::ContextId::Sidebar, command)?;
+
+    Some(menu_hint_for_keys(keys))
+}
+
+fn menu_hint_for_keys(keys: &dbflux_app::keymap::KeySequence) -> String {
+    let chord = keys.first();
+    let bare_enter = keys.is_single()
+        && chord.modifiers == dbflux_app::keymap::Modifiers::none()
+        && chord.key == "enter";
+
+    if bare_enter {
+        return "\u{21b5}".to_string();
+    }
+
+    dbflux_ui_base::keymap::key_sequence_label(keys).to_string()
+}
+
 impl ContextMenuAction {
+    /// The sidebar command whose key runs this action on the selected row.
+    /// The menu shows that key beside the action, and the key runs the same
+    /// action (see [`Sidebar::run_selected_menu_shortcut`]).
+    pub fn shortcut_command(&self) -> Option<dbflux_app::keymap::Command> {
+        use dbflux_app::keymap::Command;
+
+        match self {
+            Self::Open | Self::OpenDatabase | Self::OpenScript => Some(Command::Execute),
+            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase => {
+                Some(Command::RefreshSchema)
+            }
+            Self::RenameFolder | Self::RenameScript => Some(Command::Rename),
+            Self::Delete
+            | Self::DeleteFolder
+            | Self::DeleteScript
+            | Self::DropTable
+            | Self::DropCollection
+            | Self::DropDatabase => Some(Command::Delete),
+            _ => None,
+        }
+    }
+
     /// Returns the icon for this menu action
     fn icon(&self) -> Option<AppIcon> {
         match self {
@@ -1030,6 +1104,12 @@ pub struct Sidebar {
     bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     /// In-flight `list_buckets` fetches, keyed by profile_id.
     pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Round trip of one `ping` measured after each profile connected, shown
+    /// after its status diamond. `None` records a probe that failed, so a
+    /// failing connection is not pinged again on every state change.
+    connection_latencies: HashMap<Uuid, Option<std::time::Duration>>,
+    /// In-flight latency probes, keyed by profile_id.
+    pending_latency_probes: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1124,6 +1204,7 @@ impl Sidebar {
                     this.reconnect_profile_after_edit(profile_id, cx);
                 }
 
+                this.sync_connection_latencies(cx);
                 this.refresh_tree(cx);
                 this.refresh_scripts_tree(cx);
                 this.refresh_dashboards_tree(cx);
@@ -1329,6 +1410,8 @@ impl Sidebar {
             pending_instance_catalog_fetches: HashMap::new(),
             bucket_cache: HashMap::new(),
             pending_bucket_fetches: HashMap::new(),
+            connection_latencies: HashMap::new(),
+            pending_latency_probes: HashMap::new(),
         }
     }
 
@@ -1614,6 +1697,9 @@ impl Sidebar {
                     self.connect_to_profile(profile_id, cx);
                 }
             }
+            SchemaNodeId::BucketsFolder { profile_id } => {
+                cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+            }
             SchemaNodeId::Bucket { profile_id, name } => {
                 cx.emit(SidebarEvent::OpenObjectStoreBucket {
                     profile_id,
@@ -1794,11 +1880,13 @@ impl Sidebar {
                     if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
             );
 
-            let is_object_storage_root = matches!(
-                parse_node_id(item_id),
-                Some(SchemaNodeId::Profile { profile_id })
-                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
-            );
+            let is_object_storage_root = match parse_node_id(item_id) {
+                Some(SchemaNodeId::Profile { profile_id }) => {
+                    self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+                }
+                Some(SchemaNodeId::BucketsFolder { .. }) => true,
+                _ => false,
+            };
 
             if is_key_value_db || is_object_storage_root {
                 self.toggle_item_expansion(item_id, cx);
@@ -2223,6 +2311,90 @@ mod tests {
     }
 
     #[test]
+    fn menu_header_is_a_caption_that_cannot_be_selected() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem::header("public.orders"),
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+        ];
+
+        assert!(!items[0].is_selectable());
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert!(menu_items[0].is_header);
+        assert_eq!(menu_items[0].label.as_ref(), "public.orders");
+        assert!(!menu_items[1].is_header);
+    }
+
+    #[test]
+    fn menu_actions_pair_with_the_sidebar_keys_that_run_them() {
+        use super::ContextMenuAction;
+        use dbflux_app::keymap::Command;
+
+        assert_eq!(
+            ContextMenuAction::Open.shortcut_command(),
+            Some(Command::Execute)
+        );
+        assert_eq!(
+            ContextMenuAction::RefreshObject.shortcut_command(),
+            Some(Command::RefreshSchema)
+        );
+        assert_eq!(
+            ContextMenuAction::DropTable.shortcut_command(),
+            Some(Command::Delete)
+        );
+        assert_eq!(ContextMenuAction::ViewSchema.shortcut_command(), None);
+    }
+
+    #[test]
+    fn sidebar_menu_hints_read_like_the_design() {
+        use super::menu_hint_for_keys;
+        use dbflux_app::keymap::{KeyChord, KeySequence, Modifiers};
+
+        let single =
+            |key: &str, modifiers: Modifiers| KeySequence::from(KeyChord::new(key, modifiers));
+
+        assert_eq!(
+            menu_hint_for_keys(&single("enter", Modifiers::none())),
+            "\u{21b5}"
+        );
+        assert_eq!(menu_hint_for_keys(&single("r", Modifiers::none())), "r");
+        assert_eq!(menu_hint_for_keys(&single("x", Modifiers::none())), "x");
+        assert_eq!(
+            menu_hint_for_keys(&single("r", Modifiers::shift())),
+            "Shift R"
+        );
+    }
+
+    #[test]
+    fn table_menu_hints_come_from_the_effective_sidebar_keymap() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+            ContextMenuItem::item("Refresh", ContextMenuAction::RefreshObject),
+            ContextMenuItem::danger("Drop table", ContextMenuAction::DropTable),
+            ContextMenuItem::item("View schema", ContextMenuAction::ViewSchema),
+        ];
+
+        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_items(&items)
+            .iter()
+            .map(|item| item.shortcut.as_ref().map(|shortcut| shortcut.to_string()))
+            .collect();
+
+        assert_eq!(
+            shortcuts,
+            vec![
+                Some("\u{21b5}".to_string()),
+                Some("r".to_string()),
+                Some("x".to_string()),
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn to_menu_items_empty_input_returns_empty() {
         use super::ContextMenuItem;
 
@@ -2640,7 +2812,7 @@ mod tests {
                 dbflux_i18n::t!("sidebar.menu.open"),
                 dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
                 dbflux_i18n::t!("sidebar.menu.duplicate"),
-                dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+                dbflux_i18n::t!("sidebar.menu.delete"),
             ],
             _ => vec![],
         }
@@ -2680,7 +2852,7 @@ mod tests {
             dbflux_i18n::t!("sidebar.menu.open"),
             dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
             dbflux_i18n::t!("sidebar.menu.duplicate"),
-            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.delete"),
         ];
         for e in &expected {
             assert!(
@@ -2697,7 +2869,7 @@ mod tests {
             dbflux_i18n::t!("sidebar.menu.open"),
             dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
             dbflux_i18n::t!("sidebar.menu.duplicate"),
-            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.delete"),
         ];
         for e in &expected {
             assert!(

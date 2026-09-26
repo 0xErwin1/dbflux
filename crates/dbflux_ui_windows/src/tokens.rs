@@ -85,6 +85,22 @@ impl FormMetrics {
     pub const INLINE_GAP: Pixels = px(8.0);
 }
 
+/// Notes under the execution classes of an MCP policy.
+#[cfg(feature = "mcp")]
+pub struct PolicyNoteMetrics;
+
+#[cfg(feature = "mcp")]
+impl PolicyNoteMetrics {
+    /// Defaults note: a 13 px icon 10 px from its text, with 10 px above and
+    /// 2 px below.
+    pub const ICON: Pixels = px(13.0);
+    pub const GAP: Pixels = px(10.0);
+    pub const PADDING_TOP: Pixels = px(10.0);
+    pub const PADDING_BOTTOM: Pixels = px(2.0);
+    /// Space above the "Allow all without approval" banner. (12 px)
+    pub const BANNER_MARGIN_TOP: Pixels = px(12.0);
+}
+
 /// Connection Manager window: form header, tabs, body and footer, and the
 /// driver picker.
 pub struct ConnectionFormMetrics;
@@ -140,15 +156,19 @@ impl ConnectionFormMetrics {
     pub const PICKER_BODY_PADDING_BOTTOM: Pixels = px(16.0);
     pub const PICKER_CATEGORY_PADDING_TOP: Pixels = px(16.0);
     pub const PICKER_CATEGORY_PADDING_BOTTOM: Pixels = px(8.0);
-    /// Driver cards: 10 px apart, 14 px padding, 12 px gap, 28 px logo,
+    /// Driver cards: 10 px apart, 14 px padding, 12 px gap, 26 px logo,
     /// 3 px between the name and the detail, 11.5 px mono detail, at least
     /// 220 px wide and at most four per row.
     pub const CARD_GAP: Pixels = px(10.0);
     pub const CARD_PADDING: Pixels = px(14.0);
     pub const CARD_INNER_GAP: Pixels = px(12.0);
-    pub const CARD_LOGO: Pixels = px(28.0);
+    pub const CARD_LOGO: Pixels = px(26.0);
     pub const CARD_LINE_GAP: Pixels = px(3.0);
     pub const CARD_DETAIL_FONT: Pixels = px(11.5);
+    /// Line boxes of the card's name (15 px) and hint (14 px), which keep
+    /// the card at the board's 58 px.
+    pub const CARD_NAME_LINE_HEIGHT: Pixels = px(15.0);
+    pub const CARD_DETAIL_LINE_HEIGHT: Pixels = px(14.0);
     pub const CARD_MIN_WIDTH: Pixels = px(220.0);
     pub const CARD_MAX_COLUMNS: usize = 4;
     /// Selected card: 1.5 px tint ring over an 8% tint wash.

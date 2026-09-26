@@ -76,17 +76,19 @@ table it references.
 | **Reset** | Returns to 100% zoom and the starting position. |
 | **Arrange** | Discards the positions of tables you moved and recomputes the layout. |
 | **Fit** | Zooms and pans so every table is visible. |
-| Layout dropdown | **Left-Right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View Relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also resets zoom, position, and moved tables. |
+| Layout dropdown | **Left to right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View Relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also discards moved tables and fits the diagram into view. |
 | **Export** | **Copy as DBML** or **Copy as SQL** copies the tables shown in the diagram to the clipboard. The SQL is `CREATE TABLE` statements plus `ALTER TABLE ... ADD CONSTRAINT` for the foreign keys. |
 | _N_ tables · _M_ relations | How many tables and foreign keys the diagram shows. |
 | **Types** / **Indexes** | Show column types (on by default) / an index list under each table (off by default). |
 
 Drag empty space to pan, drag a table to move it (it snaps to the grid), and use
-the mouse wheel to zoom around the pointer. Click a table to select it. Right-click
-opens a context menu with **Zoom In**, **Zoom Out**, **Layout**, and **Copy as**.
+the mouse wheel to zoom around the pointer. A database diagram opens fitted into
+view. Click a table to select it and open its details in the panel on the right:
+the qualified table name, a summary line (columns, indexes, foreign keys, and how
+many foreign keys reference it), then INDEXES, FOREIGN KEYS, and REFERENCED BY.
+Each section appears only when it has entries. While the panel is open, selecting
+another table with the keyboard moves the panel to it. Right-click
+opens a context menu with **Zoom in**, **Zoom out**, **Layout**, and **Copy as**.
 Right-clicking a table also selects it, and while a table is selected the menu
-adds **Inspect schema**. **Inspect schema**, or a double-click on a table, opens
-the table in the inspector panel on the right, with
-TABLE, COLUMNS, INDEXES, and FOREIGN KEYS sections. The last two appear only when
-the table has indexes or declares foreign keys. Keyboard shortcuts are listed in
+adds **Inspect schema**, which opens the same panel. Keyboard shortcuts are listed in
 the [Keyboard Reference](KEYBOARD.md#schema-diagram).

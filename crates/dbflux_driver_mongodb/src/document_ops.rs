@@ -354,6 +354,22 @@ pub(crate) fn sample_pipeline(filter: Option<Document>, sample_size: u32) -> Vec
     pipeline
 }
 
+/// A user pipeline with a trailing `$limit` of `limit + 1`, so the result can
+/// tell a pipeline that yields exactly `limit` documents from one that yields
+/// more. A pipeline that ends in `$out` or `$merge` is left as is: those
+/// stages must come last and return no documents.
+pub(crate) fn limited_aggregate_pipeline(mut pipeline: Vec<Document>, limit: u32) -> Vec<Document> {
+    let writes_output = pipeline
+        .last()
+        .is_some_and(|stage| stage.contains_key("$out") || stage.contains_key("$merge"));
+
+    if !writes_output {
+        pipeline.push(doc! { "$limit": i64::from(limit) + 1 });
+    }
+
+    pipeline
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +581,34 @@ mod tests {
         let price = replacement.get_document("price").unwrap();
         assert_eq!(price.get("amount"), Some(&Bson::Double(2.0)));
         assert_eq!(price.get("qty"), Some(&Bson::Int32(9)));
+    }
+
+    #[test]
+    fn aggregate_pipelines_get_a_limit_one_past_the_cap() {
+        let pipeline = limited_aggregate_pipeline(vec![doc! { "$match": { "paid": true } }], 50);
+
+        assert_eq!(
+            pipeline,
+            vec![
+                doc! { "$match": { "paid": true } },
+                doc! { "$limit": 51_i64 }
+            ]
+        );
+    }
+
+    #[test]
+    fn aggregate_pipelines_that_write_keep_their_last_stage() {
+        let out = limited_aggregate_pipeline(vec![doc! { "$out": "archive" }], 50);
+        let merge = limited_aggregate_pipeline(
+            vec![
+                doc! { "$match": {} },
+                doc! { "$merge": { "into": "totals" } },
+            ],
+            50,
+        );
+
+        assert_eq!(out, vec![doc! { "$out": "archive" }]);
+        assert_eq!(merge.len(), 2);
     }
 
     #[test]

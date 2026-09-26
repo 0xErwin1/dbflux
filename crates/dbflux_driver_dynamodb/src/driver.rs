@@ -50,6 +50,7 @@ pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
         sections: vec![
             FormSection {
                 title: "AWS".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Cloud),
                 fields: vec![
                     field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
                     field(
@@ -62,6 +63,7 @@ pub static DYNAMODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
             },
             FormSection {
                 title: "Target".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Database),
                 fields: vec![
                     field(
                         "endpoint",
@@ -451,6 +453,14 @@ impl DbDriver for DynamoDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &DYNAMODB_METADATA
+    }
+
+    fn picker_hint(&self) -> String {
+        "AWS".to_string()
+    }
+
+    fn picker_rank(&self) -> u16 {
+        1
     }
 
     fn driver_key(&self) -> dbflux_core::DriverKey {

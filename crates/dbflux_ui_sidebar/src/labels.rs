@@ -60,7 +60,7 @@ pub(crate) fn profile_updated_label(name: &str) -> String {
 }
 
 /// Translated label for the Export Table(s) context menu item, e.g.
-/// `"Export Table…"` for a single table or `"Export 3 Tables…"` for many.
+/// `"Export table…"` for a single table or `"Export 3 tables…"` for many.
 pub(crate) fn export_tables_label(count: usize) -> String {
     if count > 1 {
         dbflux_i18n::t!("sidebar.menu.export_tables_many", count = count)
@@ -70,7 +70,7 @@ pub(crate) fn export_tables_label(count: usize) -> String {
 }
 
 /// Translated label for the Migrate Table(s) context menu item, e.g.
-/// `"Migrate Table…"` for a single table or `"Migrate 3 Tables…"` for many.
+/// `"Migrate table…"` for a single table or `"Migrate 3 tables…"` for many.
 pub(crate) fn migrate_tables_label(count: usize) -> String {
     if count > 1 {
         dbflux_i18n::t!("sidebar.menu.migrate_tables_many", count = count)

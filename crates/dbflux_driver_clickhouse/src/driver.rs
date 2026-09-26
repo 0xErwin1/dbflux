@@ -108,6 +108,7 @@ pub static CLICKHOUSE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
         sections: vec![
             FormSection {
                 title: "Server".to_string(),
+                icon: Some(dbflux_core::FormSectionIcon::Server),
                 fields: vec![
                     with_default(
                         field_required(
@@ -135,6 +136,7 @@ pub static CLICKHOUSE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
             },
             FormSection {
                 title: "Authentication".to_string(),
+                icon: Some(dbflux_core::FormSectionIcon::Authentication),
                 fields: vec![
                     with_default(
                         field_required("user", "User", FormFieldKind::Text, "default"),

@@ -3,9 +3,10 @@ use std::sync::Arc;
 use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::primitives::{Chamfer, ChamferRing, EnvTag, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Fields, Heights, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::ConnectionEnvironment;
 use gpui::prelude::*;
 use gpui::{
     Anchor, ClickEvent, Context, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
@@ -153,6 +154,7 @@ pub struct Dropdown {
     toolbar_style: bool,
     mono_label: bool,
     leading_icon: Option<AppIcon>,
+    label_environment: Option<ConnectionEnvironment>,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
 }
@@ -181,6 +183,7 @@ impl Dropdown {
             toolbar_style: false,
             mono_label: false,
             leading_icon: None,
+            label_environment: None,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
         }
@@ -313,6 +316,23 @@ impl Dropdown {
     pub fn leading_icon(mut self, icon: AppIcon) -> Self {
         self.leading_icon = Some(icon);
         self
+    }
+
+    /// Draws the environment tag between the toolbar trigger's label and its
+    /// chevron (AppByzEditor connection selector), or removes it with `None`.
+    pub fn set_label_environment(
+        &mut self,
+        environment: Option<ConnectionEnvironment>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.label_environment != environment {
+            self.label_environment = environment;
+            cx.notify();
+        }
+    }
+
+    pub fn label_environment(&self) -> Option<ConnectionEnvironment> {
+        self.label_environment
     }
 
     fn trigger_variant(&self) -> DropdownTriggerVariant {
@@ -670,6 +690,9 @@ impl Dropdown {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_size(Fields::TEXT)
                     .child(div().flex_1().truncate().child(label))
+                    .when_some(self.label_environment, |trigger, environment| {
+                        trigger.child(EnvTag::for_environment(environment))
+                    })
                     .child(
                         Icon::new(AppIcon::ChevronDown)
                             .size(Fields::CHEVRON)

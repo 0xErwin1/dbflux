@@ -3885,6 +3885,7 @@ mod tests {
                 label: "Main".to_string(),
                 sections: vec![FormSection {
                     title: "Auth".to_string(),
+                    icon: None,
                     fields: vec![FormFieldDef {
                         id: "ref_field".to_string(),
                         label: "Ref".to_string(),

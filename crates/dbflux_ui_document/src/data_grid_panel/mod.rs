@@ -7,6 +7,7 @@ mod mutations;
 mod navigation;
 mod query;
 mod render;
+mod result_search;
 pub mod row_inspector;
 mod utils;
 pub mod value_panel;
@@ -680,6 +681,17 @@ struct InspectorState {
     /// Subscription to the row inspector's button events.
     _row_inspector_subscription: Option<Subscription>,
 
+    /// Debounced lookup and counting of the inspected row's incoming
+    /// references.
+    incoming_references: row_inspector::IncomingReferencesLoader,
+
+    /// The Document panel a document collection shows instead of the row
+    /// inspector, kept alive so its expanded fields survive row changes.
+    document_inspector_content: Option<Entity<documents::inspector::DocumentInspectorContent>>,
+
+    /// Subscription to the Document panel's button events.
+    _document_inspector_subscription: Option<Subscription>,
+
     /// Optional provider for row-level kill/cancel actions.
     ///
     /// When set, right-clicking a row emits `DataGridEvent::RowActionRequested`
@@ -742,6 +754,7 @@ pub struct DataGridPanel {
     mutation_confirm: MutationConfirmState,
     focus: FocusState,
     chrome: ChromeState,
+    result_search: result_search::ResultSearch,
     inspector: InspectorState,
     pub(crate) builder: BuilderState,
     /// Document collection presentation (flattened table, query bar, schema,
@@ -1152,6 +1165,7 @@ impl DataGridPanel {
 
         // Query results are not editable (no PK info)
         let mut panel = Self::new_internal(source, app_state, Vec::new(), window, cx);
+        panel.install_result_search(window, cx);
         panel.set_result((*result).clone(), cx);
         panel
     }
@@ -1509,12 +1523,16 @@ impl DataGridPanel {
                 derived_json: None,
                 derived_text: None,
             },
+            result_search: result_search::ResultSearch::default(),
             inspector: InspectorState {
                 row_inspector_content: None,
                 follow_selection: false,
                 inspector_row: None,
                 pinned: false,
                 _row_inspector_subscription: None,
+                incoming_references: row_inspector::IncomingReferencesLoader::default(),
+                document_inspector_content: None,
+                _document_inspector_subscription: None,
                 row_action_provider: None,
                 value_panel: None,
                 value_panel_open: false,
@@ -1873,13 +1891,10 @@ impl DataGridPanel {
 
         let mut modes = ResultViewMode::available_for_shape(&self.result.shape);
 
+        // Chart follows the shape's own views (Data | JSON | Chart on the
+        // boards) when chart detection succeeded.
         if self.chart_available(cx) && !modes.contains(&ResultViewMode::Chart) {
-            // Insert Chart after Table when chart detection succeeded.
-            if let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Table) {
-                modes.insert(pos + 1, ResultViewMode::Chart);
-            } else {
-                modes.insert(0, ResultViewMode::Chart);
-            }
+            modes.push(ResultViewMode::Chart);
         }
 
         // A time-series measurement also offers the chart above the grid.
@@ -2165,6 +2180,9 @@ impl DataGridPanel {
         self.inspector.inspector_row = None;
         self.inspector.row_inspector_content = None;
         self.inspector._row_inspector_subscription = None;
+        self.inspector.incoming_references.cancel();
+        self.inspector.document_inspector_content = None;
+        self.inspector._document_inspector_subscription = None;
         self.inspector.value_panel_open = false;
         self.pending.value_panel = None;
         self.pending.row_inspector_action = None;
@@ -2641,6 +2659,7 @@ impl DataGridPanel {
         self.apply_chart_for_result(&result, cx);
 
         self.result = result;
+        self.reapply_result_search_to_new_rows();
         self.rebuild_table(None, cx);
         self.refresh.state = GridState::Ready;
 
@@ -3624,6 +3643,7 @@ impl DataGridPanel {
         let e_modes = entity.clone();
         let e_current = entity.clone();
         let e_set_mode = entity.clone();
+        let e_segments = entity.clone();
 
         ViewHandle::builder()
             .render(move |_window, _cx| {
@@ -3639,7 +3659,7 @@ impl DataGridPanel {
                 }
             })
             .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
-            .toolbar_segments(|_cx| Vec::new())
+            .toolbar_segments(move |cx| Self::result_toolbar_segments(&e_segments, cx))
             .available_modes(move |cx| {
                 let grid = e_modes.read(cx);
                 if grid.footer_hosts_view_switch() {
@@ -11343,11 +11363,12 @@ mod tests {
                 panel.available_result_view_modes(app),
                 vec![
                     super::ResultViewMode::Table,
+                    super::ResultViewMode::Json,
                     super::ResultViewMode::Chart,
                     super::ResultViewMode::Both,
-                    super::ResultViewMode::Json,
                 ],
-                "the table and the chart alone stay one click away"
+                "the table and the chart alone stay one click away, Chart after the \
+                 shape's own views (Data | JSON | Chart)"
             );
             assert_eq!(
                 panel.view_config.mode,

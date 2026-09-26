@@ -14,15 +14,15 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 
 use crate::language_service::MongoLanguageService;
 use dbflux_core::{
-    CollectionBrowseRequest, CollectionCountEstimate, CollectionCountRequest, CollectionIndexInfo,
-    CollectionSchemaRequest, CollectionSchemaSample, ColumnKind, ColumnMeta, Connection,
-    ConnectionErrorFormatter, ConnectionExt, ConnectionProfile, CrudResult, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
-    DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete, DocumentFeatures,
-    DocumentFetchRequest, DocumentInsert, DocumentPatchRequest, DocumentReplaceRequest,
-    DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef, DriverLimits,
-    DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo, FormFieldDef,
-    FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
+    CollectionAggregateRequest, CollectionBrowseRequest, CollectionCountEstimate,
+    CollectionCountRequest, CollectionIndexInfo, CollectionSchemaRequest, CollectionSchemaSample,
+    ColumnKind, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
+    CrudResult, DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DeploymentClass, DescribeRequest, DocumentConnection, DocumentDelete,
+    DocumentFeatures, DocumentFetchRequest, DocumentInsert, DocumentPatchRequest,
+    DocumentReplaceRequest, DocumentSchema, DocumentUpdate, DriverCapabilities, DriverFormDef,
+    DriverLimits, DriverMetadata, ExecutionSourceContext, FieldExportTransform, FieldInfo,
+    FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, IndexData,
     IndexDirection, InstanceCatalog, KeyValueConnection, LanguageService, MutationCapabilities,
     OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities,
     QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
@@ -47,6 +47,7 @@ pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDe
             sections: vec![
                 FormSection {
                     title: "Server".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Server),
                     fields: vec![
                         field_use_uri(),
                         when_checked(
@@ -82,6 +83,7 @@ pub static MONGODB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDe
                 },
                 FormSection {
                     title: "Authentication".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Authentication),
                     fields: vec![
                         field("user", "User", FormFieldKind::Text, "optional"),
                         field_password(),
@@ -263,6 +265,10 @@ impl DbDriver for MongoDriver {
         &MONGODB_METADATA
     }
 
+    fn picker_rank(&self) -> u16 {
+        0
+    }
+
     fn driver_key(&self) -> dbflux_core::DriverKey {
         "builtin:mongodb".into()
     }
@@ -274,6 +280,7 @@ impl DbDriver for MongoDriver {
                 label: "Settings".into(),
                 sections: vec![FormSection {
                     title: "Schema".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Schema),
                     fields: vec![
                         FormFieldDef {
                             id: "schema_sample_size".into(),
@@ -2762,7 +2769,7 @@ impl Connection for MongoConnection {
     }
 
     fn document_features(&self) -> DocumentFeatures {
-        DocumentFeatures::QUERY_SLOTS | DocumentFeatures::FIELD_PATCH
+        DocumentFeatures::QUERY_SLOTS | DocumentFeatures::FIELD_PATCH | DocumentFeatures::AGGREGATE
     }
 
     fn estimate_collection_count(
@@ -2844,6 +2851,52 @@ impl Connection for MongoConnection {
         };
 
         Ok(accumulator.finish(total_documents))
+    }
+
+    fn aggregate_collection(
+        &self,
+        request: &CollectionAggregateRequest,
+    ) -> Result<QueryResult, DbError> {
+        let start = Instant::now();
+        let limit = request.limit as usize;
+        let pipeline = crate::document_ops::limited_aggregate_pipeline(
+            request
+                .pipeline
+                .iter()
+                .map(json_to_bson_doc)
+                .collect::<Result<Vec<_>, _>>()?,
+            request.limit,
+        );
+
+        let client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let cursor = client
+            .database(&request.collection.database)
+            .collection::<Document>(&request.collection.name)
+            .aggregate(pipeline)
+            .allow_disk_use(request.allow_disk_use)
+            .run()
+            .map_err(|e| format_mongo_query_error(&e))?;
+        let mut documents = collect_cursor_documents(cursor, &self.cancelled)?;
+
+        let truncated = documents.len() > limit;
+        documents.truncate(limit);
+
+        let internal = documents_to_result(documents)?;
+        let mut result = QueryResult::json(internal.columns, internal.rows, start.elapsed());
+        result.set_rows_truncated(truncated);
+
+        log::debug!(
+            "[AGGREGATE] Collection {}: {} documents in {:.2}ms",
+            request.collection.qualified_name(),
+            result.rows.len(),
+            result.execution_time.as_secs_f64() * 1000.0,
+        );
+
+        Ok(result)
     }
 
     fn patch_document(&self, request: &DocumentPatchRequest) -> Result<CrudResult, DbError> {

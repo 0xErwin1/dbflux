@@ -270,7 +270,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `h` / `j` / `k` / `l` (o flechas)           | Desplazar la vista                                          |
 | `Shift` + `h` / `j` / `k` / `l` (o flechas) | Seleccionar la siguiente tabla en esa dirección y centrarla |
 | `Alt` + `h` / `j` / `k` / `l` (o flechas)   | Mover la tabla seleccionada                                 |
-| `r` / `s` / `c`                             | Diseño Izquierda-Derecha / Copo de nieve / Compacto         |
+| `r` / `s` / `c`                             | Diseño De izquierda a derecha / Copo de nieve / Compacto    |
 | `m`                                         | Abrir menú contextual                                       |
 | `Escape`                                    | Quitar la selección                                         |
 

@@ -34,7 +34,7 @@ access:
   ssh_tunnel_label: SSH 터널
   ssh_server_saved: SSH 서버 (저장된 터널)
   test_ssh: SSH 테스트
-  testing_ssh: SSH 연결을 테스트하는 중...
+  testing_ssh: SSH 연결을 테스트하는 중…
   ssh_success: SSH 연결 성공
   ssh_failed: SSH 연결 실패
   save_as_tunnel: 터널로 저장
@@ -54,6 +54,9 @@ chart:
       avg: 평균
       min: 최솟값
       max: 최댓값
+  legend:
+    hide_series: "클릭하여 이 시리즈 숨기기"
+    show_series: "클릭하여 이 시리즈 표시"
   engine:
     no_data: 데이터 없음
   point_inspector:
@@ -245,7 +248,7 @@ connection_manager:
     new: "새 %{driver} 연결"
   connection_overrides_title: 연결 재정의
   connection_hooks_title: 연결 훅
-  new_auth_profile: "새 인증 프로필..."
+  new_auth_profile: "새 인증 프로필…"
   aws_sso_wizard_title: AWS SSO 마법사
   aws_sso_open_failed: AWS SSO 마법사 창을 열지 못했습니다
   select_ssh_key_title: SSH 개인 키 선택
@@ -258,11 +261,11 @@ connection_manager:
   auth:
     profile_created_sso: 선택한 프로필은 AWS SSO 마법사에서 만들어졌습니다.
     profile_created_wizard: 선택한 프로필은 마법사에서 만들어졌습니다.
-    refreshing_sessions: 인증 프로필 세션을 새로고치는 중...
+    refreshing_sessions: 인증 프로필 세션을 새로고치는 중…
     select_before_login: 로그인하기 전에 인증 프로필을 선택하세요.
     provider_unavailable: "인증 공급자 '%{provider_id}'을(를) 사용할 수 없습니다."
     interactive_login_unavailable: 이 인증 프로필에는 대화형 로그인을 사용할 수 없습니다.
-    login_starting: "'%{name}'에 대한 인증 공급자 로그인을 시작하는 중..."
+    login_starting: "'%{name}'에 대한 인증 공급자 로그인을 시작하는 중…"
     login_completed: 인증 공급자 로그인이 완료되었습니다.
     login_failed: "인증 공급자 로그인에 실패했습니다: %{error}"
     session_status_valid_expires: "세션 상태: 유효 (%{expires_at}에 만료)"
@@ -334,6 +337,14 @@ connection_manager:
     cancel: 취소
     configure: 구성
     configure_named: "%{name} 구성"
+    section:
+      relational: "관계형"
+      document: "문서"
+      key_value: "키-값"
+      wide_column: "와이드 컬럼"
+      time_series_and_logs: "시계열 및 로그"
+      graph: "그래프"
+      object_storage: "오브젝트 스토리지"
   export:
     target:
       connection: 연결
@@ -534,9 +545,9 @@ connections:
   toast:
     export_from_menu: "연결 메뉴에서 내보내세요"
     export_from_menu_body: "사이드바에서 연결을 마우스 오른쪽 버튼으로 클릭하고 내보내기를 선택하세요."
-    disconnecting: "%{name}에서 연결을 끊는 중..."
+    disconnecting: "%{name}에서 연결을 끊는 중…"
     no_active_connection: 활성 연결이 없습니다
-    refreshing_schema: 스키마를 새로고치는 중...
+    refreshing_schema: 스키마를 새로고치는 중…
   error:
     refresh_schema_failed: "스키마를 새로고치지 못했습니다: %{error}"
 diagnostics:
@@ -550,6 +561,11 @@ diagnostics:
   shutdown_flush_timed_out: "일부 편집 내용이 파일에 반영되지 않았을 수 있습니다: 종료하는 동안 DBFlux가 저장하다가 시간이 초과되었습니다. 편집 내용은 복구할 수 있도록 세션 저장소에 보관되어 있습니다."
 document:
   collection:
+    inspector:
+      title: "문서"
+      expand: "JSON 편집기 열기"
+      json_failed: "문서 JSON을 만들 수 없습니다: %{error}"
+      missing: "없음"
     menu:
       unset_field: "필드 제거"
       revert_change: "변경 되돌리기"
@@ -560,6 +576,25 @@ document:
     tab:
       documents: "문서"
       schema: "스키마"
+      aggregate: "집계"
+    aggregate:
+      placeholder: "[{ \"$match\": { \"status\": \"paid\" } }, { \"$group\": { \"_id\": \"$region\", \"total\": { \"$sum\": \"$amount\" } } }]"
+      run: "실행"
+      history: "파이프라인 기록"
+      read_only_hint: "결과는 읽기 전용입니다"
+      empty: "파이프라인을 작성하고 실행하면 결과 문서가 표시됩니다"
+      running: "파이프라인 실행 중…"
+      no_results: "파이프라인이 문서를 반환하지 않았습니다"
+      capped: "처음 %{count}개 문서만 표시합니다"
+      failed: "집계 실패: %{error}"
+      read_only_edit: "집계 결과는 읽기 전용입니다"
+      task: "%{collection} 집계"
+      error:
+        syntax: "잘못된 JSON: %{error}"
+        not_array: "파이프라인은 스테이지 배열이어야 합니다"
+        stage_not_document: "스테이지 %{stage}은(는) 문서여야 합니다"
+        stage_field_count: "스테이지 %{stage}은(는) 스테이지 연산자를 정확히 하나 지정해야 합니다"
+        stage_not_operator: "스테이지 %{stage}: %{name}은(는) 스테이지 연산자가 아닙니다"
     hint:
       steps_in: "객체나 배열에서 누르면 경로 표시와 함께 안으로 들어갑니다"
       steps_out: "밖으로 나갑니다"
@@ -709,8 +744,8 @@ document:
       group_label: "그룹:"
       loading: "불러오는 중…"
       placeholder:
-        search_events: "이벤트 검색..."
-        filter_events: "이벤트 필터링..."
+        search_events: "이벤트 검색…"
+        filter_events: "이벤트 필터링…"
         all_time: "전체 기간"
         last_12_hours: "최근 12시간"
         local: 로컬
@@ -779,10 +814,16 @@ document:
       size: 크기
       versioning: 버전 관리
       created: 생성일
+      encryption: 암호화
+      public_access: 퍼블릭 액세스
     versioning:
       on: "사용"
       suspended: "일시 중지"
       off: "사용 안 함"
+    public_access:
+      blocked: 차단됨
+      partial: 부분 차단
+      open: 허용됨
     details:
       calculate_size: 크기 계산
       calculating: "계산하는 중…"
@@ -914,6 +955,8 @@ document:
         connection_not_found: "연결을 찾을 수 없거나 활성 상태가 아닙니다"
         catalog_unsupported: "이 연결은 메트릭 카탈로그를 지원하지 않습니다"
   code:
+    gutter:
+      run_statement: 이 문 실행
     history:
       title: 기록
       search: 기록 검색
@@ -924,6 +967,9 @@ document:
         days: "%{count}일 전"
       duration_ms: "%{count} ms"
     toolbar:
+      statements:
+        one: "문 %{count}개"
+        many: "문 %{count}개"
       refresh: 새로고침
       cancel: 취소
       checking: "확인 중…"
@@ -950,7 +996,7 @@ document:
         run: "검색"
         cancel: "취소"
     output:
-      running: "실행 중..."
+      running: "실행 중…"
       stopped: 중지됨
       output: 출력
       lines:
@@ -958,6 +1004,8 @@ document:
         many: "%{count}줄"
       truncated: "(%{limit}줄에서 잘림)"
     result:
+      statement_lines: "문 L%{start}–%{end}"
+      search_placeholder: 결과에서 검색
       count:
         one: "결과 %{count}개"
         many: "결과 %{count}개"
@@ -1013,6 +1061,9 @@ document:
         mongo_drop_database:
           title: dropDatabase()
           body: dropDatabase()는 전체 데이터베이스를 영구적으로 제거합니다
+        mongo_aggregate_write:
+          title: "aggregate()가 컬렉션에 씁니다"
+          body: "$out 또는 $merge가 있는 aggregate()는 결과를 컬렉션에 씁니다"
         redis_flush_all:
           title: FLUSHALL
           body: FLUSHALL은 모든 데이터베이스의 모든 키를 삭제합니다
@@ -1029,6 +1080,9 @@ document:
           title: SET 절의 원시 SQL 표현식
           body: SET 절에 원시 SQL 표현식이 있습니다 — 매개변수 바인딩을 우회합니다
     context_bar:
+      file:
+        saved: 저장됨
+        unsaved: 저장 안 됨
       placeholder:
         connection: 연결 없음
         database: 데이터베이스
@@ -1057,7 +1111,7 @@ document:
         enter_query_to_explain: 실행 계획을 볼 쿼리를 입력하세요
         enter_script_content: 실행할 스크립트 내용을 입력하세요
         write_query_first: 차트로 열려면 먼저 쿼리를 작성하세요
-        connecting: "데이터베이스 '%{database}'에 연결하는 중입니다. 잠시 기다려 주세요..."
+        connecting: "데이터베이스 '%{database}'에 연결하는 중입니다. 잠시 기다려 주세요…"
         redis_flush_disabled: 설정에서 FLUSHALL / FLUSHDB가 비활성화되어 있습니다
       result_title:
         query_failed: 쿼리 실패
@@ -1221,7 +1275,7 @@ document:
         delete_document: 문서 삭제
         paste: 붙여넣기
         edit: 편집
-        edit_in_modal: 모달에서 편집
+        edit_in_modal: 모달에서 편집…
         set_default: 기본값으로 설정
         set_null: NULL로 설정
         add_row: 행 추가
@@ -1322,6 +1376,7 @@ document:
         empty: "(비어 있음)"
         both: "둘 다"
       status:
+        read_only: 읽기 전용 결과
         rows:
           one: "행 %{count}개"
           many: "행 %{count}개"
@@ -1454,6 +1509,7 @@ document:
           many: "행 %{count}개를 처리한 후 변경이 취소되었습니다"
     row_inspector:
       action:
+        copy: "행을 JSON으로 복사"
         pin: "이 행 고정"
         unpin: "선택 따라가기"
         close: "닫기"
@@ -1522,7 +1578,7 @@ document:
       output_folder_label: "폴더"
       no_folder_chosen: 선택한 폴더 없음
       choose_folder: "선택"
-      choosing: "선택하는 중..."
+      choosing: "선택하는 중…"
       dialog_title: 내보내기 폴더 선택
       segment_size_label: "청크 크기"
       segment_size_hint: "파일 세그먼트당 행 수"
@@ -1536,7 +1592,7 @@ document:
       segment_size: "세그먼트 / 청크 크기: %{size}"
       start_export: 내보내기 시작
     running:
-      title: "내보내는 중..."
+      title: "내보내는 중…"
       position:
         of_total: "%{total}개 중 %{index}번째 테이블"
         preparing: 준비 중
@@ -1611,8 +1667,8 @@ document:
       run: 실행
     pick_folder:
       description: "manifest.json과 내보낸 테이블 파일이 있는 폴더를 선택하세요."
-      choose_folder: "폴더 선택..."
-      reading_manifest: "매니페스트를 읽는 중..."
+      choose_folder: "폴더 선택…"
+      reading_manifest: "매니페스트를 읽는 중…"
       dialog_title: 가져오기 폴더 선택
       error:
         no_connection: 이 프로필에 대한 활성 연결이 없습니다
@@ -1638,7 +1694,7 @@ document:
       back: 뒤로
       proceed: "예, 계속합니다"
     running:
-      title: "가져오는 중..."
+      title: "가져오는 중…"
       progress:
         of_total: "%{done} / %{total} 행"
         only: "%{done}행"
@@ -1865,8 +1921,8 @@ document:
         sorted_set: 정렬된 셋 멤버 추가
         stream: 스트림 항목 추가
     context_menu:
-      add_entry: 항목 추가
-      add_member: 멤버 추가
+      add_entry: 항목 추가…
+      add_member: 멤버 추가…
       copy_as_command: 명령으로 복사
       copy_entry: 항목 복사
       copy_key: 키 복사
@@ -1877,7 +1933,7 @@ document:
       delete_member: 멤버 삭제
       edit_member: 멤버 편집
       edit_value: 값 편집
-      new_key: 새 키
+      new_key: 새 키…
       rename: 이름 바꾸기
     history_modal:
       empty:
@@ -1888,7 +1944,7 @@ document:
         name_required: 쿼리 이름을 입력하세요
         success_toast: 쿼리 저장됨
         title: 쿼리 저장
-      search_placeholder: "검색..."
+      search_placeholder: "검색…"
       tabs:
         recent: 최근
         saved: 저장됨
@@ -1962,7 +2018,7 @@ document:
       select_key_prompt: 검사할 키를 선택하세요
       filter:
         keys_placeholder: "패턴(예: user:*)"
-        members_placeholder: "멤버 필터링..."
+        members_placeholder: "멤버 필터링…"
       ttl:
         no_limit: 제한 없음
         missing: 없음
@@ -2097,15 +2153,15 @@ document:
       item:
         preview: 미리 보기
         open_in_editor: 편집기에서 열기
-        download: 다운로드
-        rename: 이름 바꾸기
+        download: 다운로드…
+        rename: 이름 바꾸기…
         presign: 사전 서명
         copy_uri: S3 URI 복사
         delete: 삭제
         collapse: 접기
         expand: 펼치기
         open: 열기
-        new_folder_inside: 이 폴더에 새 폴더
+        new_folder_inside: 이 폴더에 새 폴더…
         delete_folder: 폴더 삭제
     create_folder:
       cancel: 취소
@@ -2222,7 +2278,6 @@ document:
         copy_uri: URI 복사
         delete: 삭제
         download: 다운로드
-        open: 열기
         presign: 사전 서명
       body:
         text_kind:
@@ -2422,7 +2477,7 @@ document:
       execution: 실행
       filters: 필터
       filters_where: "필터 (WHERE)"
-      sort: 정렬
+      sort_limit: "정렬 및 제한"
       sql_preview: SQL 미리 보기
     sort:
       direction:
@@ -2432,8 +2487,7 @@ document:
       key_order_named: "정렬 키 순서 (%{name})"
       key_limited_hint: 이 드라이버에서는 정렬 키 기준으로만 정렬할 수 있습니다.
       invalid_column: "\"%{column}\"이(가) GROUP BY 열 또는 집계 별칭에 없습니다"
-      move_up: "위로 이동"
-      move_down: "아래로 이동"
+      add: "+ 정렬"
     status:
       limit: 제한
       offset: 오프셋
@@ -2528,15 +2582,23 @@ document:
       no_database: 데이터베이스가 지정되지 않았습니다
       no_layout: 계산된 레이아웃이 없습니다
     inspector:
-      columns: 열
+      count:
+        columns:
+          one: "열 %{count}개"
+          many: "열 %{count}개"
+        foreign_keys:
+          one: "외래 키 %{count}개"
+          many: "외래 키 %{count}개"
+        indexes:
+          one: "인덱스 %{count}개"
+          many: "인덱스 %{count}개"
       foreign_keys: 외래 키
       indexes: 인덱스
-      summary_full: "열 %{columns}개 · 인덱스 %{indexes}개 · 외래 키 %{foreign_keys}개 · 참조 %{referenced_by}개"
-      unique: "고유"
       referenced_by: "참조하는 곳"
+      summary_full: "%{columns} · %{indexes} · %{foreign_keys} · 참조 %{referenced_by}개"
     layout:
       compact: 컴팩트
-      left_right: 왼쪽-오른쪽
+      left_right: 왼쪽에서 오른쪽
       snowflake: 스노우플레이크
     menu:
       copy_as: 다른 형식으로 복사
@@ -2573,7 +2635,7 @@ document:
       zoom_in: "확대"
       zoom_out: "축소"
     view:
-      title: "스키마: %{name}"
+      title: "%{name} · 스키마"
       title_default_database: 데이터베이스
   shared:
     add: 추가
@@ -2608,7 +2670,7 @@ document:
     new: 새 탭
     unsaved_changes: 저장되지 않은 변경 사항
 document_tree:
-  search_placeholder: 검색...
+  search_placeholder: 검색…
   view:
     tree: 트리 보기
     raw_json: 원시 JSON
@@ -2687,7 +2749,7 @@ hooks:
   source:
     file: 파일
   script:
-    placeholder: "스크립트 내용을 입력하세요..."
+    placeholder: "스크립트 내용을 입력하세요…"
   execution:
     blocking: 블로킹
     detached: 분리
@@ -2732,7 +2794,7 @@ login:
   banner:
     connection_failed: 연결 실패
     completed: 로그인 완료
-    closing: 인증에 성공했습니다. 이 대화 상자를 닫는 중...
+    closing: 인증에 성공했습니다. 이 대화 상자를 닫는 중…
   body:
     sign_in_prompt: '%{provider}(으)로 로그인하여 %{profile}을(를) 여세요.'
     waiting: 브라우저를 기다리는 중
@@ -2765,7 +2827,7 @@ modals:
     saved:
       empty: '이 연결에는 저장된 차트가 없습니다. "쿼리에서" 또는 "지표에서" 탭에서 바로 만들 수 있습니다.'
       search_label: 검색
-      search_placeholder: 차트 검색...
+      search_placeholder: 차트 검색…
     tab:
       saved: 저장된 차트
       query: 쿼리에서
@@ -2926,18 +2988,19 @@ palette:
   footer:
     navigate: "이동"
     run: "실행"
+    open_in_new_tab: "새 탭에서 열기"
     commands_only: "명령만"
     tables_only: "테이블만"
   connection:
     connected: "연결됨"
   search:
-    placeholder: 명령, 연결, 테이블, 스크립트 검색...
+    placeholder: 명령, 연결, 테이블, 스크립트 검색…
   empty: 일치하는 항목이 없습니다
   section:
     connections: 연결
     commands: 명령
     charts: 차트
-    tables: 테이블
+    tables: 테이블 및 컬렉션
     scripts: 스크립트
   kind:
     connection: 연결
@@ -2951,7 +3014,7 @@ palette:
     no_saved_charts: "현재 프로필에 저장된 차트가 없습니다"
     browse_suffix: "[찾아보기]"
   import_dashboard:
-    name: JSON에서 대시보드 가져오기...
+    name: JSON에서 대시보드 가져오기…
   command:
     new_query_tab:
       name: 새 쿼리 탭
@@ -2962,9 +3025,9 @@ palette:
     save_query:
       name: 쿼리 저장
     save_file_as:
-      name: 다른 이름으로 저장
+      name: 다른 이름으로 저장…
     open_script_file:
-      name: 스크립트 파일 열기
+      name: 스크립트 파일 열기…
     toggle_comment:
       name: 주석 전환
     open_history:
@@ -3014,9 +3077,9 @@ palette:
     open_audit_viewer:
       name: 감사 뷰어 열기
     open_saved_chart:
-      name: "차트 열기..."
+      name: "차트 열기…"
     new_dashboard:
-      name: "새 대시보드..."
+      name: "새 대시보드…"
     analyze_dump_file:
       name: "데이터베이스 덤프 분석…"
   category:
@@ -3224,6 +3287,7 @@ settings:
     warning:
       prefix: "키 시퀀스를 공유함"
       typed_text: "입력한 텍스트를 가로챔"
+    switch_to_tab_indexed: "%{index}번 탭으로 전환"
     command:
       toggle_command_palette: 명령 팔레트 전환
       new_query_tab: 새 쿼리 탭
@@ -3268,8 +3332,8 @@ settings:
       open_history: 기록 드롭다운 전환
       open_saved_queries: 저장된 쿼리 열기
       save_query: 저장
-      save_file_as: 다른 이름으로 저장
-      open_script_file: 스크립트 파일 열기
+      save_file_as: 다른 이름으로 저장…
+      open_script_file: 스크립트 파일 열기…
       toggle_comment: 주석 전환
       export_results: 결과 내보내기
       results_next_page: 결과 다음 페이지
@@ -3294,7 +3358,7 @@ settings:
       sidebar_next_tab: 사이드바 다음 탭
       refresh_schema: 스키마 새로고침
       open_connection_manager: 연결 관리자 열기
-      export_connections: "연결 내보내기…"
+      export_connections: "연결 내보내기"
       disconnect: 연결 끊기
       open_item_menu: 항목 메뉴 열기
       create_folder: 폴더 만들기
@@ -3308,9 +3372,9 @@ settings:
       open_audit_viewer: 감사 뷰어 열기
       open_mcp_approvals: MCP 승인 열기
       refresh_mcp_governance: MCP 거버넌스 새로고침
-      open_saved_chart: "차트 열기..."
-      import_dashboard: "JSON에서 대시보드 가져오기..."
-      new_dashboard: "새 대시보드..."
+      open_saved_chart: "차트 열기…"
+      import_dashboard: "JSON에서 대시보드 가져오기…"
+      new_dashboard: "새 대시보드…"
       preview_document: 문서 미리 보기
       toggle_raw_view: 원시 JSON 보기 전환
       next_match: 다음 일치 항목
@@ -3350,7 +3414,7 @@ settings:
       close_window: 창 닫기
       toggle_console: 콘솔 표시/숨기기
       load_more: 더 불러오기
-      edit_expiry: 만료 편집
+      edit_expiry: 만료 편집…
     context:
       global: 전역
       sidebar: 사이드바
@@ -3486,7 +3550,7 @@ settings:
     provider_label: 공급자
     placeholder_name: 프로필 이름
     select_provider_ellipsis: "공급자 선택…"
-    select_ellipsis: "선택..."
+    select_ellipsis: "선택…"
     select_none: "— 없음 —"
     enabled: 사용
     export: 내보내기
@@ -3502,7 +3566,7 @@ settings:
     select_before_login: 로그인하기 전에 인증 공급자를 선택하세요.
     interactive_login_unavailable: 이 공급자에는 대화형 로그인을 사용할 수 없습니다.
     fields_required_before_login: 로그인하기 전에 프로필 이름과 공급자 필드를 입력하세요.
-    starting_login: "프로필 '%{name}'의 인증 공급자 로그인을 시작하는 중..."
+    starting_login: "프로필 '%{name}'의 인증 공급자 로그인을 시작하는 중…"
     login_completed: "프로필 '%{name}'의 인증 공급자 로그인이 완료되었습니다."
     login_failed: "프로필 '%{name}'의 인증 공급자 로그인에 실패했습니다: %{error}"
     login_cancelled: 사용자가 로그인을 취소했습니다.
@@ -3510,7 +3574,7 @@ settings:
     open_browser: 브라우저 열기
     copy_url: URL 복사
     login_action: "로그인"
-    logging_in: "로그인하는 중..."
+    logging_in: "로그인하는 중…"
     runs_interactive_login_hint: 이 인증 프로필의 대화형 로그인을 실행합니다
     update: 업데이트
     create: 만들기
@@ -3642,8 +3706,9 @@ settings:
     roles_title: 역할
     roles_description: MCP 거버넌스를 위한 이름이 지정된 역할 묶음을 관리합니다
     roles_form_description: 정책을 이름이 지정된 역할로 묶어 연결별로 행위자에게 할당합니다
-    policies_title: 정책
-    policies_description: MCP 거버넌스를 위한 도구 및 실행 클래스 정책 규칙을 관리합니다
+    policies_title: MCP 정책
+    policies_description: "각 역할이 MCP를 통해 실행 클래스별로 실행할 수 있는 작업: 허용, 승인 요청 또는 거부."
+    policies_defaults_hint: "기본값: Metadata와 Read는 허용, 데이터를 변경하는 모든 클래스는 요청. 요청은 승인 대기열에서 기다리며, 에이전트는 자신의 요청을 승인할 수 없습니다."
     policies_form_description: "정책이 다루는 도구와, 각 실행 클래스를 허용할지, 승인이 필요한지, 거부할지 정의합니다"
     new_client: 새 신뢰 클라이언트
     new_role: 새 역할
@@ -3699,7 +3764,7 @@ settings:
       ask: "승인 필요"
       deny: "거부"
     warning:
-      allow_all_without_approval: "이후 에이전트는 DROP DATABASE를 포함한 모든 변경 호출을 묻지 않고 실행할 수 있습니다."
+      allow_all_without_approval: "이 정책의 모든 요청을 허용으로 바꿉니다. 에이전트가 묻지 않고 DROP DATABASE를 실행할 수 있습니다."
     action:
       update_client: 클라이언트 업데이트
       create_client: 클라이언트 만들기
@@ -3711,6 +3776,7 @@ settings:
       update_policy: 정책 업데이트
       create_policy: 정책 만들기
       allow_all_without_approval: "승인 없이 모두 허용"
+      allow_all: "모두 허용"
   drivers:
     section_title: 드라이버
     section_description: "드라이버별 재정의와 드라이버가 선언한 설정."
@@ -3970,10 +4036,10 @@ settings:
     mcp_policies: 정책
 
 shutdown:
-  signal_sent: 종료하는 중...
-  cancelling_tasks: 작업을 취소하는 중...
-  closing_connections: 연결을 닫는 중...
-  flushing_logs: 로그를 기록하는 중...
+  signal_sent: 종료하는 중…
+  cancelling_tasks: 작업을 취소하는 중…
+  closing_connections: 연결을 닫는 중…
+  flushing_logs: 로그를 기록하는 중…
   complete: 종료 완료
   failed: 종료 실패
 
@@ -4005,10 +4071,10 @@ sidebar:
     cannot_load_schema_foreign_keys: 외래 키를 불러올 수 없습니다
     cannot_load_schema_routines: 루틴을 불러올 수 없습니다
   filter:
-    dashboards_placeholder: "대시보드 필터..."
-    connections_placeholder: 연결 및 스키마 필터...
-    scripts_placeholder: 스크립트 필터...
-    stream_placeholder: 스트림 이름 필터...
+    dashboards_placeholder: "대시보드 필터…"
+    connections_placeholder: 연결 및 스키마 필터…
+    scripts_placeholder: 스크립트 필터…
+    stream_placeholder: 스트림 이름 필터…
   menu:
     open: 열기
     browse_event_streams: 이벤트 스트림 탐색
@@ -4035,7 +4101,7 @@ sidebar:
     export_ellipsis: 내보내기…
     import_ellipsis: 가져오기…
     compare_schema: 스키마 비교…
-    move_to: 이동...
+    move_to: 이동
     delete: 삭제
     delete_count: "%{count}개 항목 삭제"
     close: 닫기
@@ -4049,10 +4115,9 @@ sidebar:
     reveal_file_manager: 파일 관리자에서 표시
     copy_path: 경로 복사
     schema_diff_unsupported: 스키마 비교는 관계형 연결에서만 사용할 수 있습니다.
-    new_dashboard: 새 대시보드...
-    import_dashboard: JSON에서 대시보드 가져오기...
-    rename_ellipsis: 이름 바꾸기...
-    delete_ellipsis: 삭제...
+    new_dashboard: 새 대시보드…
+    import_dashboard: JSON에서 대시보드 가져오기…
+    rename_ellipsis: 이름 바꾸기…
     copy_metric_id: 지표 ID 복사
     copy_inspector_id: 검사기 ID 복사
   overlay:
@@ -4141,7 +4206,7 @@ sidebar:
       routines: "루틴을 불러오지 못했습니다: %{error}"
     list_buckets_failed: "버킷 목록을 조회하지 못했습니다: %{error}"
     code_generation_failed: "코드 생성에 실패했습니다: %{error}"
-    loading_event_streams: 이벤트 스트림을 불러오는 중...
+    loading_event_streams: 이벤트 스트림을 불러오는 중…
     load_schema_failed: "스키마를 불러오지 못했습니다: %{error}"
     connect_database_failed: "데이터베이스에 연결하지 못했습니다: %{error}"
     refresh_database_failed: "데이터베이스를 새로고침하지 못했습니다: %{error}"
@@ -4175,6 +4240,7 @@ sidebar:
         one: "빈 데이터베이스 %{count}개"
         many: "빈 데이터베이스 %{count}개"
       databases: 데이터베이스
+      buckets: 버킷
       new_default: 새 폴더
       fields: "필드 (%{count})"
       indexes: "인덱스 (%{count})"
@@ -4277,11 +4343,11 @@ sso_wizard:
     account_id: 계정 ID
     role_name: 역할 이름
   account:
-    discovering: 계정을 검색하는 중...
+    discovering: 계정을 검색하는 중…
     discover_button: 로그인 + 계정 검색
     no_matches: 현재 필터와 일치하는 계정이 없습니다.
   role:
-    discovering: 역할을 검색하는 중...
+    discovering: 역할을 검색하는 중…
     discover_button: 선택한 계정의 역할 검색
     no_matches: 현재 필터와 일치하는 역할이 없습니다.
   back: 뒤로
@@ -4290,17 +4356,18 @@ sso_wizard:
   status:
     missing_required: 프로필 이름, 시작 URL, 리전은 필수입니다.
     fill_before_account_discovery: 검색하기 전에 프로필 이름, 시작 URL, 리전을 입력하세요.
-    discovering_accounts: 로그인하고 SSO 계정을 가져오는 중...
+    discovering_accounts: 로그인하고 SSO 계정을 가져오는 중…
     accounts_discovered: SSO 계정 검색 완료
     accounts_failed: "계정을 검색하지 못했습니다: %{error}"
     fill_before_role_discovery: 먼저 프로필/리전/시작 URL을 입력하고 계정을 선택하세요.
-    discovering_roles: SSO 역할을 가져오는 중...
+    discovering_roles: SSO 역할을 가져오는 중…
     roles_discovered: SSO 역할 검색 완료
     roles_failed: "역할을 검색하지 못했습니다: %{error}"
     profile_created: AWS SSO 인증 프로필을 만들었습니다.
 status_bar:
   no_connection: "연결 없음"
   ready: "준비됨"
+  connected_to: "%{name}에 연결됨"
   tasks_failed: "%{count}개 실패"
   background_tasks:
     one: "백그라운드 작업 1개"
@@ -4328,7 +4395,7 @@ tasks_panel:
   cancel: "작업 취소"
   dismiss: "닫기"
   empty: 백그라운드 작업이 없습니다.
-  output_truncated: ... 패널에서 출력이 잘렸습니다
+  output_truncated: "… 패널에서 출력이 잘렸습니다"
 toast:
   action:
     copy: 복사

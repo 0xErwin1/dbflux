@@ -53,6 +53,7 @@ const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 const FOLD_CHEVRON_RIGHT_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>"#;
+const STATEMENT_RUN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/></svg>"#;
 const FOLD_CHEVRON_DOWN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>"#;
 
 fn compose_decorations(
@@ -380,6 +381,27 @@ fn empty_bottom_height(
 }
 
 /// Layout information for fold icons.
+/// The statement gutter laid out for one frame.
+struct StatementGutterLayout {
+    /// Buffer rows of the statement under the cursor, end exclusive.
+    active_rows: Option<Range<usize>>,
+    /// Width of the run-marker slot the line numbers are shifted by.
+    marker_slot_width: Pixels,
+    /// Left edge of the statement bar, from the left edge of the gutter.
+    bar_offset_x: Pixels,
+    style: super::GutterStatementStyle,
+    /// One run marker per visible statement start, prepainted.
+    markers: Vec<AnyElement>,
+}
+
+impl StatementGutterLayout {
+    fn is_active_row(&self, row: usize) -> bool {
+        self.active_rows
+            .as_ref()
+            .is_some_and(|rows| rows.contains(&row))
+    }
+}
+
 struct FoldIconLayout {
     /// Hitbox for the line number area (used for hover detection)
     line_number_hitbox: Hitbox,
@@ -1065,6 +1087,13 @@ impl<M: InputModeKind> TextElement<M> {
             line_number_width += FOLD_ICON_HITBOX_WIDTH
         }
 
+        if state.mode.line_number()
+            && let Some(statements) = state.gutter_statements.as_ref()
+        {
+            let style = statements.style;
+            line_number_width += style.marker_slot_width + style.bar_gap + style.bar_width;
+        }
+
         (line_number_width, line_number_len)
     }
 
@@ -1354,6 +1383,141 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         icon_layout
+    }
+
+    /// Lay out the statement gutter: which rows the statement under the
+    /// cursor spans, where its bar goes, and a prepainted run marker on the
+    /// first visible row of every statement.
+    fn layout_statement_gutter(
+        &self,
+        origin_x: Pixels,
+        bounds: &Bounds<Pixels>,
+        last_layout: &LastLayout,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<StatementGutterLayout> {
+        let (statements, active_rows, start_rows, is_folding) = {
+            let state = self.state.read(cx);
+            if !state.mode.line_number() {
+                return None;
+            }
+
+            let statements = state.gutter_statements.clone()?;
+            let text_len = state.text.len();
+
+            let active_rows = statements
+                .statement_at(&state.text, state.cursor())
+                .map(|range| {
+                    let first = state.text.offset_to_point(range.start.min(text_len)).row;
+                    let last = state.text.offset_to_point(range.end.min(text_len)).row;
+                    first..last + 1
+                });
+
+            let start_rows: Vec<(usize, Range<usize>)> = statements
+                .ranges
+                .iter()
+                .filter(|range| range.start <= text_len)
+                .map(|range| (state.text.offset_to_point(range.start).row, range.clone()))
+                .collect();
+
+            (statements, active_rows, start_rows, state.mode.is_folding())
+        };
+
+        let style = statements.style;
+        let fold_width = if is_folding {
+            FOLD_ICON_HITBOX_WIDTH
+        } else {
+            px(0.)
+        };
+        let bar_offset_x =
+            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - fold_width - style.bar_width;
+
+        let line_height = last_layout.line_height;
+        let marker_inset = point(
+            (style.marker_slot_width - style.marker_size).half(),
+            (line_height - style.marker_size).half(),
+        );
+
+        let mut markers = Vec::new();
+        let mut offset_y = last_layout.visible_top;
+
+        for (line, &buffer_line) in last_layout
+            .lines
+            .iter()
+            .zip(last_layout.visible_buffer_lines.iter())
+        {
+            let row_offset_y = offset_y;
+            offset_y += line.wrapped_lines.len() * line_height;
+
+            let Some((_, range)) = start_rows.iter().find(|(row, _)| *row == buffer_line) else {
+                continue;
+            };
+
+            let is_active = active_rows
+                .as_ref()
+                .is_some_and(|rows| rows.contains(&buffer_line));
+            let color = if is_active {
+                style.active_marker
+            } else {
+                style.marker
+            };
+            let icon_size = style.marker_icon_size;
+
+            let mut marker = gpui::div()
+                .id(("statement-run", buffer_line))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(style.marker_size)
+                .cursor_pointer()
+                .child(
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            if let Err(error) = window.paint_svg(
+                                bounds,
+                                "input-statement-run".into(),
+                                Some(STATEMENT_RUN_SVG),
+                                gpui::TransformationMatrix::default(),
+                                color,
+                                cx,
+                            ) {
+                                tracing::debug!("statement run marker failed to paint: {error}");
+                            }
+                        },
+                    )
+                    .size(icon_size),
+                )
+                .on_mouse_down(MouseButton::Left, {
+                    let on_run = statements.on_run.clone();
+                    let range = range.clone();
+                    move |_, window: &mut Window, cx: &mut App| {
+                        cx.stop_propagation();
+                        on_run(range.clone(), window, cx);
+                    }
+                })
+                .into_any_element();
+
+            marker.prepaint_as_root(
+                point(
+                    origin_x + marker_inset.x,
+                    bounds.origin.y + row_offset_y + marker_inset.y,
+                ),
+                gpui::size(style.marker_size, style.marker_size).into(),
+                window,
+                cx,
+            );
+
+            markers.push(marker);
+        }
+
+        Some(StatementGutterLayout {
+            active_rows,
+            marker_slot_width: style.marker_slot_width,
+            bar_offset_x,
+            style,
+            markers,
+        })
     }
 
     /// Paint fold icons using prepaint hitboxes.
@@ -1742,6 +1906,8 @@ pub(super) struct PrepaintState {
     bounds: Bounds<Pixels>,
     /// Fold icon layout data
     fold_icon_layout: FoldIconLayout,
+    /// Statement gutter, when the state carries statement ranges.
+    statement_gutter: Option<StatementGutterLayout>,
     // Inline completion rendering data
     /// Shaped ghost lines to paint after cursor row (completion lines 2+)
     ghost_lines: Vec<ShapedLine>,
@@ -2194,6 +2360,39 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 strikethrough: None,
             }];
 
+            // Rows of the statement under the cursor number in the statement
+            // colour; the cursor row among them in bold.
+            let statement_rows = state.gutter_statements.as_ref().and_then(|statements| {
+                let text_len = state.text.len();
+                let range = statements.statement_at(&state.text, state.cursor())?;
+                let first = state.text.offset_to_point(range.start.min(text_len)).row;
+                let last = state.text.offset_to_point(range.end.min(text_len)).row;
+                Some((first..last + 1, statements.style.active_line_number))
+            });
+            let statement_line_runs = statement_rows.as_ref().map(|(_, color)| {
+                vec![TextRun {
+                    len: line_number_len,
+                    font: style.font(),
+                    color: *color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }]
+            });
+            let statement_cursor_runs = statement_rows.as_ref().map(|(_, color)| {
+                vec![TextRun {
+                    len: line_number_len,
+                    font: gpui::Font {
+                        weight: gpui::FontWeight::BOLD,
+                        ..style.font()
+                    },
+                    color: *color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }]
+            });
+
             // build line numbers
             for (line, &buffer_line) in last_layout
                 .lines
@@ -2203,10 +2402,16 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let line_no: SharedString =
                     format!("{:>width$}", buffer_line + 1, width = line_number_len).into();
 
-                let runs = if current_row == Some(buffer_line) {
-                    &current_line_runs
-                } else {
-                    &other_line_runs
+                let in_statement = statement_rows
+                    .as_ref()
+                    .is_some_and(|(rows, _)| rows.contains(&buffer_line));
+                let is_current = current_row == Some(buffer_line);
+
+                let runs = match (in_statement, is_current) {
+                    (true, true) => statement_cursor_runs.as_ref().unwrap_or(&current_line_runs),
+                    (true, false) => statement_line_runs.as_ref().unwrap_or(&other_line_runs),
+                    (false, true) => &current_line_runs,
+                    (false, false) => &other_line_runs,
                 };
 
                 let mut sub_lines: SmallVec<[ShapedLine; 1]> = SmallVec::new();
@@ -2239,6 +2444,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
             )));
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
+        let statement_gutter =
+            self.layout_statement_gutter(original_x, &bounds, &last_layout, window, cx);
 
         PrepaintState {
             bounds,
@@ -2255,6 +2462,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             document_color_paths,
             indent_guides_path,
             fold_icon_layout,
+            statement_gutter,
             ghost_first_line,
             ghost_lines,
             ghost_lines_height,
@@ -2319,8 +2527,25 @@ impl<M: InputModeKind> Element for TextElement<M> {
                 let is_active = prepaint.current_row == Some(buffer_line);
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let height = line_height * lines.len() as f32;
-                // Paint the current line background
-                if is_active {
+
+                // A row of the statement under the cursor takes the statement
+                // fill (the cursor row a stronger one) instead of the plain
+                // active-line colour.
+                if let Some(gutter) = prepaint
+                    .statement_gutter
+                    .as_ref()
+                    .filter(|gutter| gutter.is_active_row(buffer_line))
+                {
+                    let row_fill = if is_active {
+                        gutter.style.cursor_line_fill
+                    } else {
+                        gutter.style.statement_fill
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(p, size(bounds.size.width, height)),
+                        row_fill,
+                    ));
+                } else if is_active {
                     if let Some(bg_color) = active_line_color {
                         window.paint_quad(fill(
                             Bounds::new(p, size(bounds.size.width, height)),
@@ -2537,17 +2762,49 @@ impl<M: InputModeKind> Element for TextElement<M> {
             );
             window.paint_quad(fill(gutter_bounds, gutter_bg));
 
+            let marker_slot_width = prepaint
+                .statement_gutter
+                .as_ref()
+                .map_or(px(0.), |gutter| gutter.marker_slot_width);
+
             // Each item is the normal lines.
             for (lines, &buffer_line) in line_numbers
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
-                let p = point(input_bounds.origin.x, origin.y + offset_y);
+                let p = point(
+                    input_bounds.origin.x + marker_slot_width,
+                    origin.y + offset_y,
+                );
                 let is_active = prepaint.current_row == Some(buffer_line);
 
                 let height = line_height * lines.len() as f32;
-                // paint active line number background
-                if is_active {
+
+                if let Some(gutter) = prepaint
+                    .statement_gutter
+                    .as_ref()
+                    .filter(|gutter| gutter.is_active_row(buffer_line))
+                {
+                    let row_fill = if is_active {
+                        gutter.style.cursor_line_fill
+                    } else {
+                        gutter.style.statement_fill
+                    };
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(gutter_bounds.origin.x, p.y),
+                            size(gutter_bounds.size.width, height),
+                        ),
+                        row_fill,
+                    ));
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(input_bounds.origin.x + gutter.bar_offset_x, p.y),
+                            size(gutter.style.bar_width, height),
+                        ),
+                        gutter.style.bar,
+                    ));
+                } else if is_active {
                     if let Some(bg_color) = active_line_color {
                         window.paint_quad(fill(
                             Bounds::new(
@@ -2578,6 +2835,12 @@ impl<M: InputModeKind> Element for TextElement<M> {
             window,
             cx,
         );
+
+        if let Some(gutter) = prepaint.statement_gutter.as_mut() {
+            for marker in gutter.markers.iter_mut() {
+                marker.paint(window, cx);
+            }
+        }
 
         self.state.update(cx, |state, cx| {
             let geometry_changed = state.last_bounds != Some(bounds)

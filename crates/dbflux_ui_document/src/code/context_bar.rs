@@ -2,11 +2,26 @@ use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
 use dbflux_components::icons::DriverIconTone;
-use dbflux_components::primitives::{EnvTag, FocusShape, Icon, Text, focus_ring};
+use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
 use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::ConnectionEnvironment;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
+/// `path` with a leading `home` directory written as `~`, the way the board
+/// shows a script location (`~/.local/share/dbflux/scripts/Query 7.sql`).
+fn home_relative_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) else {
+        return path.display().to_string();
+    };
+
+    if relative.as_os_str().is_empty() {
+        return "~".to_string();
+    }
+
+    format!("~{}{}", std::path::MAIN_SEPARATOR, relative.display())
+}
 
 fn context_dropdown_min_width(index: usize) -> Pixels {
     match index {
@@ -220,6 +235,8 @@ impl CodeDocument {
                 state.set_highlighter(editor_mode, cx);
             }
         });
+
+        self.refresh_statements(cx);
     }
 
     pub(super) fn current_source_context_spec(
@@ -610,9 +627,12 @@ impl CodeDocument {
             .connection_id
             .is_some_and(|id| self.app_state.read(cx).connections().contains_key(&id));
 
+        let environment = self.connection_environment(cx);
+
         self.source.connection_dropdown.update(cx, |dd, cx| {
             dd.set_items(connection_items, cx);
             dd.set_selected_index(selected_connection_index, cx);
+            dd.set_label_environment(environment, cx);
         });
 
         if has_selected_connection {
@@ -1440,6 +1460,62 @@ impl CodeDocument {
         )
     }
 
+    /// The script file readout at the end of the context bar (AppByzEditor):
+    /// the file path with the home directory as `~`, then "saved" with a
+    /// check while the buffer matches the file, or a muted "unsaved". `None`
+    /// for a buffer with no file behind it.
+    fn render_script_file_state(&self, cx: &App) -> Option<AnyElement> {
+        let path = self.path()?;
+        let theme = cx.theme();
+
+        let state = if self.editor.is_dirty {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .child(dbflux_i18n::t!("document.code.context_bar.file.unsaved"))
+        } else {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(EditorMetrics::FILE_STATE_GAP)
+                .text_color(theme.success)
+                .child(
+                    Icon::new(AppIcon::Check)
+                        .size(EditorMetrics::FILE_ICON)
+                        .color(theme.success),
+                )
+                .child(dbflux_i18n::t!("document.code.context_bar.file.saved"))
+        };
+
+        Some(
+            div()
+                .id("script-file-state")
+                .flex()
+                .min_w_0()
+                .ml_auto()
+                .items_center()
+                .gap(EditorMetrics::FILE_GAP)
+                .font_family(AppFonts::MONO)
+                .text_size(EditorMetrics::FILE_FONT)
+                .text_color(theme.muted_foreground)
+                .child(
+                    Icon::new(AppIcon::File)
+                        .size(EditorMetrics::FILE_ICON)
+                        .color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(home_relative_path(path, std::env::home_dir().as_deref())),
+                )
+                .child(state)
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         if !self.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
@@ -1480,7 +1556,7 @@ impl CodeDocument {
         // flex_wrap() allows controls to wrap to the next line on narrow viewports
         // rather than overflowing the bar's right edge.
         let (connection_icon, connection_icon_color) = self.connection_driver_icon(cx);
-        let environment = self.connection_environment(cx);
+        let script_file_state = self.render_script_file_state(cx);
 
         let main_row = div()
             .flex()
@@ -1505,12 +1581,6 @@ impl CodeDocument {
                                     .size(EditorMetrics::SELECTOR_ICON)
                                     .color(connection_icon_color),
                                 self.source.connection_dropdown.clone(),
-                            )
-                            .when_some(
-                                environment,
-                                |selector, environment| {
-                                    selector.child(EnvTag::for_environment(environment))
-                                },
                             ),
                             cx,
                         ),
@@ -1556,7 +1626,7 @@ impl CodeDocument {
                     // "Source:" is the generic label for the target-selector dropdown
                     // across all drivers.  The driver-specific label (spec.targets_label)
                     // is intentionally not used here — the placeholder already carries
-                    // driver-specific phrasing (e.g. "Select bucket...").
+                    // driver-specific phrasing (e.g. "Select bucket…").
                     .child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
                         "document.code.context_bar.label.source"
                     ))))
@@ -1708,7 +1778,8 @@ impl CodeDocument {
                             cx,
                         )),
                 )
-            });
+            })
+            .when_some(script_file_state, |el, state| el.child(state));
 
         // Outer bar: column layout so the custom date-range row can sit below
         // the main controls without stretching the bar's width.
@@ -1764,9 +1835,37 @@ impl CodeDocument {
 mod tests {
     use super::{
         ContextBarSlot, LanguageBinding, SqlQueryFocus, build_source_window_context,
-        context_dropdown_min_width, context_slot_is_keyboard_focused, parse_source_datetime_input,
-        resolve_effective_language, resolve_query_mode_selection,
+        context_dropdown_min_width, context_slot_is_keyboard_focused, home_relative_path,
+        parse_source_datetime_input, resolve_effective_language, resolve_query_mode_selection,
     };
+
+    #[test]
+    fn script_paths_under_home_start_with_a_tilde() {
+        let home = std::path::Path::new("/home/ana");
+        let script = home
+            .join(".local")
+            .join("share")
+            .join("dbflux")
+            .join("scripts")
+            .join("Query 7.sql");
+
+        assert_eq!(
+            home_relative_path(&script, Some(home)),
+            format!(
+                "~{sep}.local{sep}share{sep}dbflux{sep}scripts{sep}Query 7.sql",
+                sep = std::path::MAIN_SEPARATOR
+            )
+        );
+        assert_eq!(home_relative_path(home, Some(home)), "~");
+        assert_eq!(
+            home_relative_path(std::path::Path::new("/srv/q.sql"), Some(home)),
+            "/srv/q.sql"
+        );
+        assert_eq!(
+            home_relative_path(&script, None),
+            script.display().to_string()
+        );
+    }
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use gpui::px;
 

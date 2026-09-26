@@ -4,7 +4,7 @@ Una referencia para cada sección de Settings y para los connection hooks — lo
 comandos, scripts o snippets de Lua que DBFlux ejecuta alrededor del ciclo de
 vida de una conexión.
 
-Abre Settings desde la command palette (**Open Settings**) o desde la barra
+Abre Settings desde la command palette (**Open settings**) o desde la barra
 lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 
 | Sección                                             | Cubre                                                                        |
@@ -167,7 +167,8 @@ Los nombres son los de los contextos que muestra el filtro de contexto
 los nombres de ventana `Workspace`, `SettingsWindow` y
 `ConnectionManagerWindow`, y los nombres de panel `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DashboardsPanel` y
+`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`DashboardsPanel` y
 `SettingsSection`. Los valores son `vim_mode` (`normal`, `insert`, `replace`,
 `visual`, `visual_line`, `visual_block`, presente solo con la edición Vim
 activa), `language` (`sql`, `mongo`, `redis`, `lua`, `python`, `bash`, …),

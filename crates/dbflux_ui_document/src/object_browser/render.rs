@@ -589,7 +589,14 @@ impl ObjectBrowserDocument {
                     .text_color(muted)
                     .child(size_label),
             )
-            .child(div().w(CLASS_WIDTH).flex_shrink_0().child(class_element))
+            .child(
+                div()
+                    .w(CLASS_WIDTH)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .child(class_element),
+            )
             .child(
                 div()
                     .w(MODIFIED_WIDTH)

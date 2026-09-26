@@ -38,11 +38,11 @@ see [Charts](CHARTS.md) for the rules.
 
 - In a chart document, press **Save** and give it a name. Re-saving the same chart
   overwrites it (no duplicate).
-- Reopen a saved chart with **Open Chart…** in the command palette — it lists the
+- Reopen a saved chart with **Open chart…** in the command palette — it lists the
   saved charts for the active connection. (If there are none: *"No saved charts
   for the current profile"*.)
 - Saved charts also appear in the sidebar under **Saved Charts**, where each chart
-  has **Open / Rename… / Duplicate / Delete…**.
+  has **Open / Rename… / Duplicate / Delete**.
 
 Charts are saved per connection profile.
 
@@ -53,12 +53,12 @@ refresh policy.
 
 ### Create one
 
-1. Run **New Dashboard…** from the command palette (or **New Dashboard…** on the
+1. Run **New dashboard…** from the command palette (or **New dashboard…** on the
    sidebar's **Dashboards** folder).
 2. Name it. It opens with a 12-column grid and refresh turned off.
 
 New dashboards open in **View** mode. The sidebar's Dashboards folder lists saved
-dashboards with **Open / Rename… / Duplicate / Delete…**.
+dashboards with **Open / Rename… / Duplicate / Delete**.
 
 ### Edit vs. view
 
@@ -115,7 +115,7 @@ When a driver supports it (CloudWatch is the reference implementation), DBFlux c
   renders it as an **in-memory, read-only** dashboard — nothing is written back to
   the source, and nothing is saved locally. A **Refresh** action re-fetches the
   listing. The listing is session-scoped and is **not** kept across restarts.
-- **Import**: the **Import Dashboard** command (palette or sidebar) parses the
+- **Import**: the **Import dashboard from JSON…** command (palette or sidebar) parses the
   upstream definition into a new **local** dashboard with imported charts. It's
   only available when the active connection's driver supports import — otherwise
   you'll see *"The active connection does not support dashboard import."*

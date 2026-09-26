@@ -145,14 +145,16 @@ impl Workspace {
                 _ => false,
             }),
 
-            Command::ExpandCollapse => {
-                if self.focus_target == FocusTarget::Sidebar {
+            Command::ExpandCollapse => Some(match self.focus_target {
+                FocusTarget::Sidebar => {
                     self.sidebar.update(cx, |s, cx| s.expand_collapse(cx));
-                    Some(true)
-                } else {
-                    Some(false)
+                    true
                 }
-            }
+                FocusTarget::Document => self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ExpandCollapse, window, cx)
+                }),
+                _ => false,
+            }),
 
             Command::ColumnLeft => Some(match self.focus_target {
                 FocusTarget::Sidebar => {

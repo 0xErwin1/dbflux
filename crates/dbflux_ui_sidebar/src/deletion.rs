@@ -36,7 +36,12 @@ impl Sidebar {
             }
             self.pending_delete_item = Some(item_id);
             cx.notify();
+            return;
         }
+
+        // Schema objects (tables, views, collections, databases) drop through
+        // the same confirmation their menu's drop action opens.
+        self.run_selected_menu_shortcut(dbflux_app::keymap::Command::Delete, cx);
     }
 
     /// Returns ids in the active multi-selection that point to user-deletable

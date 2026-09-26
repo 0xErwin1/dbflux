@@ -12,24 +12,24 @@ queries without writing SQL.
 
 A new query tab (`Ctrl+n`) is backed by a real file in your scripts folder, the
 same way a script opened with `Ctrl+o` is. Open editors auto-save to that file
-on the configured interval, and `Ctrl+s` / **Save File As** go through the same
+on the configured interval, and `Ctrl+s` / **Save file as…** go through the same
 queue. Autosave and closing never overwrite a file that changed outside DBFlux:
 your version stays in the editor and DBFlux reports the refused write. `Ctrl+s`
-and **Save File As** are deliberate and write the file even then.
+and **Save file as…** are deliberate and write the file even then.
 
 Closing a tab with pending edits saves them first, then closes; if the write
 cannot land (for example, the file changed outside DBFlux or is read-only), the
-tab stays open with your changes and DBFlux points at `Ctrl+s` / **Save File As**
+tab stays open with your changes and DBFlux points at `Ctrl+s` / **Save file as…**
 as the deliberate overwrite. A buffer with no file yet is the exception: closing
 it asks first, so you can save it, close it without saving, or cancel. Quitting
 DBFlux saves pending edits the same way before it shuts down. If the scripts
 folder could not be created at startup, new queries are kept in the session store
-instead, and **Save File As** is offered when you close them.
+instead, and **Save file as…** is offered when you close them.
 
 ## Executing
 
-- `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.
-- `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run Query in New Tab**.
+- `Ctrl+Enter` (`Cmd+Enter`) — **Run query**.
+- `Ctrl+Shift+Enter` (`Cmd+Shift+Enter`) — **Run query in new tab**.
 
 If a non-empty text selection exists, only the selected text runs. With no
 selection, the full editor buffer is used.
@@ -74,7 +74,7 @@ DBFlux keeps a history of completed queries and lets you save named queries.
 - `Alt+h` (in the editor), or the toolbar's History button, opens and closes the
   query history panel beside the editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** the current query.
-- `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save File As**.
+- `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save file as…**.
 - `Ctrl+p` (`Cmd+p`, in the editor) — open the saved-queries browser.
 
 The history panel lists recent and saved queries and stays open while you edit.

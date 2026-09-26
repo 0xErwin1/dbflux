@@ -80,8 +80,8 @@ pub(super) struct TreeRenderParams {
     /// Color of each profile's driver logo (`DriverIconTone`).
     pub profile_icon_colors: HashMap<Uuid, Hsla>,
     /// Round-trip latency of each connected profile, shown after its status
-    /// diamond. The connection layer does not measure latency yet, so the
-    /// sidebar passes an empty map and the diamond shows alone.
+    /// diamond. A profile whose probe has not answered shows the diamond
+    /// alone.
     pub connection_latencies: HashMap<Uuid, Duration>,
     pub active_databases: HashMap<Uuid, String>,
     pub sidebar_entity: Entity<Sidebar>,
@@ -233,15 +233,6 @@ pub(super) fn render_tree_item(
         } else {
             AppIcon::ChevronRight
         })
-    } else {
-        None
-    };
-
-    let leaf_marker: Option<&'static str> = if chevron_icon.is_none() {
-        match node_kind {
-            SchemaNodeKind::InstanceOverviewLeaf => Some("•"),
-            _ => None,
-        }
     } else {
         None
     };
@@ -492,13 +483,6 @@ pub(super) fn render_tree_item(
                                     });
                                 })
                                 .child(Icon::new(icon).size(TreeMetrics::CHEVRON).muted())
-                        })
-                        .when_some(leaf_marker, |el, marker| {
-                            el.child(
-                                Text::body(marker)
-                                    .font_size(FontSizes::SM)
-                                    .color(theme.muted_foreground),
-                            )
                         }),
                 )
                 .child(
@@ -1356,6 +1340,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
         SchemaNodeKind::Bucket => Some(AppIcon::Box),
+        SchemaNodeKind::BucketsFolder => Some(AppIcon::Box),
         _ => None,
     }
 }
@@ -1476,6 +1461,7 @@ fn resolve_node_icon(
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
         SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
+        SchemaNodeKind::BucketsFolder => (Some(AppIcon::Box), "", params.color_orange),
         _ => (None, "", theme.muted_foreground),
     }
 }
@@ -1554,6 +1540,20 @@ mod tests {
     use dbflux_core::SchemaNodeKind;
     use gpui::FontWeight;
     use gpui::SharedString;
+
+    #[test]
+    fn leaf_rows_leave_the_chevron_slot_empty() {
+        let source = include_str!("render_tree.rs");
+        let render_code = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render_tree.rs has code before its tests");
+
+        assert!(
+            !render_code.contains('\u{2022}'),
+            "a leaf row must not draw a bullet where the chevron goes (P1Sidebar)"
+        );
+    }
 
     #[test]
     fn sidebar_tree_items_use_interface_family_and_hierarchy_weights() {

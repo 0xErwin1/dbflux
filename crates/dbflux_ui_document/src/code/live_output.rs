@@ -11,7 +11,7 @@ pub(crate) struct LiveOutputState {
 }
 
 impl LiveOutputState {
-    const WAITING_PLACEHOLDER: &str = "(waiting for output...)";
+    const WAITING_PLACEHOLDER: &str = "(waiting for output…)";
     pub(super) const MAX_LINES: usize = 5000;
 
     pub(super) fn new(receiver: OutputReceiver) -> Self {

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use gpui::prelude::*;
-use gpui::{App, SharedString, Window, div};
+use gpui::{AccessibleAction, App, Role, SharedString, Toggled, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::icons::AppIcon;
@@ -77,13 +77,35 @@ pub fn stepped_segment<'a>(ids: &[&'a str], active: &str, step: isize) -> Option
 /// - Keyboard focus: the track never rings. While focus is visible, the
 ///   focused segment carries a 2 px tint underline inside it; selection is
 ///   shown only by the raised thumb.
+/// - Semantics: a control named with [`Self::group`] is a radio group
+///   `segmented-<group>` whose segments are radio buttons
+///   `segmented-<group>-<id>` (element id and accessibility id), named by
+///   their label and toggled when active, so automation and assistive
+///   technology can target one option of one control. An unnamed control
+///   stays out of the accessibility tree: its segment ids repeat across
+///   controls, and duplicate accessible nodes are dropped.
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     items: Vec<SegmentedItem>,
     active_id: SharedString,
     focused: bool,
     focused_id: Option<SharedString>,
+    group: Option<SharedString>,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
+}
+
+/// Element and accessibility id of the track of the control named `group`.
+pub fn segmented_group_id(group: &str) -> SharedString {
+    SharedString::from(format!("segmented-{group}"))
+}
+
+/// Element and accessibility id of the segment `item` of the control named
+/// `group`, or a group-less id when the control has no name.
+pub fn segmented_item_id(group: Option<&str>, item: &str) -> SharedString {
+    match group {
+        Some(group) => SharedString::from(format!("segmented-{group}-{item}")),
+        None => SharedString::from(format!("seg-ctl-item-{item}")),
+    }
 }
 
 impl SegmentedControl {
@@ -97,6 +119,7 @@ impl SegmentedControl {
             active_id: active_id.into(),
             focused: false,
             focused_id: None,
+            group: None,
             on_select: Arc::new(on_select),
         }
     }
@@ -114,6 +137,14 @@ impl SegmentedControl {
         self.focused_id = Some(id.into());
         self
     }
+
+    /// Names the control, which gives it and each of its segments a stable
+    /// id (see [`segmented_group_id`] and [`segmented_item_id`]). Use a short
+    /// kebab-case name that is unique in the window, such as `theme`.
+    pub fn group(mut self, group: impl Into<SharedString>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
 }
 
 impl RenderOnce for SegmentedControl {
@@ -129,11 +160,13 @@ impl RenderOnce for SegmentedControl {
             .focused
             .then(|| self.focused_id.clone().unwrap_or_else(|| active_id.clone()));
         let on_select = self.on_select;
+        let group = self.group;
+        let is_named = group.is_some();
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
             let is_focused = focused_id.as_ref() == Some(&item.id);
-            let segment_id = SharedString::from(format!("seg-ctl-item-{}", item.id.as_ref()));
+            let segment_id = segmented_item_id(group.as_deref(), item.id.as_ref());
 
             let thumb = if is_active {
                 Chamfer::new(ChamferCut::KEYCAP).fill(theme.secondary)
@@ -151,9 +184,26 @@ impl RenderOnce for SegmentedControl {
 
             let clicked_id = item.id.clone();
             let on_select = on_select.clone();
+            let accessible_id = item.id.clone();
+            let on_accessible_select = on_select.clone();
+            let accessible_label = item.label.clone();
 
             div()
-                .id(segment_id)
+                .id(segment_id.clone())
+                .when(is_named, |segment| {
+                    segment
+                        .role(Role::RadioButton)
+                        .accessibility_id(segment_id)
+                        .aria_label(accessible_label)
+                        .aria_toggled(if is_active {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                            on_accessible_select(&accessible_id, window, cx);
+                        })
+                })
                 .relative()
                 .flex()
                 .items_center()
@@ -175,7 +225,16 @@ impl RenderOnce for SegmentedControl {
                 .into_any_element()
         });
 
+        let track_id = group
+            .as_deref()
+            .map(segmented_group_id)
+            .unwrap_or_else(|| SharedString::from("seg-ctl-track"));
+
         div()
+            .id(track_id.clone())
+            .when(is_named, |track| {
+                track.role(Role::RadioGroup).accessibility_id(track_id)
+            })
             .relative()
             .flex()
             .flex_none()
@@ -317,6 +376,89 @@ mod tests {
         assert!(
             on_roving.left() > on_active.left(),
             "the marker sits on `require`, right of the active `prefer`"
+        );
+    }
+
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    struct NamedSegments;
+
+    impl Render for NamedSegments {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SegmentedControl::new(
+                    vec![
+                        SegmentedItem::new("dark", "Dark"),
+                        SegmentedItem::new("light", "Light"),
+                    ],
+                    "dark",
+                    |_, _, _| {},
+                )
+                .group("theme"),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn named_segments_are_radio_buttons_with_stable_ids(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, window) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            NamedSegments
+        });
+        window.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let node_named = |id: &str| {
+            let (_, node) = frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .unwrap_or_else(|| panic!("{id} is in the frame"));
+            frame
+                .accessibility_node(node)
+                .unwrap_or_else(|| panic!("{id} is an accessible node"))
+                .clone()
+        };
+
+        assert_eq!(node_named("segmented-theme").role(), Role::RadioGroup);
+
+        let dark = node_named("segmented-theme-dark");
+        assert_eq!(dark.role(), Role::RadioButton);
+        assert_eq!(dark.label(), Some("Dark"));
+        assert_eq!(dark.toggled(), Some(Toggled::True));
+        assert!(dark.supports_action(AccessibleAction::Click));
+
+        let light = node_named("segmented-theme-light");
+        assert_eq!(light.toggled(), Some(Toggled::False));
+    }
+
+    #[test]
+    fn item_ids_are_scoped_by_group() {
+        assert_eq!(
+            segmented_item_id(Some("density"), "compact").as_ref(),
+            "segmented-density-compact"
+        );
+        assert_eq!(segmented_group_id("density").as_ref(), "segmented-density");
+        assert_eq!(
+            segmented_item_id(None, "compact").as_ref(),
+            "seg-ctl-item-compact"
         );
     }
 

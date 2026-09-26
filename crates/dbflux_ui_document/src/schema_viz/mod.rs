@@ -405,7 +405,9 @@ pub struct SchemaVizDocument {
     pan_offset: Point<Pixels>,
     // Node interaction
     selected_node: Option<petgraph::graph::NodeIndex>,
-    pending_details_panel: Option<petgraph::graph::NodeIndex>,
+    /// Fit the diagram into the viewport once it has been measured: set when
+    /// a schema loads without a focal table and when the layout changes.
+    pending_fit: bool,
     // Drag state for node repositioning
     dragging_node: Option<petgraph::graph::NodeIndex>,
     drag_offset: Point<Pixels>,
@@ -446,6 +448,50 @@ pub struct SchemaVizDocument {
     // rail. `None` once the user dismisses the rail, so activation does not
     // bring back a rail they closed.
     schema_inspector_title: Option<SharedString>,
+    _schema_inspector_subscription: Option<Subscription>,
+}
+
+/// Largest zoom the Fit button picks, so a small diagram is not blown up.
+const FIT_MAX_ZOOM: f32 = 1.5;
+
+/// Largest zoom the fit on open picks: a diagram that already fits opens at
+/// its natural size.
+const OPEN_FIT_MAX_ZOOM: f32 = 1.0;
+
+/// Screen margin kept around a fitted diagram, on every side.
+const FIT_MARGIN: f32 = 48.0;
+
+/// Zoom and pan that fit the graph-space box `(min_x, min_y, max_x, max_y)`
+/// inside `viewport` with [`FIT_MARGIN`] on every side, anchored at the
+/// top-left margin, at no more than `max_zoom`. `None` for an empty box or an
+/// unmeasured viewport.
+fn fit_diagram(
+    (min_x, min_y, max_x, max_y): (f32, f32, f32, f32),
+    viewport: Size<Pixels>,
+    max_zoom: f32,
+) -> Option<(f32, Point<Pixels>)> {
+    if min_x > max_x || min_y > max_y {
+        return None;
+    }
+
+    let viewport_width: f32 = viewport.width.into();
+    let viewport_height: f32 = viewport.height.into();
+    if viewport_width <= 0.0 || viewport_height <= 0.0 {
+        return None;
+    }
+
+    let content_width = (max_x - min_x).max(1.0);
+    let content_height = (max_y - min_y).max(1.0);
+    let available_width = (viewport_width - 2.0 * FIT_MARGIN).max(1.0);
+    let available_height = (viewport_height - 2.0 * FIT_MARGIN).max(1.0);
+
+    let zoom = (available_width / content_width)
+        .min(available_height / content_height)
+        .clamp(0.25, max_zoom.max(0.25));
+
+    let pan = Point::new(px(FIT_MARGIN - min_x * zoom), px(FIT_MARGIN - min_y * zoom));
+
+    Some((zoom, pan))
 }
 
 fn pixel_aligned_diagram_pan(
@@ -479,11 +525,14 @@ impl SchemaVizDocument {
 
     /// Tab title: the focal table in focused mode, otherwise the database.
     pub(crate) fn title(&self) -> String {
-        let name = match self.table_name() {
-            Some(table) => table.to_string(),
-            None => self.database.clone().unwrap_or_else(|| {
-                dbflux_i18n::t!("document.schema_viz.view.title_default_database")
-            }),
+        Self::tab_title(self.table_name(), self.database.as_deref())
+    }
+
+    /// "shop · schema": the focal table, else the database, then "schema".
+    pub(crate) fn tab_title(table: Option<&str>, database: Option<&str>) -> String {
+        let name = match table.or(database) {
+            Some(name) => name.to_string(),
+            None => dbflux_i18n::t!("document.schema_viz.view.title_default_database"),
         };
 
         dbflux_i18n::t!("document.schema_viz.view.title", name = name)
@@ -536,7 +585,7 @@ impl SchemaVizDocument {
             pan_start: Point::default(),
             pan_offset: Point::default(),
             selected_node: None,
-            pending_details_panel: None,
+            pending_fit: false,
             dragging_node: None,
             drag_offset: Point::default(),
             node_position_overrides: std::collections::HashMap::new(),
@@ -557,6 +606,7 @@ impl SchemaVizDocument {
             viewport_size: Size::default(),
             schema_inspector_content: None,
             schema_inspector_title: None,
+            _schema_inspector_subscription: None,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -842,8 +892,9 @@ impl SchemaVizDocument {
                             doc.layout = Some(layout);
                             doc.load_status = LoadStatus::Ready;
                             doc.table_cap_warning = capped;
-                            if let Some(pan) = initial_pan {
-                                doc.pan_offset = pan;
+                            match initial_pan {
+                                Some(pan) => doc.pan_offset = pan,
+                                None => doc.pending_fit = true,
                             }
                         }
                         Err(msg) => {
@@ -1420,10 +1471,9 @@ impl SchemaVizDocument {
         self.focus_handle.focus(window, cx);
     }
 
-    /// Recomputes layout using the current format, focal, show_types, and show_indexes.
-    /// Fit the whole diagram into the viewport: pick the zoom that makes every node
-    /// visible and pan so the content starts at the top-left margin.
-    fn fit_to_view(&mut self) {
+    /// Fit the whole diagram into the viewport: pick the zoom that makes every
+    /// node visible with a margin around it, never above `max_zoom`.
+    fn fit_to_view(&mut self, max_zoom: f32) {
         let (Some(graph), Some(layout)) = (&self.graph, &self.layout) else {
             return;
         };
@@ -1446,28 +1496,31 @@ impl SchemaVizDocument {
             max_y = max_y.max(y + node_layout.height);
         }
 
-        if min_x > max_x || min_y > max_y {
+        let Some((zoom, pan)) =
+            fit_diagram((min_x, min_y, max_x, max_y), self.viewport_size, max_zoom)
+        else {
             return;
-        }
-
-        let content_width = (max_x - min_x).max(1.0);
-        let content_height = (max_y - min_y).max(1.0);
-        let viewport_width: f32 = self.viewport_size.width.into();
-        let viewport_height: f32 = self.viewport_size.height.into();
-        if viewport_width <= 0.0 || viewport_height <= 0.0 {
-            return;
-        }
-
-        let margin = 48.0_f32;
-        let zoom = ((viewport_width - margin) / content_width)
-            .min((viewport_height - margin) / content_height)
-            .clamp(0.25, 1.5);
+        };
 
         self.zoom = zoom;
-        self.pan_offset = Point::new(
-            px(margin / 2.0 - min_x * zoom),
-            px(margin / 2.0 - min_y * zoom),
-        );
+        self.pan_offset = pan;
+    }
+
+    /// Runs the fit a load or layout change asked for, once the viewport has
+    /// a size and the layout exists. Until then the request stays pending.
+    fn apply_pending_fit(&mut self, cx: &mut Context<Self>) {
+        if !self.pending_fit || self.layout.is_none() {
+            return;
+        }
+
+        let measured = self.viewport_size.width > px(0.0) && self.viewport_size.height > px(0.0);
+        if !measured {
+            return;
+        }
+
+        self.pending_fit = false;
+        self.fit_to_view(OPEN_FIT_MAX_ZOOM);
+        cx.notify();
     }
 
     fn recompute_layout(&mut self) {
@@ -1540,6 +1593,7 @@ impl SchemaVizDocument {
             self.zoom = 1.0;
             self.pan_offset = Point::default();
             self.node_position_overrides.clear();
+            self.pending_fit = true;
         }
         cx.notify();
 
@@ -2328,6 +2382,7 @@ impl SchemaVizDocument {
         if let Some(next) = self.find_next_node(direction) {
             self.selected_node = Some(next);
             self.center_on_node(next);
+            self.follow_selection_in_inspector(next, cx);
             cx.notify();
             return;
         }
@@ -2345,7 +2400,20 @@ impl SchemaVizDocument {
         if let Some(node) = start {
             self.selected_node = Some(node);
             self.center_on_node(node);
+            self.follow_selection_in_inspector(node, cx);
             cx.notify();
+        }
+    }
+
+    /// Moves an open schema inspector to the newly selected table, so the
+    /// details panel follows keyboard selection. A closed rail stays closed.
+    fn follow_selection_in_inspector(
+        &mut self,
+        node_idx: petgraph::graph::NodeIndex,
+        cx: &mut Context<Self>,
+    ) {
+        if self.schema_inspector_title.is_some() {
+            self.open_schema_inspector(node_idx, cx);
         }
     }
 
@@ -2394,10 +2462,7 @@ impl SchemaVizDocument {
             return;
         };
 
-        let title = match &snapshot.node.id.schema {
-            Some(s) => format!("{}.{}", s, snapshot.node.id.name),
-            None => snapshot.node.id.name.clone(),
-        };
+        let title = snapshot.qualified_name();
 
         let content = match self.schema_inspector_content.clone() {
             Some(existing) => {
@@ -2406,6 +2471,15 @@ impl SchemaVizDocument {
             }
             None => {
                 let new_content = cx.new(|cx| inspector::SchemaInspector::new(snapshot, cx));
+                self._schema_inspector_subscription = Some(cx.subscribe(
+                    &new_content,
+                    |this, _, event: &inspector::SchemaInspectorEvent, cx| match event {
+                        inspector::SchemaInspectorEvent::Close => {
+                            this.mark_inspector_closed();
+                            cx.emit(DocumentEvent::CloseInspector);
+                        }
+                    },
+                ));
                 self.schema_inspector_content = Some(new_content.clone());
                 new_content
             }
@@ -2417,7 +2491,7 @@ impl SchemaVizDocument {
         cx.emit(DocumentEvent::OpenInspector {
             title,
             content: content.into(),
-            content_has_header: false,
+            content_has_header: true,
         });
     }
 
@@ -2439,7 +2513,7 @@ impl SchemaVizDocument {
         cx.emit(DocumentEvent::OpenInspector {
             title,
             content: content.into(),
-            content_has_header: false,
+            content_has_header: true,
         });
     }
 
@@ -2886,7 +2960,7 @@ impl SchemaVizDocument {
                 .icon(AppIcon::Maximize2)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.fit_to_view();
+                    this.fit_to_view(FIT_MAX_ZOOM);
                     cx.notify();
                 })),
             )
@@ -3052,6 +3126,7 @@ impl SchemaVizDocument {
                                 cx.notify();
                             }
                             this.viewport_size = bounds.size;
+                            this.apply_pending_fit(cx);
                         });
                     },
                     |_: gpui::Bounds<Pixels>, _, _, _| {},
@@ -3346,7 +3421,7 @@ impl SchemaVizDocument {
                     }
                     if event.click_count == 1 {
                         this.selected_node = Some(node_idx_clone);
-                        this.pending_details_panel = Some(node_idx_clone);
+                        this.open_schema_inspector(node_idx_clone, cx);
                         this.dragging_node = Some(node_idx_clone);
                         this.is_panning = false;
                         let zoom = this.zoom;

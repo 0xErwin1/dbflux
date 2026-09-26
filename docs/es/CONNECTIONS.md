@@ -20,7 +20,7 @@ Abre el Connection Manager para crear o editar conexiones:
 - Pulsa `Ctrl+Shift+N` (`Cmd+Shift+N` en macOS).
 - Desde el sidebar, pulsa `c`.
 - O usa el command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` en macOS) y ejecuta
-  **Open Connection Manager**.
+  **Open connection manager**.
 
 ## Elegir un driver
 

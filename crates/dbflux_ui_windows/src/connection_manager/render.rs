@@ -5,7 +5,7 @@ use dbflux_app::keymap::Command;
 use dbflux_components::components::form_renderer;
 use dbflux_components::composites::Island;
 use dbflux_components::controls::{Button, Checkbox, Input, InputState};
-use dbflux_components::icons::AppIcon;
+use dbflux_components::icons::{AppIcon, DriverIconTone};
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, FocusShape, Icon as AppIconElement, Label, SegmentedControl,
     SegmentedItem, Text, focus_ring,
@@ -386,7 +386,10 @@ impl ConnectionManagerWindow {
     ) -> impl IntoElement {
         let brand_icon = self.form.selected_driver.as_ref().map(|driver| {
             let metadata = driver.metadata();
-            AppIcon::for_driver(metadata.icon, metadata.category)
+            (
+                AppIcon::for_driver(metadata.icon, metadata.category),
+                DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+            )
         });
         let name_focused = show_focus && self.form_focus == FormFocus::Name;
         let name_label = dbflux_i18n::t!("connection_manager.field.name");
@@ -436,11 +439,11 @@ impl ConnectionManagerWindow {
                         })),
                 )
             })
-            .when_some(brand_icon, |header, icon| {
+            .when_some(brand_icon, |header, (icon, brand_color)| {
                 header.child(
                     AppIconElement::new(icon)
                         .size(ConnectionFormMetrics::HEADER_LOGO)
-                        .color(theme.foreground),
+                        .color(brand_color),
                 )
             })
             .child(
@@ -549,7 +552,10 @@ impl ConnectionManagerWindow {
 
     /// Frame around a control that the form's keyboard cursor can land on:
     /// the cursor ring, and a press that moves the cursor to `field` and
-    /// starts editing it.
+    /// starts editing it. The frame never dims: a disabled `Input` draws its
+    /// own 45% rest fill and dimmed text, and dimming the frame as well
+    /// multiplied the two into a nearly invisible field. Callers dim other
+    /// disabled controls themselves.
     #[allow(clippy::too_many_arguments)]
     fn cm_control_frame(
         &self,
@@ -561,18 +567,17 @@ impl ConnectionManagerWindow {
         control: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> Div {
-        layout::field_frame(focused, width, mono, control, cx)
-            .when(!enabled, |frame| {
-                frame.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
-            })
-            .when_some(field.filter(|_| enabled), |frame, field| {
+        layout::field_frame(focused, width, mono, control, cx).when_some(
+            field.filter(|_| enabled),
+            |frame, field| {
                 frame.on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, window, cx| {
                         this.enter_edit_mode_for_field(field, window, cx);
                     }),
                 )
-            })
+            },
+        )
     }
 
     fn render_form_field(
@@ -618,15 +623,20 @@ impl ConnectionManagerWindow {
                     let input_focused = show_focus && self.form_focus == input_focus;
 
                     let control = layout::inline_controls()
-                        .child(self.cm_control_frame(
-                            selector_focused,
-                            Some(selector_focus),
-                            field_enabled,
-                            Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
-                            false,
-                            selector,
-                            cx,
-                        ))
+                        .child(
+                            self.cm_control_frame(
+                                selector_focused,
+                                Some(selector_focus),
+                                field_enabled,
+                                Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
+                                false,
+                                selector,
+                                cx,
+                            )
+                            .when(!field_enabled, |frame| {
+                                frame.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
+                            }),
+                        )
                         .child(
                             self.cm_control_frame(
                                 input_focused,
@@ -823,7 +833,8 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             });
                         },
-                    );
+                    )
+                    .group(field_def.id.clone());
 
                     Self::field_row_cm(
                         field_def.label.clone(),
@@ -866,7 +877,8 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             });
                         },
-                    );
+                    )
+                    .group(field_def.id.clone());
 
                     Self::field_row_cm(
                         field_def.label.clone(),
@@ -969,7 +981,8 @@ impl ConnectionManagerWindow {
                     cx.notify();
                 });
             },
-        );
+        )
+        .group("enter-as");
 
         Self::field_row_cm(
             dbflux_i18n::t!("connection_manager.enter_as.label"),
@@ -1058,7 +1071,7 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .child(dbflux_components::composites::section_header(
                         section.title.clone(),
-                        None,
+                        section.icon.map(|icon| form_section_app_icon(icon).into()),
                         cx,
                     ))
                     .children(field_elements)
@@ -1131,15 +1144,20 @@ impl ConnectionManagerWindow {
         let port_focused = show_focus && self.form_focus == FormFocus::Port;
 
         let control = layout::inline_controls()
-            .child(self.cm_control_frame(
-                selector_focused,
-                Some(FormFocus::HostValueSource),
-                primary_enabled,
-                Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
-                false,
-                self.form.host_value_source_selector.clone(),
-                cx,
-            ))
+            .child(
+                self.cm_control_frame(
+                    selector_focused,
+                    Some(FormFocus::HostValueSource),
+                    primary_enabled,
+                    Some(ConnectionFormMetrics::SOURCE_SELECT_WIDTH),
+                    false,
+                    self.form.host_value_source_selector.clone(),
+                    cx,
+                )
+                .when(!primary_enabled, |frame| {
+                    frame.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
+                }),
+            )
             .child(
                 self.cm_control_frame(
                     input_focused,
@@ -1403,5 +1421,22 @@ impl Render for ConnectionManagerWindow {
 impl Focusable for ConnectionManagerWindow {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+/// Glyph of a driver-declared form section icon.
+fn form_section_app_icon(icon: dbflux_core::FormSectionIcon) -> AppIcon {
+    use dbflux_core::FormSectionIcon;
+
+    match icon {
+        FormSectionIcon::Server => AppIcon::Server,
+        FormSectionIcon::Authentication => AppIcon::KeyRound,
+        FormSectionIcon::Transport => AppIcon::Lock,
+        FormSectionIcon::Connection => AppIcon::Plug,
+        FormSectionIcon::Database => AppIcon::Database,
+        FormSectionIcon::Cloud => AppIcon::Globe,
+        FormSectionIcon::Version => AppIcon::Tag,
+        FormSectionIcon::Topology => AppIcon::Boxes,
+        FormSectionIcon::Schema => AppIcon::Braces,
     }
 }

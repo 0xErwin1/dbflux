@@ -697,6 +697,93 @@ fn panic_hook_records_panic_event() {
 }
 
 #[test]
+fn panic_report_details_carry_message_location_and_thread() {
+    let service = service_for_test("dbflux-audit-panic-report.sqlite");
+
+    service
+        .record_panic_report_best_effort(&dbflux_audit::PanicReport {
+            message: "index out of bounds: the len is 3 but the index is 7",
+            location: Some("crates/dbflux_ui/src/lib.rs:42:9"),
+            thread: Some("main"),
+        })
+        .expect("record_panic_report_best_effort should return Some");
+
+    let query = AuditQueryFilter {
+        tool_id: Some("system_panic".to_string()),
+        ..Default::default()
+    };
+    let events = service
+        .query_extended(&query)
+        .expect("extended query should succeed");
+    assert_eq!(events.len(), 1);
+
+    let event = &events[0];
+    assert_eq!(event.actor_id, "system");
+    assert_eq!(
+        event.summary.as_deref(),
+        Some("Application panic at crates/dbflux_ui/src/lib.rs:42:9")
+    );
+    assert_eq!(
+        event.error_message.as_deref(),
+        Some(
+            "index out of bounds: the len is 3 but the index is 7 at crates/dbflux_ui/src/lib.rs:42:9"
+        )
+    );
+
+    let details: serde_json::Value = serde_json::from_str(
+        event
+            .details_json
+            .as_deref()
+            .expect("panic details are recorded"),
+    )
+    .expect("details are JSON");
+    assert_eq!(
+        details["message"],
+        "index out of bounds: the len is 3 but the index is 7"
+    );
+    assert_eq!(details["location"], "crates/dbflux_ui/src/lib.rs:42:9");
+    assert_eq!(details["thread"], "main");
+}
+
+#[test]
+fn panic_report_redacts_secrets_in_the_message() {
+    let service = service_for_test("dbflux-audit-panic-redaction.sqlite");
+    service.set_redact_sensitive(true);
+
+    service
+        .record_panic_report_best_effort(&dbflux_audit::PanicReport {
+            message: "connect failed: https://admin:hunter2@db.internal/app",
+            location: Some("src/main.rs:1:1"),
+            thread: None,
+        })
+        .expect("record_panic_report_best_effort should return Some");
+
+    let query = AuditQueryFilter {
+        tool_id: Some("system_panic".to_string()),
+        ..Default::default()
+    };
+    let events = service
+        .query_extended(&query)
+        .expect("extended query should succeed");
+    let event = &events[0];
+
+    assert!(
+        !event
+            .details_json
+            .as_deref()
+            .unwrap_or_default()
+            .contains("hunter2")
+    );
+    assert!(
+        !event
+            .error_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("hunter2")
+    );
+}
+
+#[test]
 fn connection_lifecycle_events_record_correctly() {
     let service = service_for_test("dbflux-audit-conn-lifecycle.sqlite");
 

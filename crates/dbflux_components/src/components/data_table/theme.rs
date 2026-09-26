@@ -22,8 +22,19 @@ pub const CELL_PADDING_Y: Pixels = px(4.0); // guardrail-allow: domain const, do
 #[allow(dead_code)]
 pub const MIN_COLUMN_WIDTH: f32 = 50.0;
 
-/// Default width for a column.
-pub const DEFAULT_COLUMN_WIDTH: f32 = 120.0;
+/// Widest a column opens to fit its values. A longer value is cut, and the
+/// column can still be dragged wider.
+pub const MAX_AUTO_COLUMN_WIDTH: f32 = 360.0;
+
+/// Rows read to find a column's longest value when it opens.
+pub const AUTO_WIDTH_SAMPLE_ROWS: usize = 200;
+
+/// Room kept past the longest value, so rounding in glyph advances never
+/// cuts its last character.
+pub const AUTO_WIDTH_SLACK: f32 = 2.0;
+
+/// Advance of a JetBrains Mono glyph as a fraction of the font size.
+pub const MONO_ADVANCE_EM: f32 = 0.6;
 
 /// Width of the scrollbar.
 pub const SCROLLBAR_WIDTH: Pixels = px(12.0); // guardrail-allow: domain const, scrollbar width

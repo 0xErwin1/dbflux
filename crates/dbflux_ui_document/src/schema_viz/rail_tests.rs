@@ -176,3 +176,43 @@ fn activating_a_diagram_tab_without_an_inspector_mounts_nothing(cx: &mut TestApp
 
     assert_eq!(opens.get(), 0, "a tab without an inspector mounts nothing");
 }
+
+/// The inspector's own close button dismisses the rail and forgets it, so
+/// the next activation leaves the rail closed.
+#[gpui::test]
+fn closing_the_inspector_hides_the_rail_and_forgets_it(cx: &mut TestAppContext) {
+    let app_state = init_test_runtime(cx);
+    let window = cx.add_empty_window();
+    let document = diagram_with_open_inspector(window, app_state);
+
+    let closes = Rc::new(Cell::new(0));
+    let sink = closes.clone();
+    window.update(|_, cx| {
+        cx.subscribe(&document, move |_, event: &DocumentEvent, _| {
+            if matches!(event, DocumentEvent::CloseInspector) {
+                sink.set(sink.get() + 1);
+            }
+        })
+        .detach();
+    });
+
+    let content = window.update(|_, cx| {
+        document
+            .read(cx)
+            .schema_inspector_content
+            .clone()
+            .expect("the inspector is open")
+    });
+    window.update(|_, cx| {
+        content.update(cx, |_, cx| {
+            cx.emit(super::inspector::SchemaInspectorEvent::Close)
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(closes.get(), 1, "closing must hide the workspace rail");
+
+    let opens = count_inspector_opens(window, &document);
+    activate(window, &document);
+    assert_eq!(opens.get(), 0, "a closed inspector must not come back");
+}

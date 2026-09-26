@@ -1153,6 +1153,13 @@ impl CollectionMetrics {
     pub const LEGEND_FONT: Pixels = px(11.0);
     pub const FIELD_FONT: Pixels = px(13.0);
     pub const VALUE_FONT: Pixels = px(12.5);
+    /// Aggregate view: the pipeline editor is 148 px tall on a cut-6 ground
+    /// field, the section has 10 px top and bottom padding (14 px sides,
+    /// the query row's), and the inline error sits 6 px under the editor.
+    pub const PIPELINE_EDITOR_HEIGHT: Pixels = px(148.0);
+    pub const PIPELINE_PADDING_Y: Pixels = px(10.0);
+    pub const PIPELINE_EDITOR_PADDING_Y: Pixels = px(6.0);
+    pub const PIPELINE_ERROR_GAP: Pixels = px(6.0);
 }
 
 /// Geometry of the query editor's context bar, production banner and
@@ -1185,6 +1192,31 @@ impl EditorMetrics {
     pub const LAST_RUN_FONT: Pixels = px(12.0);
     pub const LAST_RUN_ICON: Pixels = px(13.0);
     pub const LAST_RUN_GAP: Pixels = px(6.0);
+    /// Code text: 13 px JetBrains Mono on 22 px rows.
+    pub const CODE_FONT: Pixels = px(13.0);
+    pub const CODE_LINE_HEIGHT: Pixels = px(22.0);
+    /// Script file readout at the end of the context bar: 11.5 px mono text,
+    /// 13 px file icon, 8 px between path and state, 5 px inside the state.
+    pub const FILE_FONT: Pixels = px(11.5);
+    pub const FILE_ICON: Pixels = px(13.0);
+    pub const FILE_GAP: Pixels = px(8.0);
+    pub const FILE_STATE_GAP: Pixels = px(5.0);
+    /// Statement gutter: a 24 px run-marker slot with an 18 px hit target
+    /// and a 12 px play glyph, 14 px between the line numbers and a 3 px
+    /// statement bar, the statement fill at 6 % of the tint and the cursor
+    /// line at 11 %.
+    pub const GUTTER_MARKER_SLOT: Pixels = px(24.0);
+    pub const GUTTER_MARKER_SIZE: Pixels = px(18.0);
+    pub const GUTTER_MARKER_ICON: Pixels = px(12.0);
+    pub const GUTTER_BAR_GAP: Pixels = px(14.0);
+    pub const GUTTER_BAR_WIDTH: Pixels = px(3.0);
+    pub const STATEMENT_FILL_ALPHA: f32 = 0.06;
+    pub const CURSOR_LINE_FILL_ALPHA: f32 = 0.11;
+    /// Result sub-toolbar: 11.5 px mono statement caption, 240 px search field
+    /// with a 13 px search icon.
+    pub const RESULT_CAPTION_FONT: Pixels = px(11.5);
+    pub const RESULT_SEARCH_WIDTH: Pixels = px(240.0);
+    pub const RESULT_SEARCH_ICON: Pixels = px(13.0);
     /// Smallest height the results pane can be dragged to: the result tabs
     /// (34), the view row (42), the grid header (40), one grid row (31) and
     /// the grid footer (36), so the footer never slides out of view.
@@ -1216,41 +1248,48 @@ pub struct InspectorMetrics;
 impl InspectorMetrics {
     /// Default rail width. (380 px)
     pub const WIDTH: Pixels = px(380.0);
-    /// Header: 44 px tall, 16 px left and 14 px right padding, 10 px gap,
-    /// 16 px leading icon, 11 px mono row key.
-    pub const HEADER_HEIGHT: Pixels = px(44.0);
+    /// Header (IslTable): 46 px tall, 16 px left and 12 px right padding,
+    /// 10 px gap, 15 px leading icon, 11.5 px mono row key.
+    pub const HEADER_HEIGHT: Pixels = px(46.0);
     pub const HEADER_PADDING_LEFT: Pixels = px(16.0);
-    pub const HEADER_PADDING_RIGHT: Pixels = px(14.0);
+    pub const HEADER_PADDING_RIGHT: Pixels = px(12.0);
     pub const HEADER_GAP: Pixels = px(10.0);
-    pub const HEADER_ICON: Pixels = px(16.0);
-    pub const KEY_FONT: Pixels = px(11.0);
+    pub const HEADER_ICON: Pixels = px(15.0);
+    pub const KEY_FONT: Pixels = px(11.5);
     /// Horizontal padding of the section labels and field rows. (16 px)
     pub const PADDING_X: Pixels = px(16.0);
-    /// ROW section label: 10 px above, 4 px below.
-    pub const ROW_LABEL_PADDING_TOP: Pixels = px(10.0);
-    pub const ROW_LABEL_PADDING_BOTTOM: Pixels = px(4.0);
-    /// REFERENCES section label: 16 px above, 8 px below.
-    pub const REFERENCES_LABEL_PADDING_TOP: Pixels = px(16.0);
+    /// REFERENCES section label: 12 px above, 8 px below.
+    pub const REFERENCES_LABEL_PADDING_TOP: Pixels = px(12.0);
     pub const REFERENCES_LABEL_PADDING_BOTTOM: Pixels = px(8.0);
-    /// Field row: 9 px vertical padding, 4 px between label and value,
-    /// 11.5 px label with a 12 px key icon 6 px before it, 12.5 px mono value.
-    pub const FIELD_PADDING_Y: Pixels = px(9.0);
+    /// Field row: 10 px vertical padding, 4 px between the label line and
+    /// the value box; an 11.5 px label on a 14 px line with the column type
+    /// in mono at its right end.
+    pub const FIELD_PADDING_Y: Pixels = px(10.0);
     pub const FIELD_GAP: Pixels = px(4.0);
     pub const FIELD_LABEL_FONT: Pixels = px(11.5);
+    pub const FIELD_LABEL_LINE_HEIGHT: Pixels = px(14.0);
     pub const FIELD_LABEL_GAP: Pixels = px(6.0);
     pub const FIELD_ICON: Pixels = px(12.0);
+    /// Value box: 12.5 px mono on a 16 px line, 6 x 8 px padding, on the
+    /// ground under a 4 px cut, so the box is 28 px tall.
     pub const FIELD_VALUE_FONT: Pixels = px(12.5);
-    /// Reference card: 12 px side and 6 px bottom margin, 9 x 12 px padding,
-    /// 10 px gap, 13 px key icon, 12 px chevron.
-    pub const REFERENCE_MARGIN_X: Pixels = px(12.0);
+    pub const FIELD_VALUE_LINE_HEIGHT: Pixels = px(16.0);
+    pub const FIELD_VALUE_PADDING_Y: Pixels = px(6.0);
+    pub const FIELD_VALUE_PADDING_X: Pixels = px(8.0);
+    /// Reference row: 32 px tall, 16 px side and 6 px bottom margin, 10 px
+    /// side padding and gap, 13 px icon, 12 px chevron.
+    pub const REFERENCE_HEIGHT: Pixels = px(32.0);
+    pub const REFERENCE_MARGIN_X: Pixels = px(16.0);
     pub const REFERENCE_MARGIN_BOTTOM: Pixels = px(6.0);
-    pub const REFERENCE_PADDING_Y: Pixels = px(9.0);
-    pub const REFERENCE_PADDING_X: Pixels = px(12.0);
+    pub const REFERENCE_PADDING_X: Pixels = px(10.0);
     pub const REFERENCE_GAP: Pixels = px(10.0);
     pub const REFERENCE_ICON: Pixels = px(13.0);
     pub const REFERENCE_CHEVRON: Pixels = px(12.0);
-    /// Footer: 12 px padding, 8 px between buttons.
-    pub const FOOTER_PADDING: Pixels = px(12.0);
+    /// Footer: 46 px tall, 16 px left and 12 px right padding, 8 px between
+    /// buttons.
+    pub const FOOTER_HEIGHT: Pixels = px(46.0);
+    pub const FOOTER_PADDING_LEFT: Pixels = px(16.0);
+    pub const FOOTER_PADDING_RIGHT: Pixels = px(12.0);
     pub const FOOTER_GAP: Pixels = px(8.0);
 }
 
@@ -1847,6 +1886,9 @@ impl ObjectStoreMetrics {
     pub const DETAILS_GAP: Pixels = px(28.0);
     pub const DETAILS_ICON: Pixels = px(16.0);
     pub const DETAILS_VALUE_FONT: Pixels = px(13.0);
+    /// Loader icon standing in for a value that is still being fetched.
+    /// (12 px)
+    pub const LOADING_ICON: Pixels = px(12.0);
     /// Path field: 6 px between its parts, a 12 px copy icon.
     pub const PATH_GAP: Pixels = px(6.0);
     pub const PATH_COPY_ICON: Pixels = px(12.0);
@@ -2026,6 +2068,40 @@ impl SchemaInspectorMetrics {
     pub const ROW_FONT: Pixels = px(12.0);
     pub const ICON: Pixels = px(11.0);
     pub const ICON_GAP: Pixels = px(6.0);
+    /// Header: 44 px tall, 14 px side padding, 8 px gap, a 15 px table icon.
+    pub const HEADER_HEIGHT: Pixels = px(44.0);
+    pub const HEADER_PADDING_X: Pixels = px(14.0);
+    pub const HEADER_GAP: Pixels = px(8.0);
+    pub const HEADER_ICON: Pixels = px(15.0);
+}
+
+/// Geometry of the document inspector (IslDocTable "Document" panel): the
+/// header with the document size, and the rows of the nested field tree.
+pub struct DocumentInspectorMetrics;
+
+impl DocumentInspectorMetrics {
+    /// Header: 44 px tall, 14 px side padding, 10 px gap, a 15 px braces
+    /// icon and the 11 px mono size note.
+    pub const HEADER_HEIGHT: Pixels = px(44.0);
+    pub const HEADER_PADDING_X: Pixels = px(14.0);
+    pub const HEADER_GAP: Pixels = px(10.0);
+    pub const HEADER_ICON: Pixels = px(15.0);
+    pub const SIZE_FONT: Pixels = px(11.0);
+    /// Tree: 8 px above and below the rows.
+    pub const BODY_PADDING_Y: Pixels = px(8.0);
+    /// Row: 26 px tall, 14 px side padding plus 16 px per level, 6 px
+    /// between chevron, key, colon and value, 12.5 px mono text.
+    pub const ROW_HEIGHT: Pixels = px(26.0);
+    pub const ROW_PADDING_X: Pixels = px(14.0);
+    pub const INDENT: Pixels = px(16.0);
+    pub const ROW_GAP: Pixels = px(6.0);
+    pub const CHEVRON: Pixels = px(11.0);
+    pub const ROW_FONT: Pixels = px(12.5);
+    /// Type chip column at the right: 44 px wide, 10 px text.
+    pub const TYPE_WIDTH: Pixels = px(44.0);
+    pub const TYPE_FONT: Pixels = px(10.0);
+    /// A row with a staged edit: a 2 px warning edge at its left.
+    pub const PENDING_EDGE: Pixels = px(2.0);
 }
 
 /// Geometry of the visual query builder rail (P1Builder): its header, the
@@ -2056,6 +2132,9 @@ impl BuilderMetrics {
     /// Filter row controls: 120 px column select, 64 px comparator.
     pub const FILTER_COLUMN_WIDTH: Pixels = px(120.0);
     pub const FILTER_COMPARATOR_WIDTH: Pixels = px(64.0);
+    /// Sort and limit row: a 150 px column dropdown and a 70 px limit field.
+    pub const SORT_COLUMN_WIDTH: Pixels = px(150.0);
+    pub const SORT_LIMIT_WIDTH: Pixels = px(70.0);
     /// "valid" status: 11.5 px text, 12 px icon 5 px before it.
     pub const STATUS_FONT: Pixels = px(11.5);
     pub const STATUS_ICON: Pixels = px(12.0);

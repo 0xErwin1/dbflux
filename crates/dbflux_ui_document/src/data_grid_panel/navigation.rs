@@ -606,6 +606,12 @@ impl DataGridPanel {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        // The Aggregate view has its own editor and result views; commands
+        // meant for the documents grid must not reach the hidden grid.
+        if self.collection.tab == super::documents::CollectionTab::Aggregate {
+            return self.dispatch_aggregate_command(cmd, window, cx);
+        }
+
         // A modified value panel owns "save": while its editor holds the
         // keyboard the panel reports `ContextId::TextInput`, where Cmd+S
         // resolves to SaveQuery. Saving the script instead would leave what

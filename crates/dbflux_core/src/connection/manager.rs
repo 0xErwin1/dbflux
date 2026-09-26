@@ -1,4 +1,3 @@
-use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DataStructure, DatabaseInfo,
@@ -22,11 +21,34 @@ fn teardown_connection(mut connection: Arc<dyn Connection>) -> Result<(), DbErro
     if let Some(factory) = connection.execution_session_factory() {
         return factory.shutdown();
     }
-    connection.cancel_active().log_err();
+    cancel_before_teardown(connection.as_ref());
     if let Some(connection) = Arc::get_mut(&mut connection) {
         connection.close()?;
     }
     Ok(())
+}
+
+/// Stops whatever query `connection` is running before it closes.
+fn cancel_before_teardown(connection: &dyn Connection) {
+    let result = connection.cancel_active();
+
+    if let (Some(level), Err(error)) = (teardown_cancel_log_level(&result), &result) {
+        log::log!(
+            level,
+            "Query cancellation before teardown did not run: {error}"
+        );
+    }
+}
+
+/// Log level for the outcome of the cancel sent before a teardown. A driver
+/// that cannot cancel answers `NotSupported` on every teardown, which is
+/// expected and only worth a debug line; any other failure is an error.
+fn teardown_cancel_log_level(result: &Result<(), DbError>) -> Option<log::Level> {
+    match result {
+        Ok(()) => None,
+        Err(DbError::NotSupported(_)) => Some(log::Level::Debug),
+        Err(_) => Some(log::Level::Error),
+    }
 }
 
 fn teardown_connected(connected: ConnectedProfile) -> Result<(), DbError> {
@@ -3389,6 +3411,21 @@ pub enum StaleInstallReason {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unsupported_cancel_before_teardown_logs_at_debug_only() {
+        assert_eq!(super::teardown_cancel_log_level(&Ok(())), None);
+        assert_eq!(
+            super::teardown_cancel_log_level(&Err(DbError::NotSupported(
+                "Query cancellation not supported".to_string()
+            ))),
+            Some(log::Level::Debug)
+        );
+        assert_eq!(
+            super::teardown_cancel_log_level(&Err(DbError::query_failed("connection reset"))),
+            Some(log::Level::Error)
+        );
+    }
+
     use super::*;
     use crate::{
         DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,

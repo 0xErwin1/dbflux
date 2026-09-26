@@ -1,6 +1,6 @@
 //! Chrome of a document collection: the four-slot query bar, the view row
 //! (Tree / Table / JSON, step breadcrumb, pending edits, Commit), the
-//! Documents / Schema switch, the Schema view, the JSON view and the
+//! Documents / Schema / Aggregate switch, the Schema view, the JSON view and the
 //! server-change card (P1DocTable, P2DocNested, P1DocSchema).
 
 use dbflux_components::composites::{
@@ -462,43 +462,60 @@ impl DataGridPanel {
             })
     }
 
-    /// Documents / Schema switch at the right of the header.
+    /// Documents / Schema / Aggregate switch at the right of the header;
+    /// only the views the driver offers are shown.
     pub(in crate::data_grid_panel) fn render_collection_tabs(
         &self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let panel = cx.entity().downgrade();
-        let active = match self.collection.tab {
+        let id = |tab: CollectionTab| match tab {
             CollectionTab::Documents => "documents",
             CollectionTab::Schema => "schema",
+            CollectionTab::Aggregate => "aggregate",
         };
 
-        SegmentedControl::new(
-            vec![
-                SegmentedItem::new(
-                    "documents",
+        let items = self
+            .collection_tabs(cx)
+            .into_iter()
+            .map(|tab| match tab {
+                CollectionTab::Documents => SegmentedItem::new(
+                    id(tab),
                     dbflux_i18n::t!("document.collection.tab.documents"),
                 )
                 .icon(AppIcon::File),
-                SegmentedItem::new("schema", dbflux_i18n::t!("document.collection.tab.schema"))
-                    .icon(AppIcon::Columns),
-            ],
-            active,
-            move |selected, _, cx| {
-                let tab = if selected.as_ref() == "schema" {
-                    CollectionTab::Schema
-                } else {
-                    CollectionTab::Documents
-                };
-                if let Err(error) = panel.update(cx, |this, cx| this.set_collection_tab(tab, cx)) {
-                    log::debug!("data grid released before its tab switch: {error}");
+                CollectionTab::Schema => {
+                    SegmentedItem::new(id(tab), dbflux_i18n::t!("document.collection.tab.schema"))
+                        .icon(AppIcon::Columns)
                 }
-            },
-        )
+                CollectionTab::Aggregate => SegmentedItem::new(
+                    id(tab),
+                    dbflux_i18n::t!("document.collection.tab.aggregate"),
+                )
+                .icon(AppIcon::ChartColumnBig),
+            })
+            .collect();
+
+        SegmentedControl::new(items, id(self.collection.tab), move |selected, _, cx| {
+            let tab = match selected.as_ref() {
+                "schema" => CollectionTab::Schema,
+                "aggregate" => CollectionTab::Aggregate,
+                _ => CollectionTab::Documents,
+            };
+            if let Err(error) = panel.update(cx, |this, cx| this.set_collection_tab(tab, cx)) {
+                log::debug!("data grid released before its tab switch: {error}");
+            }
+        })
     }
 
     /// Metadata chip after the collection breadcrumb: the document count.
+    /// The Schema view names the count in its own toolbar, so the chip is
+    /// hidden there (IslDocSchema).
     pub(in crate::data_grid_panel) fn collection_meta_label(&self) -> Option<String> {
+        if self.collection.tab == CollectionTab::Schema {
+            return None;
+        }
+
         let schema_total = self
             .collection
             .schema

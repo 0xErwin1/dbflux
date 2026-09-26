@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
@@ -20,9 +21,9 @@ use dbflux_core::{
     DbDriver, DbError, DbKind, DeploymentClass, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverMetadata, FormFieldKind, FormSection, FormTab, FormValues, Icon,
     KeyValueConnection, ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary,
-    ObjectVersionSummary, PresignMethod, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
-    RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily,
-    VersioningStatus, field, field_required,
+    ObjectVersionSummary, PresignMethod, PublicAccessStatus, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, RelationalConnection, SchemaLoadingStrategy, SchemaSnapshot,
+    SqlDialect, TransferFamily, VersioningStatus, field, field_required,
 };
 
 use crate::error_formatter::{
@@ -66,6 +67,7 @@ pub static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
         sections: vec![
             FormSection {
                 title: "AWS".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Cloud),
                 fields: vec![
                     field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
                     field(
@@ -85,6 +87,7 @@ pub static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
             },
             FormSection {
                 title: "Endpoint".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Server),
                 fields: vec![
                     field(
                         "endpoint",
@@ -151,6 +154,10 @@ impl DbDriver for S3Driver {
 
     fn metadata(&self) -> &DriverMetadata {
         &S3_METADATA
+    }
+
+    fn picker_hint(&self) -> String {
+        "S3, MinIO, R2".to_string()
     }
 
     fn form_definition(&self) -> &DriverFormDef {
@@ -567,6 +574,61 @@ fn build_create_bucket_request(
     }
 
     request
+}
+
+/// Error code S3 (and MinIO) return from `GetBucketEncryption` when the
+/// bucket has no default encryption configured.
+const ENCRYPTION_NOT_CONFIGURED_CODE: &str = "ServerSideEncryptionConfigurationNotFoundError";
+
+/// Default encryption described by the first rule of a bucket's encryption
+/// configuration. `None` when there is no default rule or its algorithm is
+/// one DBFlux does not name.
+fn encryption_from_rules(rules: &[ServerSideEncryptionRule]) -> Option<BucketEncryption> {
+    let default = rules
+        .iter()
+        .find_map(ServerSideEncryptionRule::apply_server_side_encryption_by_default)?;
+
+    match default.sse_algorithm() {
+        ServerSideEncryption::Aes256 => Some(BucketEncryption::SseS3),
+        ServerSideEncryption::AwsKms | ServerSideEncryption::AwsKmsDsse => {
+            Some(BucketEncryption::SseKms {
+                key_id: default.kms_master_key_id().map(str::to_string),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Encryption to report when `GetBucketEncryption` fails: a bucket without a
+/// configuration has no default encryption, and any other failure
+/// (`AccessDenied`, `NotImplemented`, network) leaves it unknown.
+fn encryption_from_error_code(code: Option<&str>) -> Option<BucketEncryption> {
+    (code == Some(ENCRYPTION_NOT_CONFIGURED_CODE)).then_some(BucketEncryption::None)
+}
+
+/// Summarizes the four public-access block settings. A setting the response
+/// omits counts as off, which is what S3 applies.
+fn public_access_from_configuration(
+    configuration: &PublicAccessBlockConfiguration,
+) -> PublicAccessStatus {
+    let settings = [
+        configuration.block_public_acls(),
+        configuration.ignore_public_acls(),
+        configuration.block_public_policy(),
+        configuration.restrict_public_buckets(),
+    ];
+    let enabled = settings
+        .iter()
+        .filter(|setting| setting.unwrap_or(false))
+        .count();
+
+    if enabled == settings.len() {
+        PublicAccessStatus::Blocked
+    } else if enabled == 0 {
+        PublicAccessStatus::Open
+    } else {
+        PublicAccessStatus::Partial
+    }
 }
 
 /// Builds the `PutBucketEncryption` configuration from a `BucketEncryption`
@@ -1046,7 +1108,42 @@ impl ObjectStoreConnection for S3Connection {
             _ => VersioningStatus::Disabled,
         };
 
-        Ok(BucketDetails { region, versioning })
+        let encryption =
+            match runtime.block_on(self.client.get_bucket_encryption().bucket(bucket).send()) {
+                Ok(output) => output
+                    .server_side_encryption_configuration()
+                    .and_then(|configuration| encryption_from_rules(configuration.rules())),
+                Err(error) => {
+                    let code = error.code().map(str::to_string);
+                    log::debug!(
+                        "GetBucketEncryption for {bucket} failed ({}); encryption shown as unknown",
+                        code.as_deref().unwrap_or("no error code")
+                    );
+                    encryption_from_error_code(code.as_deref())
+                }
+            };
+
+        let public_access = match runtime
+            .block_on(self.client.get_public_access_block().bucket(bucket).send())
+        {
+            Ok(output) => output
+                .public_access_block_configuration()
+                .map(public_access_from_configuration),
+            Err(error) => {
+                log::debug!(
+                    "GetPublicAccessBlock for {bucket} failed ({}); public access shown as unknown",
+                    error.code().unwrap_or("no error code")
+                );
+                None
+            }
+        };
+
+        Ok(BucketDetails {
+            region,
+            versioning,
+            encryption,
+            public_access,
+        })
     }
 
     fn estimate_bucket_size(
@@ -1627,6 +1724,106 @@ mod tests {
             build_encryption_configuration(&BucketEncryption::SseKms { key_id: None })
                 .expect("SseKms without a key id should still build");
         assert_eq!(configuration.rules().len(), 1);
+    }
+
+    fn encryption_rule(
+        algorithm: ServerSideEncryption,
+        key_id: Option<&str>,
+    ) -> ServerSideEncryptionRule {
+        let mut builder = ServerSideEncryptionByDefault::builder().sse_algorithm(algorithm);
+        if let Some(key_id) = key_id {
+            builder = builder.kms_master_key_id(key_id);
+        }
+
+        ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(
+                builder
+                    .build()
+                    .expect("algorithm is set, so the rule builds"),
+            )
+            .build()
+    }
+
+    #[test]
+    fn encryption_from_rules_maps_known_algorithms() {
+        assert_eq!(
+            encryption_from_rules(&[encryption_rule(ServerSideEncryption::Aes256, None)]),
+            Some(BucketEncryption::SseS3)
+        );
+        assert_eq!(
+            encryption_from_rules(&[encryption_rule(
+                ServerSideEncryption::AwsKms,
+                Some("arn:aws:kms:us-east-1:1:key/abc")
+            )]),
+            Some(BucketEncryption::SseKms {
+                key_id: Some("arn:aws:kms:us-east-1:1:key/abc".to_string())
+            })
+        );
+        assert_eq!(
+            encryption_from_rules(&[encryption_rule(ServerSideEncryption::AwsKmsDsse, None)]),
+            Some(BucketEncryption::SseKms { key_id: None })
+        );
+    }
+
+    #[test]
+    fn encryption_from_rules_is_unknown_without_a_default_rule() {
+        assert_eq!(encryption_from_rules(&[]), None);
+        assert_eq!(
+            encryption_from_rules(&[ServerSideEncryptionRule::builder().build()]),
+            None
+        );
+        assert_eq!(
+            encryption_from_rules(&[encryption_rule(ServerSideEncryption::AwsFsx, None)]),
+            None
+        );
+    }
+
+    #[test]
+    fn encryption_from_error_code_distinguishes_not_configured_from_unknown() {
+        assert_eq!(
+            encryption_from_error_code(Some(ENCRYPTION_NOT_CONFIGURED_CODE)),
+            Some(BucketEncryption::None)
+        );
+        assert_eq!(encryption_from_error_code(Some("AccessDenied")), None);
+        assert_eq!(encryption_from_error_code(Some("NotImplemented")), None);
+        assert_eq!(encryption_from_error_code(None), None);
+    }
+
+    #[test]
+    fn public_access_summarizes_block_settings() {
+        let all_on = PublicAccessBlockConfiguration::builder()
+            .block_public_acls(true)
+            .ignore_public_acls(true)
+            .block_public_policy(true)
+            .restrict_public_buckets(true)
+            .build();
+        let all_off = PublicAccessBlockConfiguration::builder()
+            .block_public_acls(false)
+            .ignore_public_acls(false)
+            .block_public_policy(false)
+            .restrict_public_buckets(false)
+            .build();
+        let some_on = PublicAccessBlockConfiguration::builder()
+            .block_public_acls(true)
+            .block_public_policy(true)
+            .build();
+
+        assert_eq!(
+            public_access_from_configuration(&all_on),
+            PublicAccessStatus::Blocked
+        );
+        assert_eq!(
+            public_access_from_configuration(&all_off),
+            PublicAccessStatus::Open
+        );
+        assert_eq!(
+            public_access_from_configuration(&PublicAccessBlockConfiguration::builder().build()),
+            PublicAccessStatus::Open
+        );
+        assert_eq!(
+            public_access_from_configuration(&some_on),
+            PublicAccessStatus::Partial
+        );
     }
 
     #[test]

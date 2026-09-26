@@ -910,8 +910,13 @@ pub(crate) fn export_toast_success(kind: &str, path: &str) -> String {
 }
 
 /// Translates a command's display name for the Settings → Keybindings
-/// section, keyed by [`dbflux_app::keymap::Command::id`].
+/// section, keyed by [`dbflux_app::keymap::Command::id`]. The nine
+/// switch-to-tab commands carry their tab number so their rows differ.
 pub(crate) fn keybinding_command_name(cmd: &dbflux_app::keymap::Command) -> String {
+    if let dbflux_app::keymap::Command::SwitchToTab(index) = cmd {
+        return dbflux_i18n::t!("settings.keybindings.switch_to_tab_indexed", index = index);
+    }
+
     dbflux_i18n::t!(&format!("settings.keybindings.command.{}", cmd.id()))
 }
 
@@ -1222,7 +1227,7 @@ mod tests {
     fn auth_login_starting_embeds_profile_name() {
         let message = auth_login_starting("prod-mongo");
 
-        assert_eq!(message, "Starting auth-provider login for 'prod-mongo'...");
+        assert_eq!(message, "Starting auth-provider login for 'prod-mongo'…");
     }
 
     #[test]
@@ -1773,6 +1778,18 @@ mod keybinding_translation_tests {
                 "English catalog value for {key} must match Command::display_name()"
             );
         }
+    }
+
+    #[test]
+    fn keybinding_command_name_numbers_every_switch_to_tab_command() {
+        assert_eq!(
+            keybinding_command_name(&Command::SwitchToTab(1)),
+            "Switch to tab 1"
+        );
+        assert_eq!(
+            keybinding_command_name(&Command::SwitchToTab(9)),
+            "Switch to tab 9"
+        );
     }
 
     #[test]

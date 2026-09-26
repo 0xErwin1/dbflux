@@ -72,6 +72,7 @@ mod focus;
 mod live_output;
 pub mod pane;
 mod render;
+mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
@@ -322,6 +323,15 @@ pub(super) struct EditorState {
     /// `cached_supports_connection_context` whenever the effective language can
     /// change (construction, connection change, query-mode switch).
     pub(super) cached_effective_language: QueryLanguage,
+    /// Byte ranges of the buffer's statements from the language's statement
+    /// splitter, refreshed on every edit. `None` when the language has no
+    /// splitter, which also hides the statement gutter.
+    pub(super) statement_ranges: Option<Vec<std::ops::Range<usize>>>,
+    /// The gutter style installed on the editor, compared against the theme
+    /// on every render so a palette switch repaints the gutter.
+    pub(super) gutter_style: Option<gpui_base::input::GutterStatementStyle>,
+    /// Whether the installed gutter carries statements (false while hidden).
+    pub(super) gutter_shown: bool,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -365,6 +375,9 @@ pub(super) struct Execution {
     pub(super) live_output: Option<LiveOutputState>,
     pub(super) _live_output_drain: Option<Task<()>>,
     pub(super) active_query_task: Option<ActiveQueryTask>,
+    /// Byte offset in the buffer where the text of the latest run starts,
+    /// used to name the statement lines behind each result.
+    pub(super) query_origin: Option<usize>,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -655,6 +668,7 @@ impl CodeDocument {
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
                     this.finish_replace_once(_window, cx);
+                    this.refresh_statements(cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
                         std::mem::replace(&mut this.editor.last_change_length, current_length);
@@ -1024,6 +1038,9 @@ impl CodeDocument {
                 cached_effective_language: query_language.clone(),
                 language_binding,
                 query_language,
+                statement_ranges: None,
+                gutter_style: None,
+                gutter_shown: false,
             },
             source: SourceContext {
                 exec_ctx,
@@ -1054,6 +1071,7 @@ impl CodeDocument {
                 live_output: None,
                 _live_output_drain: None,
                 active_query_task: None,
+                query_origin: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,
@@ -1238,6 +1256,7 @@ impl CodeDocument {
         self.editor.original_content = sql_owned;
         self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
+        self.refresh_statements(cx);
     }
 
     /// Creates document with specific title.

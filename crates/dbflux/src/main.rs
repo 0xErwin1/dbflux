@@ -121,7 +121,7 @@ fn install_shutdown_signal_handlers() {
 fn install_shutdown_signal_handlers() {}
 
 /// Installs a chained best-effort panic hook that:
-/// 1. Attempts to record the panic via AuditService::record_panic_best_effort
+/// 1. Attempts to record the panic via AuditService::record_panic_report_best_effort
 /// 2. Falls back to stderr logging if the service is unavailable or fails
 /// 3. Always delegates to the previously installed panic hook
 fn install_panic_hook() {
@@ -149,13 +149,19 @@ fn install_panic_hook() {
                 "Unknown panic payload".to_string()
             };
 
-            let panic_info_str = format!("{} at {}", panic_message, panic_location);
+            let current_thread = std::thread::current();
 
-            match audit_service.record_panic_best_effort(&panic_info_str) {
+            let report = dbflux_audit::PanicReport {
+                message: &panic_message,
+                location: Some(&panic_location),
+                thread: current_thread.name(),
+            };
+
+            match audit_service.record_panic_report_best_effort(&report) {
                 Some(_) => {}
                 None => {
                     let _ = std::io::stderr().write_all(
-                        b"[dbflux_audit] panic hook: record_panic_best_effort returned None\n",
+                        b"[dbflux_audit] panic hook: record_panic_report_best_effort returned None\n",
                     );
                 }
             }

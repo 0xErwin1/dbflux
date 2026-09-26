@@ -721,6 +721,9 @@ pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> St
         DangerousQueryKind::MongoDropDatabase => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.title")
         }
+        DangerousQueryKind::MongoAggregateWrite => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_aggregate_write.title")
+        }
         DangerousQueryKind::RedisFlushAll => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.title")
         }
@@ -778,6 +781,9 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
         }
         DangerousQueryKind::MongoDropDatabase => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.body")
+        }
+        DangerousQueryKind::MongoAggregateWrite => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_aggregate_write.body")
         }
         DangerousQueryKind::RedisFlushAll => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.body")
@@ -1573,6 +1579,37 @@ pub(crate) fn bucket_encryption_choice_label(
         BucketEncryptionChoice::None => {
             dbflux_i18n::t!("document.buckets_table.new_bucket.encryption.none")
         }
+    }
+}
+
+/// Label for a bucket's default encryption in the buckets details strip.
+///
+/// `SSE-S3`/`SSE-KMS` are the AWS encryption algorithm names, not prose, and
+/// stay in English.
+pub(crate) fn bucket_encryption_label(encryption: &dbflux_core::BucketEncryption) -> String {
+    use dbflux_core::BucketEncryption;
+
+    match encryption {
+        BucketEncryption::SseS3 => "SSE-S3".to_string(),
+        BucketEncryption::SseKms { .. } => "SSE-KMS".to_string(),
+        BucketEncryption::None => {
+            dbflux_i18n::t!("document.buckets_table.new_bucket.encryption.none")
+        }
+    }
+}
+
+/// Label for a bucket's public-access blocking in the buckets details strip.
+pub(crate) fn public_access_status_label(status: dbflux_core::PublicAccessStatus) -> String {
+    use dbflux_core::PublicAccessStatus;
+
+    match status {
+        PublicAccessStatus::Blocked => {
+            dbflux_i18n::t!("document.buckets_table.public_access.blocked")
+        }
+        PublicAccessStatus::Partial => {
+            dbflux_i18n::t!("document.buckets_table.public_access.partial")
+        }
+        PublicAccessStatus::Open => dbflux_i18n::t!("document.buckets_table.public_access.open"),
     }
 }
 
@@ -2493,6 +2530,10 @@ pub(crate) fn collection_matching_estimated(shown: usize, total: u64) -> String 
     )
 }
 
+pub(crate) fn collection_inspector_json_failed(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.inspector.json_failed", error = error)
+}
+
 pub(crate) fn collection_presence_note(sampled: u64) -> String {
     dbflux_i18n::t!(
         "document.collection.count.presence_note",
@@ -2582,6 +2623,51 @@ pub(crate) fn collection_conflict_replace(changed: &str) -> String {
     dbflux_i18n::t!("document.collection.conflict.replace", changed = changed)
 }
 
+/// "5 columns" / "1 column" for the schema inspector summary.
+pub(crate) fn schema_inspector_columns(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.columns.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.columns.many",
+            count = count
+        )
+    }
+}
+
+/// "3 indexes" / "1 index" for the schema inspector summary.
+pub(crate) fn schema_inspector_indexes(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.indexes.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.indexes.many",
+            count = count
+        )
+    }
+}
+
+/// "2 foreign keys" / "1 foreign key" for the schema inspector summary.
+pub(crate) fn schema_inspector_foreign_keys(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.foreign_keys.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.foreign_keys.many",
+            count = count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -2665,6 +2751,7 @@ mod tests {
         DangerousQueryKind::MongoUpdateMany,
         DangerousQueryKind::MongoDropCollection,
         DangerousQueryKind::MongoDropDatabase,
+        DangerousQueryKind::MongoAggregateWrite,
         DangerousQueryKind::RedisFlushAll,
         DangerousQueryKind::RedisFlushDb,
         DangerousQueryKind::RedisMultiDelete,
@@ -3035,13 +3122,13 @@ mod tests {
         );
         assert_eq!(
             copy_query_language_label(Some(QueryLanguage::MongoQuery)),
-            "Copy as Query"
+            "Copy as query"
         );
         assert_eq!(
             copy_query_language_label(Some(QueryLanguage::RedisCommands)),
-            "Copy as Command"
+            "Copy as command"
         );
-        assert_eq!(copy_query_language_label(None), "Copy as Query");
+        assert_eq!(copy_query_language_label(None), "Copy as query");
     }
 
     #[test]
@@ -3179,7 +3266,7 @@ mod tests {
         let en = dbflux_i18n::t!("document.code.output.running", locale = "en");
         let es = dbflux_i18n::t!("document.code.output.running", locale = "es");
 
-        assert_eq!(en, "Running...");
+        assert_eq!(en, "Running…");
         assert_ne!(en, es);
     }
 
@@ -3400,6 +3487,9 @@ mod tests {
             DangerousQueryKind::MongoDropDatabase => {
                 "document.code.dangerous_query.kind.mongo_drop_database.title"
             }
+            DangerousQueryKind::MongoAggregateWrite => {
+                "document.code.dangerous_query.kind.mongo_aggregate_write.title"
+            }
             DangerousQueryKind::RedisFlushAll => {
                 "document.code.dangerous_query.kind.redis_flush_all.title"
             }
@@ -3441,6 +3531,9 @@ mod tests {
             }
             DangerousQueryKind::MongoDropDatabase => {
                 "document.code.dangerous_query.kind.mongo_drop_database.body"
+            }
+            DangerousQueryKind::MongoAggregateWrite => {
+                "document.code.dangerous_query.kind.mongo_aggregate_write.body"
             }
             DangerousQueryKind::RedisFlushAll => {
                 "document.code.dangerous_query.kind.redis_flush_all.body"
@@ -4274,7 +4367,6 @@ mod tests {
             "document.object_browser.preview.versions.count.one",
             "document.object_browser.preview.versions.count.many",
             "document.object_browser.preview.action.download",
-            "document.object_browser.preview.action.open",
             "document.object_browser.preview.action.copy_uri",
             "document.object_browser.preview.action.presign",
             "document.object_browser.preview.action.delete",

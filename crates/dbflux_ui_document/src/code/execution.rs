@@ -168,11 +168,13 @@ impl CodeDocument {
     fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
+            self.execution.query_origin = None;
             self.run_query_text(query, in_new_tab, window, cx);
             return;
         }
 
         let query = self.editor.input_state.read(cx).value().to_string();
+        self.execution.query_origin = Some(0);
 
         // No selection means the whole buffer runs. When it holds more than one
         // statement and the driver can execute batches, confirm before running
@@ -263,7 +265,7 @@ impl CodeDocument {
         cx.notify();
     }
 
-    fn run_query_text(
+    pub(super) fn run_query_text(
         &mut self,
         query: String,
         in_new_tab: bool,
@@ -1465,13 +1467,29 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let set_count = if result.has_additional_results() {
+            result.iter_result_sets().count()
+        } else {
+            1
+        };
+        let buffer = self.editor.input_state.read(cx).value().to_string();
+        let captions = super::statements::result_statement_captions(
+            self.effective_language(),
+            &buffer,
+            &query,
+            self.execution.query_origin,
+            set_count,
+        );
+
         // A multi-statement batch yields one result set per statement. Give
         // each its own tab so every statement's output is visible, rather than
         // surfacing only the primary set.
         if result.has_additional_results() {
-            self.create_result_tabs_for_batch(result, query, window, cx);
+            self.create_result_tabs_for_batch(result, query, captions, window, cx);
             return;
         }
+
+        let caption: Option<SharedString> = captions.into_iter().next().flatten().map(Into::into);
 
         let should_create_new_tab = self.result_tabs.run_in_new_tab
             || self.result_tabs.result_tabs.is_empty()
@@ -1480,13 +1498,14 @@ impl CodeDocument {
         self.result_tabs.run_in_new_tab = false;
 
         if should_create_new_tab {
-            self.create_result_tab(result, query, window, cx);
+            self.create_result_tab(result, query, caption, window, cx);
         } else if let Some(index) = self.result_tabs.active_result_index
             && let Some(tab) = self.result_tabs.result_tabs.get_mut(index)
         {
             let profile_id = self.connection_id;
             tab.grid.update(cx, |g, cx| {
-                g.set_query_result(result, query.clone(), profile_id, cx)
+                g.set_query_result(result, query.clone(), profile_id, cx);
+                g.set_result_caption(caption, cx);
             });
         }
     }
@@ -1500,6 +1519,7 @@ impl CodeDocument {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        captions: Vec<Option<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1507,10 +1527,12 @@ impl CodeDocument {
 
         let first_new_index = self.result_tabs.result_tabs.len();
 
-        for set in result.iter_result_sets() {
+        for (index, set) in result.iter_result_sets().enumerate() {
             let mut single = set.clone();
             single.additional_results.clear();
-            self.create_result_tab(Arc::new(single), query.clone(), window, cx);
+
+            let caption = captions.get(index).cloned().flatten().map(Into::into);
+            self.create_result_tab(Arc::new(single), query.clone(), caption, window, cx);
         }
 
         if first_new_index < self.result_tabs.result_tabs.len() {
@@ -1522,6 +1544,7 @@ impl CodeDocument {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        caption: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1544,7 +1567,10 @@ impl CodeDocument {
             )
         });
 
-        grid.update(cx, |grid, _| grid.set_side_panels_hosted(true));
+        grid.update(cx, |grid, cx| {
+            grid.set_side_panels_hosted(true);
+            grid.set_result_caption(caption, cx);
+        });
 
         if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
@@ -2689,7 +2715,7 @@ mod tests {
             database = "logs"
         );
 
-        assert_eq!(en, "Connecting to database 'logs', please wait...");
+        assert_eq!(en, "Connecting to database 'logs', please wait…");
     }
 
     #[test]

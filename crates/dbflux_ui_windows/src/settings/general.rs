@@ -650,6 +650,7 @@ impl GeneralSection {
                 Self::theme_items(),
                 theme_index,
                 GeneralFormRow::Theme,
+                "theme",
                 |this, index| this.gen_settings.theme = Self::theme_for_index(index),
                 cx,
             ))
@@ -659,6 +660,7 @@ impl GeneralSection {
                 Self::style_items(),
                 style_index,
                 GeneralFormRow::Style,
+                "density",
                 |this, index| this.gen_settings.style = Self::style_for_index(index),
                 cx,
             ))
@@ -720,6 +722,7 @@ impl GeneralSection {
                 Self::startup_focus_items(),
                 focus_index,
                 GeneralFormRow::DefaultFocus,
+                "focus-on-launch",
                 |this, index| {
                     this.gen_settings.default_focus_on_startup =
                         Self::startup_focus_for_index(index)
@@ -995,15 +998,19 @@ impl GeneralSection {
         items: Vec<SegmentedItem>,
         active_index: usize,
         row: GeneralFormRow,
+        group: &'static str,
         setter: fn(&mut Self, usize),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let entity = cx.entity();
+        let item_ids: Vec<SharedString> = items.iter().map(|item| item.id.clone()).collect();
+        let active_id = item_ids.get(active_index).cloned().unwrap_or_default();
+
         let control = SegmentedControl::new(
             items,
-            SharedString::from(active_index.to_string()),
+            active_id,
             move |selected: &SharedString, _window, cx| {
-                let Ok(index) = selected.parse::<usize>() else {
+                let Some(index) = item_ids.iter().position(|id| id == selected) else {
                     return;
                 };
 
@@ -1013,7 +1020,8 @@ impl GeneralSection {
                     cx.notify();
                 });
             },
-        );
+        )
+        .group(group);
 
         layout::form_row(
             label,

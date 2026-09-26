@@ -776,6 +776,8 @@ pub(in crate::buckets_table) mod tests {
         let details = BucketDetails {
             region: "us-east-1".to_string(),
             versioning: VersioningStatus::Enabled,
+            encryption: None,
+            public_access: None,
         };
 
         cx.update(|cx| {
@@ -1036,6 +1038,48 @@ pub(in crate::buckets_table) mod tests {
             keymap.resolve(context, &KeyChord::parse("r").expect("plain letter chord")),
             Some(Command::Rename)
         );
+    }
+
+    /// Space on a bucket row toggles the details strip for that row.
+    #[gpui::test]
+    fn space_toggles_the_details_strip(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            BucketsTableDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            document.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("exports")]);
+                doc.select_bucket("exports".to_string(), cx);
+                doc.focus_handle.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space");
+        assert!(window.update(|_, cx| document.read(cx).show_details));
+
+        window.simulate_keystrokes("space");
+        assert!(!window.update(|_, cx| document.read(cx).show_details));
     }
 
     pub(in crate::buckets_table) fn new_test_entity(

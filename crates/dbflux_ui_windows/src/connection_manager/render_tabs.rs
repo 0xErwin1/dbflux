@@ -329,7 +329,8 @@ impl ConnectionManagerWindow {
                     cx.notify();
                 });
             },
-        );
+        )
+        .group("ssl-mode");
 
         // Wrap the segmented control in a content-width row with a trailing flex filler so
         // its segments hug their labels instead of stretching to fill the field column.

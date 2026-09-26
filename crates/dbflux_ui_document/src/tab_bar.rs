@@ -274,25 +274,7 @@ impl TabBar {
 
         let tab_manager = self.tab_manager.clone();
 
-        let icon = match meta.icon {
-            super::types::DocumentIcon::Sql => AppIcon::Code,
-            super::types::DocumentIcon::Table => AppIcon::Table,
-            super::types::DocumentIcon::Redis => AppIcon::Database,
-            super::types::DocumentIcon::RedisKey => AppIcon::Hash,
-            super::types::DocumentIcon::Terminal => AppIcon::SquareTerminal,
-            super::types::DocumentIcon::Mongo => AppIcon::Database,
-            super::types::DocumentIcon::Collection => AppIcon::Folder,
-            super::types::DocumentIcon::Script => AppIcon::ScrollText,
-            super::types::DocumentIcon::Audit => AppIcon::ScrollText,
-            super::types::DocumentIcon::SchemaViz => AppIcon::Link2,
-            super::types::DocumentIcon::Chart => AppIcon::ChartSpline,
-            super::types::DocumentIcon::Dashboard => AppIcon::ChartSpline,
-            super::types::DocumentIcon::Buckets => AppIcon::Box,
-            super::types::DocumentIcon::ObjectBrowser => AppIcon::Folder,
-            super::types::DocumentIcon::DumpAnalysis => AppIcon::HardDrive,
-            super::types::DocumentIcon::McpApprovals => AppIcon::Bot,
-            super::types::DocumentIcon::Migrate => AppIcon::ArrowUpDown,
-        };
+        let icon = tab_icon(meta.icon);
 
         let center_x = self.active_tab_center_x.clone();
 
@@ -746,5 +728,45 @@ mod tests {
             assert_eq!(tab.role(), Role::Tab);
             assert_eq!(tab.is_selected(), Some(selected), "tab {id:?}");
         }
+    }
+}
+
+/// The icon a tab shows for its document kind, matching the icon the sidebar
+/// gives the same object (a collection's box, a key-value database's key).
+fn tab_icon(icon: super::types::DocumentIcon) -> AppIcon {
+    use super::types::DocumentIcon;
+
+    match icon {
+        DocumentIcon::Sql => AppIcon::Code,
+        DocumentIcon::Table => AppIcon::Table,
+        DocumentIcon::Redis => AppIcon::KeyRound,
+        DocumentIcon::RedisKey => AppIcon::Hash,
+        DocumentIcon::Terminal => AppIcon::SquareTerminal,
+        DocumentIcon::Mongo => AppIcon::Database,
+        DocumentIcon::Collection => AppIcon::Box,
+        DocumentIcon::Script => AppIcon::ScrollText,
+        DocumentIcon::Audit => AppIcon::ScrollText,
+        DocumentIcon::SchemaViz => AppIcon::Layers,
+        DocumentIcon::Chart => AppIcon::ChartSpline,
+        DocumentIcon::Dashboard => AppIcon::ChartSpline,
+        DocumentIcon::Buckets => AppIcon::Box,
+        DocumentIcon::ObjectBrowser => AppIcon::Folder,
+        DocumentIcon::DumpAnalysis => AppIcon::HardDrive,
+        DocumentIcon::McpApprovals => AppIcon::Bot,
+        DocumentIcon::Migrate => AppIcon::ArrowUpDown,
+    }
+}
+
+#[cfg(test)]
+mod tab_icon_tests {
+    use super::tab_icon;
+    use crate::types::DocumentIcon;
+    use dbflux_components::icons::AppIcon;
+
+    #[test]
+    fn collection_and_key_value_tabs_use_their_sidebar_icons() {
+        assert_eq!(tab_icon(DocumentIcon::Collection), AppIcon::Box);
+        assert_eq!(tab_icon(DocumentIcon::Redis), AppIcon::KeyRound);
+        assert_eq!(tab_icon(DocumentIcon::SchemaViz), AppIcon::Layers);
     }
 }

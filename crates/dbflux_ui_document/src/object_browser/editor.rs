@@ -23,7 +23,7 @@ use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
 use crate::handle::DocumentEvent;
 use crate::object_text::{
     FIND_SHORTCUT_HINT, LineEnding, SAVE_SHORTCUT_HINT, TextBody, body_meta_line, build_text_input,
-    cursor_label, db_error_to_user_facing, open_find_panel, record_save_audit,
+    cursor_label, db_error_to_user_facing, keycap_text, open_find_panel, record_save_audit,
 };
 // The raw `GpuiInput` (not the app's single-line `Input` wrapper) is what
 // `CodeDocument` renders its editor with: only it supports the full-height,
@@ -639,93 +639,55 @@ impl ObjectBrowserDocument {
                     })
                     .when(is_editable, |this| {
                         this.child(
-                            div()
-                                .id("object-browser-editor-save")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .bg(theme.primary)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer().hover(|d| d.opacity(0.9)).on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.save_object_edits(cx);
-                                        }),
-                                    )
-                                })
-                                .child(
-                                    Icon::new(if is_saving {
-                                        AppIcon::Loader
-                                    } else {
-                                        AppIcon::Save
-                                    })
-                                    .small()
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::caption(if is_saving {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.saving"
-                                        )
-                                    } else {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.save"
-                                        )
-                                    })
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::key_hint(SAVE_SHORTCUT_HINT)
-                                        .color(theme.primary_foreground),
-                                ),
+                            Button::new(
+                                "object-browser-editor-save",
+                                if is_saving {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
+                                } else {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                                },
+                            )
+                            .primary()
+                            .icon(if is_saving {
+                                AppIcon::Loader
+                            } else {
+                                AppIcon::Save
+                            })
+                            .kbd(keycap_text(SAVE_SHORTCUT_HINT))
+                            .disabled(!can_act)
+                            .tab_stop(false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.save_object_edits(cx);
+                            })),
                         )
-                    })
-                    .when(is_editable, |this| {
-                        this.child(
-                            div()
-                                .id("object-browser-editor-discard")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|d| d.bg(theme.secondary))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.discard_object_edits(window, cx);
-                                        }))
-                                })
-                                .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.editor.footer.discard"
-                                ))),
+                        .child(
+                            Button::new(
+                                "object-browser-editor-discard",
+                                dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                            )
+                            .ghost()
+                            .icon(AppIcon::RotateCcw)
+                            .disabled(!can_act)
+                            .tab_stop(false)
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.discard_object_edits(window, cx);
+                                },
+                            )),
                         )
                     })
                     .child(
-                        div()
-                            .id("object-browser-editor-find")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_editor_find(window, cx);
-                            }))
-                            .child(Icon::new(AppIcon::Search).small().muted())
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.editor.footer.find"
-                            )))
-                            .child(Text::key_hint(FIND_SHORTCUT_HINT)),
+                        Button::new(
+                            "object-browser-editor-find",
+                            dbflux_i18n::t!("document.object_browser.editor.footer.find"),
+                        )
+                        .ghost()
+                        .icon(AppIcon::Search)
+                        .kbd(keycap_text(FIND_SHORTCUT_HINT))
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_editor_find(window, cx);
+                        })),
                     ),
             )
             .child(Text::caption(cursor_label(position)).muted_foreground())

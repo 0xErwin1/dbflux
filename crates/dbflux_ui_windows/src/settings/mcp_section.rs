@@ -2,7 +2,7 @@ use super::form_section::{FormSection, create_blur_subscription};
 use super::section_trait::SectionFocusEvent;
 use super::{SettingsSection, SettingsSectionId, layout};
 use crate::labels::{mcp_policy_tools_classes_summary, mcp_role_policy_count};
-use crate::tokens::{FormMetrics, SettingsMetrics};
+use crate::tokens::{FormMetrics, PolicyNoteMetrics, SettingsMetrics};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::components::multi_select::MultiSelect;
 use dbflux_components::composites::{
@@ -14,7 +14,9 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::BadgeTone;
-use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, Icon as FluxIcon, SegmentedControl, SegmentedItem, Text,
+};
 use dbflux_components::tokens::{Spacing, Widths};
 use dbflux_mcp::{MUTATING_CLASS_IDS, PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
 use dbflux_policy::ClassDecision;
@@ -1134,7 +1136,7 @@ impl McpSection {
                 let badge = if dbflux_mcp::is_builtin(&role.id) {
                     Some((
                         SharedString::from(dbflux_i18n::t!("settings.mcp.field.builtin_badge")),
-                        BadgeTone::Accent,
+                        BadgeTone::Neutral,
                     ))
                 } else {
                     None
@@ -1258,7 +1260,7 @@ impl McpSection {
                 let badge = if dbflux_mcp::is_builtin(&policy.id) {
                     Some((
                         SharedString::from(dbflux_i18n::t!("settings.mcp.field.builtin_badge")),
-                        BadgeTone::Accent,
+                        BadgeTone::Neutral,
                     ))
                 } else {
                     None
@@ -1394,6 +1396,7 @@ impl McpSection {
                     cx,
                 ))
                 .children(class_rows)
+                .child(Self::render_policy_defaults_note(cx))
                 .children(allow_all_row)
                 .child(dbflux_components::composites::section_header(
                     crate::labels::mcp_allowed_tools_header(
@@ -1467,6 +1470,7 @@ impl McpSection {
                     cx.notify();
                 });
             })
+            .group(format!("policy-class-{class}"))
             .focused(is_focused);
 
         div()
@@ -1496,33 +1500,56 @@ impl McpSection {
             )
     }
 
-    /// The "Allow all without approval" action and the warning that it lets
-    /// the agent run any mutating call, DROP DATABASE included, unasked.
+    /// The note that states the default decisions of a new policy.
+    fn render_policy_defaults_note(cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(PolicyNoteMetrics::GAP)
+            .pt(PolicyNoteMetrics::PADDING_TOP)
+            .pb(PolicyNoteMetrics::PADDING_BOTTOM)
+            .child(
+                FluxIcon::new(AppIcon::Info)
+                    .size(PolicyNoteMetrics::ICON)
+                    .color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(layout::help_text(dbflux_i18n::t!(
+                        "settings.mcp.policies_defaults_hint"
+                    ))),
+            )
+    }
+
+    /// The danger banner that turns every Ask of the policy into Allow,
+    /// warning that the agent could then run DROP DATABASE unasked.
     fn render_allow_all_row(&self, is_focused: bool, cx: &mut Context<Self>) -> Div {
         let already_allowed = self.draft_policy_classes.allows_all_mutating();
 
-        layout::inline_controls()
-            .py(FormMetrics::ROW_PADDING_Y)
-            .child(
+        div().mt(PolicyNoteMetrics::BANNER_MARGIN_TOP).child(
+            BannerBlock::new(
+                BannerVariant::Danger,
+                dbflux_i18n::t!("settings.mcp.action.allow_all_without_approval"),
+            )
+            .with_body(dbflux_i18n::t!(
+                "settings.mcp.warning.allow_all_without_approval"
+            ))
+            .with_actions(
                 Button::new(
                     "mcp-policy-allow-all",
-                    dbflux_i18n::t!("settings.mcp.action.allow_all_without_approval"),
+                    dbflux_i18n::t!("settings.mcp.action.allow_all"),
                 )
-                .secondary()
+                .danger()
                 .icon(AppIcon::TriangleAlert)
                 .focused(is_focused)
                 .disabled(already_allowed)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.allow_all_without_approval(cx);
                 })),
-            )
-            .child(
-                Text::body(dbflux_i18n::t!(
-                    "settings.mcp.warning.allow_all_without_approval"
-                ))
-                .font_size(FormMetrics::HELP_FONT)
-                .text_color(cx.theme().warning),
-            )
+            ),
+        )
     }
 
     fn allow_all_without_approval(&mut self, cx: &mut Context<Self>) {
@@ -2638,7 +2665,9 @@ mod tests {
         "settings.mcp.decision.ask",
         "settings.mcp.decision.deny",
         "settings.mcp.action.allow_all_without_approval",
+        "settings.mcp.action.allow_all",
         "settings.mcp.warning.allow_all_without_approval",
+        "settings.mcp.policies_defaults_hint",
         "settings.mcp.group.discovery",
         "settings.mcp.group.schema",
         "settings.mcp.group.query",

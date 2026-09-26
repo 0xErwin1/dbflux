@@ -54,6 +54,7 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
             sections: vec![
                 FormSection {
                     title: "Server".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Server),
                     fields: vec![
                         field_use_uri(),
                         when_checked(
@@ -90,6 +91,7 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                 },
                 FormSection {
                     title: "Authentication".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Authentication),
                     fields: vec![
                         when_unchecked(
                             field("user", "User", FormFieldKind::Text, "optional"),
@@ -100,6 +102,7 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                 },
                 FormSection {
                     title: "Topology".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Topology),
                     fields: vec![
                         with_default(
                             field(
@@ -635,6 +638,7 @@ impl DbDriver for RedisDriver {
                 sections: vec![
                     FormSection {
                         title: "Key Scanning".into(),
+                        icon: None,
                         fields: vec![
                             FormFieldDef {
                                 id: "scan_batch_size".into(),
@@ -682,6 +686,7 @@ impl DbDriver for RedisDriver {
                     },
                     FormSection {
                         title: "Safety".into(),
+                        icon: None,
                         fields: vec![FormFieldDef {
                             id: "allow_flush".into(),
                             label: "Allow FLUSHALL / FLUSHDB".into(),

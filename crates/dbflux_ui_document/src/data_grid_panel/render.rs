@@ -149,7 +149,16 @@ pub(super) fn content_mode_for_result(
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_actions(window, cx);
+        self.flush_aggregate_json(window, cx);
         let st = self.derive_render_state(cx);
+
+        // The Schema view of a collection shows only its sample toolbar and
+        // field table (IslDocSchema): no query bar and no documents footer.
+        // The Aggregate view brings its own editor, results and footer.
+        let schema_view =
+            st.document_collection && st.document_tab == documents::CollectionTab::Schema;
+        let aggregate_view =
+            st.document_collection && st.document_tab == documents::CollectionTab::Aggregate;
 
         div()
             .track_focus(&st.focus_handle)
@@ -158,12 +167,13 @@ impl Render for DataGridPanel {
             .size_full()
             .child(self.panel_origin_canvas(cx))
             .when(st.show_data_toolbar && st.document_collection, |d| {
+                let documents_tab = st.document_tab == documents::CollectionTab::Documents;
+
                 d.child(self.render_table_header(None, &st.theme, cx))
-                    .child(self.render_document_query_bar(cx))
-                    .when(
-                        st.document_tab == documents::CollectionTab::Documents,
-                        |d| d.child(self.render_document_view_row(cx)),
-                    )
+                    .when(documents_tab, |d| {
+                        d.child(self.render_document_query_bar(cx))
+                            .child(self.render_document_view_row(cx))
+                    })
             })
             .when(st.show_data_toolbar && !st.document_collection, |d| {
                 let edit_controls = st.show_edit_toolbar.then_some(EditControls {
@@ -189,26 +199,29 @@ impl Render for DataGridPanel {
                 d.child(self.render_panel_controls_header(&st, cx))
             })
             .child(self.render_content_body(&st, cx))
-            .child(self.render_status_bar(
-                st.row_count,
-                &st.exec_time,
-                st.is_paginated,
-                st.pagination_info,
-                st.total_pages,
-                st.can_prev,
-                st.can_next,
-                st.sort_info,
-                st.has_data,
-                st.uses_result_view,
-                // A document collection counts its staged edits in the view row.
-                if st.document_collection {
-                    0
-                } else {
-                    st.dirty_count
-                },
-                &st.theme,
-                cx,
-            ))
+            .when(!schema_view && !aggregate_view, |d| {
+                d.child(self.render_status_bar(
+                    st.row_count,
+                    &st.exec_time,
+                    st.is_paginated,
+                    st.pagination_info,
+                    st.total_pages,
+                    st.can_prev,
+                    st.can_next,
+                    st.sort_info,
+                    st.has_data,
+                    st.uses_result_view,
+                    // A document collection counts its staged edits in the view row.
+                    if st.document_collection {
+                        0
+                    } else {
+                        st.dirty_count
+                    },
+                    st.is_editable,
+                    &st.theme,
+                    cx,
+                ))
+            })
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
@@ -242,6 +255,7 @@ impl Render for DataGridPanel {
                     .is_visible(),
                 |d| d.child(self.mutation_confirm.mutation_confirm_hard.clone()),
             )
+            .when_some(self.render_aggregate_confirm(cx), |d, modal| d.child(modal))
     }
 }
 
@@ -675,6 +689,8 @@ impl DataGridPanel {
 
             let body = if st.document_tab == documents::CollectionTab::Schema {
                 self.render_schema_view(cx).into_any_element()
+            } else if st.document_tab == documents::CollectionTab::Aggregate {
+                self.render_aggregate_view(cx)
             } else if self.view_config.mode == DataViewMode::Json {
                 self.render_document_json_view(cx).into_any_element()
             } else {
@@ -688,6 +704,11 @@ impl DataGridPanel {
                 .into_any_element()
             };
 
+            // The Aggregate view keeps its own focus (the pipeline editor and
+            // the result views), so a click there must not pull focus back to
+            // the documents grid.
+            let focuses_documents = st.document_tab != documents::CollectionTab::Aggregate;
+
             return div()
                 .relative()
                 .flex_1()
@@ -695,14 +716,16 @@ impl DataGridPanel {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if this.focus.focus_mode != GridFocusMode::Table {
-                            this.focus_table(window, cx);
-                        }
-                    }),
-                )
+                .when(focuses_documents, |body| {
+                    body.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.focus.focus_mode != GridFocusMode::Table {
+                                this.focus_table(window, cx);
+                            }
+                        }),
+                    )
+                })
                 .child(
                     div()
                         .flex_1()
@@ -995,7 +1018,7 @@ impl DataGridPanel {
             .when_some(edit_controls, |header, controls| {
                 header.child(self.render_edit_controls(controls, theme, cx))
             })
-            .when(self.has_document_query_slots(cx), |header| {
+            .when(self.collection_tabs(cx).len() > 1, |header| {
                 header.child(self.render_collection_tabs(cx))
             })
     }
@@ -3421,9 +3444,15 @@ impl DataGridPanel {
         has_data: bool,
         uses_result_view: bool,
         pending_change_count: usize,
+        is_editable: bool,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // A grid of rows that cannot be edited says so next to its row count
+        // (AppByzEditor footer). Document collections count documents instead.
+        let shows_read_only =
+            !is_editable && self.collection.raw.is_none() && !self.result.columns.is_empty();
+
         let result_shape_label = if uses_result_view && !self.footer_hosts_view_switch() {
             Some(self.result.shape.clone())
         } else {
@@ -3614,8 +3643,17 @@ impl DataGridPanel {
                     crate::labels::row_count_label(row_count)
                 },
             ))
+            .when(shows_read_only, |d| {
+                d.child(
+                    footer_item(
+                        AppIcon::Lock,
+                        dbflux_i18n::t!("document.data.grid.status.read_only"),
+                    )
+                    .debug_selector(|| "footer-read-only".to_string()),
+                )
+            })
             .when_some(self.presence_footer(), |d, note| {
-                d.child(div().flex_shrink_0().child(note))
+                d.child(div().min_w_0().truncate().child(note))
             })
             .when_some(sort_info, |d, (col_name, direction, is_server)| {
                 let arrow_icon = match direction {

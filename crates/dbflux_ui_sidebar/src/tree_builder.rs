@@ -698,10 +698,10 @@ impl Sidebar {
             let metric_cache = state.metric_catalog_cache().clone();
 
             if conn_category == DatabaseCategory::ObjectStorage {
-                // Object storage lists its containers flat under the
-                // connection: the prefix hierarchy lives in the object browser
+                // Object storage lists its containers under one Buckets
+                // folder: the prefix hierarchy lives in the object browser
                 // document, never in the global tree.
-                profile_children.extend(build_bucket_children(profile_id, bucket_cache));
+                profile_children.push(build_buckets_folder(profile_id, bucket_cache));
             } else if schema.is_key_value() {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
@@ -2563,6 +2563,29 @@ fn build_instance_section(
     items
 }
 
+/// Build the Buckets folder of an object-storage connection.
+///
+/// The label carries the bucket count once the listing resolves; activating
+/// the folder opens the buckets table document.
+fn build_buckets_folder(
+    profile_id: Uuid,
+    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+) -> TreeItem {
+    let label = match bucket_cache.get(&profile_id) {
+        Some(buckets) => {
+            crate::labels::container_folder_label(DatabaseCategory::ObjectStorage, buckets.len())
+        }
+        None => dbflux_i18n::t!("sidebar.tree.folder.buckets"),
+    };
+
+    TreeItem::new(
+        SchemaNodeId::BucketsFolder { profile_id }.to_string(),
+        label,
+    )
+    .expanded(true)
+    .children(build_bucket_children(profile_id, bucket_cache))
+}
+
 /// Build the flat bucket rows shown under an object-storage connection.
 ///
 /// The listing is session-cached and fetched on first expansion of the
@@ -3714,6 +3737,55 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn buckets_folder_wraps_the_bucket_rows_and_counts_them() {
+        use super::build_buckets_folder;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(
+            profile_id,
+            vec![
+                dbflux_core::BucketInfo {
+                    name: "avatars".to_string(),
+                    created_at: None,
+                },
+                dbflux_core::BucketInfo {
+                    name: "exports".to_string(),
+                    created_at: None,
+                },
+            ],
+        );
+
+        let folder = build_buckets_folder(profile_id, &cache);
+
+        assert_eq!(
+            folder.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::BucketsFolder { profile_id })
+        );
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::ObjectStorage, 2)
+        );
+        assert_eq!(folder.children.len(), 2);
+    }
+
+    #[test]
+    fn buckets_folder_shows_a_plain_label_while_the_listing_loads() {
+        use super::build_buckets_folder;
+
+        let profile_id = Uuid::new_v4();
+
+        let folder = build_buckets_folder(profile_id, &HashMap::new());
+
+        assert_eq!(
+            folder.label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.folder.buckets")
+        );
+        assert_eq!(folder.children.len(), 1);
     }
 
     /// T21: a connection with no buckets says so instead of rendering nothing.

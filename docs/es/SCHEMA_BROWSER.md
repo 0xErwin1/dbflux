@@ -84,19 +84,22 @@ null), y unas líneas conectan cada clave foránea con la tabla que referencia.
 | **Restablecer** | Vuelve al 100% de zoom y a la posición inicial. |
 | **Organizar** | Descarta las posiciones de las tablas que moviste y recalcula el diseño. |
 | **Ajustar** | Aplica zoom y desplaza la vista para que todas las tablas sean visibles. |
-| Desplegable de diseño | **Izquierda-Derecha** (predeterminado) coloca a la izquierda las tablas que tienen claves foráneas y a la derecha las tablas que referencian. **Copo de nieve** pone una tabla en el centro y sus vecinas directas en un círculo alrededor: la tabla elegida en **Ver relaciones**, la tabla con más relaciones en un diagrama de base de datos. **Compacto** agrupa las tablas en una cuadrícula ajustada, ordenada por nombre. Cambiar el diseño también restablece el zoom, la posición y las tablas movidas. |
+| Desplegable de diseño | **De izquierda a derecha** (predeterminado) coloca a la izquierda las tablas que tienen claves foráneas y a la derecha las tablas que referencian. **Copo de nieve** pone una tabla en el centro y sus vecinas directas en un círculo alrededor: la tabla elegida en **Ver relaciones**, la tabla con más relaciones en un diagrama de base de datos. **Compacto** agrupa las tablas en una cuadrícula ajustada, ordenada por nombre. Cambiar el diseño también descarta las tablas movidas y ajusta el diagrama a la vista. |
 | **Exportar** | **Copiar como DBML** o **Copiar como SQL** copia al portapapeles las tablas que muestra el diagrama. El SQL son sentencias `CREATE TABLE` más `ALTER TABLE ... ADD CONSTRAINT` para las claves foráneas. |
 | _N_ tablas · _M_ relaciones | Cuántas tablas y claves foráneas muestra el diagrama. |
 | **Tipos** / **Índices** | Muestra los tipos de columna (activado por defecto) / una lista de índices bajo cada tabla (desactivado por defecto). |
 
 Arrastra un espacio vacío para desplazar la vista, arrastra una tabla para
 moverla (se ajusta a la cuadrícula) y usa la rueda del ratón para hacer zoom
-alrededor del puntero. Haz clic en una tabla para seleccionarla. El clic derecho
+alrededor del puntero. Un diagrama de base de datos se abre ajustado a la vista.
+Haz clic en una tabla para seleccionarla y abrir sus detalles en el panel de la
+derecha: el nombre calificado de la tabla, una línea de resumen (columnas,
+índices, claves foráneas y cuántas claves foráneas la referencian) y luego
+ÍNDICES, CLAVES FORÁNEAS y REFERENCIADA POR. Cada sección aparece solo cuando
+tiene entradas. Con el panel abierto, seleccionar otra tabla con el teclado lo
+mueve a esa tabla. El clic derecho
 abre un menú contextual con **Acercar**, **Alejar**, **Diseño** y **Copiar
 como**. El clic derecho sobre una tabla también la selecciona, y mientras haya
-una tabla seleccionada el menú agrega **Inspeccionar esquema**. **Inspeccionar
-esquema**, o un doble clic sobre una tabla, abre la tabla en el panel inspector
-de la derecha, con las secciones TABLA, COLUMNAS, ÍNDICES y CLAVES FORÁNEAS. Las
-dos últimas aparecen solo cuando la tabla tiene índices o declara claves
-foráneas. Los atajos de teclado están en la
+una tabla seleccionada el menú agrega **Inspeccionar esquema**, que abre el
+mismo panel. Los atajos de teclado están en la
 [Referencia de teclado](KEYBOARD.md#diagrama-de-esquema).

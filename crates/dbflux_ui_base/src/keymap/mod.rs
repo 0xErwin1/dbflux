@@ -64,6 +64,10 @@ pub fn modifiers_from_gpui(mods: &gpui::Modifiers) -> Modifiers {
 
 /// Splits a [`KeyChord`] into the display labels of its keys, in the order a
 /// `Chord` badge row renders them (for example `["Ctrl", "Shift", "N"]`).
+///
+/// Enter reads `Enter` on its own but `↵` after a modifier (`Ctrl ↵`), and a
+/// letter reads uppercase after a modifier (`Ctrl C`) but lowercase on its
+/// own (`r`, `x`), the way the design draws keycaps.
 pub fn chord_display_parts(chord: &KeyChord) -> Vec<SharedString> {
     let mut parts: Vec<SharedString> = Vec::new();
 
@@ -80,7 +84,16 @@ pub fn chord_display_parts(chord: &KeyChord) -> Vec<SharedString> {
         parts.push("Cmd".into());
     }
 
-    parts.push(SharedString::from(display_key(&chord.key)));
+    let has_modifier = !parts.is_empty();
+
+    if has_modifier && chord.key == "enter" {
+        parts.push("\u{21b5}".into());
+    } else if !has_modifier && is_single_letter(&chord.key) {
+        parts.push(chord.key.to_lowercase().into());
+    } else {
+        parts.push(SharedString::from(display_key(&chord.key)));
+    }
+
     parts
 }
 
@@ -113,6 +126,15 @@ pub fn key_sequence_label(keys: &KeySequence) -> SharedString {
         .collect::<Vec<_>>()
         .join("  ")
         .into()
+}
+
+fn is_single_letter(key: &str) -> bool {
+    let mut characters = key.chars();
+
+    matches!(
+        (characters.next(), characters.next()),
+        (Some(character), None) if character.is_alphabetic()
+    )
 }
 
 fn display_key(key: &str) -> String {

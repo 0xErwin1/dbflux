@@ -13,6 +13,8 @@
 //! Dashboards folders.
 
 use super::*;
+use dbflux_components::composites::EmptyState;
+use dbflux_components::controls::Button;
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::Icon;
 use dbflux_components::tokens::{ChromeColors, TreeMetrics};
@@ -247,29 +249,14 @@ impl Sidebar {
                 )))
             })
             .when(!has_rows, |el| {
-                let (title, hint) = if has_search {
-                    (
-                        dbflux_i18n::t!("sidebar.dashboards.no_matches_title"),
-                        dbflux_i18n::t!("sidebar.dashboards.no_matches_hint"),
-                    )
-                } else {
-                    (
-                        dbflux_i18n::t!("sidebar.dashboards.empty_title"),
-                        dbflux_i18n::t!("sidebar.dashboards.empty_hint"),
-                    )
-                };
-
                 el.child(
                     div()
                         .flex_1()
                         .flex()
-                        .flex_col()
                         .items_center()
                         .justify_center()
-                        .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Text::body(title).muted_foreground())
-                        .child(Text::body(hint).muted_foreground()),
+                        .child(dashboards_empty_state(has_search, cx)),
                 )
             })
     }
@@ -321,6 +308,46 @@ impl Sidebar {
 
         rows
     }
+}
+
+/// Empty Dashboards view: the EmptyState composite with a New dashboard
+/// button, or, while a search filters every dashboard out, the no-match
+/// variant without the button.
+fn dashboards_empty_state(has_search: bool, cx: &mut Context<Sidebar>) -> gpui::Div {
+    if has_search {
+        return div().child(
+            EmptyState::new(
+                AppIcon::Search,
+                dbflux_i18n::t!("sidebar.dashboards.no_matches_hint"),
+            )
+            .title(dbflux_i18n::t!("sidebar.dashboards.no_matches_title")),
+        );
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(Spacing::MD)
+        .child(
+            EmptyState::new(
+                AppIcon::ChartColumnBig,
+                dbflux_i18n::t!("sidebar.dashboards.empty_hint"),
+            )
+            .title(dbflux_i18n::t!("sidebar.dashboards.empty_title")),
+        )
+        .child(
+            Button::new(
+                "sidebar-dashboards-empty-new",
+                dbflux_i18n::t!("sidebar.header.new_dashboard"),
+            )
+            .primary()
+            .icon(AppIcon::Plus)
+            .tab_stop(false)
+            .on_click(cx.listener(|_, _, _, cx| {
+                cx.emit(SidebarEvent::RequestNewDashboard);
+            })),
+        )
 }
 
 /// One row of the Dashboards view, styled as a tree row: the selected row

@@ -629,7 +629,7 @@ mod tests {
         let en = dbflux_i18n::t!("document.audit.menu.copy_row_as_csv", locale = "en");
         let es = dbflux_i18n::t!("document.audit.menu.copy_row_as_csv", locale = "es");
 
-        assert_eq!(en, "Copy Row as CSV");
+        assert_eq!(en, "Copy row as CSV");
         assert_ne!(en, es);
     }
 

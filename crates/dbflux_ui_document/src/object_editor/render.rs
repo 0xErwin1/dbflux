@@ -10,7 +10,9 @@ use crate::chrome::{document_bar, document_footer, footer_item};
 use crate::handle::DocumentEvent;
 use crate::object_browser::decode_label;
 use crate::object_browser::{object_icon, object_icon_color};
-use crate::object_text::{FIND_SHORTCUT_HINT, SAVE_SHORTCUT_HINT, body_meta_line, cursor_label};
+use crate::object_text::{
+    FIND_SHORTCUT_HINT, SAVE_SHORTCUT_HINT, body_meta_line, cursor_label, keycap_text,
+};
 use dbflux_components::composites::EmptyState;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -44,11 +46,6 @@ impl Render for ObjectEditorDocument {
             .child(self.render_body(cx))
             .child(self.render_footer(cx))
     }
-}
-
-/// A shortcut hint as one keycap: `Ctrl+S` reads `Ctrl S`.
-fn keycap_text(hint: &str) -> String {
-    hint.replace('+', " ")
 }
 
 impl ObjectEditorDocument {

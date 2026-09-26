@@ -288,8 +288,12 @@ fn render_body(
             let joins_body = shows_joins.then(|| joins::render_joins(panel, cx).into_any_element());
             let group_by_body =
                 shows_group_by.then(|| group_by::render_group_by(panel, cx).into_any_element());
-            let sort_body = shows_sort.then(|| sort::render_sort(panel, cx).into_any_element());
-            let limit_body = render_limit_offset_body(panel).into_any_element();
+            let sort_body = sort::render_sort(panel, cx).into_any_element();
+            let sort_title = if shows_sort {
+                dbflux_i18n::t!("document.query_builder.section.sort_limit")
+            } else {
+                dbflux_i18n::t!("document.query_builder.section.limit_offset")
+            };
 
             let columns_badge = columns_badge(panel);
             let filters_badge = filters_badge(panel.current_spec.filter.as_ref());
@@ -336,19 +340,11 @@ fn render_body(
                 ));
             }
 
-            body.when_some(sort_body, |body, sort_body| {
-                body.child(section_card(
-                    dbflux_i18n::t!("document.query_builder.section.sort"),
-                    AppIcon::ArrowUpDown,
-                    theme,
-                    sort_body,
-                ))
-            })
-            .child(section_card(
-                dbflux_i18n::t!("document.query_builder.section.limit_offset"),
-                AppIcon::Hash,
+            body.child(section_card(
+                sort_title,
+                AppIcon::ArrowUpDown,
                 theme,
-                limit_body,
+                sort_body,
             ))
             .into_any_element()
         }
@@ -553,53 +549,6 @@ fn section_card_with_trailing(
                 .gap(BuilderMetrics::CARD_GAP)
                 .child(body),
         )
-}
-
-// ---------------------------------------------------------------------------
-// Limit & Offset (small enough to keep inline)
-// ---------------------------------------------------------------------------
-
-fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
-    let row = div().flex().flex_row().gap(Spacing::MD).items_center();
-
-    let limit_label = dbflux_i18n::t!("document.query_builder.status.limit");
-    let offset_label = dbflux_i18n::t!("document.query_builder.status.offset");
-
-    let row = if let Some(limit_state) = panel.limit_input_state.as_ref() {
-        row.child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XXS)
-                .child(Text::caption(SharedString::from(limit_label)))
-                .child(Input::new(limit_state).small().w_full()),
-        )
-    } else {
-        row.child(
-            div()
-                .flex_1()
-                .child(Text::caption(SharedString::from(limit_label))),
-        )
-    };
-
-    if let Some(offset_state) = panel.offset_input_state.as_ref() {
-        row.child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XXS)
-                .child(Text::caption(SharedString::from(offset_label)))
-                .child(Input::new(offset_state).small().w_full()),
-        )
-    } else {
-        row.child(
-            div()
-                .flex_1()
-                .child(Text::caption(SharedString::from(offset_label))),
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,7 +973,7 @@ mod tests {
             "document.query_builder.section.columns",
             "document.query_builder.section.filters",
             "document.query_builder.section.filters_where",
-            "document.query_builder.section.sort",
+            "document.query_builder.section.sort_limit",
             "document.query_builder.section.execution",
             "document.query_builder.section.sql_preview",
             "document.query_builder.section.group_by_aggregates",

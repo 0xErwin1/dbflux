@@ -30,8 +30,12 @@ El cuerpo del SELECT tiene secciones que rellenas de arriba a abajo:
   visual.
 - **Joins** — tablas adicionales con un alias y una condición `ON`.
 - **Group By / Aggregates** — ver más abajo.
-- **Sort** — entradas de `ORDER BY`.
-- **Limit & Offset** — límites de paginación.
+- **Sort and limit** — entradas de `ORDER BY` y los límites de paginación. Cada
+  fila de orden es una columna elegida en un desplegable (columnas de la tabla
+  origen y luego las de las tablas unidas) y un selector ASC/DESC; la primera
+  fila también lleva el límite. La última línea añade otra columna de orden y
+  lleva el desplazamiento. Los drivers que no pueden ordenar muestran solo el
+  límite y el desplazamiento.
 
 La vista previa de SQL está parametrizada: los valores literales se emiten como
 placeholders para el dialecto activo (SQLite, PostgreSQL, MySQL/MariaDB o SQL
@@ -51,16 +55,15 @@ Una vez agrupada la query:
   agregados).
 - Aparece una sección **Having**, que usa el mismo editor de predicados que
   Filters pero aplicado a `HAVING`.
-- Las entradas de **Sort** quedan restringidas a las columnas de agrupación y
-  los alias de los agregados; las entradas inválidas se rechazan con un error
-  visible.
+- Los desplegables de **Sort** ofrecen solo las columnas de agrupación y los
+  alias de los agregados.
 
 Cómo se comportan los resultados agrupados en el data grid se describe en
 [Resultados agregados](RESULTS.md#resultados-agregados).
 
 ## Autocompletado consciente del schema
 
-Los inputs de una sola línea del builder (filtro, orden, columnas proyectadas,
+Los inputs de una sola línea del builder (filtro, columnas proyectadas,
 la tabla destino del join, y ambos lados de un `ON` de join) ofrecen sugerencias
 inline obtenidas del schema en vivo y de la propia especificación del builder:
 columnas de la tabla origen, alias de join declarados, y columnas de la tabla

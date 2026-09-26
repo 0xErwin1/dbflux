@@ -383,6 +383,17 @@ pub trait QueryGenerator: Send + Sync {
         None
     }
 
+    /// Native text of the pipeline `Connection::aggregate_collection` runs for
+    /// `request`, used to classify it through the language service and to
+    /// show it before a pipeline that writes is confirmed. `None` (default)
+    /// leaves the pipeline unclassified.
+    fn aggregate_query(
+        &self,
+        _request: &crate::CollectionAggregateRequest,
+    ) -> Option<GeneratedQuery> {
+        None
+    }
+
     fn plan_mutation(&self, mutation: &MutationRequest) -> Option<SemanticPlan> {
         self.generate_mutation(mutation).map(|query| {
             SemanticPlan::single_query(SemanticPlanKind::MutationPreview, query.into())

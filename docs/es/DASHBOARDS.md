@@ -40,11 +40,11 @@ columna (time, numeric, text); ver [Charts](CHARTS.md) para las reglas.
 
 - En un chart document, pulsa **Save** y dale un nombre. Volver a guardar el
   mismo chart lo sobrescribe (sin duplicados).
-- Reabre un chart guardado con **Open Chart…** en el command palette — lista los
+- Reabre un chart guardado con **Open chart…** en el command palette — lista los
   charts guardados de la conexión activa. (Si no hay ninguno: *"No saved charts
   for the current profile"*.)
 - Los charts guardados también aparecen en el sidebar bajo **Saved Charts**,
-  donde cada chart tiene **Open / Rename… / Duplicate / Delete…**.
+  donde cada chart tiene **Open / Rename… / Duplicate / Delete**.
 
 Los charts se guardan por connection profile.
 
@@ -55,13 +55,13 @@ un rango de tiempo y una política de refresh.
 
 ### Crear uno
 
-1. Ejecuta **New Dashboard…** desde el command palette (o **New Dashboard…** en
+1. Ejecuta **New dashboard…** desde el command palette (o **New dashboard…** en
    la carpeta **Dashboards** del sidebar).
 2. Ponle nombre. Se abre con una cuadrícula de 12 columnas y el refresh apagado.
 
 Los dashboards nuevos se abren en modo **View**. La carpeta Dashboards del
 sidebar lista los dashboards guardados con **Open / Rename… / Duplicate /
-Delete…**.
+Delete**.
 
 ### Edit vs. view
 
@@ -123,7 +123,7 @@ DBFlux puede **explorar (browse)** e **importar** dashboards upstream.
   escribe nada de vuelta en la fuente, y nada se guarda localmente. Una acción
   **Refresh** vuelve a obtener el listado. El listado tiene el ámbito de la
   sesión y **no** se conserva entre reinicios.
-- **Import**: el comando **Import Dashboard** (palette o sidebar) parsea la
+- **Import**: el comando **Import dashboard from JSON…** (palette o sidebar) parsea la
   definición upstream en un dashboard **local** nuevo con charts importados.
   Solo está disponible cuando el driver de la conexión activa soporta la
   importación — de lo contrario verás *"The active connection does not support

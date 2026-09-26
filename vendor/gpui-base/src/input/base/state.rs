@@ -5,7 +5,7 @@
 use gpui::TextAlign;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
+    EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement, KeyBinding,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
     Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
     UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
@@ -356,6 +356,67 @@ pub enum EditGroupClosure {
     NotOwner,
 }
 
+/// Colours and sizes of the statement gutter drawn by [`GutterStatements`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GutterStatementStyle {
+    /// Width of the run-marker slot before the line numbers.
+    pub marker_slot_width: Pixels,
+    /// Square hit target of a run marker, centred in its slot and line.
+    pub marker_size: Pixels,
+    /// Size of the play glyph inside a run marker.
+    pub marker_icon_size: Pixels,
+    /// Space between the line numbers and the statement bar.
+    pub bar_gap: Pixels,
+    /// Width of the statement bar.
+    pub bar_width: Pixels,
+    /// Run marker of a statement the cursor is not in.
+    pub marker: Hsla,
+    /// Run marker of the statement under the cursor.
+    pub active_marker: Hsla,
+    /// Line numbers of the statement under the cursor.
+    pub active_line_number: Hsla,
+    /// Bar beside the lines of the statement under the cursor.
+    pub bar: Hsla,
+    /// Row fill of the statement under the cursor.
+    pub statement_fill: Hsla,
+    /// Row fill of the cursor line inside that statement.
+    pub cursor_line_fill: Hsla,
+}
+
+/// Statement decorations for a code editor's gutter: a run marker on the
+/// first line of every statement, and the statement under the cursor
+/// highlighted with a bar in the gutter, a fill across its lines and strong
+/// line numbers.
+///
+/// The ranges are byte ranges into the buffer in buffer order; the owner
+/// replaces them after every edit. Clicking a marker calls `on_run` with that
+/// statement's range.
+#[derive(Clone)]
+pub struct GutterStatements {
+    pub ranges: Vec<Range<usize>>,
+    pub style: GutterStatementStyle,
+    pub on_run: Rc<dyn Fn(Range<usize>, &mut Window, &mut App)>,
+}
+
+impl GutterStatements {
+    /// The statement containing `offset`: its range with the `;` that ends
+    /// it, so a cursor right after the separator still belongs to it.
+    pub fn statement_at(&self, text: &Rope, offset: usize) -> Option<Range<usize>> {
+        self.ranges
+            .iter()
+            .find(|range| {
+                let end = if text.char_at(range.end) == Some(';') {
+                    range.end + 1
+                } else {
+                    range.end
+                };
+
+                range.start <= offset && offset <= end
+            })
+            .cloned()
+    }
+}
+
 pub struct InputBaseState<M: InputModeKind> {
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
@@ -424,6 +485,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) scroll_size: gpui::Size<Pixels>,
     pub(super) editor_scrollbar_snapshot: Cell<Option<EditorScrollbarSnapshot>>,
     pub(super) editor_paddings: Edges<Pixels>,
+    pub(super) gutter_statements: Option<GutterStatements>,
     /// The style this state paints with: what was projected onto it, with
     /// every colour left unset resolved from the palette that is current. It
     /// is rebuilt at the top of every render, which is what keeps it current
@@ -749,6 +811,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             scroll_size: gpui::size(px(0.), px(0.)),
             editor_scrollbar_snapshot: Cell::new(None),
             editor_paddings: Edges::default(),
+            gutter_statements: None,
             deferred_scroll_offset: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
@@ -845,6 +908,21 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn set_editor_style(&mut self, style: InputEditorStyle) {
         self.editor_style = style.clone();
         self.projected_editor_style = style;
+    }
+
+    /// Installs the statement gutter, or removes it with `None`. It only
+    /// shows while line numbers do.
+    pub fn set_gutter_statements(
+        &mut self,
+        statements: Option<GutterStatements>,
+        cx: &mut Context<Self>,
+    ) {
+        self.gutter_statements = statements;
+        cx.notify();
+    }
+
+    pub fn gutter_statements(&self) -> Option<&GutterStatements> {
+        self.gutter_statements.as_ref()
     }
 
     /// Set presentation padding for multi-line text and its scrollbar layout.

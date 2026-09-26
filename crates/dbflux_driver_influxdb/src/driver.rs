@@ -8,9 +8,9 @@ use std::sync::LazyLock;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbDriver, DbError, DbKind,
-    DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldKind, FormSection,
-    FormTab, FormValues, Icon, InfluxVersion, QueryLanguage, TransferFamily, field, field_required,
-    when_checked, when_unchecked, with_default, with_help,
+    DriverCapabilities, DriverFormDef, DriverKey, DriverMetadata, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, Icon, InfluxVersion, QueryLanguage, SelectOption,
+    TransferFamily, field, field_required, when_field_equals, with_default, with_help,
 };
 
 use crate::connection::InfluxConnection;
@@ -55,6 +55,19 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
     editor_profile: None,
 });
 
+/// Values of the `use_v2` version choice; `build_config` treats `"true"` as
+/// v2, which keeps profiles saved by the former checkbox readable.
+const V1_VALUE: &str = "false";
+const V2_VALUE: &str = "true";
+
+fn when_v1(field: FormFieldDef) -> FormFieldDef {
+    when_field_equals(field, "use_v2", &[V1_VALUE])
+}
+
+fn when_v2(field: FormFieldDef) -> FormFieldDef {
+    when_field_equals(field, "use_v2", &[V2_VALUE])
+}
+
 pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     tabs: vec![FormTab {
         id: "main".into(),
@@ -62,68 +75,66 @@ pub static INFLUXDB_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormD
         sections: vec![
             FormSection {
                 title: "Version".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Version),
                 fields: vec![with_help(
                     with_default(
                         field(
                             "use_v2",
-                            "Use InfluxDB v2 (token auth / Flux)",
-                            FormFieldKind::Checkbox,
+                            "Version",
+                            FormFieldKind::Select {
+                                options: vec![
+                                    SelectOption::new(V1_VALUE, "v1"),
+                                    SelectOption::new(V2_VALUE, "v2"),
+                                ],
+                            },
                             "",
                         ),
-                        "true",
+                        V2_VALUE,
                     ),
-                    "Enable for InfluxDB v2+ (token-based auth). Disable for InfluxDB v1 (username/password).",
+                    "v2 signs in with an API token and queries with Flux. v1 uses a user and password and InfluxQL.",
                 )],
             },
             FormSection {
                 title: "Connection".into(),
+                icon: Some(dbflux_core::FormSectionIcon::Connection),
                 fields: vec![
                     field_required("url", "URL", FormFieldKind::Text, "http://localhost:8086"),
-                    when_checked(
-                        field("org", "Organization", FormFieldKind::Text, "my-org"),
-                        "use_v2",
-                    ),
-                    when_checked(
-                        with_help(
-                            field(
-                                "bucket",
-                                "Default bucket (optional)",
-                                FormFieldKind::Text,
-                                "my-bucket",
-                            ),
-                            "Pre-selects a bucket in the query editor. Leave blank to choose per-query from the dropdown.",
-                        ),
-                        "use_v2",
-                    ),
-                    when_unchecked(
-                        with_help(
-                            field(
-                                "database",
-                                "Default database (optional)",
-                                FormFieldKind::Text,
-                                "mydb",
-                            ),
-                            "Pre-selects a database in the query editor. Leave blank to choose per-query from the dropdown.",
-                        ),
-                        "use_v2",
-                    ),
-                    when_unchecked(
+                    when_v2(field("org", "Organization", FormFieldKind::Text, "my-org")),
+                    when_v2(with_help(
                         field(
-                            "retention_policy",
-                            "Retention Policy",
+                            "bucket",
+                            "Default bucket (optional)",
                             FormFieldKind::Text,
-                            "autogen",
+                            "my-bucket",
                         ),
-                        "use_v2",
-                    ),
+                        "Pre-selects a bucket in the query editor. Leave blank to choose per-query from the dropdown.",
+                    )),
+                    when_v1(with_help(
+                        field(
+                            "database",
+                            "Default database (optional)",
+                            FormFieldKind::Text,
+                            "mydb",
+                        ),
+                        "Pre-selects a database in the query editor. Leave blank to choose per-query from the dropdown.",
+                    )),
+                    when_v1(field(
+                        "retention_policy",
+                        "Retention Policy",
+                        FormFieldKind::Text,
+                        "autogen",
+                    )),
                 ],
             },
             FormSection {
                 title: "Authentication".into(),
-                fields: vec![when_unchecked(
-                    field("user", "User", FormFieldKind::Text, "optional"),
-                    "use_v2",
-                )],
+                icon: Some(dbflux_core::FormSectionIcon::Authentication),
+                fields: vec![when_v1(field(
+                    "user",
+                    "User",
+                    FormFieldKind::Text,
+                    "optional",
+                ))],
             },
         ],
     }],
@@ -158,6 +169,10 @@ impl DbDriver for InfluxDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &INFLUXDB_METADATA
+    }
+
+    fn picker_rank(&self) -> u16 {
+        0
     }
 
     fn form_definition(&self) -> &DriverFormDef {
@@ -638,37 +653,47 @@ mod tests {
     }
 
     #[test]
-    fn influxdb_form_v2_fields_are_gated_on_use_v2_checkbox() {
+    fn influxdb_form_version_is_a_v1_v2_choice_that_gates_its_fields() {
+        let version_field = INFLUXDB_FORM
+            .field("use_v2")
+            .expect("use_v2 field must exist");
+        let FormFieldKind::Select { options } = &version_field.kind else {
+            panic!("use_v2 must be a select, drawn as a segmented control");
+        };
+        let option_values: Vec<&str> = options.iter().map(|option| option.value.as_str()).collect();
+        assert_eq!(option_values, [V1_VALUE, V2_VALUE]);
+        assert_eq!(version_field.default_value, V2_VALUE);
+
         let url_field = INFLUXDB_FORM.field("url").expect("url field must exist");
         assert!(url_field.required, "url must be required");
         assert!(
-            url_field.enabled_when_checked.is_none() && url_field.enabled_when_unchecked.is_none(),
+            url_field.enabled_when_field_equals.is_none(),
             "url must not be version-gated"
         );
 
-        for v2_field_id in &["org", "bucket"] {
+        let gate_of = |field_id: &str| {
             let field = INFLUXDB_FORM
-                .field(v2_field_id)
-                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v2_field_id));
+                .field(field_id)
+                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", field_id));
+            field
+                .enabled_when_field_equals
+                .clone()
+                .map(|gate| (gate.field, gate.values))
+        };
 
+        for v2_field_id in ["org", "bucket"] {
             assert_eq!(
-                field.enabled_when_checked.as_deref(),
-                Some("use_v2"),
-                "field '{}' must be visible only when use_v2 is checked",
-                v2_field_id
+                gate_of(v2_field_id),
+                Some(("use_v2".to_string(), vec![V2_VALUE.to_string()])),
+                "field '{v2_field_id}' must be enabled only for v2"
             );
         }
 
-        for v1_field_id in &["database", "retention_policy", "user"] {
-            let field = INFLUXDB_FORM
-                .field(v1_field_id)
-                .unwrap_or_else(|| panic!("field '{}' must exist in INFLUXDB_FORM", v1_field_id));
-
+        for v1_field_id in ["database", "retention_policy", "user"] {
             assert_eq!(
-                field.enabled_when_unchecked.as_deref(),
-                Some("use_v2"),
-                "field '{}' must be visible only when use_v2 is unchecked",
-                v1_field_id
+                gate_of(v1_field_id),
+                Some(("use_v2".to_string(), vec![V1_VALUE.to_string()])),
+                "field '{v1_field_id}' must be enabled only for v1"
             );
         }
 

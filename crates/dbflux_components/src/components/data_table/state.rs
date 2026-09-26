@@ -11,8 +11,12 @@ use super::clipboard;
 use super::events::{DataTableEvent, Direction, Edge, SortState};
 use super::model::{EditBuffer, KeyedPendingEdits, TableModel};
 use super::selection::{CellCoord, SelectionState};
-use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
+use super::theme::{
+    AUTO_WIDTH_SAMPLE_ROWS, AUTO_WIDTH_SLACK, CELL_PADDING_X, MAX_AUTO_COLUMN_WIDTH,
+    MIN_COLUMN_WIDTH, MONO_ADVANCE_EM, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH,
+};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+use crate::tokens::GridMetrics;
 
 /// How a model swap treats the state that is scoped to the rows being replaced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,14 +134,7 @@ impl DataTableState {
         let col_count = model.col_count();
         let row_count = model.row_count();
         let column_widths: Vec<f32> = (0..col_count)
-            .map(|ix| {
-                let name_len = model
-                    .columns
-                    .get(ix)
-                    .map(|c| c.title.chars().count())
-                    .unwrap_or(0);
-                Self::initial_column_width(name_len)
-            })
+            .map(|ix| Self::initial_column_width(&model, ix))
             .collect();
         let column_offsets = Self::calculate_offsets(&column_widths);
 
@@ -218,16 +215,46 @@ impl DataTableState {
         }
     }
 
-    /// Compute the initial width for a column so the header name has room to render
-    /// without being truncated. The estimate uses ~7.5px per character for the
-    /// medium-weight 13px header font, plus padding for the cell, the sort indicator,
-    /// and a small buffer for the type chip / badges. Clamped to MIN_COLUMN_WIDTH.
-    fn initial_column_width(name_chars: usize) -> f32 {
-        const CHAR_WIDTH_PX: f32 = 7.5;
-        const HEADER_FIXED_OVERHEAD_PX: f32 = 56.0;
+    /// The width a column opens with: wide enough for its header (name, type
+    /// and a key or sort icon) and for the longest value among the first
+    /// `AUTO_WIDTH_SAMPLE_ROWS` rows, so short values are not cut while the
+    /// pane has room. Content counts up to `MAX_AUTO_COLUMN_WIDTH`; a header
+    /// wider than that still gets its full width.
+    ///
+    /// Text is measured by character count: header names and cells use the
+    /// monospace data face, whose advance is a fixed fraction of its size.
+    fn initial_column_width(model: &TableModel, col_ix: usize) -> f32 {
+        let Some(column) = model.columns.get(col_ix) else {
+            return MIN_COLUMN_WIDTH;
+        };
 
-        let name_width = name_chars as f32 * CHAR_WIDTH_PX + HEADER_FIXED_OVERHEAD_PX;
-        name_width.max(DEFAULT_COLUMN_WIDTH).max(MIN_COLUMN_WIDTH)
+        let cell_char = f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM;
+        let type_char = f32::from(GridMetrics::TYPE_FONT) * MONO_ADVANCE_EM;
+        let padding = f32::from(CELL_PADDING_X) * 2.0;
+        let gap = f32::from(GridMetrics::HEADER_GAP);
+
+        let type_chars = column.type_name.chars().count();
+        let type_width = if type_chars == 0 {
+            0.0
+        } else {
+            gap + type_chars as f32 * type_char
+        };
+        let icon_width = gap + f32::from(GridMetrics::HEADER_ICON);
+        let header_width =
+            padding + column.title.chars().count() as f32 * cell_char + type_width + icon_width;
+
+        let longest_value = model
+            .rows
+            .iter()
+            .take(AUTO_WIDTH_SAMPLE_ROWS)
+            .filter_map(|row| row.cells.get(col_ix))
+            .map(|cell| cell.display_text().chars().count())
+            .max()
+            .unwrap_or(0);
+        let content_width = (padding + longest_value as f32 * cell_char + AUTO_WIDTH_SLACK)
+            .min(MAX_AUTO_COLUMN_WIDTH);
+
+        header_width.max(content_width).max(MIN_COLUMN_WIDTH).ceil()
     }
 
     fn calculate_offsets(widths: &[f32]) -> Vec<f32> {
@@ -304,11 +331,12 @@ impl DataTableState {
             .model
             .columns
             .iter()
-            .map(|column| {
+            .enumerate()
+            .map(|(column_ix, column)| {
                 previous
                     .get_mut(&column.title)
                     .and_then(VecDeque::pop_front)
-                    .unwrap_or_else(|| Self::initial_column_width(column.title.chars().count()))
+                    .unwrap_or_else(|| Self::initial_column_width(&self.model, column_ix))
             })
             .collect();
         self.column_offsets = Self::calculate_offsets(&self.column_widths);
@@ -2336,7 +2364,10 @@ mod tests {
             assert_eq!(
                 widths,
                 vec![
-                    super::DataTableState::initial_column_width("name".len()),
+                    super::DataTableState::initial_column_width(
+                        &model_of(&["name", "id", "email"], 1),
+                        0
+                    ),
                     210.0,
                     300.0,
                 ],
@@ -2361,7 +2392,10 @@ mod tests {
             let widths = state.read(cx).column_widths().to_vec();
             assert_eq!(
                 widths,
-                vec![super::DataTableState::initial_column_width(2), 444.0],
+                vec![
+                    super::DataTableState::initial_column_width(&model_of(&["id", "email"], 1), 0),
+                    444.0
+                ],
                 "dropping a column must not shift another column's width into its place"
             );
         });
@@ -2387,13 +2421,73 @@ mod tests {
             assert_eq!(
                 widths,
                 vec![
-                    super::DataTableState::initial_column_width(2),
+                    super::DataTableState::initial_column_width(
+                        &model_of(&["id", "name", "extra"], 1),
+                        0
+                    ),
                     333.0,
-                    super::DataTableState::initial_column_width("extra".len()),
+                    super::DataTableState::initial_column_width(
+                        &model_of(&["id", "name", "extra"], 1),
+                        2
+                    ),
                 ],
                 "a column the previous model did not have falls back to the heuristic"
             );
         });
+    }
+
+    use super::{CELL_PADDING_X, GridMetrics, MAX_AUTO_COLUMN_WIDTH, MONO_ADVANCE_EM};
+
+    fn model_with_values(title: &str, values: &[&str]) -> std::sync::Arc<TableModel> {
+        let columns = vec![ColumnSpec {
+            id: title.into(),
+            title: title.into(),
+            kind: ColumnKind::Text,
+            align: TextAlign::Left,
+            type_name: "text".into(),
+        }];
+        let rows = values
+            .iter()
+            .map(|value| RowData {
+                cells: vec![CellValue::text(value)],
+            })
+            .collect();
+
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    #[test]
+    fn columns_open_wide_enough_for_their_values() {
+        let header_only =
+            super::DataTableState::initial_column_width(&model_with_values("title", &["E1"]), 0);
+        let with_content = super::DataTableState::initial_column_width(
+            &model_with_values("title", &["E1", "E11 — Task 1117: split the release notes"]),
+            0,
+        );
+
+        assert!(
+            with_content > header_only,
+            "a value longer than the header widens the column ({with_content} vs {header_only})"
+        );
+
+        let value_chars = "E11 — Task 1117: split the release notes".chars().count() as f32;
+        let value_width = value_chars * f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM
+            + f32::from(CELL_PADDING_X) * 2.0;
+        assert!(
+            with_content >= value_width,
+            "the value fits without being cut ({with_content} < {value_width})"
+        );
+    }
+
+    #[test]
+    fn long_values_widen_a_column_only_up_to_the_cap() {
+        let long_value = "x".repeat(400);
+        let width = super::DataTableState::initial_column_width(
+            &model_with_values("note", &[long_value.as_str()]),
+            0,
+        );
+
+        assert_eq!(width, MAX_AUTO_COLUMN_WIDTH.ceil());
     }
 
     #[gpui::test]

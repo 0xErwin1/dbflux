@@ -17,6 +17,24 @@ pub(crate) fn supports_metric_charts(metadata: &DriverMetadata) -> bool {
         .contains(DriverCapabilities::METRIC_SERIES)
 }
 
+/// Whether opening a table, collection or keyspace may reuse the tab
+/// already showing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui::views::workspace) enum TabPlacement {
+    ReuseExisting,
+    NewTab,
+}
+
+impl TabPlacement {
+    pub(in crate::ui::views::workspace) fn from_new_tab(new_tab: bool) -> Self {
+        if new_tab {
+            Self::NewTab
+        } else {
+            Self::ReuseExisting
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenDocumentDecision {
     ErrorNoConnection,
@@ -34,11 +52,23 @@ fn decide_open_document(
     has_connection: bool,
     existing_id: Option<crate::ui::document::DocumentId>,
 ) -> OpenDocumentDecision {
+    decide_open_document_with_placement(has_connection, existing_id, TabPlacement::ReuseExisting)
+}
+
+/// Like [`decide_open_document`], but a [`TabPlacement::NewTab`] request
+/// opens another document even when a tab already shows the object.
+fn decide_open_document_with_placement(
+    has_connection: bool,
+    existing_id: Option<crate::ui::document::DocumentId>,
+    placement: TabPlacement,
+) -> OpenDocumentDecision {
     if !has_connection {
         return OpenDocumentDecision::ErrorNoConnection;
     }
 
-    if let Some(existing_id) = existing_id {
+    if placement == TabPlacement::ReuseExisting
+        && let Some(existing_id) = existing_id
+    {
         return OpenDocumentDecision::FocusExisting(existing_id);
     }
 
@@ -154,7 +184,10 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenDocumentDecision, decide_open_document};
+    use super::{
+        OpenDocumentDecision, TabPlacement, decide_open_document,
+        decide_open_document_with_placement,
+    };
     use crate::ui::document::DocumentId;
     use uuid::Uuid;
 
@@ -169,6 +202,24 @@ mod tests {
         let existing = DocumentId(Uuid::new_v4());
         let decision = decide_open_document(true, Some(existing));
         assert_eq!(decision, OpenDocumentDecision::FocusExisting(existing));
+    }
+
+    #[test]
+    fn a_new_tab_request_opens_another_document_even_with_an_existing_tab() {
+        let existing = DocumentId(Uuid::new_v4());
+
+        assert_eq!(
+            decide_open_document_with_placement(true, Some(existing), TabPlacement::NewTab),
+            OpenDocumentDecision::OpenNew
+        );
+        assert_eq!(
+            decide_open_document_with_placement(true, Some(existing), TabPlacement::ReuseExisting),
+            OpenDocumentDecision::FocusExisting(existing)
+        );
+        assert_eq!(
+            decide_open_document_with_placement(false, None, TabPlacement::NewTab),
+            OpenDocumentDecision::ErrorNoConnection
+        );
     }
 
     #[test]
@@ -867,6 +918,7 @@ mod tests {
                 profile_id,
                 table,
                 database,
+                ..
             } => {
                 assert_eq!(profile_id, pid);
                 assert_eq!(table.name, "orders");
@@ -912,6 +964,7 @@ mod tests {
             PaletteSelection::OpenCollection {
                 profile_id,
                 collection,
+                ..
             } => {
                 assert_eq!(profile_id, pid);
                 assert_eq!(collection.database, "shop");
@@ -935,6 +988,7 @@ mod tests {
             PaletteSelection::OpenKeyValue {
                 profile_id,
                 database,
+                ..
             } => {
                 assert_eq!(profile_id, pid);
                 assert_eq!(database, "db0");
@@ -1040,11 +1094,13 @@ mod tests {
                     profile_id: id1,
                     table: t1,
                     database: db1,
+                    ..
                 },
                 PaletteSelection::OpenTable {
                     profile_id: id2,
                     table: t2,
                     database: db2,
+                    ..
                 },
             ) => {
                 assert_eq!(id1, id2, "Same profile");

@@ -452,6 +452,7 @@ impl KeyValueDocument {
                         this.set_type_filter(type_filter, cx)
                     });
                 })
+                .group("key-type-filter")
             });
 
         let layout_control = SegmentedControl::new(
@@ -476,7 +477,8 @@ impl KeyValueDocument {
                 };
                 update_document(&entity, cx, |this, cx| this.set_list_layout(layout, cx));
             },
-        );
+        )
+        .group("key-list-layout");
 
         div()
             .flex()

@@ -51,6 +51,14 @@ fn submenu_flyout(width: Pixels, cx: &App) -> Div {
     menu_frame(cx).w(width).occlude()
 }
 
+/// Where a cell-menu section appends its rows: the rows built so far, the
+/// visual index the next row takes, and the index of the selected row.
+pub(super) struct MenuRowCursor<'a> {
+    pub(super) rows: &'a mut Vec<AnyElement>,
+    pub(super) visual_index: &'a mut usize,
+    pub(super) selected_index: usize,
+}
+
 /// The shortcut shown on a menu row, formatted like the other keycaps in the
 /// app (`Ctrl C`, `Delete`).
 ///
@@ -59,9 +67,7 @@ fn submenu_flyout(width: Pixels, cx: &App) -> Div {
 /// Results layer.
 fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> {
     if let Some(keystroke) = context_menu_keystroke(action, cx) {
-        let label = key_chord_from_gpui(&keystroke)
-            .to_string()
-            .replace('+', " ");
+        let label = chord_display_parts(&key_chord_from_gpui(&keystroke)).join(" ");
 
         return Some(label.into());
     }
@@ -435,19 +441,28 @@ impl DataGridPanel {
 
     /// Renders the "Order" submenu trigger and its ASC/DESC/Remove ordering flyout.
     /// Only applicable to SQL table views (see `has_order` at the call site).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_order_submenu_section(
         &self,
         menu: &TableContextMenu,
         submenus_open_left: bool,
         has_order: bool,
-        selected_index: usize,
-        menu_items: &mut Vec<AnyElement>,
-        visual_index: &mut usize,
+        with_separator: bool,
+        cursor: MenuRowCursor<'_>,
         cx: &mut Context<Self>,
     ) {
         if !has_order {
             return;
+        }
+
+        let MenuRowCursor {
+            rows: menu_items,
+            visual_index,
+            selected_index,
+        } = cursor;
+
+        if with_separator {
+            menu_items.push(render_separator(cx).into_any_element());
+            *visual_index += 1;
         }
 
         let order_submenu_open = menu.order_submenu_open;
@@ -576,19 +591,26 @@ impl DataGridPanel {
     /// templates). Only present for table views, never for the document view.
     pub(super) fn render_generate_sql_submenu_section(
         is_document_view: bool,
+        with_separator: bool,
         menu: &TableContextMenu,
         submenus_open_left: bool,
-        selected_index: usize,
-        menu_items: &mut Vec<AnyElement>,
-        visual_index: &mut usize,
+        cursor: MenuRowCursor<'_>,
         cx: &mut Context<Self>,
     ) {
         if is_document_view {
             return;
         }
 
-        menu_items.push(render_separator(cx).into_any_element());
-        *visual_index += 1; // Separator takes an index slot
+        let MenuRowCursor {
+            rows: menu_items,
+            visual_index,
+            selected_index,
+        } = cursor;
+
+        if with_separator {
+            menu_items.push(render_separator(cx).into_any_element());
+            *visual_index += 1;
+        }
 
         let sql_submenu_open = menu.sql_submenu_open;
         let gen_sql_index = *visual_index;
@@ -676,17 +698,24 @@ impl DataGridPanel {
         &self,
         menu: &TableContextMenu,
         submenus_open_left: bool,
-        selected_index: usize,
-        menu_items: &mut Vec<AnyElement>,
-        visual_index: &mut usize,
+        with_separator: bool,
+        cursor: MenuRowCursor<'_>,
         cx: &mut Context<Self>,
     ) {
         if !self.has_copy_query_support() {
             return;
         }
 
-        menu_items.push(render_separator(cx).into_any_element());
-        *visual_index += 1;
+        let MenuRowCursor {
+            rows: menu_items,
+            visual_index,
+            selected_index,
+        } = cursor;
+
+        if with_separator {
+            menu_items.push(render_separator(cx).into_any_element());
+            *visual_index += 1;
+        }
 
         let copy_query_label = self.copy_query_submenu_label(cx);
         let copy_submenu_open = menu.copy_query_submenu_open;

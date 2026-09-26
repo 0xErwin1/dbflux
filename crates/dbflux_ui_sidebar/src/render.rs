@@ -461,7 +461,7 @@ impl Render for Sidebar {
             active_id,
             profile_icons,
             profile_icon_colors,
-            connection_latencies: HashMap::new(),
+            connection_latencies: measured_latencies(&self.connection_latencies),
             active_databases,
             sidebar_entity: sidebar_entity.clone(),
             multi_selection,
@@ -556,12 +556,24 @@ impl Render for Sidebar {
     }
 }
 
+/// The latencies the tree shows: the probes that succeeded.
+fn measured_latencies(
+    latencies: &HashMap<Uuid, Option<std::time::Duration>>,
+) -> HashMap<Uuid, std::time::Duration> {
+    latencies
+        .iter()
+        .filter_map(|(profile_id, latency)| latency.map(|latency| (*profile_id, latency)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sidebar_header_label;
+    use super::{measured_latencies, sidebar_header_label};
     use crate::SidebarTab;
     use dbflux_components::primitives::TextVariant;
     use dbflux_components::tokens::ShellMetrics;
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[test]
     fn header_label_names_the_active_view_as_a_section_label() {
@@ -585,5 +597,20 @@ mod tests {
         let focused = sidebar_header_label(SidebarTab::Connections, true, gpui::red()).inspect();
 
         assert!(focused.has_custom_color_override);
+    }
+
+    #[test]
+    fn only_answered_latency_probes_reach_the_tree() {
+        use std::time::Duration;
+
+        let answered = Uuid::new_v4();
+        let failed = Uuid::new_v4();
+
+        let latencies = HashMap::from([(answered, Some(Duration::from_millis(4))), (failed, None)]);
+
+        let shown = measured_latencies(&latencies);
+
+        assert_eq!(shown.get(&answered), Some(&Duration::from_millis(4)));
+        assert!(!shown.contains_key(&failed));
     }
 }

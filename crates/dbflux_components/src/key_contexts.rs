@@ -23,6 +23,8 @@ pub const KEY_VALUE_CONSOLE: &str = "KeyValueConsole";
 pub const DOCUMENT_QUERY_BAR: &str = "DocumentQueryBar";
 /// The sampled schema view of a document collection.
 pub const DOCUMENT_SCHEMA: &str = "DocumentSchema";
+/// The aggregation pipeline view of a document collection.
+pub const DOCUMENT_AGGREGATE: &str = "DocumentAggregate";
 /// The dashboards panel of the sidebar.
 pub const DASHBOARDS_PANEL: &str = "DashboardsPanel";
 /// The active section of the settings window.
@@ -39,6 +41,7 @@ pub const ALL: &[&str] = &[
     KEY_VALUE_CONSOLE,
     DOCUMENT_QUERY_BAR,
     DOCUMENT_SCHEMA,
+    DOCUMENT_AGGREGATE,
     DASHBOARDS_PANEL,
     SETTINGS_SECTION,
 ];

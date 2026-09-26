@@ -61,6 +61,34 @@ fn chord_display_parts_follow_the_platform_modifier() {
 }
 
 #[test]
+fn chord_display_parts_keep_a_bare_letter_lowercase_and_uppercase_it_after_a_modifier() {
+    let bare = chord_display_parts(&KeyChord::new("r", Modifiers::none()));
+    let with_shift = chord_display_parts(&KeyChord::new("r", Modifiers::shift()));
+    let with_ctrl = chord_display_parts(&KeyChord::new("c", Modifiers::ctrl()));
+
+    assert_eq!(
+        bare.iter().map(|part| part.as_ref()).collect::<Vec<_>>(),
+        ["r"]
+    );
+    assert_eq!(with_shift.last().map(|part| part.as_ref()), Some("R"));
+    assert_eq!(with_ctrl.last().map(|part| part.as_ref()), Some("C"));
+}
+
+#[test]
+fn chord_display_parts_draw_enter_as_a_glyph_after_a_modifier() {
+    let run = KeyChord::new("enter", Modifiers::primary());
+    let parts = chord_display_parts(&run);
+
+    assert_eq!(parts.last().map(|part| part.as_ref()), Some("\u{21b5}"));
+
+    let confirm = KeyChord::new("enter", Modifiers::none());
+    let parts = chord_display_parts(&confirm);
+    let parts: Vec<&str> = parts.iter().map(|part| part.as_ref()).collect();
+
+    assert_eq!(parts, ["Enter"]);
+}
+
+#[test]
 fn test_sidebar_vim_navigation() {
     let keymap = default_keymap();
 
@@ -149,10 +177,18 @@ fn test_primary_n_available_in_sidebar_and_text_input() {
 fn test_command_palette_no_fallback() {
     let keymap = default_keymap();
 
+    let primary_n = KeyChord::new("n", Modifiers::primary());
+    assert_eq!(keymap.resolve(ContextId::CommandPalette, &primary_n), None);
+}
+
+#[test]
+fn command_palette_opens_in_a_new_tab_with_the_primary_enter_chord() {
+    let keymap = default_keymap();
+
     let primary_enter = KeyChord::new("enter", Modifiers::primary());
     assert_eq!(
         keymap.resolve(ContextId::CommandPalette, &primary_enter),
-        None
+        Some(Command::RunQueryInNewTab)
     );
 }
 

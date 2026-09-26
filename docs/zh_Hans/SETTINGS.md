@@ -2,7 +2,7 @@
 
 DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在连接生命周期前后由 DBFlux 执行的命令、脚本或 Lua 代码片段。
 
-可通过命令面板（**Open Settings**）或侧边栏打开“设置”。该窗口左侧按设置项纵向排列。
+可通过命令面板（**Open settings**）或侧边栏打开“设置”。该窗口左侧按设置项纵向排列。
 
 | 设置项 | 内容 |
 |---------|--------|
@@ -108,7 +108,7 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 | `SidebarPanel && tab == scripts` | 在侧边栏的脚本标签页中 |
 | `CodeEditor > Input` | 在代码编辑器的文本缓冲区中 |
 
-可用的名称包括上下文筛选中显示的上下文名称（`Global`、`Sidebar`、`Editor`、`Results`、`DataTable`、`Input`、`Modal`……）、窗口名称 `Workspace`、`SettingsWindow` 和 `ConnectionManagerWindow`，以及面板名称 `ActivityRail`、`CommandSearch`、`SidebarPanel`、`CodeEditor`、`ResultPanel`、`RowInspector`、`KeyValueConsole`、`DocumentQueryBar`、`DocumentSchema`、`DashboardsPanel` 和 `SettingsSection`。可用的取值有 `vim_mode`（`normal`、`insert`、`replace`、`visual`、`visual_line`、`visual_block`，仅在开启 Vim 编辑时存在）、`language`（`sql`、`mongo`、`redis`、`lua`、`python`、`bash`……）、`tab`、`section` 和 `focus`。无法解析的谓词不会保存；引用了 DBFlux 从不设置的名称的谓词会带着警告保存，因为它永远不会匹配。
+可用的名称包括上下文筛选中显示的上下文名称（`Global`、`Sidebar`、`Editor`、`Results`、`DataTable`、`Input`、`Modal`……）、窗口名称 `Workspace`、`SettingsWindow` 和 `ConnectionManagerWindow`，以及面板名称 `ActivityRail`、`CommandSearch`、`SidebarPanel`、`CodeEditor`、`ResultPanel`、`RowInspector`、`KeyValueConsole`、`DocumentQueryBar`、`DocumentSchema`、`DocumentAggregate`、`DashboardsPanel` 和 `SettingsSection`。可用的取值有 `vim_mode`（`normal`、`insert`、`replace`、`visual`、`visual_line`、`visual_block`，仅在开启 Vim 编辑时存在）、`language`（`sql`、`mongo`、`redis`、`lua`、`python`、`bash`……）、`tab`、`section` 和 `focus`。无法解析的谓词不会保存；引用了 DBFlux 从不设置的名称的谓词会带着警告保存，因为它永远不会匹配。
 
 **哪个绑定优先。** 拥有焦点的元素（文本框、数据表格、对话框、文档树）的绑定优先于包围它的面板的绑定，你修改过的绑定优先于同一位置绑定到相同按键的默认绑定。开启 Vim 编辑时，你为某个 Vim 模式创建的绑定（例如 `Editor && vim_mode == normal` 中的 `space r`）会在 Vim 读取按键之前执行；默认绑定则把 Vim 自己的按键留给 Vim。拥有焦点的按钮、复选框或列表行总是自己处理 `Enter` 和 `Space`。
 

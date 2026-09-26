@@ -252,6 +252,10 @@ struct DriverInfo {
     category: dbflux_core::DatabaseCategory,
     default_port: Option<u16>,
     uri_scheme: String,
+    /// Short mono line under the name on the picker card (`:5432`, `file`).
+    picker_hint: String,
+    /// Driver-declared position within its picker section.
+    picker_rank: u16,
 }
 
 /// Driver and credential input widgets for the connection form's main tab.
@@ -467,6 +471,8 @@ impl ConnectionManagerWindow {
                     category: metadata.category,
                     default_port: metadata.default_port,
                     uri_scheme: metadata.uri_scheme.clone(),
+                    picker_hint: driver.picker_hint(),
+                    picker_rank: driver.picker_rank(),
                 }
             })
             .collect();
@@ -1337,6 +1343,22 @@ impl ConnectionManagerWindow {
     ) {
         self.form.driver_inputs.clear();
         self.form.select_values.clear();
+
+        // A select starts on its declared default, so fields gated on its
+        // value are enabled or disabled from the first render, before the
+        // user touches the control.
+        for field in form
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.fields.iter())
+            .filter(|field| matches!(field.kind, FormFieldKind::Select { .. }))
+            .filter(|field| !field.default_value.is_empty())
+        {
+            self.form
+                .select_values
+                .insert(field.id.clone(), field.default_value.clone());
+        }
 
         let fields: Vec<&FormFieldDef> = form
             .tabs
@@ -4199,6 +4221,7 @@ mod tests {
                     label: "Main".to_string(),
                     sections: vec![FormSection {
                         title: "Settings".to_string(),
+                        icon: None,
                         fields: vec![FormFieldDef {
                             id: "profile".to_string(),
                             label: "Profile".to_string(),
@@ -4308,8 +4331,8 @@ mod tests {
         let en = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "en");
         let es = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "es");
 
-        assert_eq!(en, "New Auth Profile...");
-        assert_eq!(es, "Nuevo perfil de autenticación...");
+        assert_eq!(en, "New auth profile…");
+        assert_eq!(es, "Nuevo perfil de autenticación…");
     }
 
     #[test]

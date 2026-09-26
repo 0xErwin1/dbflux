@@ -811,6 +811,90 @@ fn mongodb_sample_collection_schema_reports_types_presence_and_values() -> Resul
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn mongodb_aggregate_collection_runs_match_and_group_with_a_cap() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        assert!(
+            connection
+                .document_features()
+                .contains(dbflux_core::DocumentFeatures::AGGREGATE)
+        );
+
+        let docs: Vec<serde_json::Value> = (1..=10)
+            .map(|index| {
+                serde_json::json!({
+                    "region": if index % 2 == 0 { "north" } else { "south" },
+                    "paid": index <= 8,
+                    "amount": index,
+                })
+            })
+            .collect();
+        connection.insert_document(
+            &DocumentInsert::many("aggregate_test".to_string(), docs)
+                .with_database("testdb".into()),
+        )?;
+
+        let collection = CollectionRef::new("testdb", "aggregate_test");
+        let pipeline = dbflux_core::parse_aggregate_pipeline(
+            "[{ $match: { paid: true } },
+              { $group: { _id: '$region', orders: { $sum: 1 }, total: { $sum: '$amount' } } },
+              { $sort: { _id: 1 } }]",
+        )
+        .expect("pipeline parses");
+
+        let result = connection.aggregate_collection(
+            &dbflux_core::CollectionAggregateRequest::new(collection.clone(), pipeline.clone(), 50),
+        )?;
+
+        let column = |name: &str| {
+            result
+                .columns
+                .iter()
+                .position(|column| column.name == name)
+                .unwrap_or_else(|| panic!("{name} column"))
+        };
+        let (id, orders, total) = (column("_id"), column("orders"), column("total"));
+
+        assert_eq!(result.rows.len(), 2);
+        assert!(!result.rows_truncated());
+        assert_eq!(result.rows[0][id], Value::Text("north".to_string()));
+        assert_eq!(result.rows[0][orders], Value::Int(4));
+        assert_eq!(result.rows[0][total], Value::Int(20));
+        assert_eq!(result.rows[1][id], Value::Text("south".to_string()));
+        assert_eq!(result.rows[1][total], Value::Int(16));
+
+        let capped = connection.aggregate_collection(
+            &dbflux_core::CollectionAggregateRequest::new(collection.clone(), pipeline, 1),
+        )?;
+        assert_eq!(capped.rows.len(), 1);
+        assert!(capped.rows_truncated(), "a cut result says so");
+
+        let written =
+            connection.aggregate_collection(&dbflux_core::CollectionAggregateRequest::new(
+                collection,
+                vec![
+                    serde_json::json!({ "$match": { "region": "north" } }),
+                    serde_json::json!({ "$out": "aggregate_out_test" }),
+                ],
+                50,
+            ))?;
+        assert!(written.rows.is_empty(), "$out returns no documents");
+        assert_eq!(
+            connection.count_collection(&CollectionCountRequest::new(CollectionRef::new(
+                "testdb",
+                "aggregate_out_test"
+            )))?,
+            5,
+            "$out stays the last stage, so every matched document is written"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn mongodb_estimate_collection_count_is_estimated_only_without_a_filter() -> Result<(), DbError> {
     containers::with_mongodb_url(|uri| {
         let connection = connect_mongodb(uri)?;

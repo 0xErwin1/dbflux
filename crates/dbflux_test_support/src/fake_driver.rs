@@ -910,6 +910,7 @@ static CLICKHOUSE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
         label: "Main".into(),
         sections: vec![FormSection {
             title: "Connection".into(),
+            icon: None,
             fields: vec![
                 field_required("url", "URL", FormFieldKind::Text, "http://localhost:8123"),
                 field_required("user", "User", FormFieldKind::Text, "default"),
@@ -1301,6 +1302,7 @@ static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
         label: "Main".into(),
         sections: vec![FormSection {
             title: "AWS".into(),
+            icon: None,
             fields: vec![
                 field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
                 field(
@@ -1332,6 +1334,7 @@ static TURSO_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
         label: "Main".into(),
         sections: vec![FormSection {
             title: "Connection".into(),
+            icon: None,
             fields: vec![
                 field_required("url", "URL", FormFieldKind::Text, ""),
                 field("password", "Auth Token", FormFieldKind::Password, ""),

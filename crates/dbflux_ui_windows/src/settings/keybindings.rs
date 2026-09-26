@@ -119,14 +119,20 @@ fn entry_matches_filter(entry: &BindingEntry, filter: &str) -> bool {
             .contains(filter)
 }
 
-/// Keycaps for `keys`: one keycap row per chord, the chords of a sequence
-/// side by side.
+/// Keycaps for `keys`: every key of a chord is its own keycap, side by side
+/// without a separator, and the chords of a sequence sit a wider gap apart.
 fn key_sequence_keycaps(keys: &KeySequence) -> Div {
-    div().flex().items_center().gap(Spacing::XS).children(
-        keys.chords()
-            .iter()
-            .map(|chord| Kbd::chord(chord_display_parts(chord))),
-    )
+    div()
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .children(keys.chords().iter().map(|chord| {
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .children(chord_display_parts(chord).into_iter().map(Kbd::new))
+        }))
 }
 
 impl KeybindingsSection {
@@ -390,6 +396,7 @@ impl KeybindingsSection {
         .flex()
         .items_center()
         .gap(Spacing::SM)
+        .flex_shrink_0()
         .h(KEYBINDING_HEADER_HEIGHT)
         .mt(Spacing::SM)
         .border_b_1()
@@ -523,6 +530,7 @@ impl KeybindingsSection {
             .flex()
             .items_center()
             .gap(Spacing::SM)
+            .flex_shrink_0()
             .h(KEYBINDING_ROW_HEIGHT)
             .pl(KEYBINDING_ROW_INDENT)
             .border_b_1()
@@ -553,6 +561,7 @@ impl KeybindingsSection {
                     .child(self.render_row_actions(
                         &entry,
                         state.is_overridden,
+                        state.is_selected || entry.custom_predicate.is_some(),
                         (ctx_idx, binding_idx),
                         &row_id,
                         cx,
@@ -584,12 +593,14 @@ impl KeybindingsSection {
             .then(|| dbflux_i18n::t!("settings.keybindings.warning.prefix"))
     }
 
-    /// Reset arrow (overridden bindings only), the context editor and the
+    /// Reset arrow (overridden bindings only), the context editor (on the
+    /// selected row, or when the binding carries a custom context) and the
     /// edit pencil.
     fn render_row_actions(
         &self,
         entry: &BindingEntry,
         is_overridden: bool,
+        show_context_action: bool,
         (ctx_idx, binding_idx): (usize, usize),
         row_id: &str,
         cx: &mut Context<Self>,
@@ -621,24 +632,28 @@ impl KeybindingsSection {
                     ),
                 )
             })
-            .child(
-                div().w(KEYBINDING_ACTION_WIDTH).child(
-                    Button::new(
-                        SharedString::from(format!("{row_id}-context")),
-                        dbflux_i18n::t!("settings.keybindings.action.edit_context"),
-                    )
-                    .ghost()
-                    .inline()
-                    .icon(AppIcon::Layers)
-                    .icon_only()
-                    .tab_stop(false)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.keybindings_selection =
-                            KeybindingsSelection::Binding(ctx_idx, binding_idx);
-                        this.start_predicate_editing(predicate_slot.clone(), window, cx);
-                    })),
-                ),
-            )
+            .when(show_context_action, |actions| {
+                actions.child(
+                    div().w(KEYBINDING_ACTION_WIDTH).child(
+                        Button::new(
+                            SharedString::from(format!("{row_id}-context")),
+                            dbflux_i18n::t!("settings.keybindings.action.edit_context"),
+                        )
+                        .ghost()
+                        .inline()
+                        .icon(AppIcon::Layers)
+                        .icon_only()
+                        .tab_stop(false)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.keybindings_selection =
+                                    KeybindingsSelection::Binding(ctx_idx, binding_idx);
+                                this.start_predicate_editing(predicate_slot.clone(), window, cx);
+                            },
+                        )),
+                    ),
+                )
+            })
             .child(
                 div().w(KEYBINDING_ACTION_WIDTH).child(
                     Button::new(
@@ -771,16 +786,20 @@ impl KeybindingsSection {
                 })),
             );
 
-        div().pl(KEYBINDING_ROW_INDENT).py(Spacing::XS).child(
-            BannerBlock::new(
-                BannerVariant::Warning,
-                crate::labels::keybindings_conflict_title(&chord_label, &holders),
+        div()
+            .flex_shrink_0()
+            .pl(KEYBINDING_ROW_INDENT)
+            .py(Spacing::XS)
+            .child(
+                BannerBlock::new(
+                    BannerVariant::Warning,
+                    crate::labels::keybindings_conflict_title(&chord_label, &holders),
+                )
+                .with_body(crate::labels::keybindings_conflict_body(
+                    &crate::labels::keybinding_command_name(&target.command),
+                ))
+                .with_actions(actions),
             )
-            .with_body(crate::labels::keybindings_conflict_body(
-                &crate::labels::keybinding_command_name(&target.command),
-            ))
-            .with_actions(actions),
-        )
     }
 
     /// Editor of the context predicate of `slot`, under its row: the
@@ -821,6 +840,7 @@ impl KeybindingsSection {
 
         div()
             .id(SharedString::from(row_id.clone()))
+            .flex_shrink_0()
             .pl(KEYBINDING_ROW_INDENT)
             .py(Spacing::SM)
             .flex()

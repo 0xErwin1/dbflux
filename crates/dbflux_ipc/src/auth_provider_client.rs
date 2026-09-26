@@ -977,6 +977,7 @@ mod tests {
                 label: "Main".to_string(),
                 sections: vec![FormSection {
                     title: "Fields".to_string(),
+                    icon: None,
                     fields: vec![
                         FormFieldDef {
                             id: "api_key".to_string(),
@@ -1081,6 +1082,7 @@ mod tests {
                 label: "Main".to_string(),
                 sections: vec![FormSection {
                     title: "Fields".to_string(),
+                    icon: None,
                     fields: vec![
                         FormFieldDef {
                             id: "api_key".to_string(),

@@ -22,7 +22,8 @@ use gpui_component::{ActiveTheme, Sizable};
 
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::primitives::{Chamfer, ChamferRing, Text};
-use crate::tokens::{ChromeColors, FontSizes, RowColors, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, GridMetrics, RowColors, Spacing, SyntaxColors};
+use crate::typography::AppFonts;
 
 use super::events::DataTableEvent;
 use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
@@ -229,6 +230,7 @@ fn render_fields(
     };
     let is_pending_delete = record.state.is_pending_delete();
     let null_value = CellValue::null();
+    let null_color = SyntaxColors::for_current(cx).number;
 
     visible_range
         .map(|col_ix| {
@@ -343,13 +345,23 @@ fn render_fields(
                     })
                     .when(is_null || is_auto_generated, |d| d.italic())
                     .when(is_pending_delete, |d| d.line_through())
-                    .child(Text::body(display_text).font_size(FontSizes::SM).color(
-                        if is_pending_delete || is_null || is_auto_generated {
-                            theme.muted_foreground
-                        } else {
-                            theme.foreground
-                        },
-                    ))
+                    // Values read like the grid's cells: the data face, NULL
+                    // in the null colour.
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(AppFonts::MONO)
+                            .text_size(GridMetrics::FONT)
+                            .text_color(if is_pending_delete || is_auto_generated {
+                                theme.muted_foreground
+                            } else if is_null {
+                                null_color
+                            } else {
+                                theme.foreground
+                            })
+                            .child(display_text),
+                    )
                     .into_any_element()
             };
 

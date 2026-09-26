@@ -31,6 +31,30 @@ pub(super) struct RailState {
     pub audit_active: bool,
 }
 
+/// The rail state for what is on screen, with one active item at most
+/// (P1Sidebar). An open approvals or audit document takes the rail while the
+/// document area has focus or the sidebar is collapsed; otherwise the sidebar
+/// view on screen does.
+pub(super) fn resolve_rail_state(
+    sidebar_view: Option<SidebarTab>,
+    active_icon: Option<DocumentIcon>,
+    document_focused: bool,
+    approvals_available: bool,
+) -> RailState {
+    let document_leads = document_focused || sidebar_view.is_none();
+
+    let audit_active = document_leads && active_icon == Some(DocumentIcon::Audit);
+    let approvals_open = document_leads && active_icon == Some(DocumentIcon::McpApprovals);
+    let document_active = audit_active || (approvals_open && approvals_available);
+
+    RailState {
+        sidebar_view: if document_active { None } else { sidebar_view },
+        approvals_available,
+        approvals_open,
+        audit_active,
+    }
+}
+
 /// The rail's entries for `state`, top to bottom.
 pub(super) fn rail_entries(state: RailState) -> Vec<RailEntry> {
     let mut entries = vec![
@@ -228,15 +252,12 @@ impl Workspace {
             .active_tab()
             .map(|tab| tab.meta_snapshot(cx).icon);
 
-        let audit_active = active_icon == Some(DocumentIcon::Audit);
-        let approvals_open = active_icon == Some(DocumentIcon::McpApprovals);
-
-        RailState {
+        resolve_rail_state(
             sidebar_view,
-            approvals_available: cfg!(feature = "mcp"),
-            approvals_open,
-            audit_active,
-        }
+            active_icon,
+            self.focus_target == FocusTarget::Document,
+            cfg!(feature = "mcp"),
+        )
     }
 
     /// Shows a sidebar view from the rail. Choosing the view already on
@@ -573,9 +594,10 @@ impl Workspace {
 mod tests {
     use super::{
         RailState, RecentAge, global_shortcut_keys, rail_entries, rail_ids, recent_rows,
-        start_actions,
+        resolve_rail_state, start_actions,
     };
     use crate::keymap::{Command, KeyChord, Modifiers};
+    use crate::ui::document::DocumentIcon;
     use dbflux_ui_base::keymap::chord_display_parts;
     use dbflux_ui_sidebar::SidebarTab;
     use std::path::PathBuf;
@@ -665,6 +687,48 @@ mod tests {
             ..RailState::default()
         });
         assert!(idle.iter().all(|entry| !entry.active));
+    }
+
+    fn active_ids(state: RailState) -> Vec<String> {
+        rail_entries(state)
+            .into_iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.id.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn rail_has_one_active_item_when_a_panel_and_the_audit_document_are_open() {
+        let document_focused = resolve_rail_state(
+            Some(SidebarTab::Dashboards),
+            Some(DocumentIcon::Audit),
+            true,
+            true,
+        );
+        assert_eq!(active_ids(document_focused), [rail_ids::AUDIT]);
+
+        let sidebar_focused = resolve_rail_state(
+            Some(SidebarTab::Dashboards),
+            Some(DocumentIcon::Audit),
+            false,
+            true,
+        );
+        assert_eq!(active_ids(sidebar_focused), [rail_ids::DASHBOARDS]);
+
+        let sidebar_collapsed = resolve_rail_state(None, Some(DocumentIcon::Audit), false, true);
+        assert_eq!(active_ids(sidebar_collapsed), [rail_ids::AUDIT]);
+    }
+
+    #[test]
+    fn rail_keeps_the_panel_active_beside_an_ordinary_document() {
+        let state = resolve_rail_state(
+            Some(SidebarTab::Connections),
+            Some(DocumentIcon::Table),
+            true,
+            true,
+        );
+
+        assert_eq!(active_ids(state), [rail_ids::CONNECTIONS]);
     }
 
     #[test]

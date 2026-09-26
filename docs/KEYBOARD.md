@@ -21,9 +21,9 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | Keys | Action |
 |------|--------|
 | `Ctrl+Shift+P` / `Cmd+Shift+P` | Toggle command palette |
-| `Ctrl+Shift+N` / `Cmd+Shift+N` | Open Connection Manager |
+| `Ctrl+Shift+N` / `Cmd+Shift+N` | Open connection manager |
 | `Ctrl+n` / `Cmd+n` | New query tab |
-| `Ctrl+w` / `Cmd+w` | Close current tab |
+| `Ctrl+w` / `Cmd+w` | Close tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Switch to tab N |
 | `Ctrl+o` / `Cmd+o` | Open script file |
@@ -52,7 +52,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `Enter` | Open / execute item |
 | `r` | Refresh schema |
-| `c` | Open Connection Manager |
+| `c` | Open connection manager |
 | `d` | Disconnect |
 | `m` | Open item menu |
 | `Shift+j` / `Shift+k` | Extend selection down / up |
@@ -259,7 +259,7 @@ A read-only delete does not change the clipboard.
 | `h` / `j` / `k` / `l` (or arrow keys) | Pan the view |
 | `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Select the next table in that direction and center on it |
 | `Alt` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected table |
-| `r` / `s` / `c` | Left-Right / Snowflake / Compact layout |
+| `r` / `s` / `c` | Left to right / Snowflake / Compact layout |
 | `m` | Open context menu |
 | `Escape` | Clear the selection |
 

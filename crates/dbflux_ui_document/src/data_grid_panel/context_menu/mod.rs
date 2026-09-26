@@ -28,6 +28,7 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
+use sections::MenuRowCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterBackend {
@@ -54,6 +55,33 @@ const COLUMN_HEADER_MENU_WIDTH: Pixels = px(300.0);
 /// row inset and the offset in `sections.rs`), so the room it needs is its
 /// width less this.
 const SUBMENU_OVERLAP: Pixels = px(8.0); // guardrail-allow: derived from the menu width and submenu offset, not a spacing step
+
+/// Which member of the Filter / Order / Generate SQL / Copy as SQL group
+/// carries the separator that opens it. The four read as one group
+/// (IslMenu), so only the first one present gets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct QueryGroupSeparators {
+    pub(super) filter: bool,
+    pub(super) order: bool,
+    pub(super) generate_sql: bool,
+    pub(super) copy_query: bool,
+}
+
+impl QueryGroupSeparators {
+    pub(super) fn new(
+        has_filter: bool,
+        has_order: bool,
+        has_generate_sql: bool,
+        has_copy_query: bool,
+    ) -> Self {
+        Self {
+            filter: has_filter,
+            order: has_order && !has_filter,
+            generate_sql: has_generate_sql && !has_filter && !has_order,
+            copy_query: has_copy_query && !has_filter && !has_order && !has_generate_sql,
+        }
+    }
+}
 
 /// Where a context menu goes, in panel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -684,10 +712,8 @@ impl DataGridPanel {
 
         // Layout:
         //   [base items]
-        //   [sep + Filter trigger]?   (if has_filter)
-        //   [Order trigger]?          (if has_order, shares separator with filter)
-        //   [sep + GenSQL trigger]?   (if has_generate_sql)
-        //   [sep + CopyQuery trigger]?(if has_copy_query)
+        //   [sep] [Filter]? [Order]? [GenSQL]? [CopyQuery]?  (one group; the
+        //                                                    separator opens it)
         //   [sep + row_action...]?    (if row_actions non-empty)
         let inspect_row_enabled = !self.is_grouped_result();
 
@@ -708,18 +734,18 @@ impl DataGridPanel {
         };
         let base_count = base_items.len();
 
-        // Filter: sep(1) + filter(1) = 2; Order adds 1 more
-        let filter_slots = if has_filter { 2 } else { 0 };
-        let order_slots = if has_order { 1 } else { 0 };
-        let after_filter_order = base_count + filter_slots + order_slots;
+        let separators =
+            QueryGroupSeparators::new(has_filter, has_order, has_generate_sql, has_copy_query);
 
-        // GenSQL: sep(1) + trigger(1) = 2
-        let gen_sql_slots = if has_generate_sql { 2 } else { 0 };
-        let after_gen_sql = after_filter_order + gen_sql_slots;
+        let slots = |present: bool, with_separator: bool| -> usize {
+            usize::from(present) + usize::from(with_separator)
+        };
 
-        // CopyQuery: sep(1) + trigger(1) = 2
-        let copy_query_slots = if has_copy_query { 2 } else { 0 };
-        let after_copy_query = after_gen_sql + copy_query_slots;
+        let filter_slots = slots(has_filter, separators.filter);
+        let after_filter = base_count + filter_slots;
+        let after_filter_order = after_filter + slots(has_order, separators.order);
+        let after_gen_sql = after_filter_order + slots(has_generate_sql, separators.generate_sql);
+        let after_copy_query = after_gen_sql + slots(has_copy_query, separators.copy_query);
 
         // RowActions: sep(1) + N action items
         let row_action_count = if is_column_header {
@@ -738,29 +764,12 @@ impl DataGridPanel {
         let row_actions_start = after_copy_query; // index of the separator
         let total_count = after_copy_query + row_actions_slots;
 
-        let filter_trigger_idx = if has_filter {
-            Some(base_count + 1) // after separator
-        } else {
-            None
-        };
-
-        let order_trigger_idx = if has_order {
-            Some(base_count + filter_slots) // right after filter trigger
-        } else {
-            None
-        };
-
-        let gen_sql_trigger_idx = if has_generate_sql {
-            Some(after_filter_order + 1) // after separator
-        } else {
-            None
-        };
-
-        let copy_query_trigger_idx = if has_copy_query {
-            Some(after_gen_sql + 1) // after separator
-        } else {
-            None
-        };
+        let filter_trigger_idx = has_filter.then_some(base_count + usize::from(separators.filter));
+        let order_trigger_idx = has_order.then_some(after_filter + usize::from(separators.order));
+        let gen_sql_trigger_idx =
+            has_generate_sql.then_some(after_filter_order + usize::from(separators.generate_sql));
+        let copy_query_trigger_idx =
+            has_copy_query.then_some(after_gen_sql + usize::from(separators.copy_query));
 
         let any_submenu_open = self
             .context_menu
@@ -805,18 +814,12 @@ impl DataGridPanel {
                 return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
             }
 
-            // Filter separator
-            if has_filter && idx == base_count {
-                return true;
-            }
+            let group_separator = (separators.filter && idx == base_count)
+                || (separators.order && idx == after_filter)
+                || (separators.generate_sql && idx == after_filter_order)
+                || (separators.copy_query && idx == after_gen_sql);
 
-            // GenSQL separator
-            if has_generate_sql && idx == after_filter_order {
-                return true;
-            }
-
-            // CopyQuery separator
-            if has_copy_query && idx == after_gen_sql {
+            if group_separator {
                 return true;
             }
 
@@ -1498,6 +1501,13 @@ impl DataGridPanel {
 
             let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
             let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            let separators = QueryGroupSeparators::new(
+                has_filter,
+                has_order,
+                !is_document_view,
+                self.has_copy_query_support(),
+            );
+
             self.render_filter_submenu_section(
                 menu,
                 submenus_open_left,
@@ -1512,27 +1522,36 @@ impl DataGridPanel {
                 menu,
                 submenus_open_left,
                 has_order,
-                selected_index,
-                &mut menu_items,
-                &mut visual_index,
+                separators.order,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
             Self::render_generate_sql_submenu_section(
                 is_document_view,
+                separators.generate_sql,
                 menu,
                 submenus_open_left,
-                selected_index,
-                &mut menu_items,
-                &mut visual_index,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
 
             self.render_copy_query_submenu_section(
                 menu,
                 submenus_open_left,
-                selected_index,
-                &mut menu_items,
-                &mut visual_index,
+                separators.copy_query,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
 
@@ -1702,8 +1721,13 @@ impl DataGridPanel {
     /// `DataGridEvent::OpenInspector` so the workspace mounts the content.
     pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         use super::row_inspector::{
-            InspectorCell, InspectorSnapshot, RowInspectorContent, row_key_label,
+            InspectorCell, InspectorSnapshot, RowInspectorContent, column_type_label, row_key_label,
         };
+
+        if self.collection.raw.is_some() && self.is_document_collection(cx) {
+            self.open_document_inspector(row, col, cx);
+            return;
+        }
 
         let Some(table_state) = &self.grid_table.table_state else {
             return;
@@ -1720,6 +1744,7 @@ impl DataGridPanel {
             self.inspector.pinned = false;
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
+            self.inspector.incoming_references.cancel();
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -1728,6 +1753,7 @@ impl DataGridPanel {
             state.pk_columns().iter().copied().collect();
         let fk_cols = state.fk_columns().clone();
         let can_edit = state.is_editable() && !self.is_grouped_result();
+        let referenced_tables = self.foreign_key_targets(cx);
 
         let cells: Vec<InspectorCell> = model
             .columns
@@ -1738,26 +1764,35 @@ impl DataGridPanel {
                     .cell(row, ix)
                     .map(|c| self.cell_to_value(c))
                     .unwrap_or(dbflux_core::Value::Null);
+                let name = spec.title.to_string();
+                let type_label = column_type_label(
+                    &spec.type_name,
+                    referenced_tables.get(&name).map(String::as_str),
+                );
 
                 InspectorCell {
-                    name: spec.title.to_string(),
+                    name,
                     value,
+                    type_label,
                     is_primary_key: pk_cols.contains(&ix),
                     is_foreign_key: fk_cols.contains(&ix),
                 }
             })
             .collect();
 
+        let table_name = match &self.source {
+            DataSource::Table { table, .. } => Some(table.name.clone()),
+            DataSource::Collection { .. } | DataSource::QueryResult { .. } => None,
+        };
+
         let snapshot = InspectorSnapshot {
             row_number: row + 1,
-            row_key: row_key_label(&cells),
+            row_key: row_key_label(table_name.as_deref(), &cells),
             cells: cells.clone(),
             can_edit,
         };
 
-        // Build per-FK reference entries from the cached TableInfo.foreign_keys.
-        let fk_references = self.build_fk_references(&cells, cx);
-        let has_fk_lookups = !fk_references.is_empty();
+        let outgoing_references = self.build_fk_references(&cells, cx);
 
         // Reuse the existing content entity or create a new one.
         let content = match &self.inspector.row_inspector_content {
@@ -1767,9 +1802,6 @@ impl DataGridPanel {
             }
             None => {
                 let new_content = cx.new(|cx| RowInspectorContent::new(snapshot, cx));
-                if !has_fk_lookups {
-                    new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
-                }
                 self.inspector._row_inspector_subscription =
                     Some(cx.subscribe(&new_content, |this, _, event, cx| {
                         this.handle_row_inspector_event(*event, cx);
@@ -1780,10 +1812,12 @@ impl DataGridPanel {
         };
 
         let pinned = self.inspector.pinned;
-        content.update(cx, |c, cx| c.set_pinned(pinned, cx));
+        content.update(cx, |c, cx| {
+            c.set_pinned(pinned, cx);
+            c.set_outgoing_references(outgoing_references, cx);
+        });
 
-        // Fire FK resolution against the (possibly reused) content entity.
-        self.fire_fk_resolution(fk_references, content.clone(), cx);
+        self.load_incoming_references(&cells, content.clone(), cx);
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
@@ -1857,18 +1891,35 @@ impl DataGridPanel {
         }
     }
 
-    /// Build the list of FK lookups for the current row from the schema cache.
-    ///
-    /// Returns one entry per FK constraint whose local columns all have
-    /// non-null values in the current row. Multi-column FKs are skipped
-    /// (not supported by `fetch_row_by_pk`).
+    /// The table each single-column foreign key of the browsed table points
+    /// at, keyed by its column, for the inspector's type labels.
+    fn foreign_key_targets(&self, cx: &Context<Self>) -> std::collections::HashMap<String, String> {
+        let Some(foreign_keys) = self
+            .table_details_for(cx)
+            .and_then(|table_info| table_info.foreign_keys.as_deref())
+        else {
+            return std::collections::HashMap::new();
+        };
+
+        foreign_keys
+            .iter()
+            .filter(|fk| fk.columns.len() == 1)
+            .filter_map(|fk| {
+                fk.columns
+                    .first()
+                    .map(|column| (column.clone(), fk.referenced_table.clone()))
+            })
+            .collect()
+    }
+
+    /// The outgoing references of the current row: one per single-column
+    /// foreign key of the browsed table whose value is not null.
     fn build_fk_references(
         &self,
         cells: &[super::row_inspector::InspectorCell],
         cx: &Context<Self>,
     ) -> Vec<super::row_inspector::FkReference> {
-        use super::row_inspector::FkReference;
-        use dbflux_components::primitives::LoadingState;
+        use super::row_inspector::{FkReference, ReferenceKind};
 
         let Some(table_info) = self.table_details_for(cx) else {
             return Vec::new();
@@ -1882,20 +1933,16 @@ impl DataGridPanel {
         let mut references = Vec::new();
 
         for fk in fk_list {
-            // Only handle single-column FKs.
-            if fk.columns.len() != 1 || fk.referenced_columns.len() != 1 {
+            let ([local_col], [ref_col]) =
+                (fk.columns.as_slice(), fk.referenced_columns.as_slice())
+            else {
                 continue;
-            }
+            };
 
-            let local_col = &fk.columns[0];
-            let ref_col = &fk.referenced_columns[0];
-
-            // Find the value in the current row.
             let Some(cell) = cells.iter().find(|c| &c.name == local_col) else {
                 continue;
             };
 
-            // Skip null FK values.
             if cell.value.is_null() {
                 continue;
             }
@@ -1906,120 +1953,142 @@ impl DataGridPanel {
                 target_table: fk.referenced_table.clone(),
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
-                row: LoadingState::Loading,
+                kind: ReferenceKind::Outgoing,
             });
         }
 
         references
     }
 
-    /// Spawn one background task per FK reference and resolve them into the inspector.
-    fn fire_fk_resolution(
-        &self,
-        references: Vec<super::row_inspector::FkReference>,
-        inspector_entity: Entity<super::row_inspector::RowInspectorContent>,
+    /// Where the browsed table lives. `None` for other sources.
+    fn reference_lookup_target(&self, cx: &Context<Self>) -> Option<ReferenceLookupTarget> {
+        let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(profile_id)?;
+        let database = database
+            .clone()
+            .or_else(|| connected.active_database.clone())
+            .unwrap_or_else(|| "default".to_string());
+        let connection = connected.connection_for_database(&database);
+
+        Some(ReferenceLookupTarget {
+            profile_id: *profile_id,
+            database,
+            schema: table.schema.clone(),
+            table: table.name.clone(),
+            connection,
+        })
+    }
+
+    /// Finds the tables whose foreign keys point at the inspected row and
+    /// counts the rows of each that do, in the background, once the cursor
+    /// rests on the row (see `IncomingReferencesLoader`). Foreign keys come
+    /// from the schema's foreign-key cache, fetched once when missing; the
+    /// counts go through the driver's `count_table`, one query per table and
+    /// at most `MAX_CONCURRENT_REFERENCE_COUNTS` at a time.
+    fn load_incoming_references(
+        &mut self,
+        cells: &[super::row_inspector::InspectorCell],
+        content: Entity<super::row_inspector::RowInspectorContent>,
         cx: &mut Context<Self>,
     ) {
-        use super::row_inspector::FkReference;
-        use dbflux_components::primitives::LoadingState;
+        let generation = content.read(cx).generation();
 
-        if references.is_empty() {
+        let Some(ReferenceLookupTarget {
+            profile_id,
+            database,
+            schema,
+            table: table_name,
+            connection,
+        }) = self.reference_lookup_target(cx)
+        else {
+            self.inspector.incoming_references.cancel();
+            content.update(cx, |content, cx| {
+                content.add_incoming_references(generation, Vec::new(), cx);
+            });
             return;
-        }
-
-        let (profile_id, database, schema) = match &self.source {
-            super::DataSource::Table {
-                profile_id,
-                database,
-                table,
-                ..
-            } => {
-                let db = {
-                    let state = self.app_state.read(cx);
-                    let db = database.clone().or_else(|| {
-                        state
-                            .connections()
-                            .get(profile_id)
-                            .and_then(|c| c.active_database.clone())
-                    });
-                    db.unwrap_or_else(|| "default".to_string())
-                };
-                let schema = table.schema.clone().unwrap_or_else(|| "public".to_string());
-                (*profile_id, db, schema)
-            }
-            _ => return,
         };
 
-        // Use the per-database connection for the database being viewed.
-        // `state.get_connection` only returns the primary connection (which
-        // for Postgres is bound to a different database), so FK lookups
-        // failed with "relation public.X does not exist".
-        let connection = {
-            let state = self.app_state.read(cx);
-            let Some(connected) = state.connections().get(&profile_id) else {
+        let values: std::collections::HashMap<String, Value> = cells
+            .iter()
+            .map(|cell| (cell.name.clone(), cell.value.clone()))
+            .collect();
+        let app_state = self.app_state.clone();
+
+        let job = async move |cx: &mut AsyncApp| {
+            let foreign_keys = match cached_or_fetched_schema_foreign_keys(
+                &app_state,
+                profile_id,
+                &database,
+                schema.as_deref(),
+                cx,
+            )
+            .await
+            {
+                Ok(foreign_keys) => foreign_keys,
+                Err(error) => {
+                    log::debug!("row inspector could not read the schema's foreign keys: {error}");
+                    Vec::new()
+                }
+            };
+
+            let references = super::row_inspector::incoming_references(
+                &foreign_keys,
+                &table_name,
+                schema.as_deref(),
+                &values,
+            );
+
+            let first = cx.update(|cx| {
+                content.update(cx, |content, cx| {
+                    content.add_incoming_references(generation, references.clone(), cx)
+                })
+            });
+
+            let Some(first) = first else {
                 return;
             };
-            connected.connection_for_database(&database)
+
+            super::row_inspector::count_incoming_references(
+                &content,
+                generation,
+                first,
+                &references,
+                |reference, executor| {
+                    let connection = connection.clone();
+                    let request = dbflux_core::TableCountRequest::new(dbflux_core::TableRef {
+                        schema: schema.clone(),
+                        name: reference.target_table.clone(),
+                    })
+                    .with_semantic_filter(
+                        dbflux_core::SemanticFilter::compare(
+                            reference.column.as_str(),
+                            dbflux_core::WhereOperator::Eq,
+                            reference.value.clone(),
+                        ),
+                    );
+
+                    executor.spawn(async move {
+                        connection
+                            .count_table(&request)
+                            .map_err(|error| error.to_string())
+                    })
+                },
+                cx,
+            )
+            .await;
         };
 
-        // Initialise the inspector's reference list with Loading state.
-        let loading_refs: Vec<FkReference> = references
-            .iter()
-            .map(|r| FkReference {
-                column: r.column.clone(),
-                target_schema: r.target_schema.clone(),
-                target_table: r.target_table.clone(),
-                target_pk: r.target_pk.clone(),
-                value: r.value.clone(),
-                row: LoadingState::Loading,
-            })
-            .collect();
-
-        inspector_entity.update(cx, |insp, cx| {
-            insp.set_references(loading_refs, cx);
-        });
-
-        // Spawn one task per FK reference.
-        for (index, fk_ref) in references.into_iter().enumerate() {
-            let connection = connection.clone();
-            let inspector = inspector_entity.clone();
-            let database = database.clone();
-            let default_schema = schema.clone();
-
-            cx.spawn(async move |_this, cx| {
-                // Use the FK's own schema if known, otherwise fall back to
-                // the current table's schema (for same-schema FKs).
-                let resolved_schema = fk_ref
-                    .target_schema
-                    .clone()
-                    .unwrap_or(default_schema.clone());
-
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        connection.fetch_row_by_pk(
-                            &database,
-                            &resolved_schema,
-                            &fk_ref.target_table,
-                            &fk_ref.target_pk,
-                            &fk_ref.value,
-                        )
-                    })
-                    .await;
-
-                cx.update(|cx| {
-                    inspector.update(cx, |insp, cx| match result {
-                        Ok(row_opt) => {
-                            insp.resolve_reference(index, Ok(row_opt), cx);
-                        }
-                        Err(e) => {
-                            insp.resolve_reference(index, Err(e.to_string()), cx);
-                        }
-                    })
-                });
-            })
-            .detach();
-        }
+        self.inspector.incoming_references.schedule(job, cx);
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
@@ -3909,9 +3978,72 @@ fn record_clipboard_audit(
     }
 }
 
+/// The browsed table and the connection that reaches it, for the row
+/// inspector's reference lookups.
+struct ReferenceLookupTarget {
+    profile_id: uuid::Uuid,
+    database: String,
+    schema: Option<String>,
+    table: String,
+    connection: std::sync::Arc<dyn dbflux_core::Connection>,
+}
+
+/// The foreign keys of one schema: from the connection's cache when it has
+/// them, otherwise fetched on the background executor and cached for the
+/// next reader.
+async fn cached_or_fetched_schema_foreign_keys(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
+    database: &str,
+    schema: Option<&str>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<dbflux_core::SchemaForeignKeyInfo>, String> {
+    let key = dbflux_core::SchemaCacheKey::new(database, schema);
+
+    let cached = cx.update(|cx| {
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.schema_foreign_keys.get(&key))
+            .cloned()
+    });
+
+    if let Some(foreign_keys) = cached {
+        return Ok(foreign_keys);
+    }
+
+    let params = cx.update(|cx| {
+        app_state
+            .read(cx)
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+    })?;
+
+    let fetched = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await?;
+
+    let foreign_keys = fetched.foreign_keys.clone();
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state.set_schema_foreign_keys(
+                fetched.profile_id,
+                fetched.database,
+                fetched.schema,
+                fetched.foreign_keys,
+            );
+        });
+    });
+
+    Ok(foreign_keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::DataGridPanel;
+    use super::QueryGroupSeparators;
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
     use gpui::{Pixels, Point, Size, px};
 
@@ -3920,6 +4052,39 @@ mod tests {
             width: px(1000.0),
             height: px(600.0),
         }
+    }
+
+    #[test]
+    fn query_group_has_one_separator_before_its_first_member() {
+        assert_eq!(
+            QueryGroupSeparators::new(true, true, true, true),
+            QueryGroupSeparators {
+                filter: true,
+                order: false,
+                generate_sql: false,
+                copy_query: false,
+            }
+        );
+
+        assert_eq!(
+            QueryGroupSeparators::new(false, false, true, true),
+            QueryGroupSeparators {
+                filter: false,
+                order: false,
+                generate_sql: true,
+                copy_query: false,
+            }
+        );
+
+        assert_eq!(
+            QueryGroupSeparators::new(false, false, false, true),
+            QueryGroupSeparators {
+                filter: false,
+                order: false,
+                generate_sql: false,
+                copy_query: true,
+            }
+        );
     }
 
     #[test]

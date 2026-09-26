@@ -1224,6 +1224,40 @@ mod tests {
         }
     }
 
+    /// A freshly listed level puts the cursor on its first row, so Enter
+    /// works before any click, and a later page keeps the cursor in place.
+    #[gpui::test]
+    fn listing_a_level_puts_the_cursor_on_the_first_row(cx: &mut gpui::TestAppContext) {
+        let doc = new_test_entity(cx);
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_prefix_page("", Ok(page(&["logs/"], &["a.txt"])), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).tree.selected,
+                Some(ObjectTreeNodeId::Prefix("logs/".to_string()))
+            );
+        });
+
+        cx.update(|cx| {
+            doc.update(cx, |doc, cx| {
+                doc.select_node(ObjectTreeNodeId::Object("a.txt".to_string()), cx);
+                doc.apply_prefix_page("", Ok(page(&[], &["b.txt"])), cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(
+                doc.read(cx).tree.selected,
+                Some(ObjectTreeNodeId::Object("a.txt".to_string()))
+            );
+        });
+    }
+
     /// T24: keyboard navigation walks the visible rows of the current level,
     /// prefixes first, and clamps at both ends.
     #[gpui::test]

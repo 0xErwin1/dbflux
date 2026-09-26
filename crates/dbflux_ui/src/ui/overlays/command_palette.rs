@@ -423,6 +423,10 @@ struct FilteredItem {
 
 const VISIBLE_ITEMS: usize = 8;
 
+/// Most commands a mixed query (no `>` or `@` prefix) keeps, so the
+/// connections and tables it also matches stay on screen (P1Palette).
+const MIXED_QUERY_COMMAND_LIMIT: usize = 3;
+
 /// Section grouping for the rendered palette list.
 ///
 /// The order here is the visual order in the palette. Sections render only
@@ -610,7 +614,8 @@ fn palette_command_keycaps(id: &str, shortcut: Option<&str>) -> Vec<SharedString
 ///
 /// Recognizes the canonical modifier tokens used in `KeyBinding` strings
 /// (`ctrl`, `shift`, `alt`, `cmd`) and capitalizes them for display. The
-/// final segment is treated as the key name and uppercased.
+/// final segment is the key name: uppercased after a modifier (`Ctrl E`),
+/// kept as typed on its own (`x`).
 fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
     let tokens: Vec<&str> = shortcut.split('-').collect();
 
@@ -622,7 +627,9 @@ fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
     let last_idx = tokens.len() - 1;
 
     for (idx, token) in tokens.iter().enumerate() {
-        let display = if idx == last_idx {
+        let display = if idx == last_idx && last_idx == 0 {
+            token.to_string()
+        } else if idx == last_idx {
             token.to_uppercase()
         } else {
             match token.to_lowercase().as_str() {
@@ -666,6 +673,52 @@ fn filter_items(items: &[PaletteItem], matcher: &SkimMatcherV2, query: &str) -> 
         .collect()
 }
 
+/// Orders `filtered` the way the list shows it: by section, then by score,
+/// then by kind. A mixed query keeps only its best
+/// [`MIXED_QUERY_COMMAND_LIMIT`] commands so every kind it matches shows.
+fn arrange_results(
+    items: &[PaletteItem],
+    mut filtered: Vec<FilteredItem>,
+    query: &str,
+) -> Vec<FilteredItem> {
+    filtered.sort_by(|a, b| {
+        let item_a = &items[a.index];
+        let item_b = &items[b.index];
+        let section_a = PaletteSection::for_item(item_a).sort_order();
+        let section_b = PaletteSection::for_item(item_b).sort_order();
+
+        section_a
+            .cmp(&section_b)
+            .then_with(|| b.score.cmp(&a.score))
+            .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
+    });
+
+    let (scope, text) = PaletteScope::parse(query);
+
+    if scope == PaletteScope::All && !text.trim().is_empty() {
+        let mut commands_kept = 0;
+
+        filtered.retain(|filtered_item| {
+            if !matches!(items[filtered_item.index], PaletteItem::Action { .. }) {
+                return true;
+            }
+
+            commands_kept += 1;
+            commands_kept <= MIXED_QUERY_COMMAND_LIMIT
+        });
+    }
+
+    filtered
+}
+
+/// Where the chosen item opens: `Enter` reuses the tab already showing it,
+/// the new-tab chord (`Ctrl ↵`) always opens another one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenPlacement {
+    ReuseTab,
+    NewTab,
+}
+
 pub struct CommandPalette {
     visible: bool,
     items: Vec<PaletteItem>,
@@ -690,14 +743,18 @@ pub enum PaletteSelection {
         profile_id: Uuid,
         table: TableRef,
         database: Option<String>,
+        /// Open another tab even when one already shows this table.
+        new_tab: bool,
     },
     OpenCollection {
         profile_id: Uuid,
         collection: CollectionRef,
+        new_tab: bool,
     },
     OpenKeyValue {
         profile_id: Uuid,
         database: String,
+        new_tab: bool,
     },
     FocusConnection {
         profile_id: Uuid,
@@ -728,8 +785,17 @@ impl CommandPalette {
                     let query = this.input_state.read(cx).value().to_string();
                     this.update_filter(&query, cx);
                 }
-                InputEvent::PressEnter { .. } => {
-                    this.execute_selected(window, cx);
+                // The search input owns Enter and the primary-modifier Enter
+                // while it has focus, so the new-tab chord arrives here as a
+                // secondary Enter rather than through the palette keymap.
+                InputEvent::PressEnter { secondary, .. } => {
+                    let placement = if *secondary {
+                        OpenPlacement::NewTab
+                    } else {
+                        OpenPlacement::ReuseTab
+                    };
+
+                    this.execute_selected(placement, window, cx);
                 }
                 _ => {}
             },
@@ -767,7 +833,7 @@ impl CommandPalette {
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.match_query.clear();
-        self.sort_filtered_by_section();
+        self.filtered = arrange_results(&self.items, std::mem::take(&mut self.filtered), "");
 
         self.input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -799,7 +865,7 @@ impl CommandPalette {
                 .enumerate()
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
-            self.sort_filtered_by_section();
+            self.filtered = arrange_results(&self.items, std::mem::take(&mut self.filtered), "");
         }
 
         cx.notify();
@@ -817,32 +883,13 @@ impl CommandPalette {
     }
 
     fn update_filter(&mut self, query: &str, cx: &mut Context<Self>) {
-        self.filtered = filter_items(&self.items, &self.matcher, query);
+        let filtered = filter_items(&self.items, &self.matcher, query);
+        self.filtered = arrange_results(&self.items, filtered, query);
         self.match_query = PaletteScope::parse(query).1.to_string();
-
-        self.sort_filtered_by_section();
 
         self.selected_index = 0;
         self.scroll_offset = 0;
         cx.notify();
-    }
-
-    /// Sort `self.filtered` so its index order matches the visual section
-    /// order produced by the renderer. Within a section, items are ordered by
-    /// fuzzy-match score (desc) and then by `type_priority` as a tiebreaker.
-    /// Keeping these in sync ensures up/down keyboard navigation walks the
-    /// list in the order the user sees it instead of jumping across sections.
-    fn sort_filtered_by_section(&mut self) {
-        self.filtered.sort_by(|a, b| {
-            let item_a = &self.items[a.index];
-            let item_b = &self.items[b.index];
-            let sec_a = PaletteSection::for_item(item_a).sort_order();
-            let sec_b = PaletteSection::for_item(item_b).sort_order();
-            sec_a
-                .cmp(&sec_b)
-                .then_with(|| b.score.cmp(&a.score))
-                .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
-        });
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
@@ -890,7 +937,14 @@ impl CommandPalette {
         }
     }
 
-    fn execute_selected(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn execute_selected(
+        &mut self,
+        placement: OpenPlacement,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_tab = placement == OpenPlacement::NewTab;
+
         if let Some(filtered) = self.filtered.get(self.selected_index)
             && let Some(item) = self.items.get(filtered.index)
         {
@@ -932,6 +986,7 @@ impl CommandPalette {
                             name: name.clone(),
                         },
                         database: database.clone(),
+                        new_tab,
                     },
                     ResourceItem::Collection {
                         profile_id,
@@ -944,6 +999,7 @@ impl CommandPalette {
                             database: database.clone(),
                             name: name.clone(),
                         },
+                        new_tab,
                     },
                     ResourceItem::KeyValueDb {
                         profile_id,
@@ -952,6 +1008,7 @@ impl CommandPalette {
                     } => PaletteSelection::OpenKeyValue {
                         profile_id: *profile_id,
                         database: database.clone(),
+                        new_tab,
                     },
                 },
                 PaletteItem::Script { path, .. } => {
@@ -1119,13 +1176,10 @@ impl CommandPalette {
 
     fn render_footer(cx: &App) -> Div {
         let theme = cx.theme();
-        let navigate_keys: Option<Vec<SharedString>> = match (
+        let navigate_keys = palette_navigate_label(
             palette_shortcut(Command::SelectPrev),
             palette_shortcut(Command::SelectNext),
-        ) {
-            (None, None) => None,
-            (previous, next) => Some(previous.into_iter().chain(next).collect()),
-        };
+        );
 
         let hint = |label: String| div().flex_shrink_0().child(label);
 
@@ -1142,19 +1196,56 @@ impl CommandPalette {
             .text_color(theme.muted_foreground)
             .when_some(navigate_keys, |footer, keys| {
                 footer
-                    .child(Kbd::chord(keys))
+                    .child(Kbd::new(keys))
                     .child(hint(dbflux_i18n::t!("palette.footer.navigate")))
             })
             .when_some(palette_shortcut(Command::Execute), |footer, label| {
                 footer
-                    .child(Kbd::new(label))
+                    .child(Kbd::new(footer_key_label(&label)))
                     .child(hint(dbflux_i18n::t!("palette.footer.run")))
             })
+            .when_some(
+                palette_shortcut(Command::RunQueryInNewTab),
+                |footer, label| {
+                    footer
+                        .child(Kbd::new(label))
+                        .child(hint(dbflux_i18n::t!("palette.footer.open_in_new_tab")))
+                },
+            )
             .child(div().flex_1())
             .child(Kbd::new(">"))
             .child(hint(dbflux_i18n::t!("palette.footer.commands_only")))
             .child(Kbd::new("@"))
             .child(hint(dbflux_i18n::t!("palette.footer.tables_only")))
+    }
+}
+
+/// The footer's move keycap: the previous and next keys side by side in one
+/// keycap (`↑↓`), or whichever of them is bound.
+fn palette_navigate_label(
+    previous: Option<SharedString>,
+    next: Option<SharedString>,
+) -> Option<SharedString> {
+    match (previous, next) {
+        (None, None) => None,
+        (previous, next) => Some(
+            previous
+                .into_iter()
+                .chain(next)
+                .map(|label| label.to_string())
+                .collect::<String>()
+                .into(),
+        ),
+    }
+}
+
+/// A lone Enter reads `↵` in the footer, like the new-tab chord next to it
+/// (`Ctrl ↵`).
+fn footer_key_label(label: &str) -> SharedString {
+    if label == "Enter" {
+        "\u{21b5}".into()
+    } else {
+        label.to_string().into()
     }
 }
 
@@ -1226,7 +1317,7 @@ impl Render for CommandPalette {
                         })
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.selected_index = display_idx;
-                            this.execute_selected(window, cx);
+                            this.execute_selected(OpenPlacement::ReuseTab, window, cx);
                         }))
                         .into_any_element()
                 }
@@ -1263,7 +1354,12 @@ impl Render for CommandPalette {
                     Some(Command::SelectPrev) => this.select_prev(cx),
                     Some(Command::SelectNext) => this.select_next(cx),
                     Some(Command::Cancel) => this.hide(cx),
-                    Some(Command::Execute) => this.execute_selected(window, cx),
+                    Some(Command::Execute) => {
+                        this.execute_selected(OpenPlacement::ReuseTab, window, cx)
+                    }
+                    Some(Command::RunQueryInNewTab) => {
+                        this.execute_selected(OpenPlacement::NewTab, window, cx)
+                    }
                     _ => cx.propagate(),
                 }
             }))
@@ -1325,8 +1421,9 @@ impl Render for CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaletteCommand, PaletteItem, PaletteScope, PaletteSection, ResourceItem, filter_items,
-        match_ranges, palette_shortcut_parts,
+        MIXED_QUERY_COMMAND_LIMIT, PaletteCommand, PaletteItem, PaletteScope, PaletteSection,
+        ResourceItem, arrange_results, filter_items, footer_key_label, match_ranges,
+        palette_navigate_label, palette_shortcut_parts,
     };
     use fuzzy_matcher::skim::SkimMatcherV2;
     use std::fs;
@@ -1394,6 +1491,7 @@ mod tests {
             vec!["Ctrl", "Shift", "2"]
         );
         assert_eq!(palette_shortcut_parts("ctrl-e"), vec!["Ctrl", "E"]);
+        assert_eq!(palette_shortcut_parts("x"), vec!["x"]);
     }
 
     #[test]
@@ -1436,6 +1534,71 @@ mod tests {
 
         let everything = filter_items(&items, &matcher, "");
         assert_eq!(everything.len(), 3);
+    }
+
+    #[test]
+    fn a_mixed_query_caps_commands_so_connections_and_tables_show() {
+        let matcher = SkimMatcherV2::default();
+        let items = vec![
+            action("export_results", "Export orders"),
+            action("focus_editor", "Focus orders editor"),
+            action("open_history", "Open orders history"),
+            action("close_tab", "Close orders tab"),
+            action("next_tab", "Next orders tab"),
+            connection("orders-db", true),
+            table("orders"),
+            table("order_items"),
+        ];
+
+        let arranged = arrange_results(&items, filter_items(&items, &matcher, "or"), "or");
+        let kinds: Vec<PaletteSection> = arranged
+            .iter()
+            .map(|filtered| PaletteSection::for_item(&items[filtered.index]))
+            .collect();
+
+        let command_count = kinds
+            .iter()
+            .filter(|section| **section == PaletteSection::Commands)
+            .count();
+
+        assert_eq!(command_count, MIXED_QUERY_COMMAND_LIMIT);
+        assert!(kinds.contains(&PaletteSection::Connections));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|section| **section == PaletteSection::Tables)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn prefixed_and_empty_queries_keep_every_command() {
+        let matcher = SkimMatcherV2::default();
+        let items = vec![
+            action("export_results", "Export orders"),
+            action("focus_editor", "Focus orders editor"),
+            action("open_history", "Open orders history"),
+            action("close_tab", "Close orders tab"),
+            table("orders"),
+        ];
+
+        let commands_only = arrange_results(&items, filter_items(&items, &matcher, "> or"), "> or");
+        assert_eq!(commands_only.len(), 4);
+
+        let everything = arrange_results(&items, filter_items(&items, &matcher, ""), "");
+        assert_eq!(everything.len(), 5);
+    }
+
+    #[test]
+    fn footer_shows_arrows_in_one_keycap_and_enter_as_a_glyph() {
+        assert_eq!(
+            palette_navigate_label(Some("↑".into()), Some("↓".into())).as_deref(),
+            Some("↑↓")
+        );
+        assert_eq!(palette_navigate_label(None, None), None);
+        assert_eq!(footer_key_label("Enter").as_ref(), "\u{21b5}");
+        assert_eq!(footer_key_label("Ctrl ↵").as_ref(), "Ctrl ↵");
     }
 
     #[test]
@@ -1495,7 +1658,7 @@ mod tests {
     #[test]
     fn command_palette_import_label_is_exactly_correct() {
         let (_category, label) = PaletteItem::ImportDashboard.display_label();
-        assert_eq!(label, "Import Dashboard from JSON...");
+        assert_eq!(label, "Import dashboard from JSON…");
     }
 
     // R.2 — New palette entries
@@ -1533,7 +1696,7 @@ mod tests {
             .any(|c| c.name == expected_name && c.category == expected_category);
         assert!(
             found,
-            "Palette must include 'Dashboards: New Dashboard...' entry"
+            "Palette must include 'Dashboards: New dashboard…' entry"
         );
     }
 
@@ -1579,6 +1742,7 @@ mod tests {
         "palette.import_dashboard.name",
         "palette.footer.navigate",
         "palette.footer.run",
+        "palette.footer.open_in_new_tab",
         "palette.footer.commands_only",
         "palette.footer.tables_only",
         "palette.connection.connected",
@@ -1701,7 +1865,7 @@ mod tests {
         let english = dbflux_i18n::t!("palette.command.run_query.name", locale = "en");
         let spanish = dbflux_i18n::t!("palette.command.run_query.name", locale = "es");
 
-        assert_eq!(english, "Run Query");
+        assert_eq!(english, "Run query");
         assert_eq!(spanish, "Ejecutar consulta");
         assert_ne!(english, spanish);
     }

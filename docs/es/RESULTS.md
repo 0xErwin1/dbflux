@@ -141,7 +141,7 @@ driver.
 
 ## Exportar
 
-Pulsa `Ctrl+e` (`Cmd+e`) en el panel de resultados, o ejecuta **Export Results**
+Pulsa `Ctrl+e` (`Cmd+e`) en el panel de resultados, o ejecuta **Export results**
 desde el command palette. Los formatos disponibles dependen de la forma del
 resultado e incluyen:
 

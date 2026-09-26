@@ -3,9 +3,9 @@ use gpui::*;
 use gpui_component::{ActiveTheme, IconName};
 
 use crate::icon::IconSource;
-use crate::primitives::{Chamfer, Icon, Kbd};
+use crate::primitives::{Chamfer, Icon, key_label};
 use crate::tokens::{
-    Borders, ChamferCut, ChromeColorSlot, ChromeColors, ChromeEdgeRole, MenuMetrics,
+    Borders, ChamferCut, ChromeColorSlot, ChromeColors, ChromeEdgeRole, KbdMetrics, MenuMetrics,
 };
 use crate::typography::AppFonts;
 
@@ -68,6 +68,8 @@ struct MenuItemVisualState {
     text_color: MenuItemColorRole,
     icon_color: MenuItemColorRole,
     submenu_color: MenuItemColorRole,
+    /// The shortcut hint is plain muted text on every row, selected or not.
+    shortcut_color: MenuItemColorRole,
     background: Option<MenuItemBackgroundRole>,
 }
 
@@ -94,6 +96,7 @@ fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualS
             text_color: MenuItemColorRole::Foreground,
             icon_color: MenuItemColorRole::Muted,
             submenu_color: MenuItemColorRole::Muted,
+            shortcut_color: MenuItemColorRole::Muted,
             background: None,
         };
     }
@@ -103,6 +106,7 @@ fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualS
             text_color: MenuItemColorRole::Danger,
             icon_color: MenuItemColorRole::Danger,
             submenu_color: MenuItemColorRole::Danger,
+            shortcut_color: MenuItemColorRole::Muted,
             background: is_selected.then_some(MenuItemBackgroundRole::DangerTint),
         };
     }
@@ -112,6 +116,7 @@ fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualS
             text_color: MenuItemColorRole::Strong,
             icon_color: MenuItemColorRole::Tint,
             submenu_color: MenuItemColorRole::Tint,
+            shortcut_color: MenuItemColorRole::Muted,
             background: Some(MenuItemBackgroundRole::Accent),
         };
     }
@@ -120,6 +125,7 @@ fn menu_item_visual_state(item: &MenuItem, is_selected: bool) -> MenuItemVisualS
         text_color: MenuItemColorRole::Foreground,
         icon_color: MenuItemColorRole::Muted,
         submenu_color: MenuItemColorRole::Muted,
+        shortcut_color: MenuItemColorRole::Muted,
         background: None,
     }
 }
@@ -212,7 +218,8 @@ impl MenuItem {
 }
 
 /// Visual row of a menu, without handlers: icon, label, then the shortcut as
-/// a keycap or the submenu chevron (AppByzMenu, DSApp "Context menu").
+/// plain muted mono text or the submenu chevron (IslMenu, DSApp "Context
+/// menu"). The hint stays plain on the highlighted row too.
 ///
 /// Hand-rolled menus that need their own listeners or a flyout child start
 /// from this and chain `on_click` / `on_mouse_move` / `child` onto it, so
@@ -232,6 +239,7 @@ pub fn menu_row(
     let icon_color = resolve_menu_item_color(visual_state.icon_color, theme);
     let text_color = resolve_menu_item_color(visual_state.text_color, theme);
     let submenu_color = resolve_menu_item_color(visual_state.submenu_color, theme);
+    let shortcut_color = resolve_menu_item_color(visual_state.shortcut_color, theme);
 
     let wash = if item.is_danger {
         resolve_menu_item_background(MenuItemBackgroundRole::DangerTint, theme)
@@ -283,8 +291,15 @@ pub fn menu_row(
                 .truncate()
                 .child(item.label.clone()),
         )
-        .when_some(item.shortcut.clone(), |row, shortcut| {
-            row.child(Kbd::new(shortcut))
+        .when_some(item.shortcut.as_ref(), |row, shortcut| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(KbdMetrics::FONT)
+                    .text_color(shortcut_color)
+                    .child(key_label(shortcut)),
+            )
         })
         .when(item.has_submenu, |row| {
             row.child(
@@ -464,6 +479,23 @@ mod tests {
         assert_eq!(state.text_color, MenuItemColorRole::Strong);
         assert_eq!(state.icon_color, MenuItemColorRole::Tint);
         assert_eq!(state.submenu_color, MenuItemColorRole::Tint);
+    }
+
+    #[test]
+    fn shortcut_hint_stays_plain_muted_text_on_every_row() {
+        let item = MenuItem::new("Copy").shortcut("Ctrl C");
+        let danger = MenuItem::new("Drop table").danger().shortcut("x");
+
+        for selected in [false, true] {
+            assert_eq!(
+                menu_item_visual_state(&item, selected).shortcut_color,
+                MenuItemColorRole::Muted
+            );
+            assert_eq!(
+                menu_item_visual_state(&danger, selected).shortcut_color,
+                MenuItemColorRole::Muted
+            );
+        }
     }
 
     #[test]

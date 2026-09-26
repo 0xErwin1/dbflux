@@ -132,7 +132,7 @@ selected row using the driver's own query generator.
 
 ## Exporting
 
-Press `Ctrl+e` (`Cmd+e`) in the results panel, or run **Export Results** from the
+Press `Ctrl+e` (`Cmd+e`) in the results panel, or run **Export results** from the
 command palette. The available formats depend on the result shape and include:
 
 - **CSV**

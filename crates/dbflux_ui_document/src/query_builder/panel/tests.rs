@@ -134,7 +134,10 @@ fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
         _input_subs: Vec::new(),
         pending_join_rebuild: false,
         add_column_input_state: None,
-        add_sort_input_state: None,
+        sort_column_dropdowns: Vec::new(),
+        sort_add_dropdown: None,
+        sort_dropdown_options: Vec::new(),
+        _sort_dropdown_subs: Vec::new(),
         next_node_id: 0,
         predicate_input_states: HashMap::new(),
         predicate_column_input_states: HashMap::new(),
@@ -2051,4 +2054,74 @@ fn generate_alias_sanitizes_other_special_chars() {
     let panel = make_panel(make_spec(test_source()));
     let alias = panel.generate_aggregate_alias(AggFn::Sum, "total-amount");
     assert_eq!(alias, "sum_total_amount");
+}
+
+// ---- sort column dropdowns ----------------------------------------------
+
+#[test]
+fn sort_options_list_source_then_loaded_joined_columns() {
+    let mut panel = make_panel(make_spec(test_source()));
+    panel.available_columns = vec!["id".to_string(), "email".to_string()];
+    panel.join_rows.push(JoinRow {
+        kind: JoinKind::Left,
+        from_alias: "users".to_string(),
+        from_column: "id".to_string(),
+        to_schema: Some("public".to_string()),
+        to_table: "orders".to_string(),
+        to_alias: "o".to_string(),
+        on: JoinOn::RawExpression(String::new()),
+    });
+    panel.schema_cache.borrow_mut().joined_columns.insert(
+        (Some("public".to_string()), "orders".to_string()),
+        vec![ColumnInfo {
+            name: "status".to_string(),
+            type_name: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+            enum_values: None,
+        }],
+    );
+
+    let options = panel.sort_column_options();
+    let labels: Vec<String> = options
+        .iter()
+        .map(|option| panel.sort_option_label(option))
+        .collect();
+
+    assert_eq!(labels, ["id", "email", "o.status"]);
+    assert_eq!(options[2].source_alias, "o");
+}
+
+#[test]
+fn grouped_sort_options_are_group_columns_and_aggregate_aliases() {
+    let mut spec = make_spec(test_source());
+    spec.group_by = vec![dbflux_core::GroupByEntry {
+        source_alias: "users".to_string(),
+        column: "country".to_string(),
+    }];
+    spec.aggregates = vec![VisualAggregateSpec {
+        function: AggFn::Sum,
+        source_alias: Some("users".to_string()),
+        column: Some("amount".to_string()),
+        alias: "total".to_string(),
+    }];
+    let mut panel = make_panel(spec);
+    panel.available_columns = vec!["id".to_string(), "country".to_string()];
+
+    let options = panel.sort_column_options();
+
+    assert_eq!(
+        options,
+        vec![
+            SortColumnOption {
+                source_alias: "users".to_string(),
+                column: "country".to_string(),
+            },
+            SortColumnOption {
+                source_alias: String::new(),
+                column: "total".to_string(),
+            },
+        ]
+    );
 }

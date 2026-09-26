@@ -373,6 +373,12 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         name: String,
     },
+
+    /// Folder that groups the containers of an object-storage connection.
+    /// Activating it opens the buckets table document.
+    BucketsFolder {
+        profile_id: Uuid,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -442,6 +448,7 @@ pub enum SchemaNodeKind {
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
     Bucket,
+    BucketsFolder,
 }
 
 impl SchemaNodeId {
@@ -513,6 +520,7 @@ impl SchemaNodeId {
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
             Self::Bucket { .. } => SchemaNodeKind::Bucket,
+            Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
         }
     }
 
@@ -581,7 +589,8 @@ impl SchemaNodeId {
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
             | Self::InstanceOverviewLeaf { profile_id, .. }
-            | Self::Bucket { profile_id, .. } => Some(*profile_id),
+            | Self::Bucket { profile_id, .. }
+            | Self::BucketsFolder { profile_id } => Some(*profile_id),
         }
     }
 }
@@ -649,6 +658,7 @@ const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
 // Object-storage bucket leaf.
 const P_BUCKET: &str = "BKT";
+const P_BUCKETS_FOLDER: &str = "BKTF";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -1312,6 +1322,7 @@ mod tests {
             profile_id: uuid,
             name: "media.assets.example".into(),
         });
+        roundtrip(SchemaNodeId::BucketsFolder { profile_id: uuid });
     }
 
     #[test]

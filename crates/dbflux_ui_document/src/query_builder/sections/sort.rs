@@ -1,162 +1,208 @@
+use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
-use dbflux_components::tokens::{BuilderMetrics, Fields};
-use dbflux_components::typography::AppFonts;
-use gpui::{Context, IntoElement, div};
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
+use dbflux_components::tokens::BuilderMetrics;
+use dbflux_core::{OrderByMode, VisualSortDirection};
+use gpui::prelude::*;
+use gpui::{AnyElement, Context, IntoElement, SharedString, div};
 
 use crate::labels::sort_direction_label;
 use crate::query_builder::panel::QueryBuilderPanel;
 
-/// Renders the Sort section of the Query Builder.
+/// Renders the Sort and limit section of the Query Builder (IslBuilder).
 ///
-/// Shows an ordered list of sort entries. Each row has a direction toggle
-/// button (ASC/DESC), up/down reorder buttons, and a remove button.
-/// A footer row contains an "add sort" input and Add button.
+/// Each sort row is a column dropdown and an ASC/DESC switch; the first row
+/// also carries the limit field, as the board draws it. Further rows add a
+/// multi-column ORDER BY and can be removed. The last line appends a sort by
+/// picking its column and holds the offset field.
+///
+/// Drivers that order only on their sort key get the direction toggle
+/// instead of the rows, and drivers that cannot order at all get only the
+/// limit and offset fields.
 pub fn render_sort(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input};
-    use dbflux_core::{OrderByMode, VisualSortDirection};
-    use gpui::SharedString;
-    use gpui::prelude::*;
+    let mode = panel.order_by_mode(cx);
+    let container = div().flex().flex_col().gap(BuilderMetrics::ROW_GAP);
 
-    if panel.order_by_mode(cx) == OrderByMode::SortKeyOnly {
-        return render_sort_key_only(panel, cx).into_any_element();
+    match mode {
+        OrderByMode::SortKeyOnly => container
+            .child(render_sort_key_only(panel, cx))
+            .child(limit_offset_row(panel))
+            .into_any_element(),
+        OrderByMode::None => container.child(limit_offset_row(panel)).into_any_element(),
+        OrderByMode::AnyColumns => render_sort_rows(panel, container, cx).into_any_element(),
     }
+}
 
-    let sort_count = panel.sort_rows.len();
+fn render_sort_rows(
+    panel: &mut QueryBuilderPanel,
+    container: gpui::Div,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> gpui::Div {
+    panel.sync_sort_dropdowns(cx);
+
     let sort_rows = panel.sort_rows.clone();
+    let dropdowns = panel.sort_column_dropdowns.clone();
+    let limit = limit_field(panel);
 
-    let mut container = div().flex().flex_col().gap(BuilderMetrics::ROW_GAP);
+    let mut container = container;
 
-    for (i, row) in sort_rows.iter().enumerate() {
-        let label = format!("{}.{}", row.source_alias, row.column);
-        let can_move_up = i > 0;
-        let can_move_down = i + 1 < sort_count;
+    if sort_rows.is_empty() {
+        let add = panel.sort_add_dropdown.clone();
 
-        let direction_id = |direction: VisualSortDirection| {
-            SharedString::from(format!("qb-sort-dir-{i}-{direction:?}"))
-        };
-        let current_direction = direction_id(row.direction);
-        let weak = cx.weak_entity();
-        let direction_switch = SegmentedControl::new(
-            [VisualSortDirection::Asc, VisualSortDirection::Desc]
-                .into_iter()
-                .map(|direction| {
-                    SegmentedItem::new(direction_id(direction), sort_direction_label(direction))
-                })
-                .collect(),
-            current_direction.clone(),
-            move |id, _, cx| {
-                if *id == current_direction {
-                    return;
-                }
-
-                if let Some(builder) = weak.upgrade() {
-                    builder.update(cx, |this, cx| this.toggle_sort_direction(i, cx));
-                }
-            },
-        );
-
-        let row_div = div()
-            .flex()
-            .flex_row()
-            .gap(BuilderMetrics::ROW_GAP)
-            .items_center()
+        return container
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(AppFonts::MONO)
-                    .text_size(Fields::TEXT)
-                    .child(SharedString::from(label)),
+                    .flex()
+                    .items_center()
+                    .gap(BuilderMetrics::ROW_GAP)
+                    .when_some(add, |row, add| {
+                        row.child(column_slot(add.into_any_element()))
+                    })
+                    .children(limit),
             )
-            .child(direction_switch)
+            .child(offset_line(panel, None));
+    }
+
+    let mut limit = limit;
+
+    for (index, (row, dropdown)) in sort_rows.iter().zip(dropdowns).enumerate() {
+        let line = div()
+            .flex()
+            .items_center()
+            .gap(BuilderMetrics::ROW_GAP)
+            .child(column_slot(dropdown.into_any_element()))
+            .child(direction_switch(index, row.direction, cx))
+            .when(index == 0, |line| line.children(limit.take()))
+            .child(div().flex_1())
             .child(
                 Button::new(
-                    ("qb-sort-up", i),
-                    dbflux_i18n::t!("document.query_builder.sort.move_up"),
-                )
-                .ghost()
-                .inline()
-                .icon(AppIcon::ChevronUp)
-                .icon_only()
-                .disabled(!can_move_up)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    if i > 0 {
-                        this.reorder_sort(i, i - 1, cx);
-                    }
-                })),
-            )
-            .child(
-                Button::new(
-                    ("qb-sort-dn", i),
-                    dbflux_i18n::t!("document.query_builder.sort.move_down"),
-                )
-                .ghost()
-                .inline()
-                .icon(AppIcon::ChevronDown)
-                .icon_only()
-                .disabled(!can_move_down)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.reorder_sort(i, i + 1, cx);
-                })),
-            )
-            .child(
-                Button::new(
-                    ("qb-rm-sort", i),
+                    ("qb-rm-sort", index),
                     dbflux_i18n::t!("document.query_builder.filters.remove"),
                 )
                 .ghost()
                 .inline()
                 .icon(AppIcon::CircleX)
                 .icon_only()
+                .tab_stop(false)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.remove_sort(i, cx);
+                    this.remove_sort(index, cx);
                 })),
             );
 
-        container = container.child(row_div);
+        container = container.child(line);
     }
 
-    if let Some(add_state) = panel.add_sort_input_state.as_ref() {
-        container = container.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .items_center()
-                .child(
-                    crate::completion_support::single_line_completion_editor(add_state)
-                        .flex_1()
-                        .w_full(),
-                )
-                .child(
-                    Button::new("qb-add-sort", dbflux_i18n::t!("document.shared.add")).on_click(
-                        cx.listener(|this, _event, _window, cx| {
-                            if let Some(state) = this.add_sort_input_state.clone() {
-                                let text = state.read(cx).value().trim().to_string();
-                                if text.is_empty() {
-                                    return;
-                                }
-                                let (alias, column) = match text.split_once('.') {
-                                    Some((a, c)) => (a.trim().to_string(), c.trim().to_string()),
-                                    None => (this.current_spec.source.alias.clone(), text.clone()),
-                                };
-                                this.add_sort(&alias, &column, cx);
-                                state.update(cx, |s, cx| {
-                                    s.set_value("", _window, cx);
-                                });
-                            }
-                        }),
+    let add = panel
+        .sort_add_dropdown
+        .clone()
+        .map(|add| column_slot(add.into_any_element()));
+
+    container.child(offset_line(panel, add))
+}
+
+/// The ASC/DESC switch of the sort row at `index`.
+fn direction_switch(
+    index: usize,
+    direction: VisualSortDirection,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> SegmentedControl {
+    let direction_id = move |direction: VisualSortDirection| {
+        SharedString::from(format!("qb-sort-dir-{index}-{direction:?}"))
+    };
+    let current = direction_id(direction);
+    let weak = cx.weak_entity();
+
+    SegmentedControl::new(
+        [VisualSortDirection::Asc, VisualSortDirection::Desc]
+            .into_iter()
+            .map(|direction| {
+                SegmentedItem::new(direction_id(direction), sort_direction_label(direction))
+            })
+            .collect(),
+        current.clone(),
+        move |id, _, cx| {
+            if *id == current {
+                return;
+            }
+
+            if let Some(builder) = weak.upgrade() {
+                builder.update(cx, |this, cx| this.toggle_sort_direction(index, cx));
+            }
+        },
+    )
+}
+
+/// A column dropdown at the board's 150 px width.
+fn column_slot(dropdown: AnyElement) -> AnyElement {
+    div()
+        .w(BuilderMetrics::SORT_COLUMN_WIDTH)
+        .flex_shrink_0()
+        .child(dropdown)
+        .into_any_element()
+}
+
+/// The 70 px limit field, or `None` in tests that build no input state.
+fn limit_field(panel: &QueryBuilderPanel) -> Option<AnyElement> {
+    panel.limit_input_state.as_ref().map(|state| {
+        div()
+            .w(BuilderMetrics::SORT_LIMIT_WIDTH)
+            .flex_shrink_0()
+            .child(
+                Input::new(state)
+                    .small()
+                    .aria_label(dbflux_i18n::t!("document.query_builder.status.limit"))
+                    .w_full(),
+            )
+            .into_any_element()
+    })
+}
+
+/// The last line: an optional leading control (the add-sort dropdown), then
+/// the offset field at the right.
+fn offset_line(panel: &QueryBuilderPanel, leading: Option<AnyElement>) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(BuilderMetrics::ROW_GAP)
+        .children(leading)
+        .child(div().flex_1())
+        .when_some(panel.offset_input_state.as_ref(), |line, state| {
+            line.child(Text::caption(dbflux_i18n::t!(
+                "document.query_builder.status.offset"
+            )))
+            .child(
+                div()
+                    .w(BuilderMetrics::SORT_LIMIT_WIDTH)
+                    .flex_shrink_0()
+                    .child(
+                        Input::new(state)
+                            .small()
+                            .aria_label(dbflux_i18n::t!("document.query_builder.status.offset"))
+                            .w_full(),
                     ),
-                ),
-        );
-    }
+            )
+        })
+        .into_any_element()
+}
 
-    container.into_any_element()
+/// Limit and offset side by side, for drivers without column sorting.
+fn limit_offset_row(panel: &QueryBuilderPanel) -> AnyElement {
+    let limit = limit_field(panel).map(|field| {
+        div()
+            .flex()
+            .items_center()
+            .gap(BuilderMetrics::ROW_GAP)
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.query_builder.status.limit"
+            )))
+            .child(field)
+            .into_any_element()
+    });
+
+    offset_line(panel, limit)
 }
 
 /// Renders the sort section for drivers that can order only on the sort key
@@ -166,10 +212,6 @@ fn render_sort_key_only(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::Button;
-    use dbflux_core::VisualSortDirection;
-    use gpui::SharedString;
-    use gpui::prelude::*;
     use gpui_component::ActiveTheme;
 
     let direction = panel.sort_key_direction();

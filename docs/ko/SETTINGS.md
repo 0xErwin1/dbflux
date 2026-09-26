@@ -3,7 +3,7 @@
 모든 설정 섹션과 연결 훅 — 연결의 수명 주기를 중심으로 DBFlux가 실행하는 명령,
 스크립트 또는 Lua 스니펫 — 에 대한 참조 문서입니다.
 
-명령 팔레트(**Open Settings**)나 사이드바에서 설정을 엽니다. 창의 왼쪽에는
+명령 팔레트(**Open settings**)나 사이드바에서 설정을 엽니다. 창의 왼쪽에는
 섹션별로 정리되어 있습니다.
 
 | 섹션 | 설명 |
@@ -155,7 +155,8 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), 창 이름 `Workspace`,
 `SettingsWindow`, `ConnectionManagerWindow`, 그리고 패널 이름 `ActivityRail`,
 `CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
-`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DashboardsPanel`,
+`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`DashboardsPanel`,
 `SettingsSection`을 쓸 수 있습니다. 값으로는 `vim_mode`(`normal`, `insert`,
 `replace`, `visual`, `visual_line`, `visual_block`, Vim 편집이 켜져 있을 때만),
 `language`(`sql`, `mongo`, `redis`, `lua`, `python`, `bash`, …), `tab`,

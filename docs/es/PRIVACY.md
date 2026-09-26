@@ -156,7 +156,7 @@ cerrar su pestaña y al salir. El contenido sin título sin guardar se conserva
 en la carpeta `sessions/`. Esas escrituras automáticas nunca sobrescriben un
 archivo de script que cambió fuera de dbflux: la escritura se rechaza y las
 ediciones pendientes quedan en el editor (y en la copia de la carpeta
-`sessions/`). `Ctrl+s` y **Save File As** son deliberados: escriben el archivo
+`sessions/`). `Ctrl+s` y **Save file as…** son deliberados: escriben el archivo
 tal como lo pediste. Al arrancar,
 DBFlux restaura esta sesión cuando **Settings → General → Restore session on
 startup** está activado (el valor por defecto).

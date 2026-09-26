@@ -137,7 +137,9 @@ impl ObjectBrowserDocument {
         .detach();
     }
 
-    fn apply_prefix_page(
+    /// Stores a listed page. The cursor lands on the first visible row when
+    /// it has none yet, so Enter works as soon as the listing appears.
+    pub(super) fn apply_prefix_page(
         &mut self,
         prefix: &str,
         result: Result<ObjectListingPage, DbError>,
@@ -146,6 +148,7 @@ impl ObjectBrowserDocument {
         match result {
             Ok(page) => {
                 self.tree.apply_page(prefix, page);
+                self.clamp_selection();
                 self.state = DocumentState::Clean;
                 self.last_error = None;
             }

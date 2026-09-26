@@ -5,6 +5,7 @@ mod notifications;
 pub mod pipeline;
 mod render;
 mod shell;
+use actions::TabPlacement;
 
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
@@ -185,6 +186,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
                     name: name.clone(),
                 },
                 database: database.clone(),
+                new_tab: false,
             }),
             ResourceItem::Collection {
                 profile_id,
@@ -197,6 +199,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
                     database: database.clone(),
                     name: name.clone(),
                 },
+                new_tab: false,
             }),
             ResourceItem::KeyValueDb {
                 profile_id,
@@ -205,6 +208,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
             } => Some(PaletteSelection::OpenKeyValue {
                 profile_id: *profile_id,
                 database: database.clone(),
+                new_tab: false,
             }),
         },
         PaletteItem::Script { path, .. } => {
@@ -724,11 +728,13 @@ impl Workspace {
                     profile_id,
                     table,
                     database,
+                    new_tab,
                 } => {
                     this.open_table_document(
                         *profile_id,
                         table.clone(),
                         database.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
                         window,
                         cx,
                     );
@@ -736,14 +742,28 @@ impl Workspace {
                 PaletteSelection::OpenCollection {
                     profile_id,
                     collection,
+                    new_tab,
                 } => {
-                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
+                    this.open_collection_document(
+                        *profile_id,
+                        collection.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
+                        window,
+                        cx,
+                    );
                 }
                 PaletteSelection::OpenKeyValue {
                     profile_id,
                     database,
+                    new_tab,
                 } => {
-                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                    this.open_key_value_document(
+                        *profile_id,
+                        database.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
+                        window,
+                        cx,
+                    );
                 }
                 PaletteSelection::OpenScript { path } => {
                     this.open_script_from_path(path.clone(), cx);
@@ -949,6 +969,7 @@ impl Workspace {
                         *profile_id,
                         table.clone(),
                         database.clone(),
+                        TabPlacement::ReuseExisting,
                         window,
                         cx,
                     );
@@ -957,7 +978,13 @@ impl Workspace {
                     profile_id,
                     collection,
                 } => {
-                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
+                    this.open_collection_document(
+                        *profile_id,
+                        collection.clone(),
+                        TabPlacement::ReuseExisting,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenCollectionChild {
                     profile_id,
@@ -976,7 +1003,13 @@ impl Workspace {
                     profile_id,
                     database,
                 } => {
-                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                    this.open_key_value_document(
+                        *profile_id,
+                        database.clone(),
+                        TabPlacement::ReuseExisting,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSchemaViz {
                     profile_id,

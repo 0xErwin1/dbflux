@@ -201,7 +201,7 @@ non-empty query causes the document to auto-execute on its first render.
 
 ### Open chart...
 
-The "Open chart..." command lists saved charts (built by
+The "Open chart…" command lists saved charts (built by
 `build_saved_chart_palette_items`) for the active profile, and opens the
 selected chart via `open_saved_chart` as described above.
 

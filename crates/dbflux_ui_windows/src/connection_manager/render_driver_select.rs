@@ -2,7 +2,7 @@ use crate::tokens::ConnectionFormMetrics;
 use dbflux_app::keymap::Command;
 use dbflux_components::composites::Island;
 use dbflux_components::controls::{Button, Input};
-use dbflux_components::icons::AppIcon;
+use dbflux_components::icons::{AppIcon, DriverIconTone};
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, IslandMetrics, ShellMetrics};
 use dbflux_core::DatabaseCategory;
@@ -12,17 +12,57 @@ use gpui_component::ActiveTheme;
 
 use super::{ConnectionManagerWindow, DismissEvent, DriverInfo};
 
-/// Display order for category sections in the picker.
-const CATEGORY_ORDER: &[DatabaseCategory] = &[
-    DatabaseCategory::Relational,
-    DatabaseCategory::Document,
-    DatabaseCategory::KeyValue,
-    DatabaseCategory::WideColumn,
-    DatabaseCategory::TimeSeries,
-    DatabaseCategory::Graph,
-    DatabaseCategory::LogStream,
-    DatabaseCategory::ObjectStorage,
+/// A titled group of cards in the picker. Every category has one section;
+/// time series and log streams share one, since both hold timestamped data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickerSection {
+    Relational,
+    Document,
+    KeyValue,
+    WideColumn,
+    TimeSeriesAndLogs,
+    Graph,
+    ObjectStorage,
+}
+
+/// Display order of the picker sections.
+const SECTION_ORDER: &[PickerSection] = &[
+    PickerSection::Relational,
+    PickerSection::Document,
+    PickerSection::KeyValue,
+    PickerSection::WideColumn,
+    PickerSection::TimeSeriesAndLogs,
+    PickerSection::Graph,
+    PickerSection::ObjectStorage,
 ];
+
+impl PickerSection {
+    pub(super) fn for_category(category: DatabaseCategory) -> Self {
+        match category {
+            DatabaseCategory::Relational => Self::Relational,
+            DatabaseCategory::Document => Self::Document,
+            DatabaseCategory::KeyValue => Self::KeyValue,
+            DatabaseCategory::WideColumn => Self::WideColumn,
+            DatabaseCategory::TimeSeries | DatabaseCategory::LogStream => Self::TimeSeriesAndLogs,
+            DatabaseCategory::Graph => Self::Graph,
+            DatabaseCategory::ObjectStorage => Self::ObjectStorage,
+        }
+    }
+
+    fn label(self) -> String {
+        let key = match self {
+            Self::Relational => "relational",
+            Self::Document => "document",
+            Self::KeyValue => "key_value",
+            Self::WideColumn => "wide_column",
+            Self::TimeSeriesAndLogs => "time_series_and_logs",
+            Self::Graph => "graph",
+            Self::ObjectStorage => "object_storage",
+        };
+
+        dbflux_i18n::t!(&format!("connection_manager.driver_select.section.{key}"))
+    }
+}
 
 /// Column count used before the picker has been laid out once.
 pub(super) const DEFAULT_GRID_COLUMNS: usize = 2;
@@ -189,7 +229,9 @@ impl ConnectionManagerWindow {
             let Some(first_driver) = section.first() else {
                 continue;
             };
-            body = body.child(render_section_header(first_driver.category));
+            body = body.child(render_section_header(PickerSection::for_category(
+                first_driver.category,
+            )));
 
             let mut grid = driver_section_grid(self.driver_grid_columns);
             for driver in section {
@@ -220,8 +262,8 @@ impl ConnectionManagerWindow {
         body
     }
 
-    /// One driver card: logo, name and the default port (or the driver's
-    /// description when it has no port) in a chamfered card; the card under
+    /// One driver card: brand-colored logo, name and the driver's short
+    /// picker hint (`:5432`, `file`, `AWS`) in a chamfered card; the card under
     /// the keyboard cursor gets an 8% tint wash and a check mark, plus the
     /// tint ring while focus is visible.
     fn render_driver_card(
@@ -233,10 +275,7 @@ impl ConnectionManagerWindow {
         let theme = cx.theme();
         let tint = ChromeColors::tint(theme);
         let driver_id_click = driver.id.clone();
-        let detail = driver
-            .default_port
-            .map(|port| format!(":{port}"))
-            .unwrap_or_else(|| driver.description.clone());
+        let detail = driver.picker_hint.clone();
 
         let shape = if is_selected {
             Chamfer::new(ChamferCut::INPUT)
@@ -274,7 +313,7 @@ impl ConnectionManagerWindow {
             .child(
                 Icon::new(AppIcon::for_driver(driver.icon, driver.category))
                     .size(ConnectionFormMetrics::CARD_LOGO)
-                    .color(theme.foreground),
+                    .color(DriverIconTone::for_driver(driver.icon, driver.category).resolve(cx)),
             )
             .child(
                 div()
@@ -284,12 +323,17 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap(ConnectionFormMetrics::CARD_LINE_GAP)
                     .child(
-                        Text::body(driver.name.clone())
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(ChromeColors::strong(theme)),
+                        div()
+                            .line_height(ConnectionFormMetrics::CARD_NAME_LINE_HEIGHT)
+                            .child(
+                                Text::body(driver.name.clone())
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(ChromeColors::strong(theme)),
+                            ),
                     )
                     .child(
                         div()
+                            .line_height(ConnectionFormMetrics::CARD_DETAIL_LINE_HEIGHT)
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
@@ -395,42 +439,45 @@ fn driver_matches_query(driver: &DriverInfo, query: &str) -> bool {
         || driver.uri_scheme.to_lowercase().contains(query)
         || port_str.contains(query)
         || driver.description.to_lowercase().contains(query)
+        || driver.picker_hint.to_lowercase().contains(query)
 }
 
-/// Category label above a section of cards: 16 px above, 8 px below.
-fn render_section_header(category: DatabaseCategory) -> impl IntoElement {
+/// Section label above a group of cards: 16 px above, 8 px below.
+fn render_section_header(section: PickerSection) -> impl IntoElement {
     div()
         .pt(ConnectionFormMetrics::PICKER_CATEGORY_PADDING_TOP)
         .pb(ConnectionFormMetrics::PICKER_CATEGORY_PADDING_BOTTOM)
-        .child(
-            Text::label(category.display_name().to_string())
-                .font_size(ShellMetrics::SECTION_LABEL_FONT),
-        )
+        .child(Text::label(section.label()).font_size(ShellMetrics::SECTION_LABEL_FONT))
 }
 
 /// Build the ordered list of drivers visible in the picker for the given
-/// query, in display order (category section grouping included).
+/// query, in display order: grouped by picker section, then by the
+/// driver-declared picker rank, then by name.
 pub(super) fn visible_drivers(drivers: &[DriverInfo], query: &str) -> Vec<DriverInfo> {
     let q = query.to_lowercase();
     let mut out = Vec::new();
-    for category in CATEGORY_ORDER {
+    for section in SECTION_ORDER {
         let mut bucket: Vec<DriverInfo> = drivers
             .iter()
-            .filter(|d| d.category == *category && driver_matches_query(d, &q))
+            .filter(|d| {
+                PickerSection::for_category(d.category) == *section && driver_matches_query(d, &q)
+            })
             .cloned()
             .collect();
-        bucket.sort_by_key(|d| d.name.to_lowercase());
+        bucket.sort_by_key(|d| (d.picker_rank, d.name.to_lowercase()));
         out.extend(bucket);
     }
     out
 }
 
-/// Split the ordered visible-driver list into its category sections, in
-/// display order. `visible_drivers` already groups drivers by category, so
-/// every section is a non-empty run of equal categories and categories with
-/// no visible driver produce no section.
+/// Split the ordered visible-driver list into its picker sections, in
+/// display order. `visible_drivers` already groups drivers by section, so
+/// every section is a non-empty run of equal sections and sections with no
+/// visible driver produce no group.
 pub(super) fn visible_sections(visible: &[DriverInfo]) -> impl Iterator<Item = &[DriverInfo]> {
-    visible.chunk_by(|left, right| left.category == right.category)
+    visible.chunk_by(|left, right| {
+        PickerSection::for_category(left.category) == PickerSection::for_category(right.category)
+    })
 }
 
 /// Card counts of the visible category sections, in display order.
@@ -574,12 +621,14 @@ mod category_order_tests {
             category,
             default_port: None,
             uri_scheme: "test".to_string(),
+            picker_hint: String::new(),
+            picker_rank: u16::MAX,
         }
     }
 
-    /// A driver whose category is missing from `CATEGORY_ORDER` silently
+    /// A driver whose section is missing from `SECTION_ORDER` silently
     /// disappears from the picker, so every `DatabaseCategory` variant must
-    /// be listed there.
+    /// map to a listed section.
     #[test]
     fn visible_drivers_never_drops_a_category() {
         let categories = [
@@ -598,8 +647,71 @@ mod category_order_tests {
         assert_eq!(
             visible_drivers(&drivers, "").len(),
             drivers.len(),
-            "a DatabaseCategory variant is missing from CATEGORY_ORDER"
+            "a DatabaseCategory variant maps to a section missing from SECTION_ORDER"
         );
+    }
+}
+
+#[cfg(test)]
+mod picker_order_tests {
+    use dbflux_core::{DatabaseCategory, Icon};
+
+    use super::{DriverInfo, visible_drivers, visible_section_sizes};
+
+    fn driver(name: &str, category: DatabaseCategory, rank: u16) -> DriverInfo {
+        DriverInfo {
+            id: name.to_lowercase(),
+            icon: Icon::Database,
+            name: name.to_string(),
+            description: String::new(),
+            category,
+            default_port: None,
+            uri_scheme: name.to_lowercase(),
+            picker_hint: String::new(),
+            picker_rank: rank,
+        }
+    }
+
+    fn names(drivers: &[DriverInfo]) -> Vec<&str> {
+        drivers.iter().map(|driver| driver.name.as_str()).collect()
+    }
+
+    #[test]
+    fn ranked_drivers_come_first_then_the_rest_by_name() {
+        let drivers = vec![
+            driver("MariaDB", DatabaseCategory::Relational, 2),
+            driver("ClickHouse", DatabaseCategory::Relational, u16::MAX),
+            driver("PostgreSQL", DatabaseCategory::Relational, 0),
+            driver("Aurora", DatabaseCategory::Relational, u16::MAX),
+            driver("MySQL", DatabaseCategory::Relational, 1),
+        ];
+
+        assert_eq!(
+            names(&visible_drivers(&drivers, "")),
+            ["PostgreSQL", "MySQL", "MariaDB", "Aurora", "ClickHouse"]
+        );
+    }
+
+    #[test]
+    fn time_series_and_log_streams_share_one_section() {
+        let drivers = vec![
+            driver("CloudWatch Logs", DatabaseCategory::LogStream, 1),
+            driver("S3", DatabaseCategory::ObjectStorage, u16::MAX),
+            driver("InfluxDB", DatabaseCategory::TimeSeries, 0),
+        ];
+        let visible = visible_drivers(&drivers, "");
+
+        assert_eq!(names(&visible), ["InfluxDB", "CloudWatch Logs", "S3"]);
+        assert_eq!(visible_section_sizes(&visible), vec![2, 1]);
+    }
+
+    #[test]
+    fn the_filter_matches_the_picker_hint() {
+        let mut sqlite = driver("SQLite", DatabaseCategory::Relational, 4);
+        sqlite.picker_hint = "file".to_string();
+        let drivers = vec![sqlite, driver("MySQL", DatabaseCategory::Relational, 1)];
+
+        assert_eq!(names(&visible_drivers(&drivers, "file")), ["SQLite"]);
     }
 }
 
@@ -631,6 +743,8 @@ mod grid_navigation_tests {
             category,
             default_port: None,
             uri_scheme: id.to_string(),
+            picker_hint: String::new(),
+            picker_rank: u16::MAX,
         }
     }
 

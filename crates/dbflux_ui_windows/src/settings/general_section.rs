@@ -82,6 +82,7 @@ impl GeneralSection {
                 .placeholder(dbflux_i18n::t!("settings.general.language.label"))
                 .items(Self::language_items())
                 .selected_index(Some(language_index))
+                .leading_icon(AppIcon::Globe)
         });
         let dropdown_refresh_policy = cx.new(move |_cx| {
             Dropdown::new("general-refresh-policy")
@@ -267,22 +268,28 @@ impl GeneralSection {
     pub(super) fn theme_items() -> Vec<SegmentedItem> {
         vec![
             SegmentedItem::new(
-                "0",
+                "follow-system",
                 dbflux_i18n::t!("settings.general.theme.option.follow_system"),
             )
             .icon(AppIcon::Layers),
-            SegmentedItem::new("1", dbflux_i18n::t!("settings.general.theme.option.dark"))
-                .icon(AppIcon::Eye),
-            SegmentedItem::new("2", dbflux_i18n::t!("settings.general.theme.option.light"))
-                .icon(AppIcon::Eye),
+            SegmentedItem::new(
+                "dark",
+                dbflux_i18n::t!("settings.general.theme.option.dark"),
+            )
+            .icon(AppIcon::Eye),
+            SegmentedItem::new(
+                "light",
+                dbflux_i18n::t!("settings.general.theme.option.light"),
+            )
+            .icon(AppIcon::Eye),
         ]
     }
 
     /// Density segments, in index order (see [`Self::style_index`]).
     pub(super) fn style_items() -> Vec<SegmentedItem> {
         vec![
-            SegmentedItem::new("0", Self::style_label(AppStyle::Default)),
-            SegmentedItem::new("1", Self::style_label(AppStyle::Compact)),
+            SegmentedItem::new("default", Self::style_label(AppStyle::Default)),
+            SegmentedItem::new("compact", Self::style_label(AppStyle::Compact)),
         ]
     }
 
@@ -294,8 +301,11 @@ impl GeneralSection {
     }
 
     fn language_items() -> Vec<DropdownItem> {
-        std::iter::once(DropdownItem::new(dbflux_i18n::t!(
-            "settings.general.language.option.system"
+        let system_language =
+            dbflux_i18n::resolve(None, dbflux_i18n::detect_system_locale().as_deref());
+
+        std::iter::once(DropdownItem::new(Self::system_language_label(
+            system_language,
         )))
         .chain(
             dbflux_i18n::Language::available()
@@ -305,16 +315,26 @@ impl GeneralSection {
         .collect()
     }
 
+    /// The "follow the OS" entry, naming the language the OS locale resolves
+    /// to so the user sees what "System" currently means.
+    fn system_language_label(system_language: dbflux_i18n::Language) -> String {
+        format!(
+            "{} ({})",
+            dbflux_i18n::t!("settings.general.language.option.system"),
+            system_language.native_name()
+        )
+    }
+
     /// Focus-on-launch segments, in index order (see
     /// [`Self::startup_focus_index`]).
     pub(super) fn startup_focus_items() -> Vec<SegmentedItem> {
         vec![
             SegmentedItem::new(
-                "0",
+                "sidebar",
                 dbflux_i18n::t!("settings.general.default_focus.option.sidebar"),
             ),
             SegmentedItem::new(
-                "1",
+                "last-tab",
                 dbflux_i18n::t!("settings.general.default_focus.option.last_tab"),
             ),
         ]
@@ -778,7 +798,14 @@ mod tests {
         let available = dbflux_i18n::Language::available();
 
         assert_eq!(labels.len(), available.len() + 1);
-        assert_eq!(labels.first().map(|label| label.as_ref()), Some("System"));
+        let expected_system_label = GeneralSection::system_language_label(dbflux_i18n::resolve(
+            None,
+            dbflux_i18n::detect_system_locale().as_deref(),
+        ));
+        assert_eq!(
+            labels.first().map(|label| label.to_string()),
+            Some(expected_system_label)
+        );
         assert_eq!(labels.get(1).map(|label| label.as_ref()), Some("English"));
 
         let storage_ids: Vec<_> = available
@@ -793,6 +820,14 @@ mod tests {
         for (label, language) in labels.iter().skip(1).zip(available) {
             assert_eq!(label, &language.native_name());
         }
+    }
+
+    #[test]
+    fn system_language_label_names_the_resolved_language_in_parentheses() {
+        assert_eq!(
+            GeneralSection::system_language_label(dbflux_i18n::Language::ENGLISH),
+            "System (English)"
+        );
     }
 
     #[test]
