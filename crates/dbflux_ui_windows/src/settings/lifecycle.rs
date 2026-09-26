@@ -138,7 +138,7 @@ impl SettingsCoordinator {
             }
             SettingsSectionId::Keybindings => (
                 ActiveSettingsSection::Keybindings(
-                    cx.new(|cx| KeybindingsSection::new(window, cx)),
+                    cx.new(|cx| KeybindingsSection::new(app_state, window, cx)),
                 ),
                 vec![],
             ),

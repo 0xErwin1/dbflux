@@ -11,7 +11,7 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
-| [Keybindings](#keybindings)                         | Explora el keymap (solo lectura).                                            |
+| [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels)       | Perfiles de proxy SOCKS5 / HTTP.                                             |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels)   | Perfiles reutilizables de túnel SSH.                                         |
@@ -132,12 +132,36 @@ Privacy](DATA_AND_PRIVACY.md#audit-and-privacy).
 
 ## Keybindings
 
-Esta sección es un **viewer de solo lectura**. Lista el keymap activo agrupado
-por contexto, con un filtro de texto y advertencias inline cuando un chord está
-vinculado a más de un comando. Actualmente **no** te permite rebind ni guardar
-shortcuts personalizados desde la UI. Úsala para descubrir y verificar bindings;
-el keymap por defecto completo está documentado en [Usage → Keyboard
-Reference](USAGE.md#7-keyboard-reference).
+Esta sección lista el keymap activo agrupado por contexto. Fíltralo por comando
+o tecla con el campo de texto, o muestra un solo contexto con el filtro de
+contexto. Un contexto que hereda de otro (el Editor hereda de Global) también
+lista los bindings heredados que no sombrea. El keymap por defecto completo está
+documentado en [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+
+**Cambiar un atajo.** Pulsa el lápiz de un binding, o selecciónalo y pulsa
+`Enter`, y luego pulsa el atajo nuevo. `Esc` cancela. Mientras grabas, **Quitar
+atajo** deja el binding sin tecla. También se pueden grabar teclas que usa la
+propia ventana de Settings, como `Ctrl+S` o `Tab`. Un atajo es una sola tecla con
+sus modificadores; las secuencias de teclas no están soportadas, y un `Esc` solo
+no se puede grabar porque cancela.
+
+**Conflictos.** Si el atajo nuevo ya lo usa otro binding en el mismo contexto, o
+en un contexto que hereda de él o del que hereda, todavía no se guarda nada: un
+aviso nombra el otro comando y su contexto. **Cancelar** deja todo como estaba.
+**Reemplazar** asigna el atajo al binding que estás editando y se lo quita al
+otro, que queda sin atajo hasta que lo restablezcas. Un binding que choca con
+otro muestra una etiqueta "en conflicto con", y el pie cuenta los conflictos.
+
+**Restablecer.** Un binding modificado muestra una flecha que restablece su valor
+por defecto (`r` sobre un binding seleccionado hace lo mismo, y `Delete` quita su
+atajo). **Restablecer predeterminados** en el pie descarta todas las
+modificaciones. El pie también muestra cuántos bindings están modificados.
+
+Los cambios se aplican al instante en todas las ventanas, sin reiniciar. Solo se
+guardan tus modificaciones, en la tabla `cfg_keybinding_overrides` de
+`dbflux.db`, así que los bindings que no cambiaste siguen los valores por defecto
+de futuras versiones. Una modificación cuyo binding por defecto elimina una
+versión posterior se ignora.
 
 ---
 

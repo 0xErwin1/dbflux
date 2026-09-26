@@ -26,8 +26,7 @@ use dbflux_ui_base::{
 use crate::app::McpRuntimeEventRaised;
 
 use crate::keymap::{
-    self, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
-    key_chord_from_gpui,
+    self, Command, CommandDispatcher, ContextId, FocusTarget, effective_keymap, key_chord_from_gpui,
 };
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
@@ -384,7 +383,6 @@ pub struct Workspace {
     _pipeline_subscription: Option<Subscription>,
 
     focus_target: FocusTarget,
-    keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
     /// Tab stop of the title bar's command search, which opens the palette.
     command_search_focus: FocusHandle,
@@ -1599,7 +1597,6 @@ impl Workspace {
             pipeline_progress: None,
             _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
-            keymap: default_keymap(),
             focus_handle,
             command_search_focus: cx.focus_handle(),
             #[cfg(feature = "mcp")]
@@ -1737,144 +1734,79 @@ impl Workspace {
     }
 
     fn default_commands() -> Vec<PaletteCommand> {
-        // Shortcut labels for the command palette. The strings here are in
-        // the kebab-case form expected by `palette_shortcut_parts` so they
-        // render as a multi-badge `Chord` (e.g. `[Ctrl] + [N]`) rather than a
-        // single collapsed token.
-        //
-        // The primary-modifier bindings in `keymap::defaults` use Cmd on
-        // macOS and Ctrl elsewhere, so the labels below mirror that. Bindings
-        // kept literal on every platform (Ctrl+Tab, Ctrl+Shift+1..4) keep
-        // `ctrl-` here as well.
-        struct ShortcutLabels {
-            new_query_tab: &'static str,
-            run_query: &'static str,
-            run_query_in_new_tab: &'static str,
-            save_query: &'static str,
-            save_file_as: &'static str,
-            open_script_file: &'static str,
-            toggle_comment: &'static str,
-            open_history: &'static str,
-            close_tab: &'static str,
-            export_results: &'static str,
-            toggle_sidebar: &'static str,
-            open_audit_viewer: &'static str,
-        }
-
-        #[cfg(target_os = "macos")]
-        const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "cmd-n",
-            run_query: "cmd-enter",
-            run_query_in_new_tab: "cmd-shift-enter",
-            save_query: "cmd-s",
-            save_file_as: "cmd-shift-s",
-            open_script_file: "cmd-o",
-            toggle_comment: "cmd-/",
-            open_history: "cmd-p",
-            close_tab: "cmd-w",
-            export_results: "cmd-e",
-            toggle_sidebar: "cmd-b",
-            open_audit_viewer: "cmd-shift-a",
-        };
-        #[cfg(not(target_os = "macos"))]
-        const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "ctrl-n",
-            run_query: "ctrl-enter",
-            run_query_in_new_tab: "ctrl-shift-enter",
-            save_query: "ctrl-s",
-            save_file_as: "ctrl-shift-s",
-            open_script_file: "ctrl-o",
-            toggle_comment: "ctrl-/",
-            open_history: "ctrl-p",
-            close_tab: "ctrl-w",
-            export_results: "ctrl-e",
-            toggle_sidebar: "ctrl-b",
-            open_audit_viewer: "ctrl-shift-a",
-        };
-
+        // Keycaps come from the effective keymap for every command it binds
+        // (see `palette_command_keycaps`). An explicit shortcut is only
+        // needed for a command the keymap does not bind itself.
         vec![
             // Editor
             PaletteCommand::new(
                 "new_query_tab",
                 dbflux_i18n::t!("palette.command.new_query_tab.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.new_query_tab),
+            ),
             PaletteCommand::new(
                 "run_query",
                 dbflux_i18n::t!("palette.command.run_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.run_query),
+            ),
             PaletteCommand::new(
                 "run_query_in_new_tab",
                 dbflux_i18n::t!("palette.command.run_query_in_new_tab.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.run_query_in_new_tab),
+            ),
             PaletteCommand::new(
                 "save_query",
                 dbflux_i18n::t!("palette.command.save_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.save_query),
+            ),
             PaletteCommand::new(
                 "save_file_as",
                 dbflux_i18n::t!("palette.command.save_file_as.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.save_file_as),
+            ),
             PaletteCommand::new(
                 "open_script_file",
                 dbflux_i18n::t!("palette.command.open_script_file.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.open_script_file),
+            ),
             PaletteCommand::new(
                 "toggle_comment",
                 dbflux_i18n::t!("palette.command.toggle_comment.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.toggle_comment),
+            ),
             PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.open_history),
+            ),
             PaletteCommand::new(
                 "cancel_query",
                 dbflux_i18n::t!("palette.command.cancel_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
             )
             .with_shortcut("esc"),
-            // Tabs — Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every
-            // platform (Cmd+Tab is the macOS app switcher).
+            // Tabs
             PaletteCommand::new(
                 "close_tab",
                 dbflux_i18n::t!("palette.command.close_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut(SC.close_tab),
+            ),
             PaletteCommand::new(
                 "next_tab",
                 dbflux_i18n::t!("palette.command.next_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut("ctrl-tab"),
+            ),
             PaletteCommand::new(
                 "prev_tab",
                 dbflux_i18n::t!("palette.command.prev_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut("ctrl-shift-tab"),
+            ),
             // Results
             PaletteCommand::new(
                 "export_results",
                 dbflux_i18n::t!("palette.command.export_results.name"),
                 dbflux_i18n::t!("palette.category.results"),
-            )
-            .with_shortcut(SC.export_results),
+            ),
             // Connections
             PaletteCommand::new(
                 "open_connection_manager",
@@ -1891,39 +1823,33 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.refresh_schema.name"),
                 dbflux_i18n::t!("palette.category.connections"),
             ),
-            // Focus — Ctrl+Shift+1..4 stay literal Ctrl on every platform
-            // (Cmd+Shift+3/4 are macOS screenshot shortcuts).
+            // Focus
             PaletteCommand::new(
                 "focus_sidebar",
                 dbflux_i18n::t!("palette.command.focus_sidebar.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-1"),
+            ),
             PaletteCommand::new(
                 "focus_editor",
                 dbflux_i18n::t!("palette.command.focus_editor.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-2"),
+            ),
             PaletteCommand::new(
                 "focus_results",
                 dbflux_i18n::t!("palette.command.focus_results.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-3"),
+            ),
             PaletteCommand::new(
                 "focus_tasks",
                 dbflux_i18n::t!("palette.command.focus_tasks.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-4"),
+            ),
             // View
             PaletteCommand::new(
                 "toggle_sidebar",
                 dbflux_i18n::t!("palette.command.toggle_sidebar.name"),
                 dbflux_i18n::t!("palette.category.view"),
-            )
-            .with_shortcut(SC.toggle_sidebar),
+            ),
             PaletteCommand::new(
                 "toggle_editor",
                 dbflux_i18n::t!("palette.command.toggle_editor.name"),
@@ -1970,8 +1896,7 @@ impl Workspace {
                 "open_audit_viewer",
                 dbflux_i18n::t!("palette.command.open_audit_viewer.name"),
                 dbflux_i18n::t!("palette.category.view"),
-            )
-            .with_shortcut(SC.open_audit_viewer),
+            ),
             // Charts / Dashboards
             PaletteCommand::new(
                 "open_saved_chart",

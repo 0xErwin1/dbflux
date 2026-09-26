@@ -3,9 +3,15 @@ use std::collections::HashMap;
 use super::{Command, ContextId, KeyChord};
 
 /// A single layer of keybindings for a specific context.
+///
+/// Besides the chord lookup table the layer keeps the order in which chords
+/// were first bound, so lists built from it (the settings page) follow the
+/// order the keymap declares them in.
+#[derive(Clone)]
 pub struct KeymapLayer {
     context: ContextId,
     bindings: HashMap<KeyChord, Command>,
+    chord_order: Vec<KeyChord>,
 }
 
 impl KeymapLayer {
@@ -13,11 +19,23 @@ impl KeymapLayer {
         Self {
             context,
             bindings: HashMap::new(),
+            chord_order: Vec::new(),
         }
     }
 
+    /// Binds `chord` to `command`. Binding a chord again replaces its command
+    /// and keeps its original position.
     pub fn bind(&mut self, chord: KeyChord, command: Command) {
-        self.bindings.insert(chord, command);
+        if self.bindings.insert(chord.clone(), command).is_none() {
+            self.chord_order.push(chord);
+        }
+    }
+
+    /// Bindings of this layer in the order their chords were first bound.
+    pub fn ordered_bindings(&self) -> impl Iterator<Item = (&KeyChord, Command)> {
+        self.chord_order
+            .iter()
+            .filter_map(|chord| self.bindings.get(chord).map(|command| (chord, *command)))
     }
 
     pub fn get(&self, chord: &KeyChord) -> Option<Command> {
@@ -39,6 +57,7 @@ impl KeymapLayer {
 ///
 /// When resolving a key chord, the stack first checks the current context,
 /// then falls back to parent contexts (ending at Global) if no match is found.
+#[derive(Clone)]
 pub struct KeymapStack {
     layers: HashMap<ContextId, KeymapLayer>,
 }
@@ -53,6 +72,11 @@ impl KeymapStack {
     /// Adds a layer to the stack.
     pub fn add_layer(&mut self, layer: KeymapLayer) {
         self.layers.insert(layer.context, layer);
+    }
+
+    /// Returns the layer holding the bindings declared for `context` itself.
+    pub fn layer(&self, context: ContextId) -> Option<&KeymapLayer> {
+        self.layers.get(&context)
     }
 
     /// Resolves a key chord to a command, checking the given context first,
@@ -81,9 +105,9 @@ impl KeymapStack {
 
         while let Some(ctx) = current {
             if let Some(layer) = self.layers.get(&ctx) {
-                for (chord, cmd) in layer.bindings() {
+                for (chord, cmd) in layer.ordered_bindings() {
                     if seen_chords.insert(chord.clone()) {
-                        result.push((chord.clone(), *cmd, ctx));
+                        result.push((chord.clone(), cmd, ctx));
                     }
                 }
             }
@@ -103,14 +127,16 @@ impl KeymapStack {
     /// Returns the chord bound to a command in the given context, falling back
     /// to parent contexts the same way [`KeymapStack::resolve`] does.
     ///
-    /// When one layer binds the command to several chords, which of them is
-    /// returned is unspecified.
+    /// When one layer binds the command to several chords, the one bound
+    /// first is returned.
     pub fn chord_for_command(&self, context: ContextId, command: Command) -> Option<&KeyChord> {
         let mut current = Some(context);
 
         while let Some(ctx) = current {
             if let Some(layer) = self.layers.get(&ctx)
-                && let Some((chord, _)) = layer.bindings().iter().find(|(_, cmd)| **cmd == command)
+                && let Some((chord, _)) = layer
+                    .ordered_bindings()
+                    .find(|(_, bound_command)| *bound_command == command)
             {
                 return Some(chord);
             }

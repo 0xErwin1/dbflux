@@ -3172,17 +3172,39 @@ settings:
   keybindings:
     filter_label: "Filter shortcuts"
     title: "Keyboard shortcuts"
-    subtitle: "Every command and its keys, by context."
+    subtitle: "Every command and its keys, by context. Press the pencil to record a new chord."
     filter_placeholder: "Filter by command or key"
     binding_count:
       one: "1 binding"
       many: "%{count} bindings"
     inherits_from: "inherits from %{parent}"
     inherited: inherited
+    context_filter:
+      all: "All contexts"
+    no_shortcut: "No shortcut"
+    recording:
+      prompt: "Press the new shortcut…"
+      cancel_hint: "to cancel"
+    action:
+      edit: "Change shortcut"
+      reset: "Reset to default"
+      remove: "Remove shortcut"
+      cancel: "Cancel"
+      replace: "Replace"
+      reset_all: "Reset to defaults"
     conflict:
-      title: "Conflict: %{chord} also bound to %{others}"
-      body: Two or more commands share this chord in this context.
-      unknown_other: another binding
+      title: "%{chord} is already used by %{bindings}"
+      holder: "%{command} (%{context})"
+      body: "Replace gives the shortcut to %{command}. The other binding keeps no shortcut until you reset it."
+      badge: "conflicts with %{context}"
+    footer:
+      conflicts:
+        one: "1 conflict"
+        many: "%{count} conflicts"
+      overridden:
+        one: "1 overridden"
+        many: "%{count} overridden"
+    save_error: "Could not save the keyboard shortcuts: %{error}"
     command:
       toggle_command_palette: Toggle Command Palette
       new_query_tab: New Query Tab

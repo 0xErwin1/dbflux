@@ -9,7 +9,7 @@ use dbflux_components::composites::{
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
 use dbflux_components::typography::AppFonts;
-use dbflux_ui_base::keymap::chord_display_parts;
+use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
 use dbflux_ui_base::platform;
 
 /// Identifiers of the rail entries, passed back by the rail on click.
@@ -90,11 +90,11 @@ pub(super) fn rail_entries(state: RailState) -> Vec<RailEntry> {
     entries
 }
 
-/// Display labels of the chord the default keymap binds to `command` in the
+/// Display labels of the chord the effective keymap binds to `command` in the
 /// global context, so the shell shows the binding that is actually
 /// registered, with the platform's modifier (Cmd on macOS).
 pub(super) fn global_shortcut_keys(command: Command) -> Option<Vec<SharedString>> {
-    default_keymap()
+    effective_keymap()
         .chord_for_command(ContextId::Global, command)
         .map(chord_display_parts)
 }

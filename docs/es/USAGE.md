@@ -6,9 +6,8 @@ resultados, graficar, y el modelo de teclado.
 
 DBFlux es keyboard-first. Casi todas las acciones tienen tanto un gesto de ratón
 como un atajo de teclado. Los atajos listados en esta guía son los valores por
-defecto de la aplicación; puedes revisar el keymap activo completo en **Settings
-→ Keybindings** (un visor de solo lectura — ver el [Resumen de
-Settings](#8-settings-overview)).
+defecto de la aplicación; puedes revisar y cambiar el keymap activo en
+**Settings → Keybindings** (ver el [Resumen de Settings](#8-settings-overview)).
 
 ---
 
@@ -987,9 +986,9 @@ soporte de AI/MCP, que es el valor por defecto):
   la retención.
 - **MCP Clients / Roles / Policies** — gobernanza de clientes de AI (clientes
   confiables, roles, políticas). Ver `docs/MCP_AI_INTEGRATION.md`.
-- **Keybindings** — un visor de **solo lectura** del keymap activo, con un
-  filtro de texto y avisos de conflicto. Reasignar teclas desde la UI no está
-  disponible.
+- **Keybindings** — el keymap activo por contexto, con un filtro de texto y un
+  filtro de contexto. Graba un atajo nuevo para cualquier binding, quítalo o
+  restablécelo; los conflictos se muestran antes de guardar nada.
 - **Proxies** — perfiles de proxy SOCKS5 / HTTP CONNECT.
 - **SSH Tunnels** — perfiles de túnel SSH seleccionables por conexión.
 - **Auth Profiles** — perfiles de autenticación gestionados por un provider (AWS

@@ -18,13 +18,52 @@ pub(crate) fn keybindings_inherits_from(parent: &str) -> String {
     dbflux_i18n::t!("settings.keybindings.inherits_from", parent = parent)
 }
 
-/// Formats the conflict banner title for a chord shared by multiple commands.
-pub(crate) fn keybindings_conflict_title(chord: &str, others: &str) -> String {
+/// Formats the conflict banner title: the recorded chord and the bindings
+/// that already hold it.
+pub(crate) fn keybindings_conflict_title(chord: &str, bindings: &str) -> String {
     dbflux_i18n::t!(
         "settings.keybindings.conflict.title",
         chord = chord,
-        others = others
+        bindings = bindings
     )
+}
+
+/// Formats one binding named in the conflict banner: its command and context.
+pub(crate) fn keybindings_conflict_holder(command: &str, context: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.keybindings.conflict.holder",
+        command = command,
+        context = context
+    )
+}
+
+/// Formats the conflict banner body naming the command that would take the
+/// chord.
+pub(crate) fn keybindings_conflict_body(command: &str) -> String {
+    dbflux_i18n::t!("settings.keybindings.conflict.body", command = command)
+}
+
+/// Formats the "conflicts with <context>" badge of a binding row.
+pub(crate) fn keybindings_conflict_badge(context: &str) -> String {
+    dbflux_i18n::t!("settings.keybindings.conflict.badge", context = context)
+}
+
+/// Formats the footer's conflict count.
+pub(crate) fn keybindings_conflict_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.keybindings.footer.conflicts.one")
+    } else {
+        dbflux_i18n::t!("settings.keybindings.footer.conflicts.many", count = count)
+    }
+}
+
+/// Formats the footer's count of overridden bindings.
+pub(crate) fn keybindings_overridden_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.keybindings.footer.overridden.one")
+    } else {
+        dbflux_i18n::t!("settings.keybindings.footer.overridden.many", count = count)
+    }
 }
 
 /// Formats the About section copyright line with the resolved author name.

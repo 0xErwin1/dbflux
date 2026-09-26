@@ -6,8 +6,8 @@ and the keyboard model.
 
 DBFlux is keyboard-first. Almost every action has both a mouse affordance and a
 keyboard binding. The keybindings listed in this guide are the application
-defaults; you can review the full active keymap in **Settings → Keybindings**
-(a read-only viewer — see the [Settings overview](#8-settings-overview)).
+defaults; you can review and change the active keymap in **Settings →
+Keybindings** (see the [Settings overview](#8-settings-overview)).
 
 ---
 
@@ -917,8 +917,9 @@ support, which is the default):
   retention.
 - **MCP Clients / Roles / Policies** — AI client governance (trusted clients,
   roles, policies). See `docs/MCP_AI_INTEGRATION.md`.
-- **Keybindings** — a **read-only** viewer for the active keymap, with a text
-  filter and conflict warnings. Rebinding from the UI is not available.
+- **Keybindings** — the active keymap by context, with a text filter and a
+  context filter. Record a new shortcut for any binding, remove it, or reset
+  it; conflicts are shown before anything is saved.
 - **Proxies** — SOCKS5 / HTTP CONNECT proxy profiles.
 - **SSH Tunnels** — SSH tunnel profiles selectable per connection.
 - **Auth Profiles** — provider-driven authentication profiles (AWS SSO / shared

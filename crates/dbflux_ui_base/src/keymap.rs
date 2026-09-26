@@ -4,15 +4,15 @@
 //! because they require `dbflux_app::keymap` types, which `dbflux_components`
 //! intentionally does not depend on.
 
-use dbflux_app::keymap::{Command, ContextId, KeymapLayer};
+use dbflux_app::keymap::{Command, ContextId, KeymapLayer, KeymapOverrides};
 use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
 use dbflux_components::components::document_tree;
 use gpui::{
-    Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Keystroke,
-    SharedString,
+    Action, App, DummyKeyboardMapper, Global, KeyBinding, KeyBindingContextPredicate,
+    KeyBindingMetaIndex, Keystroke, SharedString,
 };
 use std::rc::Rc;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 // ============================================================================
 // GPUI keystroke conversion helpers
@@ -110,8 +110,162 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
 });
 
 /// Returns a reference to the default [`KeymapStack`] with all default keybindings.
+///
+/// This is the keymap before user overrides. Code that dispatches keys or
+/// shows a shortcut reads [`effective_keymap`] instead.
 pub fn default_keymap() -> &'static KeymapStack {
     &DEFAULT_KEYMAP
+}
+
+// ============================================================================
+// Effective keymap (defaults + user overrides)
+// ============================================================================
+
+struct EffectiveKeymap {
+    overrides: KeymapOverrides,
+    keymap: Arc<KeymapStack>,
+}
+
+static EFFECTIVE_KEYMAP: LazyLock<RwLock<EffectiveKeymap>> = LazyLock::new(|| {
+    RwLock::new(EffectiveKeymap {
+        overrides: KeymapOverrides::new(),
+        keymap: Arc::new(DEFAULT_KEYMAP.clone()),
+    })
+});
+
+/// The keymap in force: the defaults with the user's overrides applied.
+///
+/// Every key dispatch and every shortcut label reads this, so a change made
+/// in the settings applies on the next key press and the next render.
+pub fn effective_keymap() -> Arc<KeymapStack> {
+    EFFECTIVE_KEYMAP
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .keymap
+        .clone()
+}
+
+/// The user overrides the effective keymap was built from.
+pub fn keymap_overrides() -> KeymapOverrides {
+    EFFECTIVE_KEYMAP
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .overrides
+        .clone()
+}
+
+/// Rebuilds the effective keymap from `overrides` without touching the GPUI
+/// bindings. [`apply_keymap_overrides`] is the entry point for the app.
+fn install_keymap_overrides(overrides: KeymapOverrides) {
+    let keymap = Arc::new(overrides.apply(default_keymap()));
+
+    let mut effective = EFFECTIVE_KEYMAP
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    effective.overrides = overrides;
+    effective.keymap = keymap;
+}
+
+/// Makes `overrides` the user's keymap customization: rebuilds the effective
+/// keymap and regenerates every native GPUI binding derived from it, so the
+/// change applies in every window without a restart.
+pub fn apply_keymap_overrides(overrides: KeymapOverrides, cx: &mut App) {
+    install_keymap_overrides(overrides);
+    refresh_derived_keybindings(cx);
+}
+
+// ============================================================================
+// Native GPUI bindings derived from the effective keymap
+// ============================================================================
+
+/// Marks the GPUI bindings generated from the keymap, so a refresh removes
+/// exactly those and leaves every other registered binding alone.
+const DERIVED_BINDING_META: KeyBindingMetaIndex = KeyBindingMetaIndex(0xDBF1);
+
+#[derive(Default)]
+struct DerivedKeybindingSources(Vec<fn() -> Vec<KeyBinding>>);
+
+impl Global for DerivedKeybindingSources {}
+
+/// Registers `source` as a producer of native GPUI bindings generated from
+/// the effective keymap, and binds what it produces now.
+///
+/// Some keys must be native GPUI bindings (see `document_tree_keybindings`
+/// and the workspace focus chords). Their producers read
+/// [`effective_keymap`], and every registered producer runs again whenever
+/// the overrides change.
+pub fn register_derived_keybindings(source: fn() -> Vec<KeyBinding>, cx: &mut App) {
+    cx.default_global::<DerivedKeybindingSources>()
+        .0
+        .push(source);
+    refresh_derived_keybindings(cx);
+}
+
+fn refresh_derived_keybindings(cx: &mut App) {
+    let sources = cx
+        .try_global::<DerivedKeybindingSources>()
+        .map(|sources| sources.0.clone())
+        .unwrap_or_default();
+
+    let derived: Vec<KeyBinding> = sources
+        .iter()
+        .flat_map(|source| source())
+        .map(|binding| binding.with_meta(DERIVED_BINDING_META))
+        .collect();
+
+    let keymap = cx.key_bindings();
+    let retained: Vec<KeyBinding> = keymap
+        .borrow()
+        .bindings()
+        .filter(|binding| binding.meta() != Some(DERIVED_BINDING_META))
+        .cloned()
+        .collect();
+
+    {
+        let mut keymap = keymap.borrow_mut();
+        keymap.clear();
+        keymap.add_bindings(retained);
+        keymap.add_bindings(derived);
+    }
+
+    cx.refresh_windows();
+}
+
+/// A native GPUI binding that runs `action` on the chord the effective
+/// keymap gives `command` in `context`, active in `key_context` (every
+/// context with `None`). Returns `None` when the user removed the command's
+/// shortcut.
+pub fn derived_keybinding(
+    context: ContextId,
+    command: Command,
+    action: Box<dyn Action>,
+    key_context: Option<&str>,
+) -> Option<KeyBinding> {
+    let keystroke = gpui_keystroke(effective_keymap().chord_for_command(context, command)?);
+
+    let predicate = match key_context.map(KeyBindingContextPredicate::parse) {
+        None => None,
+        Some(Ok(predicate)) => Some(Rc::new(predicate)),
+        Some(Err(error)) => {
+            log::error!("Invalid key context for {command:?}: {error}");
+            return None;
+        }
+    };
+
+    match KeyBinding::load(
+        &keystroke,
+        action,
+        predicate,
+        false,
+        None,
+        &DummyKeyboardMapper,
+    ) {
+        Ok(binding) => Some(binding),
+        Err(error) => {
+            log::error!("Invalid keystroke `{keystroke}` for {command:?}: {error}");
+            None
+        }
+    }
 }
 
 fn global_layer() -> KeymapLayer {
@@ -187,18 +341,16 @@ fn global_layer() -> KeymapLayer {
     // switching the whole group to the primary modifier would silently break
     // two of the four bindings on Mac.
     //
-    // IMPORTANT — these four entries are retained as a no-op label source only.
+    // IMPORTANT — these four entries never match through KeymapStack.
     //
     // (a) Actual keystroke dispatch is owned by `workspace_keybindings()` in
-    //     `actions.rs`, registered via `cx.bind_keys` as native GPUI bindings.
+    //     `actions.rs`, which turns these entries into native GPUI bindings.
     //     GPUI normalizes Ctrl+Shift+digit chords at the platform layer before
     //     KeymapStack sees them (see GitHub #65), so these structural matchers
     //     never fire at runtime.
-    // (b) These entries serve one live purpose: supplying the shortcut label in
-    //     the command palette. `shortcut_for_command` reads KeymapStack (not the
-    //     GPUI keymap), so removing these entries would drop the "Ctrl+Shift+N"
-    //     hints from the palette. Do not remove them until the command palette is
-    //     updated to read GPUI native bindings.
+    // (b) They are still the source of truth for the chord: the native
+    //     bindings, the palette label and the settings page all read them, so
+    //     a user override of one of them moves the real shortcut.
     layer.bind(
         KeyChord::new("1", Modifiers::ctrl_shift()),
         Command::FocusSidebar,
@@ -1087,7 +1239,7 @@ fn dropdown_layer() -> KeymapLayer {
 /// Call once at startup, in place of calling the tree component's own `init`.
 pub fn init_document_tree_keybindings(cx: &mut App) {
     document_tree::init(cx);
-    cx.bind_keys(document_tree_keybindings());
+    register_derived_keybindings(document_tree_keybindings, cx);
 }
 
 /// Native GPUI bindings for the document tree, generated from the keymap's
@@ -1109,7 +1261,7 @@ pub fn document_tree_keybindings() -> Vec<KeyBinding> {
             }
         };
 
-    default_keymap()
+    effective_keymap()
         .bindings_for_context(ContextId::DocumentTree)
         .into_iter()
         .filter(|(_, _, source)| *source == ContextId::DocumentTree)
@@ -1966,5 +2118,83 @@ mod tests {
             window.update(|_, cx| state.read(cx).is_search_visible()),
             "`/` must open the search bar",
         );
+    }
+
+    /// A rebinding reaches the effective keymap and the generated native
+    /// bindings at once, and resetting it restores the default key. This is
+    /// the only test that changes the process-wide overrides; it touches a
+    /// binding no other test relies on and restores the defaults at the end.
+    #[gpui::test]
+    fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext) {
+        use dbflux_app::keymap::BindingSlot;
+        use dbflux_components::components::document_tree::{
+            DocumentTree, DocumentTreeEvent, DocumentTreeState,
+        };
+        use dbflux_core::Value;
+        use gpui::AppContext as _;
+        use std::cell::RefCell;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(init_document_tree_keybindings);
+
+        let state = cx.update(|cx| {
+            cx.new(|cx| {
+                let mut state = DocumentTreeState::new(cx);
+                state.load_from_values(vec![("first".to_string(), Value::Int(1))], cx);
+                state
+            })
+        });
+        let (_tree, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, cx| DocumentTree::new("test-document-tree-overrides", state, cx)
+        });
+
+        let cycles = Rc::new(RefCell::new(0usize));
+        window.update(|window, cx| {
+            let cycles = cycles.clone();
+            cx.subscribe(&state, move |_, event: &DocumentTreeEvent, _| {
+                if matches!(event, DocumentTreeEvent::CycleDataViewRequested) {
+                    *cycles.borrow_mut() += 1;
+                }
+            })
+            .detach();
+            state.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let slot = BindingSlot::new(
+            ContextId::DocumentTree,
+            Command::CycleDocumentView,
+            KeyChord::new("t", Modifiers::none()),
+        );
+        let rebound = KeyChord::new("t", Modifiers::alt());
+
+        let mut overrides = KeymapOverrides::new();
+        overrides.set(slot.clone(), Some(rebound.clone()));
+        window.update(|_, cx| apply_keymap_overrides(overrides.clone(), cx));
+
+        assert_eq!(keymap_overrides(), overrides);
+        assert_eq!(
+            effective_keymap().resolve(ContextId::DocumentTree, &rebound),
+            Some(Command::CycleDocumentView)
+        );
+        assert_eq!(
+            default_keymap().resolve(ContextId::DocumentTree, &rebound),
+            None,
+            "the defaults stay untouched"
+        );
+
+        window.simulate_keystrokes("t");
+        assert_eq!(*cycles.borrow(), 0, "the old key no longer cycles the view");
+
+        window.simulate_keystrokes("alt-t");
+        assert_eq!(*cycles.borrow(), 1, "the new key cycles the view");
+
+        overrides.reset(&slot);
+        window.update(|_, cx| apply_keymap_overrides(overrides, cx));
+
+        window.simulate_keystrokes("t");
+        assert_eq!(*cycles.borrow(), 2, "the reset restores the default key");
     }
 }

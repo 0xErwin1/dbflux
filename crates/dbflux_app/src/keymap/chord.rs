@@ -156,6 +156,83 @@ impl KeyChord {
         }
     }
 
+    /// Text form used to persist a chord: the lowercase modifier names in a
+    /// fixed order, each followed by `+`, then the key (`ctrl+shift+p`).
+    ///
+    /// The key is always the last segment, so keys such as `+` or `-`
+    /// survive the round trip through [`KeyChord::from_storage_string`].
+    pub fn to_storage_string(&self) -> String {
+        let mut text = String::new();
+
+        for (enabled, name) in [
+            (self.modifiers.platform, "cmd"),
+            (self.modifiers.ctrl, "ctrl"),
+            (self.modifiers.alt, "alt"),
+            (self.modifiers.shift, "shift"),
+        ] {
+            if enabled {
+                text.push_str(name);
+                text.push('+');
+            }
+        }
+
+        text.push_str(&self.key);
+        text
+    }
+
+    /// Parses the text produced by [`KeyChord::to_storage_string`].
+    pub fn from_storage_string(text: &str) -> Result<Self, ParseError> {
+        let mut modifiers = Modifiers::default();
+        let mut rest = text;
+
+        loop {
+            let (flag, remainder) = if let Some(remainder) = rest.strip_prefix("cmd+") {
+                (&mut modifiers.platform, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("ctrl+") {
+                (&mut modifiers.ctrl, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("alt+") {
+                (&mut modifiers.alt, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("shift+") {
+                (&mut modifiers.shift, remainder)
+            } else {
+                break;
+            };
+
+            if remainder.is_empty() {
+                break;
+            }
+
+            *flag = true;
+            rest = remainder;
+        }
+
+        if rest.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        Ok(Self::new(rest, modifiers))
+    }
+
+    /// Text form of a key sequence: the storage form of each chord, separated
+    /// by single spaces (`ctrl+k ctrl+s`). A chord's storage form never holds
+    /// a space, because the space key is named `space`.
+    pub fn sequence_to_storage_string(chords: &[KeyChord]) -> String {
+        chords
+            .iter()
+            .map(KeyChord::to_storage_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Parses the text produced by [`KeyChord::sequence_to_storage_string`].
+    pub fn sequence_from_storage_string(text: &str) -> Result<Vec<Self>, ParseError> {
+        if text.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        text.split(' ').map(Self::from_storage_string).collect()
+    }
+
     /// Returns true if this chord has the Ctrl or Platform (Cmd) modifier.
     #[allow(dead_code)]
     pub fn has_ctrl_or_cmd(&self) -> bool {
@@ -267,6 +344,60 @@ mod tests {
             },
         };
         assert_eq!(chord.to_string(), "Cmd+Shift+p");
+    }
+
+    #[test]
+    fn storage_string_round_trips_modifiers_and_symbol_keys() {
+        let chords = [
+            KeyChord::new("p", Modifiers::ctrl_shift()),
+            KeyChord::new("+", Modifiers::ctrl()),
+            KeyChord::new("-", Modifiers::none()),
+            KeyChord::new(
+                "enter",
+                Modifiers {
+                    platform: true,
+                    alt: true,
+                    ..Modifiers::none()
+                },
+            ),
+        ];
+
+        for chord in chords {
+            let text = chord.to_storage_string();
+            assert_eq!(KeyChord::from_storage_string(&text), Ok(chord));
+        }
+
+        assert_eq!(
+            KeyChord::new("p", Modifiers::ctrl_shift()).to_storage_string(),
+            "ctrl+shift+p"
+        );
+        assert_eq!(KeyChord::from_storage_string(""), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn storage_sequences_round_trip() {
+        let sequence = vec![
+            KeyChord::new("k", Modifiers::ctrl()),
+            KeyChord::new("space", Modifiers::none()),
+            KeyChord::new("+", Modifiers::shift()),
+        ];
+
+        let text = KeyChord::sequence_to_storage_string(&sequence);
+        assert_eq!(text, "ctrl+k space shift++");
+        assert_eq!(KeyChord::sequence_from_storage_string(&text), Ok(sequence));
+
+        assert_eq!(
+            KeyChord::sequence_from_storage_string("g"),
+            Ok(vec![KeyChord::new("g", Modifiers::none())])
+        );
+        assert_eq!(
+            KeyChord::sequence_from_storage_string(""),
+            Err(ParseError::Empty)
+        );
+        assert_eq!(
+            KeyChord::sequence_from_storage_string("ctrl+k  g"),
+            Err(ParseError::Empty)
+        );
     }
 
     #[test]

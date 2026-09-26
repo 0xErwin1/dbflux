@@ -3172,17 +3172,39 @@ settings:
   keybindings:
     filter_label: "筛选快捷键"
     title: "键盘快捷键"
-    subtitle: "按上下文列出的所有命令及其按键。"
+    subtitle: "按上下文列出的所有命令及其按键。点击铅笔可录制新的组合键。"
     filter_placeholder: "按命令或按键筛选"
     binding_count:
       one: "1 个绑定"
       many: "%{count} 个绑定"
     inherits_from: "继承自 %{parent}"
     inherited: 继承的
+    context_filter:
+      all: "所有上下文"
+    no_shortcut: "无快捷键"
+    recording:
+      prompt: "请按下新的快捷键…"
+      cancel_hint: "取消"
+    action:
+      edit: "更改快捷键"
+      reset: "恢复默认"
+      remove: "移除快捷键"
+      cancel: "取消"
+      replace: "替换"
+      reset_all: "全部恢复默认"
     conflict:
-      title: "冲突：%{chord} 还绑定到 %{others}"
-      body: 两个或更多命令在此上下文中共享此组合键。
-      unknown_other: 另一个绑定
+      title: "%{chord} 已被 %{bindings} 使用"
+      holder: "%{command}（%{context}）"
+      body: "替换后快捷键将分配给 %{command}。另一个绑定将没有快捷键，直到你将其恢复。"
+      badge: "与 %{context} 冲突"
+    footer:
+      conflicts:
+        one: "1 个冲突"
+        many: "%{count} 个冲突"
+      overridden:
+        one: "1 个已修改"
+        many: "%{count} 个已修改"
+    save_error: "无法保存键盘快捷键：%{error}"
     command:
       toggle_command_palette: 切换命令面板
       new_query_tab: 新建查询标签页

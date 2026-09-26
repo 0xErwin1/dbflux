@@ -542,7 +542,7 @@ impl Render for Workspace {
                 let chord = key_chord_from_gpui(&event.keystroke);
                 let context = this.active_context(cx);
 
-                if let Some(cmd) = this.keymap.resolve(context, &chord)
+                if let Some(cmd) = effective_keymap().resolve(context, &chord)
                     && this.dispatch(cmd, window, cx)
                 {
                     cx.stop_propagation();

@@ -1,5 +1,6 @@
-use crate::keymap::ContextId;
+use crate::keymap::{Command, ContextId};
 use crate::ui::icons::AppIcon;
+use dbflux_app::keymap::default_slots;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::DriverIconTone;
 use dbflux_components::primitives::{
@@ -8,6 +9,7 @@ use dbflux_components::primitives::{
 use dbflux_components::tokens::{ChamferCut, ChromeColors, PaletteMetrics};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{CollectionRef, TableRef};
+use dbflux_ui_base::keymap::{chord_display_parts, default_keymap, effective_keymap};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
@@ -559,6 +561,47 @@ fn match_ranges(matcher: &SkimMatcherV2, name: &str, query: &str) -> Vec<Range<u
     ranges
 }
 
+/// Contexts searched, in order, for the chord a palette command shows.
+const PALETTE_SHORTCUT_CONTEXTS: [ContextId; 5] = [
+    ContextId::Global,
+    ContextId::Editor,
+    ContextId::Results,
+    ContextId::Sidebar,
+    ContextId::BackgroundTasks,
+];
+
+/// Keycaps of a palette command.
+///
+/// A command the default keymap binds shows the chord the effective keymap
+/// gives it, so a rebinding shows at once and a removed shortcut shows
+/// none. Any other command shows its explicit `shortcut`, if it has one.
+fn palette_command_keycaps(id: &str, shortcut: Option<&str>) -> Vec<SharedString> {
+    let command = Command::from_palette_id(id).or_else(|| {
+        Command::all_variants()
+            .into_iter()
+            .find(|command| command.id() == id)
+    });
+
+    let keymap_binds_command = command.is_some_and(|command| {
+        default_slots(default_keymap())
+            .iter()
+            .any(|slot| slot.command == command)
+    });
+
+    match command {
+        Some(command) if keymap_binds_command => {
+            let keymap = effective_keymap();
+
+            PALETTE_SHORTCUT_CONTEXTS
+                .iter()
+                .find_map(|context| keymap.chord_for_command(*context, command))
+                .map(chord_display_parts)
+                .unwrap_or_default()
+        }
+        _ => shortcut.map(palette_shortcut_parts).unwrap_or_default(),
+    }
+}
+
 /// Split a shortcut string like "ctrl-shift-k" into one label per keycap.
 ///
 /// Recognizes the canonical modifier tokens used in `KeyBinding` strings
@@ -962,10 +1005,7 @@ impl CommandPalette {
                 .collect();
 
         let keycaps: Vec<AnyElement> = match item {
-            PaletteItem::Action {
-                shortcut: Some(shortcut),
-                ..
-            } => palette_shortcut_parts(shortcut)
+            PaletteItem::Action { id, shortcut, .. } => palette_command_keycaps(id, *shortcut)
                 .into_iter()
                 .map(|part| Kbd::new(part).into_any_element())
                 .collect(),

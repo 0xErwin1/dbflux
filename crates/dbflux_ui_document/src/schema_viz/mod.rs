@@ -41,7 +41,7 @@ use dbflux_components::tokens::{
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::AppStateEntity;
-use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
+use dbflux_ui_base::keymap::{effective_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 
 /// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
@@ -3020,7 +3020,7 @@ impl SchemaVizDocument {
                     ContextId::SchemaViz
                 };
 
-                if let Some(command) = default_keymap().resolve(context, &chord) {
+                if let Some(command) = effective_keymap().resolve(context, &chord) {
                     this.dispatch_command(command, window, cx);
                 }
             }))

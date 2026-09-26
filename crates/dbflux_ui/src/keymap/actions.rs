@@ -1,4 +1,6 @@
-use gpui::{KeyBinding, actions};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_ui_base::keymap::derived_keybinding;
+use gpui::{Action, KeyBinding, actions};
 
 actions!(
     dbflux,
@@ -86,18 +88,32 @@ pub use dbflux_components::actions::{
 /// four bindings on macOS. The full group stays on `ctrl-shift` across all
 /// platforms for consistency.
 ///
-/// ## Scope: only these four digit chords
+/// ## Scope: only these four focus commands
 ///
 /// Only the four focus-pane shortcuts go through GPUI native bindings. All
-/// letter-based and other chords remain in the `KeymapStack` system in
-/// `defaults.rs` and are unaffected by this function.
+/// letter-based and other chords remain in the `KeymapStack` system and are
+/// unaffected by this function.
+///
+/// The chords come from the effective keymap's Global layer, so a user
+/// override moves the native binding too. A focus command whose shortcut was
+/// removed gets no binding.
 pub fn workspace_keybindings() -> Vec<KeyBinding> {
-    vec![
-        KeyBinding::new("ctrl-shift-1", FocusSidebar, None),
-        KeyBinding::new("ctrl-shift-2", FocusEditor, None),
-        KeyBinding::new("ctrl-shift-3", FocusResults, None),
-        KeyBinding::new("ctrl-shift-4", FocusBackgroundTasks, None),
-    ]
+    let focus_commands: [(Command, Box<dyn Action>); 4] = [
+        (Command::FocusSidebar, Box::new(FocusSidebar)),
+        (Command::FocusEditor, Box::new(FocusEditor)),
+        (Command::FocusResults, Box::new(FocusResults)),
+        (
+            Command::FocusBackgroundTasks,
+            Box::new(FocusBackgroundTasks),
+        ),
+    ];
+
+    focus_commands
+        .into_iter()
+        .filter_map(|(command, action)| {
+            derived_keybinding(ContextId::Global, command, action, None)
+        })
+        .collect()
 }
 
 /// Keybindings that shadow `gpui-component` input defaults inside the "Input"
@@ -110,31 +126,38 @@ pub fn workspace_keybindings() -> Vec<KeyBinding> {
 /// `gpui_component::init` makes them take precedence at the same context
 /// depth.
 ///
-/// We bind the platform-appropriate keystroke directly (`cmd-enter` on macOS,
-/// `ctrl-enter` elsewhere) rather than the abstract `secondary-` form so the
+/// The run chords come from the effective keymap's Global layer, whose
+/// defaults are the platform-appropriate keystrokes (`cmd-enter` on macOS,
+/// `ctrl-enter` elsewhere) rather than the abstract `secondary-` form, so the
 /// macOS Ctrl+Enter stays free for editor interrupt semantics and matches the
-/// Cmd convention used by `results_layer` for ResultsCopyCell.
+/// Cmd convention used by `results_layer` for ResultsCopyCell. A user
+/// override moves them; a removed shortcut drops the binding.
 ///
 /// On Linux/Windows this also adds Ctrl+Shift+Z as redo: `gpui-component`
 /// only binds Ctrl+Y there (macOS already has Cmd+Shift+Z), and Ctrl+Shift+Z
 /// is the redo chord most editors pair with Ctrl+Z.
 pub fn input_context_keybindings() -> Vec<KeyBinding> {
     let ctx = Some("Input");
-    #[cfg(target_os = "macos")]
-    {
-        vec![
-            KeyBinding::new("cmd-enter", RunQuery, ctx),
-            KeyBinding::new("cmd-shift-enter", RunQueryInNewTab, ctx),
-        ]
-    }
+
+    let run_commands: [(Command, Box<dyn Action>); 2] = [
+        (Command::RunQuery, Box::new(RunQuery)),
+        (Command::RunQueryInNewTab, Box::new(RunQueryInNewTab)),
+    ];
+
+    #[allow(unused_mut)]
+    let mut bindings: Vec<KeyBinding> = run_commands
+        .into_iter()
+        .filter_map(|(command, action)| derived_keybinding(ContextId::Global, command, action, ctx))
+        .collect();
+
     #[cfg(not(target_os = "macos"))]
-    {
-        vec![
-            KeyBinding::new("ctrl-enter", RunQuery, ctx),
-            KeyBinding::new("ctrl-shift-enter", RunQueryInNewTab, ctx),
-            KeyBinding::new("ctrl-shift-z", gpui_component::input::Redo, ctx),
-        ]
-    }
+    bindings.push(KeyBinding::new(
+        "ctrl-shift-z",
+        gpui_component::input::Redo,
+        ctx,
+    ));
+
+    bindings
 }
 
 #[cfg(test)]

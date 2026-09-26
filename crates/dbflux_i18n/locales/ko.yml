@@ -3172,17 +3172,39 @@ settings:
   keybindings:
     filter_label: "단축키 필터"
     title: "키보드 단축키"
-    subtitle: "컨텍스트별 모든 명령과 키."
+    subtitle: "컨텍스트별 모든 명령과 키. 연필을 눌러 새 키 조합을 기록합니다."
     filter_placeholder: "명령 또는 키로 필터"
     binding_count:
       one: "바인딩 1개"
       many: "바인딩 %{count}개"
     inherits_from: "%{parent}에서 상속"
     inherited: 상속됨
+    context_filter:
+      all: "모든 컨텍스트"
+    no_shortcut: "단축키 없음"
+    recording:
+      prompt: "새 단축키를 누르세요…"
+      cancel_hint: "취소"
+    action:
+      edit: "단축키 변경"
+      reset: "기본값으로 재설정"
+      remove: "단축키 제거"
+      cancel: "취소"
+      replace: "바꾸기"
+      reset_all: "기본값으로 재설정"
     conflict:
-      title: "충돌: %{chord}이(가) %{others}에도 바인딩되어 있습니다"
-      body: 이 컨텍스트에서 두 개 이상의 명령이 이 키 조합을 공유합니다.
-      unknown_other: 다른 바인딩
+      title: "%{chord}은(는) 이미 %{bindings}에서 사용 중입니다"
+      holder: "%{command} (%{context})"
+      body: "바꾸기를 누르면 단축키가 %{command}에 지정됩니다. 다른 바인딩은 재설정할 때까지 단축키가 없습니다."
+      badge: "%{context}과(와) 충돌"
+    footer:
+      conflicts:
+        one: "충돌 1개"
+        many: "충돌 %{count}개"
+      overridden:
+        one: "변경됨 1개"
+        many: "변경됨 %{count}개"
+    save_error: "키보드 단축키를 저장할 수 없습니다: %{error}"
     command:
       toggle_command_palette: 명령 팔레트 전환
       new_query_tab: 새 쿼리 탭

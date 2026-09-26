@@ -28,7 +28,6 @@ pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
 use crate::ssh_shared::SshAuthSelection;
-use dbflux_app::keymap::KeymapStack;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::components::value_source_selector::ValueSourceSelector;
@@ -428,7 +427,6 @@ pub struct ConnectionManagerWindow {
 
     // Keyboard navigation state
     focus_handle: FocusHandle,
-    keymap: &'static KeymapStack,
     driver_focus: DriverFocus,
     form_focus: FormFocus,
     edit_state: EditState,
@@ -876,7 +874,6 @@ impl ConnectionManagerWindow {
             ssh_test_status: TestStatus::None,
             ssh_test_error: None,
             focus_handle,
-            keymap: dbflux_ui_base::keymap::default_keymap(),
             driver_focus: DriverFocus::First,
             form_focus: FormFocus::Name,
             edit_state: EditState::Navigating,

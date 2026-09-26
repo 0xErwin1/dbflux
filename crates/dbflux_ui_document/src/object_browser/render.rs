@@ -118,7 +118,7 @@ pub(crate) fn object_icon_color(icon: AppIcon, cx: &App) -> Hsla {
 
 /// Keystroke bound to `command` in the listing, from the live keymap.
 fn listing_shortcut(command: Command) -> Option<String> {
-    dbflux_ui_base::default_keymap().shortcut_for_command(ContextId::Results, command)
+    dbflux_ui_base::effective_keymap().shortcut_for_command(ContextId::Results, command)
 }
 
 pub(super) fn format_modified(modified: Option<DateTime<Utc>>) -> String {

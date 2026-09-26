@@ -873,7 +873,7 @@ impl ConnectionManagerWindow {
         let chord = key_chord_from_gpui(&event.keystroke);
         let context = self.active_context();
 
-        if let Some(command) = self.keymap.resolve(context, &chord) {
+        if let Some(command) = dbflux_ui_base::keymap::effective_keymap().resolve(context, &chord) {
             return self.dispatch_command(command, window, cx);
         }
 

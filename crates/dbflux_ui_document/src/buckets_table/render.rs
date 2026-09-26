@@ -56,7 +56,7 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 /// from the keymap so the empty-state hint always names the live binding.
 /// `None` when nothing in the table context refreshes the document.
 pub(super) fn refresh_shortcut() -> Option<String> {
-    dbflux_ui_base::default_keymap()
+    dbflux_ui_base::effective_keymap()
         .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
 }
 
@@ -151,7 +151,7 @@ fn created_date_label(row: &BucketRow) -> String {
 
 /// Keystroke bound to `command` in the table, from the live keymap.
 fn table_shortcut(command: Command) -> Option<String> {
-    dbflux_ui_base::default_keymap().shortcut_for_command(ContextId::Results, command)
+    dbflux_ui_base::effective_keymap().shortcut_for_command(ContextId::Results, command)
 }
 
 impl BucketsTableDocument {

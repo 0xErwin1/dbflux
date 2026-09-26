@@ -371,6 +371,12 @@ fn run_gui() {
         };
         let app_state = cx.new(|_cx| app_state_inner);
 
+        let keymap_overrides = dbflux_app::keymap::load_keymap_overrides(
+            app_state.read(cx).storage_runtime(),
+            dbflux_ui_base::keymap::default_keymap(),
+        );
+        dbflux_ui_base::keymap::apply_keymap_overrides(keymap_overrides, cx);
+
         // Wire the bridge into the audit service before cloning it out.
         // `attach_tracing_bridge` must be called on the owned `AppState`
         // because `AuditService.bridge_min_level` is not shared across clones.
@@ -427,8 +433,8 @@ fn run_gui() {
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
                 cx.bind_keys(command_palette_keybindings());
-                cx.bind_keys(input_context_keybindings());
-                cx.bind_keys(workspace_keybindings());
+                dbflux_ui_base::keymap::register_derived_keybindings(input_context_keybindings, cx);
+                dbflux_ui_base::keymap::register_derived_keybindings(workspace_keybindings, cx);
 
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
                 workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));

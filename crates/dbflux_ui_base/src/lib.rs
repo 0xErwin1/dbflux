@@ -40,7 +40,7 @@ pub use dashboard_manager::{
     Dashboard, DashboardManager, DashboardPanel, DashboardPanelDraft, DashboardPanelKind,
     DraftGridLayout,
 };
-pub use keymap::{default_keymap, key_chord_from_gpui};
+pub use keymap::{default_keymap, effective_keymap, key_chord_from_gpui};
 pub use object_tree::{
     IMPLICIT_DATABASE_LABEL, NodeContent, ObjectTreeCoordinator, ObjectTreeEvent,
     ObjectTreeInstallKey, ObjectTreeKey, ObjectTreeNode, ObjectTreeOutcome, ObjectTreeRejection,

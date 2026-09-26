@@ -162,10 +162,10 @@ pub(super) fn render_kv_context_menu(
             .size_full()
             .track_focus(menu_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
+                use dbflux_ui_base::keymap::{effective_keymap, key_chord_from_gpui};
 
                 let chord = key_chord_from_gpui(&event.keystroke);
-                let keymap = default_keymap();
+                let keymap = effective_keymap();
 
                 if let Some(cmd) =
                     keymap.resolve(dbflux_app::keymap::ContextId::ContextMenu, &chord)

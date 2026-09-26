@@ -6,7 +6,7 @@ use dbflux_components::composites::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::MenuMetrics;
-use dbflux_ui_base::keymap::{chord_display_parts, default_keymap, key_chord_from_gpui};
+use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap, key_chord_from_gpui};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 
@@ -72,7 +72,7 @@ fn action_shortcut(action: ContextMenuAction, cx: &App) -> Option<SharedString> 
         _ => return None,
     };
 
-    default_keymap()
+    effective_keymap()
         .chord_for_command(ContextId::Results, command)
         .map(|chord| chord_display_parts(chord).join(" ").into())
 }
@@ -873,10 +873,10 @@ impl DataGridPanel {
                 .track_focus(&self.focus.context_menu_focus)
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     use dbflux_app::keymap::KeyChord;
-                    use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
+                    use dbflux_ui_base::keymap::{effective_keymap, key_chord_from_gpui};
 
                     let chord = key_chord_from_gpui(&event.keystroke);
-                    let keymap = default_keymap();
+                    let keymap = effective_keymap();
 
                     if let Some(cmd) = keymap.resolve(ContextId::ContextMenu, &chord)
                         && this.dispatch_menu_command(cmd, window, cx)

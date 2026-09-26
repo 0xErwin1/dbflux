@@ -10,7 +10,7 @@ window is organized into sections down the left side.
 |---------|--------|
 | [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
-| [Keybindings](#keybindings) | Browse the keymap (read-only). |
+| [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels) | SOCKS5 / HTTP proxy profiles. |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels) | Reusable SSH tunnel profiles. |
@@ -126,11 +126,36 @@ the full event schema and redaction behavior see [Audit](AUDIT.md) and
 
 ## Keybindings
 
-This section is a **read-only viewer**. It lists the active keymap grouped by
-context, with a text filter and inline warnings when a chord is bound to more
-than one command. It does **not** currently let you rebind or save custom
-shortcuts from the UI. Use it to discover and verify bindings; the full default
-keymap is documented in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+This section lists the active keymap grouped by context. Filter it by command
+or key with the text field, or show one context with the context filter. A
+context that inherits from another (the Editor inherits from Global) also lists
+the inherited bindings it does not shadow. The full default keymap is documented
+in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+
+**Changing a shortcut.** Press the pencil on a binding, or select it and press
+`Enter`, then press the new shortcut. `Esc` cancels. While recording, **Remove
+shortcut** leaves the binding with no key. Keys the settings window uses itself,
+such as `Ctrl+S` or `Tab`, can be recorded too. A shortcut is a single key with
+its modifiers; key sequences are not supported, and a bare `Esc` cannot be
+recorded because it cancels.
+
+**Conflicts.** If the new shortcut is already used by another binding in the same
+context, or in a context that inherits from it or that it inherits from, nothing
+is saved yet: a warning names the other command and its context. **Cancel** keeps
+everything as it was. **Replace** gives the shortcut to the binding you are
+editing and removes it from the other one, which keeps no shortcut until you
+reset it. A binding that collides with another shows a "conflicts with" badge,
+and the footer counts the conflicts.
+
+**Resetting.** An overridden binding shows a reset arrow that restores its
+default (`r` on a selected binding does the same, and `Delete` removes its
+shortcut). **Reset to defaults** in the footer drops every override. The footer
+also shows how many bindings are overridden.
+
+Changes apply at once in every window, without a restart. Only your overrides
+are stored, in the `cfg_keybinding_overrides` table of `dbflux.db`, so bindings
+you did not change follow the defaults of future releases. An override whose
+default binding a later release removes is ignored.
 
 ---
 

@@ -3172,17 +3172,39 @@ settings:
   keybindings:
     filter_label: "Filtrar atajos"
     title: "Atajos de teclado"
-    subtitle: "Cada comando y sus teclas, por contexto."
+    subtitle: "Cada comando y sus teclas, por contexto. Pulsa el lápiz para grabar un atajo nuevo."
     filter_placeholder: "Filtrar por comando o tecla"
     binding_count:
       one: "1 atajo"
       many: "%{count} atajos"
     inherits_from: "hereda de %{parent}"
     inherited: heredado
+    context_filter:
+      all: "Todos los contextos"
+    no_shortcut: "Sin atajo"
+    recording:
+      prompt: "Pulsa el nuevo atajo…"
+      cancel_hint: "para cancelar"
+    action:
+      edit: "Cambiar atajo"
+      reset: "Restablecer el predeterminado"
+      remove: "Quitar atajo"
+      cancel: "Cancelar"
+      replace: "Reemplazar"
+      reset_all: "Restablecer predeterminados"
     conflict:
-      title: "Conflicto: %{chord} también está asignado a %{others}"
-      body: Dos o más comandos comparten este atajo en este contexto.
-      unknown_other: otro atajo
+      title: "%{chord} ya lo usa %{bindings}"
+      holder: "%{command} (%{context})"
+      body: "Reemplazar asigna el atajo a %{command}. El otro atajo queda sin tecla hasta que lo restablezcas."
+      badge: "en conflicto con %{context}"
+    footer:
+      conflicts:
+        one: "1 conflicto"
+        many: "%{count} conflictos"
+      overridden:
+        one: "1 modificado"
+        many: "%{count} modificados"
+    save_error: "No se pudieron guardar los atajos de teclado: %{error}"
     command:
       toggle_command_palette: Mostrar u ocultar la paleta de comandos
       new_query_tab: Nueva pestaña de consulta
