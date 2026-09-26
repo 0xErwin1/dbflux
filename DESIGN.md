@@ -11,6 +11,7 @@ description: >-
   tabulated in the Colors section. Source of truth is
   crates/dbflux_components/src/{theme.rs,tokens.rs,density.rs,semantic.rs}.
 colors:
+  desk: "#050507"
   background: "#09090B"
   panel: "#100F13"
   raised: "#1A181E"
@@ -48,6 +49,7 @@ colors:
   text-selection: "rgba(212, 140, 200, 0.25)"
   drop-target: "rgba(212, 140, 200, 0.10)"
   overlay: "rgba(5, 5, 7, 0.62)"
+  island-edge: "rgba(255, 255, 255, 0.05)"
   danger-soft: "rgba(255, 107, 94, 0.14)"
   danger-soft-hover: "rgba(255, 107, 94, 0.22)"
   danger-soft-pressed: "rgba(255, 107, 94, 0.30)"
@@ -154,11 +156,13 @@ spacing:
   tree-indent: 14px
   grid-row: 31px
   grid-header: 40px
-  document-tab: 36px
-  document-tab-bar: 42px
+  document-tab: 30px
+  document-tab-bar: 46px
   panel-header: 40px
-  title-bar: 43px
-  activity-rail: 52px
+  title-bar: 44px
+  activity-rail: 46px
+  status-bar: 38px
+  island-gap: 8px
   icon-sm: 16px
   icon-md: 20px
   icon-lg: 24px
@@ -216,14 +220,17 @@ components:
     color: "{colors.ring}"
     size: "{spacing.focus-ring}"
   document-tab:
-    backgroundColor: "{colors.background}"
+    backgroundColor: transparent
     textColor: "{colors.muted-foreground}"
     height: "{spacing.document-tab}"
   document-tab-active:
-    backgroundColor: "{colors.panel}"
+    backgroundColor: "{colors.raised}"
     textColor: "{colors.strong}"
-    topEdge: "{colors.byzantine}"
-    cut: "{cuts.input}"
+    cut: "{cuts.control}"
+  island:
+    backgroundColor: "{colors.panel}"
+    borderColor: "{colors.island-edge}"
+    cut: "{cuts.card}"
   tree-row:
     height: "{spacing.tree-row}"
     textColor: "{colors.foreground}"
@@ -294,8 +301,9 @@ The design canvas is the reference for intent: https://claude.ai/artifact/RrT5VL
 
 | Role | Dark | Light | Theme field / accessor | Use |
 |---|---|---|---|---|
-| bg | `#09090B` | `#F6F4F7` | `background` | window ground, sidebar, tab bar, input fill |
-| panel | `#100F13` | `#FFFFFF` | `popover`, `tab_active`, `table` | panes, cards, modals, active tab |
+| desk | `#050507` | `#E6E1E9` | `ChromeColors::desk` | main window ground under the islands, Settings and Connection Manager frames |
+| bg | `#09090B` | `#F6F4F7` | `background` | input and well fill, grid header, tasks panel |
+| panel | `#100F13` | `#FFFFFF` | `popover`, `tab_active`, `table` | islands, cards, modals, status chips |
 | raised | `#1A181E` | `#EEEAF0` | `secondary` | secondary buttons, chips, menus, keycaps |
 | line | `#232128` | `#E3DEE6` | `border` | separators, pane edges, input edges |
 | line-2 | `#37333D` | `#CBC4D1` | `input`, `muted` | control edges on raised surfaces, card and modal edges |
@@ -333,6 +341,7 @@ Text on a solid success, info, warning or danger fill is `#09090B` on Dark and `
 | text selection | tint 25 % | byzantine 25 % | `selection` |
 | drop target | tint 10 % | byzantine 10 % | drag and drop |
 | scrim | `#050507` 62 % | `#1E1423` 28 % | behind modals (`overlay`) |
+| island edge | white 5 % | strong 6 % | the hairline along an island's outline (`ChromeColors::island_edge`) |
 
 Row-state tints for the data grid (`RowStateColors`): insert success 15 %, delete danger 10 %, error danger 15 %, saving warning 10 % on Dark; 14 / 12 / 14 / 14 % on Light. Dirty rows get no row tint; the edited cell carries the marker.
 
@@ -370,7 +379,7 @@ The eight text roles are the `Text` constructors in `primitives/text.rs`. Base s
 
 - **Spacing scale:** 4, 8, 12, 16, 24 px (`Spacing`), plus a locked 6 px half-step (`Spacing::XXS`).
 - **Borders:** 1 px thin, 2 px medium, 1.5 px focus ring (`Borders`).
-- **Chrome:** title bar 43 px, activity rail 52 px wide with 38 px buttons, panel headers 40 px, document tab bar 42 px with 36 px tabs, result tab bar 40 px, result footer 36 px.
+- **Chrome:** title bar 44 px, activity rail 46 px wide with 38 px buttons, sidebar header and footer 46 px, panel headers 40 px, document tab row 46 px with 30 px tabs, result tab bar 40 px, result footer 36 px, status bar 38 px with 26 px chips.
 - **Rows:** tree 26 px with 14 px indent, grid 31 px with a 40 px header, menu 30 px, list rows in modals 40 px.
 
 ### Control sizes
@@ -389,9 +398,37 @@ The eight text roles are the `Text` constructors in `primitives/text.rs`. Base s
 
 Everything in one toolbar row is 30 px, so buttons, inputs, selects and segmented controls align without adjustments.
 
+## Shell: islands
+
+Every pane of the main window floats on the desk as an **island**: the panel fill cut 14 px at the top-left and bottom-right corners, a 1 px hairline that follows the full outline, cuts included (white 5 % on Dark, strong 6 % on Light), and no shadow. Islands never touch: 8 px of desk (`IslandMetrics::GAP`) separates them from each other and from the window's side edges. Build every island with `composites::Island`; never paint a pane with `.bg()` and a border instead.
+
+```mermaid
+flowchart TB
+    title["Title bar, 44 px on the desk: command search centered, approvals bell on the right"]
+    subgraph body["Body: 8 px side padding, 8 px between islands"]
+        direction LR
+        rail["Activity rail, 46 px on the desk"]
+        sidebar["Sidebar island, 290 px"]
+        document["Document island: tab row 46 px, documents, background tasks"]
+        side["Right-side island, such as the inspector, 380 px"]
+    end
+    status["Status bar, 38 px on the desk: 26 px chips on the panel fill"]
+    title --> body --> status
+```
+
+- **Title bar** (`ShellMetrics::TITLE_BAR_HEIGHT`, 44 px): no fill and no line. The command search (420 by 30 px, well fill) is centered; the approvals bell (34 by 30 px on the tint wash, tint icon, count badge over its corner) sits at the right end. There is no sidebar toggle and there are no tabs in the title bar.
+- **Activity rail** (46 px): directly on the desk, no fill and no line. The active entry takes the tint wash at 16 %.
+- **Sidebar island** (290 px, resizable): header and footer 46 px; the footer has no line above it.
+- **Document island**: the document tab row (46 px, 10 px padding, 4 px between tabs) sits at its top and is omitted while no tab is open. The active tab is a 30 px chip on the raised fill, cut 6, with a tint icon and strong 600 text; inactive tabs are muted 400 text on no fill and show their close button on hover. Below the tab row come the documents and the background tasks panel, which stays inside this island.
+- **Right-side islands**: a workspace-level side panel (row, document, schema and builder inspectors) is a full-height island after the document island. A side panel that a document draws itself (chart settings, grid stats, object preview, stream consumer groups) is an island inside the document island, framed by `docked_island_frame`, which shows 8 px of desk on its left and top.
+- **Status bar** (38 px, 8 px padding, 8 px gap): no fill and no line. Every item is a 26 px chip on the panel fill, cut 6. The connection chip takes the success wash, or the danger wash for a production connection.
+- **Settings and Connection Manager**: the window frame is the desk. The title row is 40 px with no fill or line; the body is islands 8 px apart (Settings: a 230 px navigation island and the content island; Connection Manager: one island holding the whole body); the footer sits on the frame with no line.
+
+The desk shows through the cut corners: `Island` paints the fill first, the content over it, and then the corners in the desk color and the hairline on top, so content that fills its rows still reads as cut. `IslandMetrics::EDGE` set to zero removes the hairline.
+
 ## Elevation & Depth
 
-Flat. Regions are separated by a 1 px line, not by shadow. The five surface roles (`primitives::surface(SurfaceRole, cx)`) decide fill, edge and cut:
+Flat. Islands are separated by the desk; regions inside an island are separated by a 1 px line, not by shadow. The five surface roles (`primitives::surface(SurfaceRole, cx)`) decide fill, edge and cut:
 
 | Role | Fill | Edge | Cut | Use |
 |---|---|---|---|---|
@@ -405,22 +442,22 @@ Menus (`menu_frame`) use the raised fill with a line-2 edge, cut 12 and the larg
 
 ## Shapes: the cut
 
-The signature shape is a 45° cut on the **top-left and bottom-right** corners (`ChamferCorners::TopLeftBottomRight`, the default). Document and result tabs cut the **top-left only** (`ChamferCorners::TopLeft`); a split button cuts top-left on the main action and bottom-right on the menu segment. The cut depth grows with the size of the thing:
+The signature shape is a 45° cut on the **top-left and bottom-right** corners (`ChamferCorners::TopLeftBottomRight`, the default). Result tabs cut the **top-left only** (`ChamferCorners::TopLeft`); a split button cuts top-left on the main action and bottom-right on the menu segment. The cut depth grows with the size of the thing:
 
 | Cut | Token | Applies to |
 |---|---|---|
 | 4 px | `ChamferCut::KEYCAP` | keycaps, badges, env tags, counters, checkboxes, segmented thumb |
-| 6 px | `ChamferCut::CONTROL` | 24–30 px controls: buttons, inputs, selects, icon buttons, segmented track, command search |
-| 8 px | `ChamferCut::INPUT` | document tabs (top-left only), banners, the 34 px filter field, modal code blocks |
+| 6 px | `ChamferCut::CONTROL` | 24–30 px controls: buttons, inputs, selects, icon buttons, segmented track, command search, document tab chips, status chips |
+| 8 px | `ChamferCut::INPUT` | result tabs (top-left only), banners, the 34 px filter field, modal code blocks |
 | 10 px | `ChamferCut::LARGE_CONTROL` | 44 px buttons |
 | 12 px | `ChamferCut::OVERLAY` | menus, popovers, dropdown lists, toasts |
-| 14 px | `ChamferCut::CARD` | cards |
+| 14 px | `ChamferCut::CARD` | cards, islands |
 | 18 px | `ChamferCut::MODAL` | modals, hero frames |
 
 Rules:
 
 - **Controls and surfaces are cut; data never is.** Grid cells, rows, list items, code editors and charts keep square edges.
-- **Borders run on the straight edges only.** `Chamfer::border` paints a 1 px inset line on the four straight sides; the diagonals stay borderless. A focus ring is the one stroke that follows the diagonals.
+- **Borders run on the straight edges only.** `Chamfer::border` paints a 1 px inset line on the four straight sides; the diagonals stay borderless. A focus ring and an island's hairline are the strokes that follow the diagonals.
 - Radii stay 0 in Default density. Compact keeps its 2–3 px radii for non-chamfered gpui-component widgets; the cut does not change with density.
 
 ### Using `Chamfer` in code
@@ -493,7 +530,7 @@ Use these. Never hand-roll a rounded `div`, a color literal or a one-off control
 | Surface | `surface(SurfaceRole, cx)` | `primitives::surface` | any pane, card, raised block, overlay or modal frame |
 | Modal | `Modal`, `modal_field`, `modal_code`, `modal_lead` | `modals` | dialogs; the `Modal` key context takes Escape, Enter and the scroll keys; handles focus |
 | Headers | `panel_header`, `panel_header_with_actions`, `section_header`, `page_header`, `collapsible_bar` | `composites::header` | titles of panels, sections and pages |
-| Tabs | `document_tab`, `result_tab`, `inline_tab` (+ `*_tab_bar`) | `composites::tabs` | document tabs, result tabs, in-pane tab strips |
+| Tabs | `document_tab`, `result_tab`, `inline_tab` (+ `*_tab_bar`) | `composites::tabs` | document tab chips, result tabs, in-pane tab strips |
 | Focus | `focus_ring`, `focus_underline`, `WhenFocusVisible` | `primitives::focus_ring` | keyboard focus on anything that is not already a control |
 | Text | `Text::title/heading/body/body_sm/label/caption/code/key_hint` | `primitives::text` | every piece of copy |
 | Input | `Input` | `controls::input` | single-line text entry |
@@ -510,6 +547,7 @@ Use these. Never hand-roll a rounded `div`, a color literal or a one-off control
 | Breadcrumb | `Breadcrumb` | `composites::breadcrumb` | object paths (bucket/prefix, schema/table) |
 | Empty state | `EmptyState` (`.card`, `.danger`) | `composites::empty_state` | empty or failed regions |
 | Divider | `divider(axis, DividerTone, cx)` | `primitives::divider` | 1 px rules between regions and control groups |
+| Island | `Island`, `docked_island_frame` | `composites::island` | every pane of the main window and of the Settings and Connection Manager windows |
 | Activity rail | `ActivityRail` | `composites::activity_rail` | the left rail of the main window |
 | Command search | `CommandSearch` | `composites::shell_bar` | title-bar trigger for the command palette |
 | Row inspector | `RowInspectorContent` | `dbflux_ui_document::data_grid_panel::row_inspector` | the inspector rail for one grid row |
@@ -525,6 +563,7 @@ All boards live on the design canvas: https://claude.ai/artifact/RrT5VLW14vaPQzV
 | DSApp | app components |
 | DSAppPlan | which code component each board component becomes |
 | DSBrand | brand mark and app icons |
+| `Isl*`, `IslLight*` | the islands shell: every main-window screen, Settings and Connection Manager on the desk |
 | AppByzTable | table view with the row inspector |
 | AppByzEditor | query editor with results |
 | AppByzMenu | cell context menu |

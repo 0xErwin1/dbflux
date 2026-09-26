@@ -4,6 +4,7 @@ mod control_shell;
 mod empty_state;
 mod field_row;
 mod header;
+mod island;
 mod list_row;
 mod master_detail_list;
 mod menu_item;
@@ -27,6 +28,9 @@ pub use field_row::{
 pub use header::{
     collapsible_bar, page_header, page_header_with_action, panel_header, panel_header_with_actions,
     section_header,
+};
+pub use island::{
+    Island, IslandInspection, docked_island_frame, inspect_island, island_edge_ring, island_fill,
 };
 pub use list_row::ListRow;
 pub use master_detail_list::{

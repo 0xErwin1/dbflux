@@ -948,6 +948,8 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 
 ### Tareas en segundo plano
 
+El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado no ocupa espacio: se abre con la entrada de tareas en segundo plano de la barra de estado, o con `Ctrl+Shift+4`, que además le pasa el foco. `Tab` y `Shift+Tab` lo saltan mientras está colapsado.
+
 | Teclas                                        | Acción                                   |
 | --------------------------------------------- | ---------------------------------------- |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k`                | Enfocar panel izquierda / abajo / arriba |

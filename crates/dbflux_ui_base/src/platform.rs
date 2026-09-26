@@ -9,7 +9,7 @@ use dbflux_components::primitives::{Icon, Text};
 #[cfg(target_os = "linux")]
 use dbflux_components::tokens::ChromeColors;
 #[cfg(target_os = "linux")]
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::{Heights, IslandMetrics, Spacing};
 use gpui::{
     App, IntoElement, SharedString, Stateful, Window, WindowDecorations, WindowKind, WindowOptions,
     div, px,
@@ -147,15 +147,14 @@ pub fn render_csd_title_bar_with_crumbs(
     {
         let theme = cx.theme();
         let sep_color = ChromeColors::ghost_border(theme);
+        // The row sits on the window's desk frame: no fill and no line.
         let title_bar = div()
             .id("linux-csd-title-bar")
             .flex()
             .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .h(TITLE_BAR_HEIGHT)
-            .bg(theme.tab_bar)
-            .border_b_1()
-            .border_color(theme.border);
+            .h(IslandMetrics::WINDOW_TITLE_HEIGHT);
 
         let mut drag_area = csd_drag_area("linux-csd-drag-area")
             .flex()
@@ -163,7 +162,7 @@ pub fn render_csd_title_bar_with_crumbs(
             .items_center()
             .flex_1()
             .h_full()
-            .pl_3()
+            .pl(IslandMetrics::WINDOW_TITLE_PADDING_X)
             .gap_2()
             .child(Text::body_sm(title.to_string()));
 

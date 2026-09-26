@@ -237,17 +237,15 @@ impl Render for TabBar {
 
         let new_tab_btn = self.render_new_tab_button(cx).into_any_element();
 
-        // The strip sizes to its tabs so the title bar that hosts it keeps
-        // the space after the last tab for moving the window.
-        document_tab_bar(cx).id("tab-bar").min_w_0().child(
+        document_tab_bar(cx).id("tab-bar").w_full().min_w_0().child(
             div()
                 .id("document-tab-list")
                 .role(Role::TabList)
                 .flex()
                 .min_w_0()
-                .items_stretch()
+                .items_center()
                 .overflow_x_hidden()
-                .gap(TabMetrics::BAR_GAP)
+                .gap(TabMetrics::DOCUMENT_BAR_GAP)
                 .children(tabs)
                 .child(new_tab_btn),
         )
@@ -299,22 +297,29 @@ impl TabBar {
         let center_x = self.active_tab_center_x.clone();
 
         let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
         let icon_color = if is_active {
-            ChromeColors::strong(theme)
+            tint
         } else {
             theme.muted_foreground
         };
-        let tint = ChromeColors::tint(theme);
+        let title_element = if is_active {
+            document_tab_title(title, true, cx)
+        } else {
+            document_tab_title(title, false, cx).font_weight(FontWeight::NORMAL)
+        };
+        let hover_group: SharedString = format!("tab-group-{}", id.0).into();
 
         document_tab(
             ElementId::Name(format!("tab-{}", id.0).into()),
             is_active,
             cx,
         )
+        .group(hover_group.clone())
         .role(Role::Tab)
         .aria_selected(is_active)
-        .min_w(px(100.0))
-        .max_w(px(220.0))
+        .min_w(TabMetrics::DOCUMENT_TAB_MIN_WIDTH)
+        .max_w(TabMetrics::DOCUMENT_TAB_MAX_WIDTH)
         .when(is_active, |el| {
             el.child(
                 canvas(
@@ -362,13 +367,7 @@ impl TabBar {
             }),
         )
         .child(Icon::new(icon).size(TabMetrics::ICON).color(icon_color))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .child(document_tab_title(title, is_active, cx)),
-        )
+        .child(div().flex_1().min_w_0().truncate().child(title_element))
         // Dirty indicator: a tint diamond when the document has unsaved
         // changes. Shows the change summary in a tooltip on hover.
         .when(is_dirty, |el| {
@@ -386,14 +385,17 @@ impl TabBar {
                     }),
             )
         })
-        // Spinner or close button
-        .child(self.render_tab_action(id, is_executing, cx))
+        // Spinner or close button. Inactive tabs show the close button only
+        // while hovered.
+        .child(self.render_tab_action(id, is_executing, is_active, hover_group, cx))
     }
 
     fn render_tab_action(
         &self,
         id: DocumentId,
         is_executing: bool,
+        is_active: bool,
+        hover_group: SharedString,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if is_executing {
@@ -412,6 +414,10 @@ impl TabBar {
             .justify_center()
             .cursor_pointer()
             .hover(move |el| el.bg(hover))
+            .when(!is_active, |el| {
+                el.invisible()
+                    .group_hover(hover_group, |style| style.visible())
+            })
             .child(
                 Icon::new(AppIcon::CircleX)
                     .size(TabMetrics::CLOSE_ICON)
@@ -429,13 +435,15 @@ impl TabBar {
 
     fn render_new_tab_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .mt(TabMetrics::DOCUMENT_TAB_TOP)
+            .ml(TabMetrics::NEW_TAB_MARGIN_LEFT)
             .flex()
+            .flex_shrink_0()
             .items_center()
             .child(
                 Button::new("new-tab-btn", dbflux_i18n::t!("document.tabs.new"))
                     .ghost()
                     .icon(AppIcon::Plus)
+                    .icon_size(TabMetrics::ICON)
                     .icon_only()
                     .on_click(cx.listener(|_this, _event, _window, cx| {
                         cx.emit(TabBarEvent::NewTabRequested);

@@ -201,8 +201,7 @@ impl Workspace {
                     true
                 }
                 FocusTarget::BackgroundTasks => {
-                    self.tasks_state.toggle();
-                    cx.notify();
+                    self.toggle_tasks_panel(cx);
                     true
                 }
                 _ => false,
@@ -440,9 +439,11 @@ impl Workspace {
         }) {
             return true;
         }
-        // Workspace-level: Document -> BackgroundTasks
+        // Workspace-level: Document -> BackgroundTasks, only while the tasks
+        // panel is expanded; collapsed, it renders nothing to move onto.
+        let tasks_expanded = self.tasks_state.is_expanded();
         let next = match self.focus_target {
-            FocusTarget::Document => FocusTarget::BackgroundTasks,
+            FocusTarget::Document if tasks_expanded => FocusTarget::BackgroundTasks,
             FocusTarget::BackgroundTasks => FocusTarget::Document,
             _ => return false,
         };
@@ -457,10 +458,12 @@ impl Workspace {
         }) {
             return true;
         }
-        // Workspace-level: BackgroundTasks -> Document
+        // Workspace-level: BackgroundTasks -> Document, and Document ->
+        // BackgroundTasks only while the tasks panel is expanded.
+        let tasks_expanded = self.tasks_state.is_expanded();
         let prev = match self.focus_target {
             FocusTarget::BackgroundTasks => FocusTarget::Document,
-            FocusTarget::Document => FocusTarget::BackgroundTasks,
+            FocusTarget::Document if tasks_expanded => FocusTarget::BackgroundTasks,
             _ => return false,
         };
         self.set_focus(prev, window, cx);

@@ -254,6 +254,49 @@ pub fn chamfer_left_edge_polygon(
     band_polygon(bounds, cut, corners, (left, top, band_right, bottom))
 }
 
+/// The corners of `bounds` that lie outside the shape: one right triangle per
+/// cut corner. Painting them in the color of what surrounds the shape masks
+/// content drawn inside `bounds` so it reads as clipped to the cut.
+pub fn chamfer_outside_polygons(
+    bounds: Bounds<Pixels>,
+    cut: Pixels,
+    corners: ChamferCorners,
+) -> Vec<Vec<Point<Pixels>>> {
+    let (left, top, right, bottom) = edges_of(bounds);
+
+    if right <= left || bottom <= top {
+        return Vec::new();
+    }
+
+    let cut = f32::from(clamp_cut(bounds.size, cut));
+
+    if cut <= 0.0 {
+        return Vec::new();
+    }
+
+    let top_left = vec![
+        point(left, top),
+        point(left + cut, top),
+        point(left, top + cut),
+    ];
+    let bottom_right = vec![
+        point(right, bottom),
+        point(right, bottom - cut),
+        point(right - cut, bottom),
+    ];
+
+    let triangles = match corners {
+        ChamferCorners::TopLeftBottomRight => vec![top_left, bottom_right],
+        ChamferCorners::TopLeft => vec![top_left],
+        ChamferCorners::BottomRight => vec![bottom_right],
+    };
+
+    triangles
+        .iter()
+        .map(|triangle| to_pixel_points(triangle))
+        .collect()
+}
+
 /// Centerline of a [`ChamferRing`] around the shape: the outline moved
 /// outward by `offset + thickness / 2` (inward when negative), keeping every
 /// diagonal parallel to the shape's own cut. Stroking this closed polygon with
@@ -452,6 +495,7 @@ pub struct Chamfer {
     bottom_edge: Option<ChamferEdge>,
     left_edge: Option<ChamferEdge>,
     ring: Option<ChamferRing>,
+    outside_fill: Option<Hsla>,
     interaction_id: Option<ElementId>,
     held: bool,
 }
@@ -468,6 +512,7 @@ impl Chamfer {
             bottom_edge: None,
             left_edge: None,
             ring: None,
+            outside_fill: None,
             interaction_id: None,
             held: false,
         }
@@ -535,6 +580,14 @@ impl Chamfer {
         self
     }
 
+    /// Paints the cut corners, outside the shape, with `color`. A shape placed
+    /// as the last child of its container, filled with the color around the
+    /// container, masks children that paint into the corners.
+    pub fn outside_fill(mut self, color: impl Into<Hsla>) -> Self {
+        self.outside_fill = Some(color.into());
+        self
+    }
+
     /// Tracks hover and pressed state so `fill_hover` / `fill_active` apply.
     /// `id` keys the pressed state and must be unique among its siblings.
     pub fn interactive(mut self, id: impl Into<ElementId>) -> Self {
@@ -551,8 +604,9 @@ impl Chamfer {
     }
 
     /// Paints the shape into `bounds` with the given fill. The border is drawn
-    /// on top of the fill, the top, bottom and left edges over the border, and
-    /// the ring last. Bounds, cut, border and edges snap to the device pixel grid.
+    /// on top of the fill, the top, bottom and left edges over the border, the
+    /// outside fill after them, and the ring last. Bounds, cut, border and
+    /// edges snap to the device pixel grid.
     pub fn paint(&self, bounds: Bounds<Pixels>, fill: Hsla, window: &mut Window) {
         let scale_factor = window.scale_factor();
         let bounds = snap_bounds_to_device(bounds, scale_factor);
@@ -584,6 +638,12 @@ impl Chamfer {
             let thickness = snap_length_to_device(edge.thickness, scale_factor);
             let polygon = chamfer_left_edge_polygon(bounds, cut, self.corners, thickness);
             paint_polygon(&polygon, edge.color, window);
+        }
+
+        if let Some(outside) = self.outside_fill {
+            for polygon in chamfer_outside_polygons(bounds, cut, self.corners) {
+                paint_polygon(&polygon, outside, window);
+            }
         }
 
         if let Some(ring) = self.ring {
@@ -991,6 +1051,70 @@ mod tests {
         }
 
         inside
+    }
+
+    #[test]
+    fn outside_polygons_cover_only_the_cut_corners() {
+        let triangles = chamfer_outside_polygons(
+            rect(10.0, 20.0, 200.0, 100.0),
+            ChamferCut::CARD,
+            ChamferCorners::default(),
+        );
+
+        assert_eq!(triangles.len(), 2);
+        assert_eq!(
+            raw(&triangles[0]),
+            vec![(10.0, 20.0), (24.0, 20.0), (10.0, 34.0)]
+        );
+        assert_eq!(
+            raw(&triangles[1]),
+            vec![(210.0, 120.0), (210.0, 106.0), (196.0, 120.0)]
+        );
+
+        let shape = chamfer_points(
+            rect(10.0, 20.0, 200.0, 100.0),
+            ChamferCut::CARD,
+            ChamferCorners::default(),
+        );
+        assert!(!contains(&shape, 12.0, 22.0));
+        assert!(contains(&triangles[0], 12.0, 22.0));
+    }
+
+    #[test]
+    fn outside_polygons_follow_the_cut_corners_and_skip_empty_shapes() {
+        let top_left = chamfer_outside_polygons(
+            rect(0.0, 0.0, 100.0, 30.0),
+            ChamferCut::INPUT,
+            ChamferCorners::TopLeft,
+        );
+        assert_eq!(top_left.len(), 1);
+
+        let bottom_right = chamfer_outside_polygons(
+            rect(0.0, 0.0, 100.0, 30.0),
+            ChamferCut::INPUT,
+            ChamferCorners::BottomRight,
+        );
+        assert_eq!(
+            raw(&bottom_right[0]),
+            vec![(100.0, 30.0), (100.0, 22.0), (92.0, 30.0)]
+        );
+
+        assert!(
+            chamfer_outside_polygons(
+                rect(0.0, 0.0, 0.0, 30.0),
+                ChamferCut::CARD,
+                ChamferCorners::default()
+            )
+            .is_empty()
+        );
+        assert!(
+            chamfer_outside_polygons(
+                rect(0.0, 0.0, 100.0, 30.0),
+                Pixels::ZERO,
+                ChamferCorners::default()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

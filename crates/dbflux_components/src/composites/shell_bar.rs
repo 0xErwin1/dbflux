@@ -11,7 +11,7 @@ use gpui_component::tooltip::Tooltip;
 use crate::controls::is_activation_key;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferRing, Icon, Kbd};
-use crate::tokens::{ChamferCut, ChromeColors, ShellMetrics};
+use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, ShellMetrics};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type ActivateHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
@@ -19,9 +19,9 @@ type ActivateHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
 /// The "Search or run a command" field of the title bar.
 ///
 /// It is a trigger, not an editor: a click, or Enter or Space while it has
-/// focus, runs `on_open`, which opens the command palette. Layout: 28 px, cut
-/// 6, panel fill with a line border, search icon, the placeholder, and the
-/// palette's chord as one keycap on the right.
+/// focus, runs `on_open`, which opens the command palette. Layout: 420 by
+/// 30 px, cut 6, the well fill (window ground) with a line border, search
+/// icon, the placeholder, and the palette's chord as one keycap on the right.
 #[derive(IntoElement)]
 pub struct CommandSearch {
     id: ElementId,
@@ -83,7 +83,7 @@ impl RenderOnce for CommandSearch {
             .is_some_and(|handle| handle.is_focused(window));
 
         let mut shape = Chamfer::new(ChamferCut::CONTROL)
-            .fill(theme.popover)
+            .fill(theme.background)
             .border(theme.border)
             .fill_hover(theme.secondary)
             .fill_active(theme.secondary_hover)
@@ -101,8 +101,8 @@ impl RenderOnce for CommandSearch {
             .aria_label(self.placeholder.clone())
             .relative()
             .flex()
-            .flex_1()
-            .min_w_0()
+            .flex_shrink_0()
+            .w(ShellMetrics::COMMAND_SEARCH_WIDTH)
             .items_center()
             .gap(ShellMetrics::COMMAND_SEARCH_GAP)
             .h(ShellMetrics::COMMAND_SEARCH_HEIGHT)
@@ -149,8 +149,9 @@ impl RenderOnce for CommandSearch {
     }
 }
 
-/// The bell at the right end of the title bar, with a byzantine count badge
-/// while something waits for the user.
+/// The bell at the right end of the title bar: a 34 by 30 px button on the
+/// tint wash with a tint icon, and a byzantine count badge over its top-right
+/// corner while something waits for the user.
 #[derive(IntoElement)]
 pub struct NotificationBell {
     id: ElementId,
@@ -194,6 +195,8 @@ impl RenderOnce for NotificationBell {
         let badge = Self::badge_text(self.count);
         let label = self.label.clone();
 
+        let tint = ChromeColors::tint(theme);
+
         div()
             .id(self.id)
             .aria_label(self.label)
@@ -201,23 +204,28 @@ impl RenderOnce for NotificationBell {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .h_full()
-            .ml(ShellMetrics::BELL_MARGIN_LEFT)
-            .mr(ShellMetrics::BELL_MARGIN_RIGHT)
-            .px(ShellMetrics::BELL_PADDING_X)
+            .justify_center()
+            .w(ShellMetrics::BELL_WIDTH)
+            .h(ShellMetrics::BELL_HEIGHT)
             .cursor_pointer()
-            .hover(|bell| bell.bg(theme.list_hover))
+            .child(
+                Chamfer::new(ChamferCut::CONTROL)
+                    .fill(tint.opacity(ButtonMetrics::SOFT_FILL_REST))
+                    .fill_hover(tint.opacity(ButtonMetrics::SOFT_FILL_HOVER))
+                    .fill_active(tint.opacity(ButtonMetrics::SOFT_FILL_PRESSED))
+                    .interactive("notification-bell-chamfer"),
+            )
             .child(
                 Icon::new(AppIcon::Bell)
                     .size(ShellMetrics::BELL_ICON)
-                    .color(theme.foreground),
+                    .color(tint),
             )
             .when_some(badge, |bell, text| {
                 bell.child(
                     div()
                         .absolute()
-                        .top(ShellMetrics::BELL_BADGE_TOP)
-                        .right_0()
+                        .top(ShellMetrics::BELL_BADGE_OFFSET)
+                        .right(ShellMetrics::BELL_BADGE_OFFSET)
                         .flex()
                         .items_center()
                         .justify_center()

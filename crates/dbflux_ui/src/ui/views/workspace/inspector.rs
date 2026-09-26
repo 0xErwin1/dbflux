@@ -10,7 +10,9 @@
 //!
 //! # Resize
 //!
-//! The left-edge grip (6 px) starts the drag on `mouse_down`.  Move and up
+//! The rail is its own island, `IslandMetrics::GAP` of desk to the right of
+//! the document island. `width` is the island's width. The grip (6 px) over
+//! the island's left edge starts the drag on `mouse_down`.  Move and up
 //! events are captured by a workspace-root drag mask (an absolute overlay
 //! rendered only while `is_resizing == true`) so the cursor is tracked
 //! anywhere on screen.  When the drag ends the inspector emits
@@ -22,10 +24,11 @@
 //! `workspace/dispatch.rs` as a fallback after the active document declines
 //! Cancel: it calls `close()` and returns `true`.
 
+use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, InspectorMetrics};
+use dbflux_components::tokens::{ChromeColors, InspectorMetrics, IslandMetrics};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -219,7 +222,6 @@ impl Focusable for WorkspaceInspector {
 impl Render for WorkspaceInspector {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let content_width = self.width - INSPECTOR_GRIP_WIDTH;
         let is_resizing = self.is_resizing;
         let title = self.title.clone();
         let content = self.content.clone();
@@ -259,46 +261,25 @@ impl Render for WorkspaceInspector {
                 )
         });
 
-        // Outer flex_row: grip (resize handle) + body (header + content host).
+        // The rail is an island of its own after the document island: the
+        // desk gap on its left, then the island with the grip over its left
+        // edge. mouse_down on the grip starts the drag; move/up are owned by
+        // the workspace drag mask so cursor tracking works even after the
+        // cursor leaves this column.
         div()
             .id("workspace-inspector")
             .key_context(dbflux_components::key_contexts::ROW_INSPECTOR)
             .h_full()
-            .w(self.width)
+            .w(self.width + IslandMetrics::GAP)
+            .pl(IslandMetrics::GAP)
             .flex_shrink_0()
             .flex()
-            .flex_row()
-            .bg(theme.popover)
-            .border_l_1()
-            .border_color(theme.border)
             .track_focus(&self.focus_handle)
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-            // Grip (left edge, INSPECTOR_GRIP_WIDTH px).
-            // mouse_down starts the drag; move/up are owned by the workspace drag mask
-            // so cursor tracking works even after the cursor leaves this column.
             .child(
-                div()
-                    .id("workspace-inspector-grip")
+                Island::new()
                     .h_full()
-                    .w(INSPECTOR_GRIP_WIDTH)
-                    .flex_shrink_0()
-                    .cursor_col_resize()
-                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(is_resizing, |el| el.bg(ChromeColors::tint(&theme)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.begin_resize(event, cx);
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .h_full()
-                    .w(content_width)
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
+                    .w(self.width)
                     .when_some(header, |body, header| body.child(header))
                     .child(
                         div()
@@ -307,6 +288,24 @@ impl Render for WorkspaceInspector {
                             .min_h_0()
                             .overflow_hidden()
                             .when_some(content, |el, view| el.child(view)),
+                    )
+                    .child(
+                        div()
+                            .id("workspace-inspector-grip")
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(INSPECTOR_GRIP_WIDTH)
+                            .cursor_col_resize()
+                            .hover(|el| el.bg(theme.accent.opacity(0.3)))
+                            .when(is_resizing, |el| el.bg(ChromeColors::tint(&theme)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                    this.begin_resize(event, cx);
+                                }),
+                            ),
                     ),
             )
     }

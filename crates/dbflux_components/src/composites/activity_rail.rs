@@ -9,7 +9,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::tooltip::Tooltip;
 
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, Icon, Status, StatusIndicator};
+use crate::primitives::{Chamfer, Icon};
 use crate::tokens::{ButtonMetrics, ChamferCut, ChromeColors, ShellMetrics};
 
 /// Where an entry sits in the rail: stacked from the top, or pinned to the
@@ -32,8 +32,6 @@ pub struct RailEntry {
     pub label: SharedString,
     /// The view the entry opens is the one on screen.
     pub active: bool,
-    /// Draws the tint diamond in the top-right corner (work waiting).
-    pub pending: bool,
     pub placement: RailPlacement,
 }
 
@@ -44,18 +42,12 @@ impl RailEntry {
             icon,
             label: label.into(),
             active: false,
-            pending: false,
             placement: RailPlacement::Top,
         }
     }
 
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
-        self
-    }
-
-    pub fn pending(mut self, pending: bool) -> Self {
-        self.pending = pending;
         self
     }
 
@@ -103,9 +95,9 @@ pub fn rail_button_colors(theme: &gpui_component::Theme, active: bool) -> RailBu
 
 type RailSelectHandler = Rc<dyn Fn(&SharedString, &mut Window, &mut App)>;
 
-/// The activity rail: `ShellMetrics::RAIL_WIDTH` wide, the window ground with
-/// a line on its right, 38 px buttons stacked from the top and the bottom
-/// entries pinned to the bottom edge.
+/// The activity rail: `ShellMetrics::RAIL_WIDTH` wide directly on the desk,
+/// with no fill or line of its own, 38 px buttons stacked from the top and
+/// the bottom entries pinned to the bottom edge.
 #[derive(IntoElement)]
 pub struct ActivityRail {
     id: ElementId,
@@ -170,15 +162,6 @@ impl ActivityRail {
                     .size(ShellMetrics::RAIL_ICON)
                     .color(colors.icon),
             )
-            .when(entry.pending, |button| {
-                button.child(
-                    div()
-                        .absolute()
-                        .top(ShellMetrics::RAIL_INDICATOR_TOP)
-                        .right(ShellMetrics::RAIL_INDICATOR_RIGHT)
-                        .child(StatusIndicator::new(Status::Busy)),
-                )
-            })
             .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
             .when_some(on_select, |button, handler| {
                 button.on_click(move |_, window, cx| handler(&entry_id, window, cx))
@@ -188,7 +171,6 @@ impl ActivityRail {
 
 impl RenderOnce for ActivityRail {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
         let (top, bottom) = Self::partition(&self.entries);
 
         let top_buttons: Vec<_> = top
@@ -212,9 +194,6 @@ impl RenderOnce for ActivityRail {
             .h_full()
             .pt(ShellMetrics::RAIL_PADDING_Y)
             .pb(ShellMetrics::RAIL_PADDING_Y)
-            .bg(theme.background)
-            .border_r_1()
-            .border_color(theme.border)
             .children(top_buttons)
             .child(div().flex_1())
             .children(bottom_buttons)
@@ -230,7 +209,7 @@ mod tests {
             RailEntry::new("connections", AppIcon::Database, "Connections").active(true),
             RailEntry::new("settings", AppIcon::Settings, "Settings").bottom(),
             RailEntry::new("scripts", AppIcon::SquareTerminal, "Scripts"),
-            RailEntry::new("approvals", AppIcon::Bot, "Approvals").pending(true),
+            RailEntry::new("approvals", AppIcon::Bot, "Approvals"),
         ]
     }
 
@@ -250,13 +229,11 @@ mod tests {
     fn builders_set_state_and_placement() {
         let entry = RailEntry::new("audit", AppIcon::FingerprintPattern, "Audit");
         assert!(!entry.active);
-        assert!(!entry.pending);
         assert_eq!(entry.placement, RailPlacement::Top);
         assert_eq!(entry.element_id().as_ref(), "rail-audit");
 
-        let entry = entry.active(true).pending(true).bottom();
+        let entry = entry.active(true).bottom();
         assert!(entry.active);
-        assert!(entry.pending);
         assert_eq!(entry.placement, RailPlacement::Bottom);
     }
 

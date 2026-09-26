@@ -1,8 +1,8 @@
 //! The three tab kinds of the design system (DSAppPlan "Tabs").
 //!
-//! - Document tabs (AppByzTable, AppByzEditor): 36 px tabs at the bottom of a
-//!   42 px bar. The active tab has the panel fill, a top-left cut of 8 and a
-//!   2 px byzantine edge along its top; inactive tabs are muted.
+//! - Document tabs (Isl* boards): a 46 px row at the top of the document
+//!   island. The active tab is a 30 px chip on the raised fill with a cut of
+//!   6 and strong text; inactive tabs are muted text on no fill.
 //! - Result tabs (AppByzEditor results): 34 px tabs at the bottom of a 40 px
 //!   bar, with a row count and statement range after the label. The active
 //!   tab is drawn like an active document tab.
@@ -19,21 +19,21 @@ use gpui_component::ActiveTheme;
 use crate::primitives::{Chamfer, ChamferCorners, Text};
 use crate::tokens::{ChamferCut, ChromeColors, TabMetrics};
 
-/// The document tab strip: 42 px, laid out inside the title bar, which owns
-/// the ground and the line along the bottom. Add `document_tab`s and the
-/// new-tab button as children.
+/// The document tab row: 46 px at the top of the document island, 10 px side
+/// padding, 4 px between tabs. Add `document_tab`s and the new-tab button as
+/// children.
 pub fn document_tab_bar(_cx: &App) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
-        .items_stretch()
+        .items_center()
         .h(TabMetrics::DOCUMENT_BAR_HEIGHT)
-        .pl(TabMetrics::DOCUMENT_BAR_PADDING_LEFT)
-        .gap(TabMetrics::BAR_GAP)
+        .px(TabMetrics::DOCUMENT_BAR_PADDING_X)
+        .gap(TabMetrics::DOCUMENT_BAR_GAP)
 }
 
-/// One document tab. Add the icon, `document_tab_title`, the dirty diamond
-/// and the close button as children.
+/// One document tab: a 30 px chip. Add the icon, `document_tab_title`, the
+/// dirty diamond and the close button as children.
 pub fn document_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<gpui::Div> {
     div()
         .id(id)
@@ -43,15 +43,10 @@ pub fn document_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Statefu
         .items_center()
         .gap(TabMetrics::DOCUMENT_TAB_GAP)
         .h(TabMetrics::DOCUMENT_TAB_HEIGHT)
-        .mt(TabMetrics::DOCUMENT_TAB_TOP)
-        .pr(TabMetrics::DOCUMENT_TAB_PADDING_X)
-        .pl(if active {
-            TabMetrics::DOCUMENT_TAB_ACTIVE_PADDING_LEFT
-        } else {
-            TabMetrics::DOCUMENT_TAB_PADDING_X
-        })
+        .px(TabMetrics::DOCUMENT_TAB_PADDING_X)
+        .whitespace_nowrap()
         .cursor_pointer()
-        .child(tab_shape(active, cx))
+        .child(document_tab_shape(active, cx))
 }
 
 /// Title of a document or result tab: 13 px, strong and 600 when active,
@@ -161,8 +156,24 @@ pub fn inline_tab(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<
         })
 }
 
-/// Shape behind a document or result tab: panel fill, top-left cut and
-/// byzantine top edge when active; a raised hover fill otherwise.
+/// Chip behind a document tab: the raised fill with a cut of 6 when active;
+/// no fill with a raised hover fill otherwise.
+fn document_tab_shape(active: bool, cx: &App) -> Chamfer {
+    let theme = cx.theme();
+    let shape = Chamfer::new(ChamferCut::CONTROL);
+
+    if active {
+        shape.fill(theme.secondary)
+    } else {
+        shape
+            .fill(gpui::transparent_black())
+            .fill_hover(theme.secondary)
+            .interactive("document-tab-shape")
+    }
+}
+
+/// Shape behind a result tab: panel fill, top-left cut and byzantine top
+/// edge when active; a raised hover fill otherwise.
 fn tab_shape(active: bool, cx: &App) -> Chamfer {
     let theme = cx.theme();
     let shape = Chamfer::new(ChamferCut::INPUT).corners(ChamferCorners::TopLeft);

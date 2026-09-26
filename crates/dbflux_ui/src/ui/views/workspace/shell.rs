@@ -30,7 +30,6 @@ pub(super) struct RailState {
     /// The build carries the MCP approvals view.
     pub approvals_available: bool,
     pub approvals_open: bool,
-    pub approvals_pending: usize,
     pub audit_active: bool,
 }
 
@@ -64,8 +63,7 @@ pub(super) fn rail_entries(state: RailState) -> Vec<RailEntry> {
                 AppIcon::Bot,
                 dbflux_i18n::t!("workspace.rail.approvals"),
             )
-            .active(state.approvals_open)
-            .pending(state.approvals_pending > 0),
+            .active(state.approvals_open),
         );
     }
 
@@ -260,7 +258,6 @@ impl Workspace {
             sidebar_view,
             approvals_available: cfg!(feature = "mcp"),
             approvals_open,
-            approvals_pending: self.pending_approvals_count(cx),
             audit_active,
         }
     }
@@ -320,10 +317,10 @@ impl Workspace {
         }
     }
 
-    /// The 42 px row at the top of the window: the sidebar toggle and the
-    /// command search over the rail and sidebar, the document tabs, the
-    /// approvals bell, and on a client-decorated Linux window the window
-    /// controls. Empty space in the row moves the window there.
+    /// The 44 px row at the top of the window, on the desk: the command
+    /// search centered, the approvals bell at the right end and, on a
+    /// client-decorated Linux window, the window controls after it. Empty
+    /// space in the row moves the window there.
     pub(super) fn render_title_bar(
         &mut self,
         window: &mut Window,
@@ -335,42 +332,7 @@ impl Workspace {
             platform::render_csd_window_controls(window, cx, Some(close))
         });
 
-        let theme = cx.theme();
-        let collapsed = self.is_sidebar_collapsed(cx);
-        let left_width = ShellMetrics::RAIL_WIDTH + self.sidebar_dock.read(cx).expanded_width();
         let palette_keys = global_shortcut_keys(Command::ToggleCommandPalette).unwrap_or_default();
-
-        let collapse_icon = if collapsed {
-            AppIcon::ChevronRight
-        } else {
-            AppIcon::ChevronLeft
-        };
-        let collapse_label: SharedString = if collapsed {
-            dbflux_i18n::t!("workspace.title_bar.expand_sidebar").into()
-        } else {
-            dbflux_i18n::t!("workspace.title_bar.collapse_sidebar").into()
-        };
-        let muted = theme.muted_foreground;
-        let strong = dbflux_components::tokens::ChromeColors::strong(theme);
-
-        let workspace = cx.entity().clone();
-        let collapse_button = div()
-            .id("title-bar-sidebar-toggle")
-            .aria_label(collapse_label.clone())
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .px(ShellMetrics::COLLAPSE_PADDING_X)
-            .cursor_pointer()
-            .text_color(muted)
-            .hover(move |button| button.text_color(strong))
-            .child(Icon::new(collapse_icon).size(ShellMetrics::COLLAPSE_ICON))
-            .tooltip(move |window, cx| {
-                gpui_component::tooltip::Tooltip::new(collapse_label.clone()).build(window, cx)
-            })
-            .on_click(move |_, _, cx| {
-                workspace.update(cx, |workspace, cx| workspace.toggle_sidebar(cx));
-            });
 
         let workspace = cx.entity().clone();
         let command_search = CommandSearch::new(
@@ -384,20 +346,6 @@ impl Workspace {
                 workspace.open_command_palette_from_title_bar(window, cx);
             });
         });
-
-        let left_block = div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .gap(ShellMetrics::TITLE_BLOCK_GAP)
-            .w(left_width)
-            .h_full()
-            .pl(ShellMetrics::TITLE_BLOCK_PADDING_LEFT)
-            .pr(ShellMetrics::TITLE_BLOCK_PADDING_RIGHT)
-            .border_r_1()
-            .border_color(theme.border)
-            .child(collapse_button)
-            .child(command_search);
 
         let bell = cfg!(feature = "mcp").then(|| {
             let workspace = cx.entity().clone();
@@ -418,27 +366,36 @@ impl Workspace {
             .id("title-bar")
             .flex()
             .flex_shrink_0()
-            .items_stretch()
+            .items_center()
             .w_full()
             .h(ShellMetrics::TITLE_BAR_HEIGHT)
-            .bg(theme.background)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(left_block)
-            .child(
-                div()
-                    .flex()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(self.tab_bar.clone()),
-            )
+            .pl(ShellMetrics::TITLE_BAR_PADDING_X)
+            .when(!client_decorated, |bar| {
+                bar.pr(ShellMetrics::TITLE_BAR_PADDING_X)
+            })
             .child(
                 platform::csd_drag_area("title-bar-drag-area")
                     .flex_1()
+                    .flex_basis(px(0.0))
                     .h_full(),
             )
-            .children(bell)
-            .children(window_controls)
+            .child(command_search)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .flex_basis(px(0.0))
+                    .h_full()
+                    .items_center()
+                    .justify_end()
+                    .child(
+                        platform::csd_drag_area("title-bar-drag-area-end")
+                            .flex_1()
+                            .h_full(),
+                    )
+                    .children(bell)
+                    .children(window_controls),
+            )
     }
 
     /// The empty workspace (P1Empty): the app glyph and title over a START
@@ -719,11 +676,10 @@ mod tests {
     }
 
     #[test]
-    fn rail_flags_pending_approvals_and_the_open_views() {
+    fn rail_flags_the_open_views() {
         let entries = rail_entries(RailState {
             approvals_available: true,
             approvals_open: true,
-            approvals_pending: 2,
             audit_active: true,
             ..RailState::default()
         });
@@ -733,7 +689,6 @@ mod tests {
             .find(|entry| entry.id.as_ref() == rail_ids::APPROVALS)
             .expect("approvals entry");
         assert!(approvals.active);
-        assert!(approvals.pending);
 
         let audit = entries
             .iter()
@@ -745,7 +700,7 @@ mod tests {
             approvals_available: true,
             ..RailState::default()
         });
-        assert!(idle.iter().all(|entry| !entry.pending && !entry.active));
+        assert!(idle.iter().all(|entry| !entry.active));
     }
 
     #[test]
@@ -835,8 +790,6 @@ mod tests {
             "workspace.rail.settings",
             "workspace.title_bar.command_search",
             "workspace.title_bar.approvals",
-            "workspace.title_bar.collapse_sidebar",
-            "workspace.title_bar.expand_sidebar",
             "workspace.empty.title",
             "workspace.empty.subtitle",
             "workspace.empty.start",

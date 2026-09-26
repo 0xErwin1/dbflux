@@ -4342,8 +4342,6 @@ workspace:
   title_bar:
     command_search: "Buscar o ejecutar un comando"
     approvals: "Aprobaciones de MCP"
-    collapse_sidebar: "Contraer la barra lateral"
-    expand_sidebar: "Expandir la barra lateral"
   empty:
     title: "Ninguna pestaña abierta"
     subtitle: "Abre algo desde la barra lateral o empieza aquí."
@@ -4356,7 +4354,6 @@ workspace:
     yesterday: "ayer"
     days_ago: "hace %{count} días"
   background_tasks: Tareas en segundo plano
-  background_tasks_idle: inactivo
   empty_documents: No hay documentos abiertos
   empty_hint: "Abre una tabla desde la barra lateral o empieza con una de estas opciones."
   hint:

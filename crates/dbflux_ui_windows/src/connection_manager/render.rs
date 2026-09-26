@@ -3,6 +3,7 @@ use crate::ssh_shared::SshAuthSelection;
 use crate::tokens::{ConnectionFormMetrics, FormMetrics};
 use dbflux_app::keymap::Command;
 use dbflux_components::components::form_renderer;
+use dbflux_components::composites::Island;
 use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
@@ -10,7 +11,7 @@ use dbflux_components::primitives::{
     SegmentedItem, Text, focus_ring,
 };
 use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Heights};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Heights, IslandMetrics};
 use dbflux_core::{FormFieldDef, FormFieldKind, FormTab};
 use dbflux_ui_base::keymap::{
     CONNECTION_MANAGER_WINDOW_KEY_CONTEXT, RunCommand, root_key_context, run_command,
@@ -275,12 +276,11 @@ impl ConnectionManagerWindow {
             .render_form_header(title, is_editing, show_focus, cx)
             .into_any_element();
         let theme = cx.theme();
-        let border_color = theme.border;
 
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
+        let body = Island::new()
+            .flex_1()
+            .min_h_0()
+            .mx(IslandMetrics::GAP)
             .child(header)
             .child(tab_bar)
             .child(
@@ -314,12 +314,17 @@ impl ConnectionManagerWindow {
                 form.child(
                     div()
                         .flex_shrink_0()
-                        .bg(cx.theme().popover)
                         .px(ConnectionFormMetrics::PADDING_X)
                         .pb(ConnectionFormMetrics::BANNER_MARGIN_BOTTOM)
                         .child(banner),
                 )
-            })
+            });
+
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(body)
             .child(
                 div()
                     .flex()
@@ -328,9 +333,6 @@ impl ConnectionManagerWindow {
                     .gap(FormMetrics::INLINE_GAP)
                     .h(crate::tokens::SettingsMetrics::FOOTER_HEIGHT)
                     .px(crate::tokens::SettingsMetrics::FOOTER_PADDING_X)
-                    .border_t_1()
-                    .border_color(border_color)
-                    .bg(cx.theme().background)
                     .child(
                         Button::new(
                             "test-connection",
@@ -1338,7 +1340,8 @@ impl Render for ConnectionManagerWindow {
             &dbflux_i18n::t!("connection_manager.window_title"),
         );
 
-        let theme = cx.theme();
+        let desk = ChromeColors::desk(cx.theme());
+        let has_title_row = csd_title_bar.is_some();
 
         div()
             .id("connection-manager")
@@ -1371,19 +1374,29 @@ impl Render for ConnectionManagerWindow {
                 }
             }))
             .size_full()
-            .bg(theme.background)
+            .flex()
+            .flex_col()
+            .bg(desk)
             .text_size(dbflux_components::tokens::FontSizes::BASE)
             .when_some(csd_title_bar, |el, title_bar| el.child(title_bar))
-            .child(match self.view {
-                View::DriverSelect => self.render_driver_select(window, cx).into_any_element(),
-                View::EditForm => self.render_form(window, cx).into_any_element(),
-                View::Import => div()
-                    .relative()
-                    .size_full()
-                    .child(self.render_driver_select(window, cx))
-                    .child(self.import_panel.clone())
-                    .into_any_element(),
-            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .when(!has_title_row, |body| body.pt(IslandMetrics::GAP))
+                    .child(match self.view {
+                        View::DriverSelect => {
+                            self.render_driver_select(window, cx).into_any_element()
+                        }
+                        View::EditForm => self.render_form(window, cx).into_any_element(),
+                        View::Import => div()
+                            .relative()
+                            .size_full()
+                            .child(self.render_driver_select(window, cx))
+                            .child(self.import_panel.clone())
+                            .into_any_element(),
+                    }),
+            )
     }
 }
 

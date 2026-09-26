@@ -1,3 +1,4 @@
+use dbflux_components::composites::Island;
 use dbflux_components::tokens::{ChromeColors, ShellMetrics};
 use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
@@ -10,7 +11,7 @@ pub enum SidebarDockEvent {
     Expanded,
 }
 
-/// A collapsed sidebar leaves no column behind: the activity rail stays on
+/// A collapsed sidebar leaves no island behind: the activity rail stays on
 /// screen and reopens it.
 const COLLAPSED_WIDTH: Pixels = px(0.0);
 const DEFAULT_EXPANDED_WIDTH: Pixels = ShellMetrics::SIDEBAR_WIDTH;
@@ -317,22 +318,22 @@ impl Render for SidebarDock {
             .w(self.current_width())
             .flex()
             .flex_row()
-            .bg(cx.theme().tab_bar)
-            .when(!is_collapsed, |el| {
-                el.border_r_1().border_color(cx.theme().border)
-            })
             .child(pointer_listeners)
             .when_some(resize_listeners, |el, listeners| el.child(listeners))
             .when(!is_collapsed, |el| {
                 el.child(
-                    div()
-                        .h_full()
-                        .flex_1()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .child(self.sidebar.clone()),
+                    Island::new()
+                        .size_full()
+                        .child(
+                            div()
+                                .h_full()
+                                .w_full()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(self.sidebar.clone()),
+                        )
+                        .child(self.render_grip(window, cx)),
                 )
-                .child(self.render_grip(window, cx))
             })
     }
 }

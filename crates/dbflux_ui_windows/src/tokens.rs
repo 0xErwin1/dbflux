@@ -7,7 +7,7 @@ use gpui::{Pixels, px};
 pub struct SettingsMetrics;
 
 impl SettingsMetrics {
-    /// Navigation column width, including its right line. (230 px)
+    /// Navigation island width. (230 px)
     pub const NAV_WIDTH: Pixels = px(230.0);
     /// Padding around the navigation search field. (12 px)
     pub const NAV_SEARCH_PADDING: Pixels = px(12.0);
@@ -30,8 +30,9 @@ impl SettingsMetrics {
     /// Bottom padding of a page head that draws a line under it. (14 px)
     pub const PAGE_HEAD_PADDING_BOTTOM: Pixels = px(14.0);
 
-    /// Footer: a 56 px row plus its top line, 18 px padding, 8 px gap.
-    pub const FOOTER_HEIGHT: Pixels = px(57.0);
+    /// Footer on the window frame: 56 px with no line above it, 18 px
+    /// padding, 8 px gap.
+    pub const FOOTER_HEIGHT: Pixels = px(56.0);
     pub const FOOTER_PADDING_X: Pixels = px(18.0);
     pub const FOOTER_GAP: Pixels = px(8.0);
     /// Unsaved-changes marker: a 7 px diamond, 8 px before 12.5 px text.

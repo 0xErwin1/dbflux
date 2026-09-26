@@ -91,7 +91,7 @@ impl Sidebar {
         let theme = cx.theme();
 
         let mut shape = Chamfer::new(ChamferCut::CONTROL)
-            .fill(theme.popover)
+            .fill(theme.background)
             .border(theme.border);
 
         if focused {
@@ -489,7 +489,6 @@ impl Render for Sidebar {
 
         let sidebar_for_footer_hover = sidebar_entity.clone();
         let sidebar_for_header_hover = sidebar_entity.clone();
-        let sidebar_background = theme.sidebar;
 
         let content = match active_tab {
             SidebarTab::Connections => self
@@ -524,7 +523,6 @@ impl Render for Sidebar {
             .flex()
             .flex_col()
             .size_full()
-            .bg(sidebar_background)
             .key_context(key_context)
             .child(
                 // Header: clear row hover when mouse enters this region.

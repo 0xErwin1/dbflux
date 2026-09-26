@@ -1,6 +1,7 @@
 use crate::app::{AppStateChanged, AppStateEntity};
 use crate::ui::document::{TabManager, TabManagerEvent};
 use crate::ui::icons::AppIcon;
+use dbflux_components::composites::island_fill;
 use dbflux_components::primitives::{Chamfer, Icon, Status, StatusIndicator, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
 use dbflux_components::typography::AppFonts;
@@ -194,24 +195,34 @@ impl StatusBar {
         }
     }
 
-    /// A segment of the bar: full height, 12 px padding, 7 px gap.
-    fn segment(id: impl Into<ElementId>) -> Stateful<Div> {
+    /// A chip of the bar (Isl* status bar): a 26 px island chip, cut 6,
+    /// 12 px padding, 8 px gap. A clickable chip takes the raised fill on
+    /// hover.
+    fn chip(id: impl Into<ElementId>, clickable: bool, cx: &App) -> Stateful<Div> {
+        let theme = cx.theme();
+        let id = id.into();
+
+        let mut shape = Chamfer::new(ChamferCut::CONTROL).fill(island_fill(theme));
+
+        if clickable {
+            shape = shape
+                .fill_hover(theme.secondary)
+                .fill_active(theme.secondary_hover)
+                .interactive(ElementId::Name(format!("{id}-chamfer").into()));
+        }
+
         div()
             .id(id)
+            .relative()
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(ShellMetrics::STATUS_SEGMENT_GAP)
-            .h_full()
-            .px(ShellMetrics::STATUS_SEGMENT_PADDING_X)
+            .gap(ShellMetrics::STATUS_CHIP_GAP)
+            .h(ShellMetrics::STATUS_CHIP_HEIGHT)
+            .px(ShellMetrics::STATUS_CHIP_PADDING_X)
             .whitespace_nowrap()
-    }
-
-    /// A segment on the right half, separated from the one before by a line.
-    fn right_segment(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
-        Self::segment(id)
-            .border_l_1()
-            .border_color(cx.theme().border)
+            .when(clickable, |chip| chip.cursor_pointer())
+            .child(shape)
     }
 
     fn pending_approvals_count(&self, cx: &App) -> usize {
@@ -240,39 +251,26 @@ impl StatusBar {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let tint = dbflux_components::tokens::ChromeColors::tint(cx.theme());
-        let hover = cx.theme().list_hover;
         let notes_url = update.notes_url.clone();
         let tooltip: SharedString = dbflux_i18n::t!("updates.status_bar.tooltip").into();
 
-        Self::right_segment("status-bar-update-available", cx)
-            .cursor_pointer()
-            .hover(move |segment| segment.bg(hover))
+        Self::chip("status-bar-update-available", true, cx)
             .on_click(move |_, _, cx| cx.open_url(&notes_url))
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .child(
+                Icon::new(AppIcon::ArrowUp)
+                    .size(ShellMetrics::STATUS_ICON)
+                    .color(tint),
+            )
+            .child(
                 div()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(ShellMetrics::STATUS_SEGMENT_GAP)
-                    .h(ShellMetrics::STATUS_CHIP_HEIGHT)
-                    .px(ShellMetrics::STATUS_CHIP_PADDING_X)
-                    .child(Chamfer::new(ChamferCut::KEYCAP).fill(tint.opacity(0.14)))
-                    .child(
-                        Icon::new(AppIcon::ArrowUp)
-                            .size(ShellMetrics::STATUS_ICON)
-                            .color(tint),
-                    )
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(tint)
-                            .whitespace_nowrap()
-                            .child(dbflux_i18n::t!(
-                                "updates.status_bar.available",
-                                version = update.label
-                            )),
-                    ),
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(tint)
+                    .whitespace_nowrap()
+                    .child(dbflux_i18n::t!(
+                        "updates.status_bar.available",
+                        version = update.label
+                    )),
             )
     }
 
@@ -281,11 +279,7 @@ impl StatusBar {
         let app_state = self.app_state.read(cx);
 
         let Some(connection) = app_state.active_connection() else {
-            return div()
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .mx(ShellMetrics::STATUS_SEGMENT_PADDING_X)
+            return Self::chip("status-bar-connection", false, cx)
                 .text_color(theme.muted_foreground)
                 .child(
                     StatusIndicator::new(Status::Idle)
@@ -296,7 +290,7 @@ impl StatusBar {
 
         let metadata = connection.connection.metadata();
         let icon = AppIcon::for_driver(metadata.icon, metadata.category);
-        let success = theme.success;
+        let accent = Self::connection_accent(connection.profile.environment(), theme);
 
         div()
             .id("status-bar-connection")
@@ -304,53 +298,62 @@ impl StatusBar {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap(ShellMetrics::STATUS_SEGMENT_GAP)
+            .gap(ShellMetrics::STATUS_CHIP_GAP)
             .h(ShellMetrics::STATUS_CHIP_HEIGHT)
-            .mx(ShellMetrics::STATUS_CHIP_MARGIN_X)
             .px(ShellMetrics::STATUS_CHIP_PADDING_X)
-            .text_color(success)
+            .whitespace_nowrap()
+            .text_color(accent)
             .font_weight(FontWeight::SEMIBOLD)
             .child(
-                Chamfer::new(ChamferCut::KEYCAP)
-                    .fill(success.opacity(ShellMetrics::STATUS_CHIP_ALPHA)),
+                Chamfer::new(ChamferCut::CONTROL)
+                    .fill(accent.opacity(ShellMetrics::STATUS_CHIP_ALPHA)),
             )
             .child(
                 Icon::new(icon)
                     .size(ShellMetrics::STATUS_ICON)
-                    .color(success),
+                    .color(accent),
             )
             .child(connection.profile.name.clone())
             .into_any_element()
+    }
+
+    /// Color of the connection chip: danger for a production connection,
+    /// success otherwise.
+    fn connection_accent(
+        environment: Option<dbflux_core::ConnectionEnvironment>,
+        theme: &gpui_component::Theme,
+    ) -> Hsla {
+        if environment == Some(dbflux_core::ConnectionEnvironment::Production) {
+            theme.danger
+        } else {
+            theme.success
+        }
     }
 
     fn render_statement(summary: StatementSummary, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let tint = dbflux_components::tokens::ChromeColors::tint(theme);
 
-        let (icon, icon_color, text, framed) = match summary {
-            StatementSummary::Running(text) => (AppIcon::Loader, tint, text, true),
+        let (icon, icon_color, text) = match summary {
+            StatementSummary::Running(text) => (AppIcon::Loader, tint, text),
             StatementSummary::Finished { status, text } => match status {
-                TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger, text, true),
-                TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground, text, true),
+                TaskStatus::Failed(_) => (AppIcon::CircleX, theme.danger, text),
+                TaskStatus::Cancelled => (AppIcon::CircleX, theme.muted_foreground, text),
                 TaskStatus::Completed | TaskStatus::Running => {
-                    (AppIcon::Check, theme.success, text, true)
+                    (AppIcon::Check, theme.success, text)
                 }
             },
             StatementSummary::Ready => (
                 AppIcon::Check,
                 theme.success,
                 dbflux_i18n::t!("status_bar.ready"),
-                false,
             ),
         };
 
-        Self::segment("status-bar-statement")
+        Self::chip("status-bar-statement", false, cx)
             .flex_shrink(1.0)
             .min_w_0()
             .overflow_hidden()
-            .when(framed, |segment| {
-                segment.border_r_1().border_color(theme.border)
-            })
             .child(
                 Icon::new(icon)
                     .size(ShellMetrics::STATUS_ICON)
@@ -361,7 +364,7 @@ impl StatusBar {
                     .min_w_0()
                     .overflow_hidden()
                     .text_ellipsis()
-                    .child(Self::readout_text(text)),
+                    .child(Self::readout_text(text).color(theme.foreground)),
             )
     }
 
@@ -370,7 +373,6 @@ impl StatusBar {
         let tint = dbflux_components::tokens::ChromeColors::tint(theme);
         let danger = theme.danger;
         let muted = theme.muted_foreground;
-        let hover = theme.list_hover;
 
         let mut segments: Vec<(SharedString, AppIcon, Hsla, String)> = Vec::new();
 
@@ -404,10 +406,8 @@ impl StatusBar {
         segments
             .into_iter()
             .map(|(id, icon, color, label)| {
-                Self::right_segment(ElementId::Name(id.clone()), cx)
+                Self::chip(ElementId::Name(id.clone()), true, cx)
                     .debug_selector(move || id.to_string())
-                    .cursor_pointer()
-                    .hover(move |segment| segment.bg(hover))
                     .text_color(color)
                     .child(Icon::new(icon).size(ShellMetrics::STATUS_ICON).color(color))
                     .child(label)
@@ -451,7 +451,6 @@ impl Render for StatusBar {
         let theme = cx.theme();
         let tint = dbflux_components::tokens::ChromeColors::tint(theme);
         let danger = theme.danger;
-        let hover = theme.list_hover;
 
         let task_segments = self.render_task_segments(counts, cx);
 
@@ -460,10 +459,9 @@ impl Render for StatusBar {
             .flex()
             .flex_shrink_0()
             .items_center()
+            .gap(ShellMetrics::STATUS_BAR_GAP)
             .h(ShellMetrics::STATUS_BAR_HEIGHT)
-            .bg(cx.theme().background)
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .px(ShellMetrics::STATUS_BAR_PADDING_X)
             .font_family(AppFonts::INTERFACE)
             .text_size(ShellMetrics::STATUS_FONT)
             .text_color(cx.theme().muted_foreground)
@@ -474,7 +472,7 @@ impl Render for StatusBar {
             // differentiating whether the profile or the server enforced it.
             .when_some(read_only_copy, |this, (label, tooltip)| {
                 this.child(
-                    Self::segment("status-bar-read-only")
+                    Self::chip("status-bar-read-only", false, cx)
                         .child(Self::metadata_text(label))
                         .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)),
                 )
@@ -482,9 +480,7 @@ impl Render for StatusBar {
             .child(div().flex_1())
             .when(unread > 0, |this| {
                 this.child(
-                    Self::right_segment("error-badge", cx)
-                        .cursor_pointer()
-                        .hover(move |segment| segment.bg(hover))
+                    Self::chip("error-badge", true, cx)
                         .text_color(danger)
                         .child(
                             Icon::new(AppIcon::CircleAlert)
@@ -503,9 +499,7 @@ impl Render for StatusBar {
             .children(task_segments)
             .when(approvals > 0, |this| {
                 this.child(
-                    Self::right_segment("status-bar-approvals", cx)
-                        .cursor_pointer()
-                        .hover(move |segment| segment.bg(hover))
+                    Self::chip("status-bar-approvals", true, cx)
                         .text_color(tint)
                         .child(
                             Icon::new(AppIcon::Bell)
@@ -528,8 +522,9 @@ impl Render for StatusBar {
                     .into_iter()
                     .enumerate()
                     .map(|(index, segment)| {
-                        let mut el = Self::right_segment(
+                        let mut el = Self::chip(
                             ElementId::Name(format!("status-segment-{index}").into()),
+                            false,
                             cx,
                         )
                         .child(segment.text);
@@ -603,6 +598,30 @@ mod tests {
             StatusBar::statement_summary(None, None),
             StatementSummary::Ready
         );
+    }
+
+    #[test]
+    fn connection_chip_turns_danger_only_for_production() {
+        let theme = gpui_component::Theme::default();
+
+        assert_eq!(
+            StatusBar::connection_accent(
+                Some(dbflux_core::ConnectionEnvironment::Production),
+                &theme
+            ),
+            theme.danger
+        );
+
+        for environment in [
+            None,
+            Some(dbflux_core::ConnectionEnvironment::Staging),
+            Some(dbflux_core::ConnectionEnvironment::Development),
+        ] {
+            assert_eq!(
+                StatusBar::connection_accent(environment, &theme),
+                theme.success
+            );
+        }
     }
 
     #[test]

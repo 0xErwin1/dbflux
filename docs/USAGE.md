@@ -879,6 +879,8 @@ A read-only delete does not change the clipboard.
 
 ### Background Tasks
 
+The tasks panel sits under the documents and starts collapsed. Collapsed, it takes no space: open it with the background tasks entry in the status bar, or with `Ctrl+Shift+4`, which also moves focus to it. `Tab` and `Shift+Tab` skip the panel while it is collapsed.
+
 | Keys | Action |
 |------|--------|
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Focus left / down / up panel |

@@ -1,9 +1,10 @@
 use crate::tokens::ConnectionFormMetrics;
 use dbflux_app::keymap::Command;
+use dbflux_components::composites::Island;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ShellMetrics};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, IslandMetrics, ShellMetrics};
 use dbflux_core::DatabaseCategory;
 use gpui::prelude::*;
 use gpui::*;
@@ -66,9 +67,14 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .size_full()
-            .bg(cx.theme().popover)
-            .child(self.render_picker_header(window, cx))
-            .child(self.render_picker_body(&visible, focused_idx, cx))
+            .child(
+                Island::new()
+                    .flex_1()
+                    .min_h_0()
+                    .mx(IslandMetrics::GAP)
+                    .child(self.render_picker_header(window, cx))
+                    .child(self.render_picker_body(&visible, focused_idx, cx)),
+            )
             .child(self.render_picker_footer(focused_driver, cx))
     }
 
@@ -308,7 +314,6 @@ impl ConnectionManagerWindow {
         focused_driver: Option<DriverInfo>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let cta_label = focused_driver
             .as_ref()
             .map(|d| crate::labels::driver_select_configure(&d.name))
@@ -338,9 +343,6 @@ impl ConnectionManagerWindow {
             .gap(Fields::GAP)
             .h(crate::tokens::SettingsMetrics::FOOTER_HEIGHT)
             .px(crate::tokens::SettingsMetrics::FOOTER_PADDING_X)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.background)
             .child(
                 Button::new(
                     "cm-driver-import",

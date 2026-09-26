@@ -170,29 +170,30 @@ impl ModalMetrics {
 }
 
 /// Geometry of the three tab kinds (document, result, inline), taken from the
-/// AppByzTable, AppByzEditor and P1ConnForm boards.
+/// Isl* (document tabs), AppByzEditor and P1ConnForm boards.
 pub struct TabMetrics;
 
 impl TabMetrics {
-    /// Height of the document tab bar; tabs sit at its bottom.
-    pub const DOCUMENT_BAR_HEIGHT: Pixels = px(42.0);
-    /// Height of one document tab.
-    pub const DOCUMENT_TAB_HEIGHT: Pixels = px(36.0);
-    /// Space above a document tab inside its bar.
-    pub const DOCUMENT_TAB_TOP: Pixels = px(6.0);
-    /// Horizontal padding of a document tab.
-    pub const DOCUMENT_TAB_PADDING_X: Pixels = px(14.0);
-    /// Left padding of the active document tab, which clears its cut.
-    pub const DOCUMENT_TAB_ACTIVE_PADDING_LEFT: Pixels = px(16.0);
-    /// Gap between icon, title and trailing items of a document tab.
-    pub const DOCUMENT_TAB_GAP: Pixels = px(9.0);
-    /// Leading icon of a document tab.
-    pub const ICON: Pixels = px(15.0);
-    /// Close icon and spinner of a document tab.
-    pub const CLOSE_ICON: Pixels = px(13.0);
-    /// Left padding of the document tab bar.
-    pub const DOCUMENT_BAR_PADDING_LEFT: Pixels = px(8.0);
-    /// Gap between neighbouring tabs of a document or result bar.
+    /// Document tab row at the top of the document island: 46 px, 10 px
+    /// side padding, 4 px between tabs.
+    pub const DOCUMENT_BAR_HEIGHT: Pixels = px(46.0);
+    pub const DOCUMENT_BAR_PADDING_X: Pixels = px(10.0);
+    pub const DOCUMENT_BAR_GAP: Pixels = px(4.0);
+    /// One document tab: a 30 px chip, 12 px side padding, 8 px between
+    /// icon, title and trailing items.
+    pub const DOCUMENT_TAB_HEIGHT: Pixels = px(30.0);
+    pub const DOCUMENT_TAB_PADDING_X: Pixels = px(12.0);
+    pub const DOCUMENT_TAB_GAP: Pixels = px(8.0);
+    /// Narrowest and widest a document tab gets before its title truncates.
+    pub const DOCUMENT_TAB_MIN_WIDTH: Pixels = px(100.0);
+    pub const DOCUMENT_TAB_MAX_WIDTH: Pixels = px(220.0);
+    /// Leading icon of a document tab. (14 px)
+    pub const ICON: Pixels = px(14.0);
+    /// Close icon and spinner of a document tab. (12 px)
+    pub const CLOSE_ICON: Pixels = px(12.0);
+    /// Space between the last tab and the new-tab button. (4 px)
+    pub const NEW_TAB_MARGIN_LEFT: Pixels = px(4.0);
+    /// Gap between neighbouring tabs of a result bar.
     pub const BAR_GAP: Pixels = px(2.0);
     /// Height of the result tab bar.
     pub const RESULT_BAR_HEIGHT: Pixels = px(40.0);
@@ -562,6 +563,27 @@ impl ChromeColors {
     /// The palette assigns strong text to `accent_foreground`, so this reads it.
     pub fn strong(theme: &gpui_component::Theme) -> Hsla {
         theme.accent_foreground
+    }
+
+    /// The desk under the islands: the main window ground and the frame of
+    /// the Settings and Connection Manager windows. `#050507` on dark,
+    /// `#E6E1E9` on light.
+    pub fn desk(theme: &gpui_component::Theme) -> Hsla {
+        if theme.mode.is_dark() {
+            rgb(0x050507).into()
+        } else {
+            rgb(0xE6E1E9).into()
+        }
+    }
+
+    /// Hairline that traces an island's outline, cuts included: white at
+    /// 5 % on dark, strong text (`#141118`) at 6 % on light.
+    pub fn island_edge(theme: &gpui_component::Theme) -> Hsla {
+        if theme.mode.is_dark() {
+            Hsla::from(rgb(0xFFFFFF)).opacity(0.05)
+        } else {
+            Hsla::from(rgb(0x141118)).opacity(0.06)
+        }
     }
 }
 
@@ -1421,66 +1443,50 @@ impl NavigationMetrics {
 }
 
 /// Geometry of the application shell: title bar, activity rail, sidebar
-/// frame, status bar and the empty workspace (AppByzTable, P1Empty).
-///
-/// Rows that draw a line on one edge are sized as the board's row plus that
-/// line, because the board draws the line outside the row's height.
+/// island, status bar and the empty workspace (Isl* boards, P1Empty).
 pub struct ShellMetrics;
 
 impl ShellMetrics {
-    /// Title bar: a 42 px row plus its bottom line.
-    pub const TITLE_BAR_HEIGHT: Pixels = px(43.0);
-    /// Title bar left block: 10 px left and 8 px right padding, 8 px gap.
-    pub const TITLE_BLOCK_PADDING_LEFT: Pixels = px(10.0);
-    pub const TITLE_BLOCK_PADDING_RIGHT: Pixels = px(8.0);
-    pub const TITLE_BLOCK_GAP: Pixels = px(8.0);
-    /// Sidebar collapse chevron in the title bar: 16 px icon, 6 px padding
-    /// on each side.
-    pub const COLLAPSE_ICON: Pixels = px(16.0);
-    pub const COLLAPSE_PADDING_X: Pixels = px(6.0);
+    /// Title bar: 44 px on the desk, 14 px side padding, no line.
+    pub const TITLE_BAR_HEIGHT: Pixels = px(44.0);
+    pub const TITLE_BAR_PADDING_X: Pixels = px(14.0);
 
-    /// Command search field: 28 px tall, cut 6, 10 px padding, 8 px gap,
-    /// 14 px search icon, 12.5 px text.
-    pub const COMMAND_SEARCH_HEIGHT: Pixels = px(28.0);
+    /// Command search field, centered in the title bar: 420 by 30 px, cut
+    /// 6, 10 px padding, 8 px gap, 14 px search icon, 12.5 px text.
+    pub const COMMAND_SEARCH_WIDTH: Pixels = px(420.0);
+    pub const COMMAND_SEARCH_HEIGHT: Pixels = px(30.0);
     pub const COMMAND_SEARCH_PADDING_X: Pixels = px(10.0);
     pub const COMMAND_SEARCH_GAP: Pixels = px(8.0);
     pub const COMMAND_SEARCH_ICON: Pixels = px(14.0);
     pub const COMMAND_SEARCH_FONT: Pixels = px(12.5);
 
-    /// Notification bell: 17 px icon, 8 px padding, 12 px before and 8 px
-    /// after it.
-    pub const BELL_ICON: Pixels = px(17.0);
-    pub const BELL_PADDING_X: Pixels = px(8.0);
-    pub const BELL_MARGIN_LEFT: Pixels = px(12.0);
-    pub const BELL_MARGIN_RIGHT: Pixels = px(8.0);
+    /// Notification bell: a 34 by 30 px tinted button, cut 6, 16 px icon.
+    pub const BELL_WIDTH: Pixels = px(34.0);
+    pub const BELL_HEIGHT: Pixels = px(30.0);
+    pub const BELL_ICON: Pixels = px(16.0);
     /// Count badge on the bell: 15 px tall, at least 16 px wide, 4 px
-    /// padding, 10 px bold text, 7 px from the top of the bar.
+    /// padding, 10 px bold text, 5 px past the bell's top and right edges.
     pub const BELL_BADGE_HEIGHT: Pixels = px(15.0);
     pub const BELL_BADGE_MIN_WIDTH: Pixels = px(16.0);
     pub const BELL_BADGE_PADDING_X: Pixels = px(4.0);
     pub const BELL_BADGE_FONT: Pixels = px(10.0);
-    pub const BELL_BADGE_TOP: Pixels = px(7.0);
+    pub const BELL_BADGE_OFFSET: Pixels = px(-5.0);
 
-    /// Activity rail: 52 px wide including its right line.
-    pub const RAIL_WIDTH: Pixels = px(52.0);
-    /// Rail buttons: 38 px square, cut 6, 19 px icon, 6 px apart, 10 px
-    /// from the top and bottom of the rail.
+    /// Activity rail: 46 px wide on the desk, no fill and no line.
+    pub const RAIL_WIDTH: Pixels = px(46.0);
+    /// Rail buttons: 38 px square, cut 6, 19 px icon, 6 px apart, 4 px from
+    /// the top and the bottom of the rail.
     pub const RAIL_BUTTON: Pixels = px(38.0);
     pub const RAIL_ICON: Pixels = px(19.0);
     pub const RAIL_GAP: Pixels = px(6.0);
-    pub const RAIL_PADDING_Y: Pixels = px(10.0);
-    /// Pending diamond on a rail button: 7 px, 6 px from the top and 8 px
-    /// from the right edge of the button.
-    pub const RAIL_INDICATOR: Pixels = px(7.0);
-    pub const RAIL_INDICATOR_TOP: Pixels = px(6.0);
-    pub const RAIL_INDICATOR_RIGHT: Pixels = px(8.0);
+    pub const RAIL_PADDING_Y: Pixels = px(4.0);
     /// Wash of the active rail button, over the tint.
-    pub const RAIL_ACTIVE_ALPHA: f32 = 0.14;
+    pub const RAIL_ACTIVE_ALPHA: f32 = 0.16;
 
-    /// Sidebar: 290 px wide by default, including its right line.
+    /// Sidebar island: 290 px wide by default.
     pub const SIDEBAR_WIDTH: Pixels = px(290.0);
-    /// Sidebar header: 40 px, 16 px left and 12 px right padding, 8 px gap.
-    pub const SIDEBAR_HEADER_HEIGHT: Pixels = px(40.0);
+    /// Sidebar header: 46 px, 16 px left and 12 px right padding, 8 px gap.
+    pub const SIDEBAR_HEADER_HEIGHT: Pixels = px(46.0);
     /// Section label of the sidebar header and the empty workspace cards. (10 px)
     pub const SECTION_LABEL_FONT: Pixels = px(10.0);
     /// Sidebar filter: 12 px side and 10 px bottom padding around a 30 px
@@ -1488,23 +1494,24 @@ impl ShellMetrics {
     pub const SIDEBAR_FILTER_PADDING_X: Pixels = px(12.0);
     pub const SIDEBAR_FILTER_PADDING_BOTTOM: Pixels = px(10.0);
     pub const SIDEBAR_FILTER_ICON: Pixels = px(14.0);
-    /// Sidebar footer: a 38 px row plus its top line, 14 px padding, 10 px gap.
-    pub const SIDEBAR_FOOTER_HEIGHT: Pixels = px(39.0);
-    pub const SIDEBAR_FOOTER_PADDING_X: Pixels = px(14.0);
+    /// Sidebar footer: 46 px with no line above it, 16 px padding, 10 px gap.
+    pub const SIDEBAR_FOOTER_HEIGHT: Pixels = px(46.0);
+    pub const SIDEBAR_FOOTER_PADDING_X: Pixels = px(16.0);
     pub const SIDEBAR_FOOTER_GAP: Pixels = px(10.0);
     pub const SIDEBAR_FOOTER_FONT: Pixels = px(12.0);
 
-    /// Status bar: a 30 px row plus its top line, 12 px text.
-    pub const STATUS_BAR_HEIGHT: Pixels = px(31.0);
+    /// Status bar: 38 px on the desk, 8 px side padding and 8 px between
+    /// its chips, 12 px text.
+    pub const STATUS_BAR_HEIGHT: Pixels = px(38.0);
+    pub const STATUS_BAR_PADDING_X: Pixels = px(8.0);
+    pub const STATUS_BAR_GAP: Pixels = px(8.0);
     pub const STATUS_FONT: Pixels = px(12.0);
-    /// Status bar segment: 12 px padding, 7 px gap, 13 px icon.
-    pub const STATUS_SEGMENT_PADDING_X: Pixels = px(12.0);
-    pub const STATUS_SEGMENT_GAP: Pixels = px(7.0);
+    /// Status chip: a 26 px island chip, cut 6, 12 px padding, 8 px gap,
+    /// 13 px icon.
+    pub const STATUS_CHIP_HEIGHT: Pixels = px(26.0);
+    pub const STATUS_CHIP_PADDING_X: Pixels = px(12.0);
+    pub const STATUS_CHIP_GAP: Pixels = px(8.0);
     pub const STATUS_ICON: Pixels = px(13.0);
-    /// Connection chip: 20 px tall, cut 4, 10 px padding, 6 px margin.
-    pub const STATUS_CHIP_HEIGHT: Pixels = px(20.0);
-    pub const STATUS_CHIP_PADDING_X: Pixels = px(10.0);
-    pub const STATUS_CHIP_MARGIN_X: Pixels = px(6.0);
     /// Wash of the connection chip, over the success color.
     pub const STATUS_CHIP_ALPHA: f32 = 0.12;
 
@@ -1574,6 +1581,25 @@ impl ShellMetrics {
     /// Inline status of a tree row ("retry", "connecting"): 11 px, 5 px gap.
     pub const ROW_STATUS_FONT: Pixels = px(11.0);
     pub const ROW_STATUS_GAP: Pixels = px(5.0);
+}
+
+/// Geometry of the islands: the chamfered panes that float on the desk
+/// (Isl* boards).
+pub struct IslandMetrics;
+
+impl IslandMetrics {
+    /// Cut of the top-left and bottom-right corners of every island. (14 px)
+    pub const CUT: Pixels = ChamferCut::CARD;
+    /// Space between neighbouring islands and between an island and the
+    /// window's side edges. (8 px)
+    pub const GAP: Pixels = px(8.0);
+    /// Thickness of the hairline along the island outline; zero draws none.
+    pub const EDGE: Pixels = px(1.0);
+
+    /// Title row of a window whose body is islands (Settings, Connection
+    /// Manager): 40 px on the desk, 16 px side padding, no line.
+    pub const WINDOW_TITLE_HEIGHT: Pixels = px(40.0);
+    pub const WINDOW_TITLE_PADDING_X: Pixels = px(16.0);
 }
 
 /// Geometry of the master list of a master-detail page (P1SettingsMcp,

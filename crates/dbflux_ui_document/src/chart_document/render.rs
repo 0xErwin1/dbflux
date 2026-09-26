@@ -29,6 +29,7 @@ use dbflux_components::chart::{
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
+use dbflux_components::composites::{Island, docked_island_frame};
 use dbflux_components::controls::DropdownSelectionChanged;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
@@ -37,7 +38,7 @@ use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{
-    ChartDocumentMetrics, ChromeColors, DocumentMetrics, Fields, Spacing,
+    ChartDocumentMetrics, ChromeColors, DocumentMetrics, Fields, IslandMetrics, Spacing,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_ui_base::toast::flush_pending_toast;
@@ -533,24 +534,21 @@ impl ChartDocument {
                 });
 
                 rail_element.map(|element| {
-                    div()
+                    docked_island_frame(&theme)
                         .absolute()
                         .top_0()
                         .right_0()
                         .bottom_0()
-                        .w(ChartDocumentMetrics::PICKER_WIDTH)
-                        .flex()
-                        .flex_col()
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .bg(theme.popover)
+                        .w(ChartDocumentMetrics::PICKER_WIDTH + IslandMetrics::GAP)
                         .occlude()
                         .child(
-                            div()
-                                .flex_grow(1.0)
-                                .min_h_0()
-                                .overflow_hidden()
-                                .child(element),
+                            Island::new().flex_1().min_h_0().child(
+                                div()
+                                    .flex_grow(1.0)
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(element),
+                            ),
                         )
                         .into_any_element()
                 })
@@ -923,22 +921,22 @@ impl ChartDocument {
                     ),
             );
 
-        div()
+        docked_island_frame(theme)
             .absolute()
             .top_0()
             .right_0()
             .bottom_0()
-            .w(ChartDocumentMetrics::RAIL_WIDTH)
-            .flex()
-            .flex_col()
-            .px(ChartDocumentMetrics::RAIL_PADDING_X)
-            .py(ChartDocumentMetrics::RAIL_PADDING_Y)
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.background)
+            .w(ChartDocumentMetrics::RAIL_WIDTH + IslandMetrics::GAP)
             .occlude()
-            .child(header)
-            .child(body)
+            .child(
+                Island::new()
+                    .flex_1()
+                    .min_h_0()
+                    .px(ChartDocumentMetrics::RAIL_PADDING_X)
+                    .py(ChartDocumentMetrics::RAIL_PADDING_Y)
+                    .child(header)
+                    .child(body),
+            )
             .into_any_element()
     }
 }

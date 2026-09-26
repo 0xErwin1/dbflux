@@ -4342,8 +4342,6 @@ workspace:
   title_bar:
     command_search: "Search or run a command"
     approvals: "MCP approvals"
-    collapse_sidebar: "Collapse sidebar"
-    expand_sidebar: "Expand sidebar"
   empty:
     title: "No tab open"
     subtitle: "Open something from the sidebar, or start here."
@@ -4356,7 +4354,6 @@ workspace:
     yesterday: "yesterday"
     days_ago: "%{count} days ago"
   background_tasks: Background Tasks
-  background_tasks_idle: idle
   empty_documents: No documents open
   empty_hint: "Open a table from the sidebar, or start with one of these."
   hint:

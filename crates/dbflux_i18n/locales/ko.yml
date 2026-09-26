@@ -4341,8 +4341,6 @@ workspace:
   title_bar:
     command_search: "명령 검색 또는 실행"
     approvals: "MCP 승인"
-    collapse_sidebar: "사이드바 접기"
-    expand_sidebar: "사이드바 펼치기"
   empty:
     title: "열린 탭 없음"
     subtitle: "사이드바에서 항목을 열거나 여기서 시작하세요."
@@ -4355,7 +4353,6 @@ workspace:
     yesterday: "어제"
     days_ago: "%{count}일 전"
   background_tasks: 백그라운드 작업
-  background_tasks_idle: 유휴
   empty_documents: 열린 문서가 없습니다.
   empty_hint: "사이드바에서 테이블을 열거나 다음 중 하나로 시작하세요."
   hint:

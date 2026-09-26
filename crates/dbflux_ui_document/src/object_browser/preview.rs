@@ -18,11 +18,13 @@ use super::render::object_icon_color;
 use super::render::{format_modified, object_icon};
 use super::{ObjectAction, ObjectBrowserDocument};
 use crate::labels::object_browser_versions_count_label;
+use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{
-    ChromeColors, DocumentMetrics, Fields, Heights, ObjectStoreMetrics, PreviewRailMetrics, Spacing,
+    ChromeColors, DocumentMetrics, Fields, Heights, IslandMetrics, ObjectStoreMetrics,
+    PreviewRailMetrics, Spacing,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{Encoding, ObjectVersionSummary};
@@ -53,8 +55,9 @@ const PREVIEW_MAX_WIDTH_FRACTION: f32 = 0.55;
 /// applies, so the listing keeps room even below this.
 const PREVIEW_DRAG_MAX_WIDTH: Pixels = px(1200.0);
 
-/// Hit target of the resize grip on the pane's left edge.
-const PREVIEW_GRIP_WIDTH: Pixels = px(7.0);
+/// Hit target of the resize grip on the pane's left edge: the desk gap
+/// between the listing and the preview island.
+const PREVIEW_GRIP_WIDTH: Pixels = IslandMetrics::GAP;
 
 /// Label column of the metadata rows. (110 px)
 const METADATA_LABEL_WIDTH: Pixels = px(110.0);
@@ -168,12 +171,16 @@ impl ObjectBrowserDocument {
             .size_full()
         });
 
+        // The preview is an island of its own inside the document island:
+        // the desk shows above it and in the grip column on its left.
         div()
             .w(width)
             .min_w(PREVIEW_MIN_WIDTH)
             .max_w(relative(PREVIEW_MAX_WIDTH_FRACTION))
             .flex()
             .flex_row()
+            .pt(IslandMetrics::GAP)
+            .bg(ChromeColors::desk(theme))
             .child(
                 div()
                     .id("object-preview-grip")
@@ -181,8 +188,6 @@ impl ObjectBrowserDocument {
                     .w(PREVIEW_GRIP_WIDTH)
                     .flex_shrink_0()
                     .cursor_col_resize()
-                    .border_l_1()
-                    .border_color(theme.border)
                     .hover(|el| el.bg(theme.accent.opacity(0.3)))
                     .when(resizing, |el| el.bg(ChromeColors::tint(theme)))
                     .on_mouse_down(
@@ -193,12 +198,9 @@ impl ObjectBrowserDocument {
                     ),
             )
             .child(
-                div()
+                Island::new()
                     .flex_1()
                     .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .bg(theme.background)
                     .when_some(resize_listeners, |el, listeners| el.child(listeners))
                     .child(self.render_preview_header(key, cx))
                     .when(editing, |this| this.child(self.render_editor_meta(key, cx)))

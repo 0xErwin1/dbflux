@@ -2672,19 +2672,19 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         let body = self.render_rail_stats_tab(theme, cx).into_any_element();
 
-        div()
+        dbflux_components::composites::docked_island_frame(theme)
             .absolute()
             .top_0()
             .right_0()
             .bottom_0()
-            .w(gpui::px(320.0))
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.popover)
+            .w(gpui::px(320.0) + dbflux_components::tokens::IslandMetrics::GAP)
             .occlude()
-            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
+            .child(
+                dbflux_components::composites::Island::new()
+                    .flex_1()
+                    .min_h_0()
+                    .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body)),
+            )
     }
 
     /// Section container helper for the right dock panels.

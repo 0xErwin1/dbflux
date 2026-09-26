@@ -1,9 +1,9 @@
 use crate::tokens::SettingsMetrics;
 use dbflux_components::components::tree_nav::FlatRow;
-use dbflux_components::composites::ListRow;
+use dbflux_components::composites::{Island, ListRow};
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::primitives::{Chamfer, ChamferRing, Icon, Kbd, Text};
-use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, ShellMetrics};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields, IslandMetrics, ShellMetrics};
 use dbflux_ui_base::keymap::{RunCommand, run_command};
 use dbflux_ui_base::platform;
 use gpui::prelude::*;
@@ -62,16 +62,10 @@ impl SettingsCoordinator {
         }
 
         let no_results = rows.is_empty();
-        let theme = cx.theme();
 
-        div()
+        Island::new()
             .w_full()
             .h_full()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.border)
-            .flex()
-            .flex_col()
             .child(self.render_nav_search(window, cx))
             .child(
                 div()
@@ -253,10 +247,12 @@ impl Render for SettingsCoordinator {
             &dbflux_i18n::t!("connection_manager.tab.settings"),
         );
 
+        let has_title_row = csd_title_bar.is_some();
+
         div()
             .size_full()
             .relative()
-            .bg(cx.theme().background)
+            .bg(ChromeColors::desk(cx.theme()))
             .text_size(dbflux_components::tokens::FontSizes::BASE)
             .flex()
             .flex_col()
@@ -279,25 +275,19 @@ impl Render for SettingsCoordinator {
                     .flex_1()
                     .min_h_0()
                     .flex()
+                    .px(IslandMetrics::GAP)
+                    .when(!has_title_row, |body| body.pt(IslandMetrics::GAP))
                     .child(
                         div()
                             .h_full()
                             .w(self.sidebar_width)
-                            .flex()
-                            .flex_row()
-                            .child(
-                                div()
-                                    .h_full()
-                                    .flex_1()
-                                    .child(self.render_sidebar(_window, cx)),
-                            )
-                            .child(self.render_sidebar_grip(cx)),
+                            .flex_shrink_0()
+                            .child(self.render_sidebar(_window, cx)),
                     )
-                    .child(
-                        layout::section_container(self.active_section_view.clone())
-                            .h_full()
-                            .bg(cx.theme().popover),
-                    ),
+                    .child(self.render_sidebar_grip(cx))
+                    .child(Island::new().flex_1().min_w_0().h_full().child(
+                        layout::section_container(self.active_section_view.clone()).h_full(),
+                    )),
             )
             // Settings status footer
             .child(self.render_settings_footer(_window, cx))
@@ -343,6 +333,7 @@ impl SettingsCoordinator {
         div()
             .id("settings-sidebar-grip")
             .h_full()
+            .flex_shrink_0()
             .w(SETTINGS_SIDEBAR_GRIP_WIDTH)
             .cursor_col_resize()
             .hover(|el| el.bg(cx.theme().accent.opacity(0.25)))
@@ -408,9 +399,6 @@ impl SettingsCoordinator {
             .flex()
             .items_center()
             .gap(SettingsMetrics::FOOTER_GAP)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.background)
             .when(unsaved > 0, |footer| {
                 footer.child(unsaved_changes_marker(unsaved, theme.warning))
             })

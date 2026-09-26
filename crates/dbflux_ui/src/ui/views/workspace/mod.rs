@@ -1976,7 +1976,14 @@ impl Workspace {
         self.focus_target.to_context()
     }
 
+    /// Moves keyboard focus to `target`. Focusing the background tasks
+    /// expands their panel first, since a collapsed panel renders nothing
+    /// that could hold focus.
     pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
+        if target == FocusTarget::BackgroundTasks {
+            self.tasks_state = PanelState::Expanded;
+        }
+
         self.sidebar_dock.update(cx, |dock, cx| {
             dock.set_sidebar_focused(target == FocusTarget::Sidebar, cx);
         });
@@ -2150,8 +2157,16 @@ impl Workspace {
         }
     }
 
+    /// Expands or collapses the background tasks panel. Collapsing it while
+    /// it holds focus hands focus back to the document, on the next render,
+    /// because the collapsed panel is not drawn at all.
     pub fn toggle_tasks_panel(&mut self, cx: &mut Context<Self>) {
         self.tasks_state.toggle();
+
+        if !self.tasks_state.is_expanded() && self.focus_target == FocusTarget::BackgroundTasks {
+            self.pending_focus = Some(FocusTarget::Document);
+        }
+
         cx.notify();
     }
 
@@ -2255,12 +2270,28 @@ impl Workspace {
         });
     }
 
+    /// The next area in the Tab cycle, skipping the background tasks while
+    /// their panel is collapsed.
     fn next_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
-        self.focus_target.next()
+        self.skip_collapsed_tasks(self.focus_target.next(), FocusTarget::next)
     }
 
+    /// The previous area in the Tab cycle, skipping the background tasks
+    /// while their panel is collapsed.
     fn prev_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
-        self.focus_target.prev()
+        self.skip_collapsed_tasks(self.focus_target.prev(), FocusTarget::prev)
+    }
+
+    fn skip_collapsed_tasks(
+        &self,
+        candidate: FocusTarget,
+        step: fn(&FocusTarget) -> FocusTarget,
+    ) -> FocusTarget {
+        if candidate == FocusTarget::BackgroundTasks && !self.tasks_state.is_expanded() {
+            step(&candidate)
+        } else {
+            candidate
+        }
     }
 }
 
@@ -4014,7 +4045,7 @@ mod tab_close_request_tests {
         window.run_until_parked();
 
         window.simulate_keystrokes("tab");
-        assert_eq!(target(window), FocusTarget::BackgroundTasks);
+        assert_eq!(target(window), FocusTarget::Document);
 
         window.simulate_keystrokes("shift-tab");
         assert_eq!(target(window), FocusTarget::Sidebar);
@@ -4022,8 +4053,127 @@ mod tab_close_request_tests {
         window.simulate_keystrokes("ctrl-shift-4");
         assert_eq!(target(window), FocusTarget::BackgroundTasks);
 
+        window.simulate_keystrokes("shift-tab");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+
         window.simulate_keystrokes("ctrl-shift-1");
         assert_eq!(target(window), FocusTarget::Sidebar);
+    }
+
+    fn tasks_panel_rendered(window: &mut VisualTestContext) -> bool {
+        window.run_until_parked();
+        window.debug_bounds("tasks-panel").is_some()
+    }
+
+    fn tasks_expanded(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).tasks_state.is_expanded())
+    }
+
+    /// Collapsed, the background tasks render nothing under the documents:
+    /// no bar and no panel.
+    #[gpui::test]
+    fn collapsed_background_tasks_render_nothing(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+
+        assert!(!tasks_expanded(window, &workspace));
+        assert!(!tasks_panel_rendered(window));
+        assert!(
+            window
+                .debug_bounds("panel-header-Background Tasks")
+                .is_none()
+        );
+    }
+
+    /// The status bar's tasks chip is the way into the collapsed panel.
+    #[gpui::test]
+    fn the_status_tasks_chip_expands_the_tasks_panel(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.run_until_parked();
+
+        let chip = window
+            .debug_bounds("tasks-toggle")
+            .expect("the status bar must draw the tasks chip");
+        window.simulate_click(chip.center(), gpui::Modifiers::none());
+
+        assert!(tasks_expanded(window, &workspace));
+        assert!(tasks_panel_rendered(window));
+    }
+
+    /// Focus Background Tasks expands the collapsed panel so focus lands on
+    /// something drawn.
+    #[gpui::test]
+    fn focusing_the_background_tasks_expands_their_panel(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.run_until_parked();
+
+        window.simulate_keystrokes("ctrl-shift-4");
+
+        window.update(|_, cx| {
+            assert_eq!(
+                workspace.read(cx).focus_target,
+                FocusTarget::BackgroundTasks
+            );
+        });
+        assert!(tasks_expanded(window, &workspace));
+        assert!(tasks_panel_rendered(window));
+    }
+
+    /// Tab and Shift+Tab skip the background tasks while their panel is
+    /// collapsed, and stop on them once it is expanded.
+    #[gpui::test]
+    fn focus_cycling_skips_the_collapsed_background_tasks(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let target =
+            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("tab");
+        assert_eq!(target(window), FocusTarget::Document);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Document);
+            })
+        });
+        assert!(!tasks_expanded(window, &workspace));
+
+        window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.toggle_tasks_panel(cx)));
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::BackgroundTasks);
+            })
+        });
+    }
+
+    /// Collapsing the panel while it holds focus returns focus to the
+    /// document instead of leaving it on an element that is no longer drawn.
+    #[gpui::test]
+    fn collapsing_the_focused_tasks_panel_returns_focus_to_the_document(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                workspace.toggle_tasks_panel(cx);
+            })
+        });
+
+        assert!(!tasks_panel_rendered(window));
+        window.update(|_, cx| {
+            assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
+        });
     }
 
     /// Letters the sidebar binds (`q` switches its tab) are text while its

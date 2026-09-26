@@ -19,8 +19,8 @@ pub use banner::{BannerBlock, BannerVariant};
 pub use chamfer::{
     Chamfer, ChamferColors, ChamferCorners, ChamferEdge, ChamferFillKind, ChamferRing,
     chamfer_border_polygons, chamfer_bottom_edge_polygon, chamfer_left_edge_polygon,
-    chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon, clamp_cut, motion_ease,
-    snap_bounds_to_device, snap_length_to_device, transition_color,
+    chamfer_outside_polygons, chamfer_points, chamfer_ring_points, chamfer_top_edge_polygon,
+    clamp_cut, motion_ease, snap_bounds_to_device, snap_length_to_device, transition_color,
 };
 pub use divider::{DividerTone, divider, hdivider, vdivider};
 pub use file_picker::{FilePicker, file_picker_label};

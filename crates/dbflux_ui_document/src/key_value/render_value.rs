@@ -14,6 +14,7 @@ use super::metadata::format_size;
 use super::render::{type_badge_element, update_document};
 use super::{KeyValueDocument, KeyValueFocusMode, KvValueViewMode, TtlState};
 use crate::handle::DocumentEvent;
+use dbflux_components::composites::{Island, docked_island_frame};
 use dbflux_components::controls::{Button, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
@@ -21,7 +22,8 @@ use dbflux_components::primitives::{
     SegmentedItem, Text,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, FontSizes, KeyValueMetrics, Shadows, Spacing, SyntaxColors,
+    ChamferCut, ChromeColors, FontSizes, IslandMetrics, KeyValueMetrics, Shadows, Spacing,
+    SyntaxColors,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{KeyLoadState, KeyType, KeyValueFeatures, RangeOrder, ValueRepr};
@@ -1927,16 +1929,12 @@ impl KeyValueDocument {
                 }))
         });
 
-        div()
+        let groups = div()
             .id("kv-stream-groups")
-            .w(KeyValueMetrics::GROUPS_WIDTH)
-            .flex_none()
+            .size_full()
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.background)
             .child(groups_header)
             .child(table_header)
             .children(rows)
@@ -1950,7 +1948,12 @@ impl KeyValueDocument {
                 )
             })
             .when_some(callout, |panel, callout| panel.child(callout))
-            .when_some(pending_list, |panel, pending| panel.child(pending))
+            .when_some(pending_list, |panel, pending| panel.child(pending));
+
+        docked_island_frame(&theme)
+            .w(KeyValueMetrics::GROUPS_WIDTH + IslandMetrics::GAP)
+            .flex_none()
+            .child(Island::new().flex_1().min_h_0().child(groups))
             .into_any_element()
     }
 

@@ -4340,8 +4340,6 @@ workspace:
   title_bar:
     command_search: "搜索或运行命令"
     approvals: "MCP 审批"
-    collapse_sidebar: "折叠侧边栏"
-    expand_sidebar: "展开侧边栏"
   empty:
     title: "没有打开的标签页"
     subtitle: "从侧边栏打开内容，或从这里开始。"
@@ -4354,7 +4352,6 @@ workspace:
     yesterday: "昨天"
     days_ago: "%{count} 天前"
   background_tasks: 后台任务
-  background_tasks_idle: 空闲
   empty_documents: 没有打开的文档
   empty_hint: "从侧边栏打开一个表，或从以下操作开始。"
   hint:

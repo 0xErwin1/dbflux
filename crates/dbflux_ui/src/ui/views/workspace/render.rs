@@ -1,11 +1,10 @@
 use super::*;
-use dbflux_components::composites::collapsible_bar;
+use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{HeaderMetrics, ShellMetrics};
-use gpui_component::IconName;
+use dbflux_components::tokens::{ChromeColors, IslandMetrics, ShellMetrics, TabMetrics};
 use gpui_component::resizable::ResizablePanel;
 
 /// Schedules `run` at the end of the current effect cycle instead of running
@@ -48,55 +47,17 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// The background tasks dock under the document area: the collapsed bar,
-    /// or, expanded, the tasks panel with its own header.
-    fn render_tasks_dock(&self, cx: &mut Context<Self>) -> ResizablePanel {
-        let tasks_expanded = self.tasks_state.is_expanded();
-        let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
-        let collapsed_height = HeaderMetrics::BAR_HEIGHT;
-
-        let content = if tasks_expanded {
-            self.tasks_panel.clone().into_any_element()
-        } else {
-            let running_task_count = self.app_state.read(cx).tasks().running_tasks().len();
-            let tasks_status: SharedString = if running_task_count == 0 {
-                dbflux_i18n::t!("workspace.background_tasks_idle").into()
-            } else {
-                crate::ui::labels::tasks_running_label(running_task_count).into()
-            };
-            let workspace = cx.entity().clone();
-
-            collapsible_bar(
-                "panel-header-Background Tasks",
-                dbflux_i18n::t!("workspace.background_tasks"),
-                Some(tasks_status),
-                true,
-                tasks_focused,
-                Some(IconName::Loader),
-                move |_, _, app| {
-                    workspace.update(app, |workspace, cx| {
-                        workspace.toggle_tasks_panel(cx);
-                    });
-                },
-                cx,
-            )
-            .into_any_element()
-        };
-
+    /// The expanded background tasks panel under the document area, with its
+    /// own header. Collapsed, nothing is rendered there: the status bar's
+    /// tasks chip is the only way back in.
+    fn render_tasks_panel(&self, cx: &mut Context<Self>) -> ResizablePanel {
         resizable_panel()
-            .size(if tasks_expanded {
-                ShellMetrics::TASKS_PANEL_HEIGHT
-            } else {
-                collapsed_height
-            })
-            .size_range(if tasks_expanded {
-                px(80.0)..px(2000.0)
-            } else {
-                collapsed_height..collapsed_height
-            })
+            .size(ShellMetrics::TASKS_PANEL_HEIGHT)
+            .size_range(px(80.0)..px(2000.0))
             .child(
                 div()
                     .id("tasks-panel")
+                    .debug_selector(|| "tasks-panel".to_string())
                     .flex()
                     .flex_col()
                     .size_full()
@@ -108,7 +69,7 @@ impl Workspace {
                             }
                         }),
                     )
-                    .child(content),
+                    .child(self.tasks_panel.clone()),
             )
     }
 }
@@ -225,8 +186,8 @@ impl Render for Workspace {
         let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
         let inspector_entity = self.workspace_inspector.clone();
 
-        let theme = cx.theme().clone();
-        let bg_color = theme.background;
+        let desk = ChromeColors::desk(cx.theme());
+        let sidebar_collapsed = self.is_sidebar_collapsed(cx);
         let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
         let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
@@ -253,7 +214,6 @@ impl Render for Workspace {
                             .child(doc),
                     )
                 })
-                .when(inspector_open, |el| el.child(inspector_entity.clone()))
                 .children(toast_layer)
                 .into_any_element()
         } else {
@@ -262,16 +222,17 @@ impl Render for Workspace {
                 .into_any_element()
         };
 
-        // One resizable state per tasks-dock mode: the panel group keeps the
-        // sizes it laid out, so reusing one state would reopen the expanded
-        // dock at the collapsed bar's height instead of its default.
-        let panels_id = if self.tasks_state.is_expanded() {
+        // One resizable state per tasks-panel mode: the panel group keeps the
+        // sizes it laid out, so reusing the documents-only state would reopen
+        // the tasks panel without its default height.
+        let tasks_expanded = self.tasks_state.is_expanded();
+        let panels_id = if tasks_expanded {
             "main-panels-tasks-expanded"
         } else {
             "main-panels"
         };
 
-        let right_pane = v_resizable(panels_id)
+        let document_panes = v_resizable(panels_id)
             .child(
                 resizable_panel()
                     .size(px(500.0))
@@ -282,7 +243,6 @@ impl Render for Workspace {
                             .flex()
                             .flex_col()
                             .size_full()
-                            .bg(theme.popover)
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
@@ -302,7 +262,19 @@ impl Render for Workspace {
                             .child(document_area),
                     ),
             )
-            .child(self.render_tasks_dock(cx));
+            .when(tasks_expanded, |panels| {
+                panels.child(self.render_tasks_panel(cx))
+            });
+
+        // The document island: the tab row (only while a tab is open) over
+        // the documents and, when expanded, the background tasks panel.
+        let document_island = Island::new()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .ml(IslandMetrics::GAP)
+            .when(has_tabs, |island| island.child(self.tab_bar.clone()))
+            .child(div().flex_1().min_h_0().child(document_panes));
 
         let focus_handle = self.focus_handle.clone();
         let root_key_context = self.root_key_context(cx);
@@ -311,7 +283,7 @@ impl Render for Workspace {
             .id("workspace-root")
             .relative()
             .size_full()
-            .bg(bg_color)
+            .bg(desk)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if this.sidebar_dock.read(cx).is_resizing() {
                     this.sidebar_dock.update(cx, |dock, cx| {
@@ -552,15 +524,19 @@ impl Render for Workspace {
                     .child(title_bar)
                     .child(
                         div()
+                            .id("workspace-body")
                             .flex()
                             .flex_row()
                             .flex_1()
+                            .min_h_0()
+                            .px(IslandMetrics::GAP)
                             .overflow_hidden()
                             .child(rail)
                             .child(
                                 div()
                                     .id("sidebar-panel")
                                     .h_full()
+                                    .when(!sidebar_collapsed, |panel| panel.ml(IslandMetrics::GAP))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, window, cx| {
@@ -573,7 +549,8 @@ impl Render for Workspace {
                                     )
                                     .child(sidebar_dock),
                             )
-                            .child(div().flex_1().overflow_hidden().child(right_pane)),
+                            .child(document_island)
+                            .when(inspector_open, |body| body.child(inspector_entity.clone())),
                     )
                     .child(status_bar),
             )
@@ -816,7 +793,7 @@ impl Render for Workspace {
                 let tab_bar_entity = self.tab_bar.clone();
 
                 let menu_x = menu.position_x;
-                let menu_y = ShellMetrics::TITLE_BAR_HEIGHT;
+                let menu_y = ShellMetrics::TITLE_BAR_HEIGHT + TabMetrics::DOCUMENT_BAR_HEIGHT;
                 let items = TabBar::build_tab_menu_items();
                 let selected = menu.selected_index;
 
@@ -959,10 +936,12 @@ mod tests {
     use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
 
     #[test]
-    fn workspace_render_uses_canonical_panel_header_contract() {
+    fn workspace_render_draws_no_collapsed_tasks_bar() {
         let source = workspace_render_source();
 
-        assert!(source.contains("collapsible_bar("));
+        assert!(!source.contains("collapsible_bar("));
+        assert!(!source.contains("panel-header-Background Tasks"));
+        assert!(!source.contains("background_tasks_idle"));
         assert!(!source.contains("fn background_tasks_panel_header("));
         assert!(!source.contains("fn render_panel_header("));
         assert!(!source.contains("fn panel_header_title("));
@@ -978,25 +957,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_render_keeps_loader_icon_in_the_tasks_header_contract() {
+    fn tabbed_and_empty_workspace_paths_share_one_tasks_panel_only_while_expanded() {
         let source = workspace_render_source();
 
-        assert!(source.contains("Some(IconName::Loader)"));
-    }
-
-    #[test]
-    fn tabbed_and_empty_workspace_paths_share_one_tasks_dock() {
-        let source = workspace_render_source();
-        let invocations = background_tasks_header_invocations();
-
-        assert_eq!(invocations.len(), 1);
-        assert_eq!(source.matches("self.render_tasks_dock(cx)").count(), 1);
-
-        for invocation in invocations {
-            assert!(invocation.contains("collapsible_bar("));
-            assert!(invocation.contains("tasks_focused"));
-            assert!(invocation.contains("Some(IconName::Loader)"));
-        }
+        assert_eq!(source.matches("self.render_tasks_panel(cx)").count(), 1);
+        assert!(source.contains(".when(tasks_expanded, |panels| {"));
+        assert!(source.contains("\"main-panels-tasks-expanded\""));
+        assert!(source.contains("\"main-panels\""));
     }
 
     #[test]
@@ -1010,16 +977,6 @@ mod tests {
         assert!(!area.contains("focus_ring"));
         assert!(!area.contains("ChamferRing"));
         assert!(!area.contains("border_color"));
-    }
-
-    #[test]
-    fn workspace_background_tasks_contract_stays_out_of_local_helper_code_paths() {
-        let invocations = background_tasks_header_invocations();
-
-        for invocation in invocations {
-            assert!(!invocation.contains("theme.tab_bar"));
-            assert!(!invocation.contains("theme.primary"));
-        }
     }
 
     #[test]
@@ -1182,25 +1139,6 @@ mod tests {
             .next()
             .expect("render.rs should contain production code before tests")
             .to_string()
-    }
-
-    fn background_tasks_header_invocations() -> Vec<String> {
-        let source = workspace_render_source();
-        let mut invocations = Vec::new();
-        let mut remaining = source.as_str();
-
-        while let Some(start) = remaining.find("collapsible_bar(") {
-            let tail = &remaining[start..];
-            let end = tail
-                .find("\n                cx,\n")
-                .map(|index| index + "\n                cx,\n".len())
-                .expect("workspace render should close the collapsible_bar call");
-
-            invocations.push(tail[..end].to_string());
-            remaining = &tail[end..];
-        }
-
-        invocations
     }
 }
 

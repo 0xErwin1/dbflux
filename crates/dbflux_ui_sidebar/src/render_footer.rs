@@ -73,8 +73,6 @@ impl Sidebar {
             .items_center()
             .h(ShellMetrics::SIDEBAR_FOOTER_HEIGHT)
             .px(ShellMetrics::SIDEBAR_FOOTER_PADDING_X)
-            .border_t_1()
-            .border_color(theme.border)
             .text_size(ShellMetrics::SIDEBAR_FOOTER_FONT)
             .text_color(theme.muted_foreground)
             .child(content)
