@@ -41,7 +41,7 @@ flowchart TB
 
     subgraph UI["Presentación — 6 crates de UI"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — sin dependencia de dbflux_app)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(sistema tab/pane, documents,<br/>data_grid_panel, governance)"]
         uisidebar["dbflux_ui_sidebar<br/>(árbol de sidebar de connections + scripts)"]
         uiwindows["dbflux_ui_windows<br/>(ventanas connection_manager + settings)"]
@@ -158,7 +158,7 @@ crates/
       icon.rs               # Icon rendering helpers
       primitives/           # Low-level building blocks (badge, banner, label, button, etc.)
       controls/             # Input controls (button, checkbox, dropdown, input, select, etc.)
-      composites/           # Composed patterns (modal_frame, tab_strip, section_header, etc.)
+      composites/           # Composed patterns (header, tabs, split_button, etc.)
       components/           # Domain components
         data_table/         # Custom virtualized data table
           mod.rs
@@ -184,7 +184,7 @@ crates/
         json_editor_view.rs # Inline JSON editor component
         multi_select.rs     # Multi-select dropdown component
         value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
-      modals/               # Reusable modal components (cell_editor, document_preview, etc.)
+      modals/               # El `Modal` compartido y los modales construidos sobre él (cell_editor, document_preview, etc.)
       result_panel/         # ResultPanel + ViewHandle universal chrome host
       chart/                # Chart engine (detect, spec, decimate, axis, legend, engine)
       saved_chart.rs        # SavedChart + SavedChartStore type alias
@@ -195,12 +195,11 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested events, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # Motor del keymap: capas por defecto, overrides, bindings nativos de GPUI
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
       user_error/           # Centralized user-facing error reporting (UserFacingError,
                             # ErrorKind, report_error, report_error_async) + throttle
-      modal_frame.rs        # Reusable modal chrome/frame
       platform.rs           # X11/Wayland detection, window options
       sql_preview_modal.rs  # SQL/query preview modal (dual-mode: SQL and generic)
       sso_wizard.rs         # SSO account/role discovery wizard [cfg aws]
@@ -217,8 +216,8 @@ crates/
       data_view.rs          # DataViewMode abstraction (Table vs Document)
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
-      governance.rs         # MCP approvals view for pending executions
-      history_modal.rs      # Recent/saved queries modal
+      governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
+      history_panel.rs      # Recent/saved queries side panel
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
       chart_document/       # ChartDocument: saved/interactive chart tab
@@ -348,6 +347,7 @@ crates/
             actions.rs      # Workspace-level action handlers
             dispatch.rs     # Command dispatch logic
             render.rs       # Workspace rendering
+            shell.rs        # Title bar, activity rail, empty workspace
           status_bar.rs     # Status bar rendering
           tasks_panel.rs    # Background tasks panel
         dock/
@@ -359,14 +359,11 @@ crates/
           # Shims at old overlay paths re-export from dbflux_ui_base / dbflux_components:
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # Shim: pub use dbflux_ui_document::*
         icons/mod.rs        # Shim: re-exports AppIcon + embedded_bytes (SVG resources live here)
         theme.rs            # Shim: pub use dbflux_components::theme::*
         tokens.rs           # Shim: pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # Shim: → dbflux_ui_base::modal_frame
           toast.rs          # Shim: → dbflux_ui_base::toast
         windows/mod.rs      # Shim: pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # Shim: pub use dbflux_ui_sidebar::*
@@ -543,7 +540,7 @@ crates/
   dbflux_approval/           # Approval service for deferred executions
     src/lib.rs              # Exports for ApprovalService and pending store
     src/service.rs          # ApprovalService (approve/reject lifecycle)
-    src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait, InMemoryPendingExecutionStore (tests), ExecutionPlan
   dbflux_audit/             # Audit logging
     src/lib.rs              # AuditService: validate, fingerprint, redact, record
     src/query.rs            # AuditQueryFilter (actor, category, action, outcome, date range)
@@ -888,11 +885,10 @@ conexión sin acceder al código del driver.
   `PaneHandle` construido en `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provee
   un editor modal para columnas JSON y texto largo/multilínea, con validación y
-  formateo de JSON. (Shim en la ruta antigua de overlay en `dbflux_ui`.)
+  formateo de JSON.
 - Document preview modal:
   `crates/dbflux_components/src/modals/document_preview.rs` preview de document
-  JSON a pantalla completa con un editor JSON inline. (Shim en la ruta antigua
-  de overlay en `dbflux_ui`.)
+  JSON a pantalla completa con un editor JSON inline.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` command
   palette con fuzzy-search para todas las acciones de la app.
 
@@ -1271,9 +1267,13 @@ genérico declarado por el driver. La forma actual del generic source-window es
 las anotaciones de connection/database/schema se serializan en los headers de
 archivo guardados.
 
-**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provee un
-modal unificado para explorar recent queries y saved queries con búsqueda,
-favoritos y soporte de rename.
+**History panel**: `crates/dbflux_ui_document/src/history_panel.rs` provee un
+panel lateral junto al editor para explorar recent queries y saved queries con
+búsqueda, favoritos y soporte de rename. Un documento entrega esos paneles al
+workspace mediante `PaneHandle::side_panels` (`DocumentSidePanel`), y el
+workspace dibuja cada uno como una isla junto a la isla del documento; los rails
+del chart, el rail de estadísticas del chart de la grilla, el preview de objetos
+y los consumer groups de un stream usan el mismo mecanismo.
 
 ### Release Channels y Branding
 
@@ -1299,13 +1299,17 @@ runtime necesita:
   `set_nightly_shares_stable_db` (ver § Storage y Configuración).
 
 **Assets de branding**: las marcas de marca a color completo viven bajo
-`resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`,
-`mark-small.svg`, `wordmark.svg`) más el `resources/branding/glyph.svg`
-compartido. `crates/dbflux_ui/src/assets.rs` sirve la marca PNG pre-renderizada
-por channel para `img(...)`. Los archivos de icono por plataforma están
+`resources/branding/{stable,nightly}/` (`mark.svg` es el icono completo de la
+app para 48 px o más, `mark-small.svg` el glifo para 32 px o menos,
+`wordmark.svg` el lockup glifo + DBFLUX, y sus versiones pre-renderizadas
+`mark-256.png` / `mark-small-256.png`) más el `resources/branding/glyph.svg`
+monocromo compartido. `crates/dbflux_ui/src/assets.rs` sirve los PNG
+pre-renderizados por channel para `img(...)`: el glifo para el workspace vacío
+y el icono completo para el diálogo de bienvenida y la sección Acerca de. Los archivos de icono por plataforma están
 commiteados bajo `packaging/icons/` (`dbflux.ico` / `dbflux-nightly.ico` para
 Windows, `dbflux.icns` / `dbflux-nightly.icns` para el bundle de macOS) y se
-regeneran desde los SVG cuando cambia el arte; `crates/dbflux/build.rs` embebe
+regeneran desde los SVG con `scripts/branding/generate-icons.sh` cuando cambia
+el arte; `crates/dbflux/build.rs` embebe
 el icono de Windows y el `VERSIONINFO` en `dbflux.exe`, eligiendo el channel
 con la misma regla de versión que `ReleaseChannel`. La metadata de packaging (`packaging/*.yaml`,
 `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`,
@@ -1477,9 +1481,12 @@ IA con una capa completa de gobernanza:
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` toma actor, connection, tool y classification
-- Devuelve `PolicyDecision::Allow` o `PolicyDecision::Deny(reason)`
+- Devuelve `PolicyDecision::Allow`, `PolicyDecision::RequireApproval` o
+  `PolicyDecision::Deny(reason)`; entre las policies que listan el tool gana la
+  decisión de clase más permisiva (Allow > Ask > Deny)
 - `PolicyRole` compone múltiples tool policies
-- `ToolPolicy` define los tools permitidos y los niveles de classification
+- `ToolPolicy` define los tools permitidos y un `ClassDecision` por clase
+  (Allow / Ask / Deny), guardado como `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` vincula actors/connections a roles y policies
 
 **Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
@@ -1490,8 +1497,15 @@ IA con una capa completa de gobernanza:
 **Approval Flow** (`dbflux_approval`):
 - `ApprovalService` gestiona el lifecycle de approve/reject para ejecuciones
   diferidas
-- `InMemoryPendingExecutionStore` mantiene las ejecuciones pendientes a la
-  espera de approval humano
+- Las ejecuciones pendientes se persisten en `app_pending_executions` dentro de
+  `dbflux.db` mediante `SqlitePendingExecutionStore`
+  (`crates/dbflux_storage/src/pending_executions.rs`), compartido por la app y
+  el servidor `dbflux mcp`; `InMemoryPendingExecutionStore` es el respaldo
+  cuando ese store no puede abrirse y lo usan los tests
+- Una llamada cuya clase es Ask se encola; una persona la aprueba o rechaza en
+  la app, y la llamada idéntica repetida consume la aprobación una vez
+  (`PendingStatus::Consumed`). Los clientes MCP nunca pueden llamar a
+  `approve_execution` / `reject_execution`
 - `ExecutionPlan` captura el contexto original del request para la ejecución
   diferida
 
@@ -1537,8 +1551,8 @@ IA con una capa completa de gobernanza:
   seguro y no mutante
 
 **Integración con la UI**:
-- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) para
-  revisar ejecuciones pendientes
+- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance/`), pestaña de
+  documento para revisar ejecuciones pendientes
 - `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) en
   Settings para trusted clients, roles y policies
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) como el visor de
@@ -1602,29 +1616,48 @@ IA con una capa completa de gobernanza:
   indexes) bajo demanda cuando los items se expanden en el sidebar, no durante
   la conexión inicial (optimización de rendimiento para bases de datos grandes).
 - Flujo de history: las queries completadas se almacenan en `HistoryStore`, se
-  persisten a JSON, y son accesibles a través del history modal
-  (`crates/dbflux_core/src/storage/history.rs`). La UI del history modal está en
-  `crates/dbflux_ui_document/src/history_modal.rs`.
+  persisten a JSON, y son accesibles a través del history panel
+  (`crates/dbflux_core/src/storage/history.rs`). La UI del history panel está en
+  `crates/dbflux_ui_document/src/history_panel.rs`.
 - Flujo de saved queries: los usuarios pueden guardar queries con nombres vía
-  `SavedQueryStore`; el history modal (Ctrl+P) permite explorar, buscar y cargar
+  `SavedQueryStore`; el history panel (Ctrl+P) permite explorar, buscar y cargar
   saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## Arquitectura de Teclado y Foco
 
-- Sistema de keymap: `crates/dbflux_ui/src/keymap/` (permanece en `dbflux_ui`)
-  define el keymap glue (`actions.rs`, `dispatcher.rs`). Los keymap helpers
-  (`default_keymap`, `key_chord_from_gpui`) viven en
-  `crates/dbflux_ui_base/src/keymap.rs`. Los tipos de comando de dominio
-  (`Command`, `ContextId`) se definen en `dbflux_core::keymap_types` y se
-  re-exportan a través de `crates/dbflux_app/src/keymap/`.
+- Motor del keymap: `crates/dbflux_ui_base/src/keymap/` contiene las capas por
+  defecto (`defaults.rs`, una por `ContextId`) y convierte el keymap efectivo
+  (los valores por defecto más los overrides del usuario de
+  `dbflux_app::keymap`) en key bindings nativos de GPUI. Cada binding tiene una
+  secuencia de teclas y un predicado de contexto en el lenguaje de GPUI
+  (`Editor && vim_mode == normal`), así que GPUI resuelve la precedencia, las
+  secuencias y su timeout. Los tipos de comando de dominio (`Command`,
+  `ContextId`) se definen en `dbflux_core::keymap_types` y se re-exportan a
+  través de `crates/dbflux_app/src/keymap/`, que además contiene el modelo de
+  overrides, su almacenamiento y el grabador del editor de settings.
+- Contextos de teclas: la raíz de cada ventana (workspace, ventana de settings,
+  connection manager) fija el identificador del contexto dueño del teclado,
+  calculado con su modelo de foco, más `Global` cuando ese contexto hereda los
+  bindings globales y las entradas del document activo (`vim_mode`,
+  `language`). Los bindings de esos contextos despachan `RunCommand`, que maneja
+  la raíz. Los elementos fijan sus propios contextos (`DataTable`, `Input`,
+  `Modal`, `DocumentTree`, los editores modales, `KeyValueView`); sus bindings
+  despachan las actions del elemento y ganan porque están más adentro. Los
+  contenedores agregan identificadores descriptivos (`SidebarPanel`,
+  `CodeEditor`, `ResultPanel`, …) solo para predicados del usuario. El GPUI
+  vendorizado trae los cambios de dispatch que necesita el motor
+  (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
 - Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`;
   `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según
-  `focus_target` (Document, Sidebar, BackgroundTasks).
+  `focus_target` (Document, Sidebar, BackgroundTasks). Un document dueño de
+  algunos comandos maneja `RunCommand` primero en su propia raíz y deja pasar
+  los demás.
 - Diseño centrado en el document: FocusTarget se simplificó de
   Editor/Results/Sidebar/BackgroundTasks a Document/Sidebar/BackgroundTasks,
   dejando que los documents gestionen su propio estado de foco interno.
 - Capas de foco: cada contexto tiene su propia capa de keymap con bindings de
-  estilo vim (navegación j/k/h/l).
+  estilo vim (navegación j/k/h/l); los contextos que heredan los bindings
+  globales requieren `!Modal`, así que un diálogo abierto captura el teclado.
 - Modos de foco de panel: paneles complejos como las data tables tienen máquinas
   de estado de foco interno (`FocusMode::Table`/`Toolbar`,
   `EditState::Navigating`/`Editing`) para manejar navegación por teclado

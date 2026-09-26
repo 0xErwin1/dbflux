@@ -50,7 +50,7 @@ pub fn render_execution(
         let variant = if is_active {
             ButtonVariant::Primary
         } else {
-            ButtonVariant::Default
+            ButtonVariant::Secondary
         };
         mode_row = mode_row.child(
             Button::new(("qb-exec-mode", mode as usize), execution_mode_label(mode))

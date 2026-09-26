@@ -8,7 +8,7 @@ use crate::ui::labels::{
 impl Workspace {
     pub(in crate::ui::views::workspace) fn open_connection_manager(&self, cx: &mut Context<Self>) {
         let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
+        let bounds = dbflux_ui_windows::connection_manager::window_bounds(cx);
 
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
@@ -20,7 +20,11 @@ impl Workspace {
             focus: true,
             ..Default::default()
         };
-        platform::apply_window_options(&mut options, 600.0, 500.0);
+        platform::apply_window_options(
+            &mut options,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_WIDTH,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_HEIGHT,
+        );
 
         match cx.open_window(options, |window, cx| {
             dbflux_ui_base::ui_automation::install(window, cx);
@@ -65,7 +69,7 @@ impl Workspace {
             return;
         };
 
-        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
+        let bounds = dbflux_ui_windows::connection_manager::window_bounds(cx);
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
@@ -76,7 +80,11 @@ impl Workspace {
             focus: true,
             ..Default::default()
         };
-        platform::apply_window_options(&mut options, 600.0, 500.0);
+        platform::apply_window_options(
+            &mut options,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_WIDTH,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_HEIGHT,
+        );
 
         if let Err(error) = cx.open_window(options, |window, cx| {
             dbflux_ui_base::ui_automation::install(window, cx);
@@ -95,7 +103,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let app_state = self.app_state.clone();
-        let bounds = Bounds::centered(None, size(px(700.0), px(650.0)), cx);
+        let bounds = dbflux_ui_windows::connection_manager::window_bounds(cx);
 
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
@@ -107,7 +115,11 @@ impl Workspace {
             focus: true,
             ..Default::default()
         };
-        platform::apply_window_options(&mut options, 600.0, 500.0);
+        platform::apply_window_options(
+            &mut options,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_WIDTH,
+            dbflux_ui_windows::connection_manager::WINDOW_MIN_HEIGHT,
+        );
 
         if let Err(error) = cx.open_window(options, |window, cx| {
             dbflux_ui_base::ui_automation::install(window, cx);
@@ -511,6 +523,7 @@ mod active_query_prompt_tests {
     fn new_harness(cx: &mut TestAppContext) -> Harness<'_> {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {

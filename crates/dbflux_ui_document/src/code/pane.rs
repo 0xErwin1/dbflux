@@ -7,11 +7,26 @@
 use super::CodeDocument;
 use crate::dedup::DocumentKey;
 use crate::handle::DocumentEvent;
-use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle};
+use crate::pane::{BoxedDocEventCallback, CodeSessionTabSnapshot, PaneHandle, StatusSegment};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use gpui::{App, Entity, IntoElement};
 
 impl CodeDocument {
+    /// Status-bar segment of the editor: the text encoding and the cursor
+    /// position, 1-based ("UTF-8 · Ln 16, Col 23").
+    pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
+        let position = self.editor.input_state.read(cx).cursor_position();
+
+        vec![StatusSegment {
+            text: format!(
+                "UTF-8 \u{b7} {}",
+                crate::object_text::cursor_label(position)
+            )
+            .into(),
+            tooltip: None,
+        }]
+    }
+
     /// Wrap a typed `Entity<CodeDocument>` in a `PaneHandle`.
     ///
     /// Reads the document ID synchronously from `cx` then seals all operations
@@ -191,6 +206,27 @@ impl CodeDocument {
         // loaded or wrote. A missing or different-path baseline reports `None`, so
         // cleanup keeps the file; whether the file still holds those bytes is
         // verified away from the UI thread, together with the removal.
+        handle.status_segments = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).status_segments(cx))
+        });
+
+        handle.key_context_entries = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).key_context_entries())
+        });
+
+        handle.tab_tooltip = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.read(cx)
+                    .editor
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string().into())
+            })
+        });
+
         handle.empty_script_cleanup = Some({
             let e = entity.clone();
             Box::new(move |cx| e.read(cx).pending_empty_script_cleanup(cx))
@@ -249,6 +285,11 @@ impl CodeDocument {
                     shadow_path: d.shadow_path().cloned(),
                 })
             })
+        });
+
+        handle.side_panels = Some({
+            let e = entity.clone();
+            Box::new(move |_window, cx| e.update(cx, |d, cx| d.side_panels(cx)))
         });
 
         handle

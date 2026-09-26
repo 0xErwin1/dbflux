@@ -22,7 +22,8 @@ use crate::chart::stats::{
     SeriesStats, compute_series_stats, hit_test_focused_series, interpolate_y_at_x,
 };
 use crate::semantic::ChartColors;
-use crate::tokens::FontSizes;
+use crate::tokens::ChromeColors;
+use crate::typography::AppFonts;
 use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
@@ -1263,9 +1264,9 @@ impl Render for ChartView {
 
                                 let theme = cx.theme();
                                 let tick_color = theme.muted_foreground;
-                                let tick_font = font("Zed Mono");
-                                let tick_size = gpui::px(10.0);
-                                let line_height = gpui::px(12.0);
+                                let tick_font = font(AppFonts::MONO);
+                                let tick_size = gpui::px(10.5);
+                                let line_height = gpui::px(13.0);
                                 let gridline_color = theme.border;
 
                                 let plot_w_provisional = (w - MARGIN_LEFT - MARGIN_RIGHT).max(1.0);
@@ -1324,7 +1325,6 @@ impl Render for ChartView {
                                 paint_gridlines(
                                     window,
                                     kind_canvas,
-                                    &x_ticks_dynamic,
                                     &y_ticks_dynamic,
                                     plot_x0,
                                     plot_y0,
@@ -1333,7 +1333,6 @@ impl Render for ChartView {
                                     y_log_min,
                                     y_log_range,
                                     gridline_color,
-                                    data_to_screen_x,
                                 );
 
                                 paint_chart_series(
@@ -1544,13 +1543,12 @@ fn shape_x_ticks(
     (shaped, lp, rp)
 }
 
-/// Paint horizontal gridlines at each Y tick and vertical gridlines at each
-/// X tick.
+/// Paint a horizontal gridline at each Y tick (P1Chart draws no vertical
+/// gridlines; the hover crosshair marks the X position).
 ///
 /// Skips all gridlines for `ChartKind::Pie` which has no axes. Y-tick values
 /// are in projection space (log1p or linear); `project_y_proj_space_to_screen`
-/// maps them to screen coordinates. Vertical gridlines use `data_to_screen_x`
-/// for X positioning.
+/// maps them to screen coordinates.
 ///
 /// Requires a GPUI paint context (`&mut Window`). Cannot be unit-tested outside
 /// a GPUI test harness.
@@ -1558,7 +1556,6 @@ fn shape_x_ticks(
 fn paint_gridlines(
     window: &mut Window,
     kind: crate::chart::spec::ChartKind,
-    x_ticks: &[crate::chart::axis::TickLabel],
     y_ticks: &[crate::chart::axis::TickLabel],
     plot_x0: f32,
     plot_y0: f32,
@@ -1567,7 +1564,6 @@ fn paint_gridlines(
     y_log_min: f64,
     y_log_range: f64,
     gridline_color: Hsla,
-    data_to_screen_x: impl Fn(f64) -> f32,
 ) {
     use crate::chart::spec::ChartKind;
 
@@ -1580,20 +1576,6 @@ fn paint_gridlines(
                 size: gpui::Size {
                     width: gpui::px(plot_w),
                     height: gpui::px(1.0),
-                },
-            },
-            gridline_color,
-        ));
-    }
-
-    for tick in x_ticks.iter().filter(|_| !matches!(kind, ChartKind::Pie)) {
-        let sx = data_to_screen_x(tick.value);
-        window.paint_quad(fill(
-            gpui::Bounds {
-                origin: point(gpui::px(sx - 0.5), gpui::px(plot_y0)),
-                size: gpui::Size {
-                    width: gpui::px(1.0),
-                    height: gpui::px(plot_h),
                 },
             },
             gridline_color,
@@ -1828,7 +1810,7 @@ fn paint_hover_overlay(
     let theme = cx.theme();
     let crosshair_color = Hsla {
         a: 0.7,
-        ..theme.primary
+        ..ChromeColors::tint(theme)
     };
     paint_dashed_vline(
         window,
@@ -2015,22 +1997,25 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
             div()
                 .flex()
                 .flex_col()
-                .items_center()
+                .items_start()
                 .justify_center()
-                .gap_1()
+                .gap(gpui::px(6.0))
                 .flex_1()
-                .p_3()
+                .h_full()
                 .child(
                     div()
-                        .text_size(gpui::px(14.0))
-                        .text_color(chart_colors.label_fg)
-                        .child(SharedString::from(series_spec.label.clone())),
+                        .font_family(crate::typography::AppFonts::DISPLAY)
+                        .font_weight(gpui::FontWeight::BLACK)
+                        .text_size(gpui::px(44.0))
+                        .line_height(gpui::relative(1.0))
+                        .text_color(accent)
+                        .child(SharedString::from(value_text)),
                 )
                 .child(
                     div()
-                        .text_size(gpui::px(40.0))
-                        .text_color(accent)
-                        .child(SharedString::from(value_text)),
+                        .text_size(gpui::px(12.0))
+                        .text_color(chart_colors.label_fg)
+                        .child(SharedString::from(series_spec.label.clone())),
                 )
                 .into_any_element(),
         );
@@ -2052,7 +2037,7 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
         .flex_row()
         .flex_wrap()
         .items_center()
-        .justify_around()
+        .gap(gpui::px(12.0))
         .children(tiles)
 }
 
@@ -2982,46 +2967,55 @@ fn readout_overlay(r: HoverReadout, colors: ChartColors) -> impl IntoElement {
         .max_h(gpui::px(max_h_px))
         .flex()
         .flex_col()
-        .gap(gpui::px(2.0))
-        .px(gpui::px(10.0))
-        .py(gpui::px(8.0))
-        .bg(colors.panel_bg)
-        .border_1()
-        .border_color(colors.panel_border)
-        .rounded(gpui::px(6.0))
-        .text_size(FontSizes::XS)
+        .gap(gpui::px(5.0))
+        .px(gpui::px(12.0))
+        .py(gpui::px(10.0))
+        .font_family(crate::typography::AppFonts::MONO)
+        .text_size(gpui::px(12.0))
         .overflow_hidden()
-        // Header: time + optional offset
+        // P1Chart tooltip: the input cut on the raised fill with the strong
+        // line around it.
+        .child(
+            crate::primitives::Chamfer::new(crate::tokens::ChamferCut::INPUT)
+                .fill(colors.pill_bg)
+                .border(colors.pill_border),
+        )
+        // Header: time + optional offset, muted
         .child(
             div()
                 .flex()
                 .items_center()
-                .text_color(colors.value_fg)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .gap(gpui::px(6.0))
+                .pb(gpui::px(1.0))
+                .text_color(colors.label_fg)
                 .child(r.header_time)
-                .when_some(r.header_offset, |d, offset| {
-                    d.child(div().text_color(colors.label_fg).child(offset))
-                }),
+                .when_some(r.header_offset, |d, offset| d.child(offset)),
         )
-        // One row per series; focused row gets semibold.
+        // One row per series; the focused row is bold.
         .children(r.series.into_iter().enumerate().map(move |(idx, entry)| {
             let is_focused = idx == focused_idx;
             div()
                 .flex()
                 .items_center()
-                .gap(gpui::px(6.0))
-                .py(gpui::px(1.0))
-                .when(is_focused, |d| d.font_weight(gpui::FontWeight::SEMIBOLD))
-                // 10px colour swatch
-                .child(div().w(gpui::px(10.0)).h(gpui::px(10.0)).bg(entry.color))
-                // Series name (muted, takes remaining space)
+                .gap(gpui::px(8.0))
+                .when(is_focused, |d| d.font_weight(gpui::FontWeight::BOLD))
+                // 8px colour swatch
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .w(gpui::px(8.0))
+                        .h(gpui::px(8.0))
+                        .bg(entry.color),
+                )
+                // Series name
                 .child(
                     div()
                         .flex_1()
+                        .min_w(gpui::px(70.0))
                         .text_color(colors.label_fg)
                         .child(entry.label),
                 )
-                // Value (foreground)
+                // Value, strong
                 .child(div().text_color(colors.value_fg).child(entry.y_label))
         }))
 }

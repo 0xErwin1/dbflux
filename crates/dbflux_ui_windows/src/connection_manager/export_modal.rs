@@ -10,9 +10,9 @@ use dbflux_components::controls::{
     InputState,
 };
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
-use dbflux_components::primitives::{BannerBlock, BannerVariant, IconButton, Text, surface_raised};
-use dbflux_components::tokens::{FontSizes, Heights, Spacing};
+use dbflux_components::modals::modal::{Modal, ModalFocus};
+use dbflux_components::primitives::{BannerBlock, BannerVariant, SurfaceRole, Text, surface};
+use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_components::typography::AppFonts;
 use dbflux_core::LogErr;
 use dbflux_core::access::AccessKind;
@@ -1046,7 +1046,10 @@ impl Render for ExportBundleModal {
             None => dbflux_i18n::t!("connection_manager.export.title"),
         };
 
-        let shell = ModalShell::new(title, body.into_any_element(), footer.into_any_element())
+        let shell = Modal::new(title)
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::ArrowUp)
             .width(px(640.0))
             .focus_handle(self.focus.handle())
             .on_confirm({
@@ -1104,7 +1107,7 @@ impl ExportBundleModal {
             }
         }
 
-        let mut block = surface_raised(cx)
+        let mut block = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -1325,15 +1328,19 @@ impl ExportBundleModal {
                 AppIcon::Eye
             };
 
-            let toggle = IconButton::new("export-passphrase-eye", eye_icon.into()).on_click({
-                let entity = cx.entity().clone();
-                move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.show_passphrase = !this.show_passphrase;
-                        cx.notify();
-                    });
-                }
-            });
+            let toggle = Button::new("export-passphrase-eye", "")
+                .ghost()
+                .icon(eye_icon)
+                .icon_only()
+                .on_click({
+                    let entity = cx.entity().clone();
+                    move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.show_passphrase = !this.show_passphrase;
+                            cx.notify();
+                        });
+                    }
+                });
 
             div()
                 .flex()
@@ -1386,11 +1393,16 @@ impl ExportBundleModal {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let browse = IconButton::new("export-output-browse", AppIcon::Folder.into())
-            .icon_size(Heights::ICON_SM)
-            .on_click(move |_event, _window, cx| {
-                entity.update(cx, |this, cx| this.browse_output_path(cx));
-            });
+        let browse = Button::new(
+            "export-output-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_output_path(cx));
+        });
 
         let row = div()
             .flex()
@@ -1637,6 +1649,7 @@ mod keyboard_tests {
         Events,
     ) {
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         let app_state = cx.new(|_| {
             AppStateEntity::new_with_storage_runtime(
                 StorageRuntime::in_memory().expect("in-memory storage"),

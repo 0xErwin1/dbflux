@@ -606,6 +606,12 @@ impl DataGridPanel {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        // The Aggregate view has its own editor and result views; commands
+        // meant for the documents grid must not reach the hidden grid.
+        if self.collection.tab == super::documents::CollectionTab::Aggregate {
+            return self.dispatch_aggregate_command(cmd, window, cx);
+        }
+
         // A modified value panel owns "save": while its editor holds the
         // keyboard the panel reports `ContextId::TextInput`, where Cmd+S
         // resolves to SaveQuery. Saving the script instead would leave what
@@ -757,6 +763,27 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            Command::CycleDocumentView => {
+                self.toggle_view_mode(cx);
+                true
+            }
+            Command::SaveQuery if self.commits_document_patches(cx) => {
+                self.commit_document_edits(cx);
+                true
+            }
+            Command::SaveQuery => {
+                if let Some(table_state) = &self.grid_table.table_state
+                    && table_state.read(cx).has_pending_operations()
+                {
+                    table_state.update(cx, |state, cx| state.request_save_all(cx));
+                    return true;
+                }
+                false
+            }
+            Command::RunQuery if self.is_document_collection(cx) => {
+                self.find_documents(window, cx);
+                true
+            }
             Command::ToggleRecordView => {
                 if self.record_view_available() {
                     self.set_record_mode(!self.record_mode(), cx);
@@ -765,6 +792,10 @@ impl DataGridPanel {
             }
             Command::ToggleValuePanel => {
                 self.toggle_value_panel(cx);
+                true
+            }
+            Command::ToggleRowInspector => {
+                self.toggle_row_inspector(cx);
                 true
             }
             _ => false,

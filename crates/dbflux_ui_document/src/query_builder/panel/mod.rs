@@ -128,6 +128,14 @@ impl JoinRow {
     }
 }
 
+/// A column the sort dropdowns offer: the alias it is read through and its
+/// name. Aggregate aliases of a grouped query carry an empty alias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortColumnOption {
+    pub source_alias: String,
+    pub column: String,
+}
+
 /// A single sort entry as tracked by the panel.
 #[derive(Debug, Clone)]
 pub struct SortRow {
@@ -263,6 +271,9 @@ pub struct QueryBuilderPanel {
     /// The id of the currently loaded saved query, if any.
     pub(crate) loaded_id: Option<String>,
 
+    /// Whether the Columns card lists the columns that can still be added.
+    pub(crate) column_picker_open: bool,
+
     /// Weak handle back to the DataGridPanel that owns this builder.
     data_grid: Option<WeakEntity<DataGridPanel>>,
 
@@ -322,8 +333,19 @@ pub struct QueryBuilderPanel {
     /// InputState backing the "add column (alias.column)" entry field.
     pub(crate) add_column_input_state: Option<Entity<GpuiEditorState>>,
 
-    /// InputState backing the "add sort (alias.column)" entry field.
-    pub(crate) add_sort_input_state: Option<Entity<GpuiEditorState>>,
+    /// Column dropdown of each sort row, in `sort_rows` order. Rebuilt by
+    /// `sync_sort_dropdowns` whenever the row count changes.
+    pub(crate) sort_column_dropdowns: Vec<Entity<Dropdown>>,
+
+    /// The dropdown that appends a sort row by picking its column.
+    pub(crate) sort_add_dropdown: Option<Entity<Dropdown>>,
+
+    /// Columns the sort dropdowns currently list, so they are refreshed only
+    /// when the offered columns change.
+    pub(crate) sort_dropdown_options: Vec<SortColumnOption>,
+
+    /// Subscriptions of the sort dropdowns, dropped with them on a rebuild.
+    pub(crate) _sort_dropdown_subs: Vec<Subscription>,
 
     /// Monotonically increasing counter used to mint stable `node_id` values for
     /// new `Predicate` nodes. The counter only moves forward; no value is reused.
@@ -666,10 +688,6 @@ impl QueryBuilderPanel {
             crate::completion_support::new_single_line_completion_state(window, cx, "alias.column")
         });
 
-        let add_sort_input_state = cx.new(|cx| {
-            crate::completion_support::new_single_line_completion_state(window, cx, "alias.column")
-        });
-
         let alias_or_column_provider: Rc<dyn CompletionProvider> =
             Rc::new(SchemaCompletionProvider::new(
                 app_state_weak.clone(),
@@ -681,10 +699,6 @@ impl QueryBuilderPanel {
             ));
 
         add_column_input_state.update(cx, |state, _| {
-            state.lsp_mut().completion_provider = Some(alias_or_column_provider.clone());
-        });
-
-        add_sort_input_state.update(cx, |state, _| {
             state.lsp_mut().completion_provider = Some(alias_or_column_provider.clone());
         });
 
@@ -743,6 +757,7 @@ impl QueryBuilderPanel {
             limit_text,
             offset_text,
             loaded_id: None,
+            column_picker_open: false,
             data_grid,
             focus_handle,
             sql_preview,
@@ -756,7 +771,10 @@ impl QueryBuilderPanel {
             _input_subs: vec![limit_sub, offset_sub],
             pending_join_rebuild: false,
             add_column_input_state: Some(add_column_input_state),
-            add_sort_input_state: Some(add_sort_input_state),
+            sort_column_dropdowns: Vec::new(),
+            sort_add_dropdown: None,
+            sort_dropdown_options: Vec::new(),
+            _sort_dropdown_subs: Vec::new(),
             next_node_id,
             predicate_input_states: HashMap::new(),
             predicate_column_input_states: HashMap::new(),

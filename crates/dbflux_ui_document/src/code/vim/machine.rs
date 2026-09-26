@@ -23,6 +23,18 @@ pub enum VimMode {
 }
 
 impl VimMode {
+    /// The mode's value for the `vim_mode` keymap context key.
+    pub fn context_id(self) -> &'static str {
+        match self {
+            VimMode::Normal => "normal",
+            VimMode::Insert => "insert",
+            VimMode::Replace => "replace",
+            VimMode::Visual => "visual",
+            VimMode::VisualLine => "visual_line",
+            VimMode::VisualBlock => "visual_block",
+        }
+    }
+
     /// Insert and Replace let the native input edit text; the other modes lock it.
     pub(crate) fn accepts_text(self) -> bool {
         matches!(self, VimMode::Insert | VimMode::Replace)

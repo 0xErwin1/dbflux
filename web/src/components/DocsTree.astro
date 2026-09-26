@@ -1,5 +1,5 @@
 ---
-import Icon from '../components/Icon.astro';
+import Glyph from './Glyph.astro';
 import { localizedDocTitle, sectionsFor } from '../data/docs';
 import type { DocTitlesByLocale } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
@@ -25,6 +25,17 @@ const {
   titlesByLocale = {},
 } = Astro.props;
 
+/** One glyph per rail section, keyed by `DocsSection.id` in `data/nav.ts`. */
+const SECTION_ICONS: Readonly<Record<string, string>> = {
+  start: 'zap',
+  using: 'play',
+  configure: 'settings',
+  integrate: 'plug',
+  reference: 'file-text',
+  drivers: 'database',
+  contribute: 'github',
+};
+
 const sections = sectionsFor(available).sections.map((section) => ({
   ...section,
   holdsCurrent: current !== undefined && section.entries.includes(current),
@@ -32,31 +43,28 @@ const sections = sectionsFor(available).sections.map((section) => ({
 ---
 
 <nav class="tree" aria-label="Documentation">
-  <button class="tree__search" type="button" data-search-open>
-    <span>
-      <Icon name="search" size={13} />
-      <span class="tree__search-label">{t(locale, 'docs_tree.search_cta')}</span>
-    </span>
-    <kbd>Ctrl K</kbd>
+  <button class="tree__search c8" type="button" data-search-open>
+    <Glyph name="search" size={15} />
+    <span class="tree__search-label">{t(locale, 'docs_tree.search_cta')}</span>
+    <kbd class="c4">Ctrl K</kbd>
   </button>
 
   <ul class="tree__groups">
     {
-      sections.map((section, index) => (
+      sections.map((section) => (
         <li>
           <details open={section.holdsCurrent} data-holds={section.holdsCurrent ? '' : undefined}>
             <summary>
-              <span class="tree__chev">
-                <Icon name="chevron" size={11} />
-              </span>
-              <span class="tree__num">{String(index + 1).padStart(2, '0')}</span>
+              <Glyph name={SECTION_ICONS[section.id] ?? 'file-text'} size={16} class="tree__icon" />
               <span class="tree__title">{sectionTitle(locale, section.id)}</span>
-              <span class="tree__count">{section.entries.length}</span>
+              <span class="tree__count mono">{section.entries.length}</span>
+              <Glyph name="chevron-right" size={12} class="tree__chev" />
             </summary>
             <ul class="tree__leaves">
               {section.entries.map((id) => (
                 <li>
                   <a
+                    class="c6"
                     href={docsHref(`${version.id}/${id}`, locale)}
                     aria-current={id === current ? 'page' : undefined}
                   >
@@ -76,38 +84,32 @@ const sections = sectionsFor(available).sections.map((section) => ({
   .tree {
     display: flex;
     flex-direction: column;
+    gap: 22px;
   }
 
   .tree__search {
-    width: calc(100% - var(--s-4) * 2);
-    text-align: left;
-    cursor: pointer;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: var(--s-4);
-    margin: var(--s-5) var(--s-4);
-    padding: var(--s-3) var(--s-4);
+    gap: 10px;
+    height: 40px;
+    margin-right: 24px;
+    padding: 0 12px;
+    border: 0;
     background: var(--panel);
-    border: var(--bw) solid var(--border-interactive);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    box-shadow: inset 0 0 0 1px var(--border);
     color: var(--text-muted);
-    transition: border-color var(--t-instant) linear;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: box-shadow var(--t-instant) linear;
   }
 
   .tree__search:hover {
-    border-color: var(--text-muted);
-  }
-
-  .tree__search span {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    min-width: 0;
+    box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 
   .tree__search-label {
+    flex-grow: 1;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
@@ -115,10 +117,10 @@ const sections = sectionsFor(available).sections.map((section) => ({
   }
 
   .tree__search kbd {
-    font-size: var(--fs-label);
-    border: var(--bw) solid var(--border);
-    padding: 1px 5px;
     flex-shrink: 0;
+    padding: 2px 6px;
+    background: var(--raised);
+    font-size: 10.5px;
     white-space: nowrap;
   }
 
@@ -130,17 +132,20 @@ const sections = sectionsFor(available).sections.map((section) => ({
   }
 
   .tree__groups {
-    padding: var(--s-3) var(--s-2);
+    padding-bottom: 28px;
   }
 
   summary {
     display: flex;
     align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-2) var(--s-4);
+    gap: 10px;
+    height: 36px;
+    padding: 0 12px;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
     cursor: pointer;
     list-style: none;
-    transition: background 120ms linear;
   }
 
   summary::-webkit-details-marker {
@@ -148,95 +153,61 @@ const sections = sectionsFor(available).sections.map((section) => ({
   }
 
   summary:hover {
-    background: var(--panel);
+    color: var(--text-strong);
   }
 
-  details[data-holds]:not([open]) summary {
-    background: var(--panel);
+  summary :global(.tree__icon),
+  summary :global(.tree__chev) {
+    color: var(--text-muted);
   }
 
-  .tree__chev {
-    display: inline-flex;
-    color: var(--text-faint);
+  details[open] summary {
+    color: var(--text-strong);
+  }
+
+  details[open] summary :global(.tree__icon) {
+    color: var(--accent);
+  }
+
+  summary :global(.tree__chev) {
     transition: transform 160ms var(--ease-std);
   }
 
-  details[open] .tree__chev {
+  details[open] summary :global(.tree__chev) {
     transform: rotate(90deg);
-  }
-
-  .tree__num {
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    color: var(--text-muted);
-    width: 14px;
   }
 
   .tree__title {
     flex-grow: 1;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text);
   }
 
-  details[open] .tree__title {
-    color: var(--text-strong);
-  }
-
-  /* This is a count, not an ornament: it has to be readable. --border is a
-     separator colour at 1.25:1 and was never a text colour. */
   .tree__count {
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
+    font-size: 11px;
+    font-weight: 400;
     color: var(--text-muted);
   }
 
-  @keyframes unfurl {
-    from {
-      opacity: 0;
-      transform: translateY(-4px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-
-  details[open] .tree__leaves {
-    animation: unfurl var(--t-quick) var(--ease-std) both;
-  }
-
   .tree__leaves a {
-    position: relative;
-    display: block;
-    padding: var(--s-2) var(--s-4) var(--s-2) 30px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    margin: 1px 12px 1px 38px;
+    padding: 0 12px;
+    font-size: 13.5px;
     color: var(--text-muted);
     transition:
       background 120ms linear,
       color 120ms linear;
   }
 
-  .tree__leaves a::before {
-    content: '';
-    position: absolute;
-    left: 17px;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--border);
-  }
-
   .tree__leaves a:hover {
-    background: var(--panel);
+    background: var(--raised);
     color: var(--text-strong);
-    text-decoration: none;
   }
 
   .tree__leaves a[aria-current='page'] {
-    background: var(--raised);
-    color: var(--text-strong);
-    box-shadow: inset 2px 0 0 0 var(--accent);
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 700;
   }
 </style>

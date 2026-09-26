@@ -1,5 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="DBFlux nightly">
-  <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="#0A0E14"></rect>
-  <circle cx="64" cy="64" r="44" fill="none" stroke="#AAD94C" stroke-width="6" stroke-dasharray="8 5"></circle>
-  <path d="M76 22 L36 70 L58 70 L52 106 L92 58 L70 58 Z" fill="#AAD94C" stroke="#0A0E14" stroke-width="5" stroke-linejoin="round"></path>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><title>DBFlux Nightly</title><path d="M12 0H64V52L52 64H0V12Z" fill="#131116"></path><path d="M13 3H61V51L51 61H3V13Z" fill="none" stroke="#702963" stroke-width="3"></path><path d="M37 8L20 36H31L26 57L45 28H34L39 8Z" fill="#D48CC8"></path></svg>

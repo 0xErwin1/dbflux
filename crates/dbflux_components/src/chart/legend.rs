@@ -1,12 +1,14 @@
 //! Legend element factory for line charts.
 //!
-//! `legend_element` renders a row of clickable chips below the canvas, one per
-//! series. Clicking a chip toggles its visibility via `on_toggle_hidden`.
+//! `legend_element` renders a row of series swatches below the canvas, one
+//! chip per series. Clicking a chip toggles its visibility via
+//! `on_toggle_hidden`; the chip's tooltip says so.
 
 use std::collections::HashSet;
 
 use gpui::prelude::*;
 use gpui::{AnyElement, Hsla, IntoElement, SharedString, div};
+use gpui_component::tooltip::Tooltip;
 
 use crate::chart::spec::SeriesSpec;
 use crate::chart::stats::SeriesStats;
@@ -35,10 +37,6 @@ pub fn legend_element<F>(
 where
     F: Fn(usize, &mut gpui::Window, &mut gpui::App) + Clone + Send + Sync + 'static,
 {
-    let total = series.len();
-    let visible = total - hidden.len();
-    let counter: SharedString = format!("{} of {} visible · click to hide", visible, total).into();
-
     let chips: Vec<AnyElement> = series
         .iter()
         .enumerate()
@@ -80,17 +78,20 @@ where
                 chip = chip.child(div().text_color(colors.label_fg).child(stat));
             }
 
-            if let Some(ref handler) = on_toggle_hidden {
-                let handler = handler.clone();
-                chip = chip.cursor_pointer().on_mouse_down(
-                    gpui::MouseButton::Left,
-                    move |_ev, window, cx| {
-                        handler(i, window, cx);
-                    },
-                );
-            }
+            let Some(ref handler) = on_toggle_hidden else {
+                return chip.into_any_element();
+            };
 
-            chip.into_any_element()
+            let handler = handler.clone();
+            let hint = toggle_hint(is_hidden);
+
+            chip.id(("chart-legend-series", i))
+                .cursor_pointer()
+                .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
+                .on_mouse_down(gpui::MouseButton::Left, move |_ev, window, cx| {
+                    handler(i, window, cx);
+                })
+                .into_any_element()
         })
         .collect();
 
@@ -106,13 +107,34 @@ where
         .border_t_1()
         .border_color(colors.pill_border)
         .children(chips)
-        .child(
-            div()
-                .flex_1()
-                .flex()
-                .justify_end()
-                .text_color(colors.muted_fg)
-                .text_size(ChartGeometry::FONT_TINY)
-                .child(counter),
-        )
+}
+
+/// Tooltip of a clickable legend chip: what a click does to its series.
+fn toggle_hint(is_hidden: bool) -> SharedString {
+    if is_hidden {
+        dbflux_i18n::t!("chart.legend.show_series").into()
+    } else {
+        dbflux_i18n::t!("chart.legend.hide_series").into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toggle_hint;
+
+    #[test]
+    fn toggle_hint_names_the_action_a_click_performs() {
+        assert_eq!(
+            toggle_hint(false).as_ref(),
+            dbflux_i18n::t!("chart.legend.hide_series", locale = "en")
+        );
+        assert_eq!(
+            toggle_hint(true).as_ref(),
+            dbflux_i18n::t!("chart.legend.show_series", locale = "en")
+        );
+        assert_ne!(
+            dbflux_i18n::t!("chart.legend.hide_series", locale = "en"),
+            dbflux_i18n::t!("chart.legend.hide_series", locale = "es")
+        );
+    }
 }

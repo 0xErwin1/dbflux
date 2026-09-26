@@ -1263,9 +1263,10 @@ impl Sidebar {
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             state.clear_connect_failure(profile_id);
-            let result = state.start_task(
+            let result = state.start_task_for_profile(
                 TaskKind::Connect,
                 crate::labels::pipeline_connecting_task_label(&profile_name),
+                Some(profile_id),
             );
             cx.emit(dbflux_ui_base::AppStateChanged);
             result

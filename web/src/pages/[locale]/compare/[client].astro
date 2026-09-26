@@ -1,0 +1,33 @@
+---
+import Base from '../../../layouts/Base.astro';
+import VsPage from '../../../components/compare/VsPage.astro';
+import { COMPARE_CLIENTS } from '../../../data/compare';
+import type { ClientId } from '../../../data/compare';
+import { DOCS_AT_ROOT, SITE_ORIGIN } from '../../../data/site';
+import { DEFAULT_LOCALE, LOCALES, dictionary } from '../../../i18n';
+import type { Locale } from '../../../i18n';
+
+export function getStaticPaths() {
+  return LOCALES.filter((locale) => locale !== DEFAULT_LOCALE).flatMap((locale) =>
+    COMPARE_CLIENTS.map((client) => ({
+      params: { locale, client: client.id },
+      props: { locale, client: client.id },
+    })),
+  );
+}
+
+const { locale, client } = Astro.props as { locale: Locale; client: ClientId };
+const strings = dictionary(locale).compare_page.vs_client[client];
+---
+
+<Base
+  title={strings.page_title}
+  description={strings.page_description}
+  current="compare"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/${locale}/compare/${client}/` : undefined}
+  locale={locale}
+  translated
+>
+  <VsPage client={client} locale={locale} />
+</Base>

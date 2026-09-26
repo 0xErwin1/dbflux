@@ -52,18 +52,26 @@ pub(crate) fn result_view_mode_label(mode: crate::result_view::ResultViewMode) -
     match mode {
         ResultViewMode::Table => dbflux_i18n::t!("document.data.grid.views.table"),
         ResultViewMode::Chart => dbflux_i18n::t!("document.data.grid.views.chart"),
+        ResultViewMode::Both => dbflux_i18n::t!("document.data.grid.views.both"),
         ResultViewMode::Json => dbflux_i18n::t!("document.data.grid.views.json"),
         ResultViewMode::Text => dbflux_i18n::t!("document.data.grid.views.text"),
         ResultViewMode::Raw => dbflux_i18n::t!("document.data.grid.views.raw"),
     }
 }
 
-/// Label for the grid / record presentation toggle in the results status bar.
-pub(crate) fn record_mode_label(record_mode: bool) -> String {
-    if record_mode {
-        dbflux_i18n::t!("document.data.grid.views.record")
-    } else {
-        dbflux_i18n::t!("document.data.grid.views.grid")
+/// Label for the record presentation toggle in the results status bar.
+pub(crate) fn record_view_label() -> String {
+    dbflux_i18n::t!("document.data.grid.views.record")
+}
+
+/// Label of a mode in a table's footer view switch, where the data view is
+/// the "Grid" (AppByzTable) rather than a query result's "Data".
+pub(crate) fn table_view_mode_label(mode: crate::result_view::ResultViewMode) -> String {
+    match mode {
+        crate::result_view::ResultViewMode::Table => {
+            dbflux_i18n::t!("document.data.grid.views.grid")
+        }
+        other => result_view_mode_label(other),
     }
 }
 
@@ -242,6 +250,37 @@ pub(crate) fn chart_degraded_copy(
 
 /// Row/column shape summary shown above the chart dock's degraded-state
 /// column chips, with the row and column counts pluralized independently.
+/// Metadata chip of a table breadcrumb: the column count, then the row
+/// count when the source reports a total ("11 columns · 1284 rows").
+pub(crate) fn breadcrumb_meta_label(columns: usize, total_rows: Option<u64>) -> String {
+    let columns_label = if columns == 1 {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.one",
+            count = columns
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.data.chart_dock.rail.shape.columns.many",
+            count = columns
+        )
+    };
+
+    match total_rows {
+        Some(1) => format!(
+            "{columns_label} · {}",
+            dbflux_i18n::t!("document.data.chart_dock.rail.shape.rows.one", count = 1)
+        ),
+        Some(rows) => format!(
+            "{columns_label} · {}",
+            dbflux_i18n::t!(
+                "document.data.chart_dock.rail.shape.rows.many",
+                count = rows
+            )
+        ),
+        None => columns_label,
+    }
+}
+
 pub(crate) fn chart_dock_shape_label(rows: usize, columns: usize) -> String {
     let rows_label = if rows == 1 {
         dbflux_i18n::t!("document.data.chart_dock.rail.shape.rows.one", count = rows)
@@ -507,21 +546,13 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
-/// Label for the code editor toolbar's run-shortcut caption.
-///
-/// `shortcut` is the platform-specific key chord (e.g. `"Cmd+Enter"`), which
-/// stays a literal outside the catalog. Only the surrounding "(selection/full)"
-/// qualifier, shown for query languages that support connection context, is
-/// translated.
-pub(crate) fn code_toolbar_shortcut_hint_label(shortcut: &str, with_selection: bool) -> String {
-    if with_selection {
-        dbflux_i18n::t!(
-            "document.code.toolbar.shortcut_hint_with_selection",
-            shortcut = shortcut
-        )
-    } else {
-        shortcut.to_string()
-    }
+/// Summary of the last run at the end of the editor toolbar
+/// ("last run 0.32 s").
+pub(crate) fn code_toolbar_last_run_label(seconds: f64) -> String {
+    dbflux_i18n::t!(
+        "document.code.toolbar.last_run",
+        seconds = format!("{seconds:.2}")
+    )
 }
 
 /// Task-panel description for a running script, with the query language's
@@ -690,6 +721,9 @@ pub(crate) fn dangerous_query_title(kind: dbflux_core::DangerousQueryKind) -> St
         DangerousQueryKind::MongoDropDatabase => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.title")
         }
+        DangerousQueryKind::MongoAggregateWrite => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_aggregate_write.title")
+        }
         DangerousQueryKind::RedisFlushAll => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.title")
         }
@@ -747,6 +781,9 @@ pub(crate) fn dangerous_query_body(kind: dbflux_core::DangerousQueryKind) -> Str
         }
         DangerousQueryKind::MongoDropDatabase => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_drop_database.body")
+        }
+        DangerousQueryKind::MongoAggregateWrite => {
+            dbflux_i18n::t!("document.code.dangerous_query.kind.mongo_aggregate_write.body")
         }
         DangerousQueryKind::RedisFlushAll => {
             dbflux_i18n::t!("document.code.dangerous_query.kind.redis_flush_all.body")
@@ -926,32 +963,14 @@ pub(crate) fn execution_count_state_label(
     }
 }
 
-/// Label for a [`crate::history_modal::HistoryTab`] shown on the history
+/// Label for a [`crate::history_panel::HistoryTab`] shown on the history
 /// modal's tab bar.
-pub(crate) fn history_tab_label(tab: crate::history_modal::HistoryTab) -> String {
-    use crate::history_modal::HistoryTab;
+pub(crate) fn history_tab_label(tab: crate::history_panel::HistoryTab) -> String {
+    use crate::history_panel::HistoryTab;
 
     match tab {
         HistoryTab::Recent => dbflux_i18n::t!("document.key_value.history_modal.tabs.recent"),
         HistoryTab::Saved => dbflux_i18n::t!("document.key_value.history_modal.tabs.saved"),
-    }
-}
-
-/// Label for the history modal footer's visible-item count.
-///
-/// Uses the singular catalog bucket only for exactly one item; every other
-/// count, including zero, uses the plural bucket.
-pub(crate) fn history_items_count_label(count: usize) -> String {
-    if count == 1 {
-        dbflux_i18n::t!(
-            "document.key_value.history_modal.footer.items.one",
-            count = count
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.key_value.history_modal.footer.items.many",
-            count = count
-        )
     }
 }
 
@@ -1039,29 +1058,6 @@ pub(crate) fn audit_category_label(category: dbflux_core::EventCategory) -> Stri
         EventCategory::Governance => dbflux_i18n::t!("document.audit.category.governance"),
         EventCategory::ObjectStorage => {
             dbflux_i18n::t!("document.audit.category.object_storage")
-        }
-    }
-}
-
-/// Short uppercase chip shown for a [`dbflux_core::EventCategory`] in an
-/// audit row.
-///
-/// Exhaustive by construction, like [`audit_category_label`], so a new
-/// category cannot fall through to a placeholder chip.
-pub(crate) fn audit_category_chip_label(category: dbflux_core::EventCategory) -> String {
-    use dbflux_core::EventCategory;
-
-    match category {
-        EventCategory::Config => dbflux_i18n::t!("document.audit.category_chip.config"),
-        EventCategory::Connection => dbflux_i18n::t!("document.audit.category_chip.connection"),
-        EventCategory::Query => dbflux_i18n::t!("document.audit.category_chip.query"),
-        EventCategory::Hook => dbflux_i18n::t!("document.audit.category_chip.hook"),
-        EventCategory::Script => dbflux_i18n::t!("document.audit.category_chip.script"),
-        EventCategory::System => dbflux_i18n::t!("document.audit.category_chip.system"),
-        EventCategory::Mcp => dbflux_i18n::t!("document.audit.category_chip.mcp"),
-        EventCategory::Governance => dbflux_i18n::t!("document.audit.category_chip.governance"),
-        EventCategory::ObjectStorage => {
-            dbflux_i18n::t!("document.audit.category_chip.object_storage")
         }
     }
 }
@@ -1586,6 +1582,37 @@ pub(crate) fn bucket_encryption_choice_label(
     }
 }
 
+/// Label for a bucket's default encryption in the buckets details strip.
+///
+/// `SSE-S3`/`SSE-KMS` are the AWS encryption algorithm names, not prose, and
+/// stay in English.
+pub(crate) fn bucket_encryption_label(encryption: &dbflux_core::BucketEncryption) -> String {
+    use dbflux_core::BucketEncryption;
+
+    match encryption {
+        BucketEncryption::SseS3 => "SSE-S3".to_string(),
+        BucketEncryption::SseKms { .. } => "SSE-KMS".to_string(),
+        BucketEncryption::None => {
+            dbflux_i18n::t!("document.buckets_table.new_bucket.encryption.none")
+        }
+    }
+}
+
+/// Label for a bucket's public-access blocking in the buckets details strip.
+pub(crate) fn public_access_status_label(status: dbflux_core::PublicAccessStatus) -> String {
+    use dbflux_core::PublicAccessStatus;
+
+    match status {
+        PublicAccessStatus::Blocked => {
+            dbflux_i18n::t!("document.buckets_table.public_access.blocked")
+        }
+        PublicAccessStatus::Partial => {
+            dbflux_i18n::t!("document.buckets_table.public_access.partial")
+        }
+        PublicAccessStatus::Open => dbflux_i18n::t!("document.buckets_table.public_access.open"),
+    }
+}
+
 /// Label for a [`dbflux_components::chart::ChartKind`] shown as a segmented
 /// button in the dashboard panel's Configure popover. Exhaustive by
 /// construction so a new chart kind fails this crate's build until its
@@ -1785,6 +1812,22 @@ pub(crate) fn export_wizard_task_label(table_count: usize, profile: &str) -> Str
             "document.export_wizard.task.many",
             count = table_count,
             profile = profile
+        )
+    }
+}
+
+/// Title of the export dialog, naming how many tables it exports. Uses the
+/// singular bucket only for exactly one table.
+pub(crate) fn export_wizard_title(table_count: usize) -> String {
+    if table_count == 1 {
+        dbflux_i18n::t!(
+            "document.export_wizard.title_tables.one",
+            count = table_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.export_wizard.title_tables.many",
+            count = table_count
         )
     }
 }
@@ -2384,6 +2427,247 @@ pub(crate) fn dump_analysis_summary_line(total_keys: u64, total_serialized_bytes
     )
 }
 
+// === Document collections ===
+
+/// `1234567` as `1,234,567`.
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
+}
+
+pub(crate) fn collection_sample_size_label(size: u32) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.sample_size",
+        count = grouped_count(u64::from(size))
+    )
+}
+
+pub(crate) fn collection_slot_not_object(slot: &str) -> String {
+    dbflux_i18n::t!("document.collection.slot.not_object", slot = slot)
+}
+
+pub(crate) fn collection_slot_invalid(slot: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.slot.invalid",
+        slot = slot,
+        error = error
+    )
+}
+
+pub(crate) fn collection_schema_failed(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.schema.failed", error = error)
+}
+
+pub(crate) fn collection_invalid_edit(path: &str, reason: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.commit.invalid_value",
+        path = path,
+        reason = reason
+    )
+}
+
+pub(crate) fn collection_committed_toast(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.collection.commit.done.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.collection.commit.done.many", count = count)
+    }
+}
+
+pub(crate) fn collection_json_invalid(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.json.invalid", error = error)
+}
+
+/// "3 fields" for staged cells, "2 documents" for JSON edits.
+pub(crate) fn collection_pending_count(count: usize, documents: bool) -> String {
+    match (documents, count == 1) {
+        (true, true) => dbflux_i18n::t!("document.collection.pending.documents.one", count = count),
+        (true, false) => {
+            dbflux_i18n::t!("document.collection.pending.documents.many", count = count)
+        }
+        (false, true) => dbflux_i18n::t!("document.collection.pending.fields.one", count = count),
+        (false, false) => {
+            dbflux_i18n::t!("document.collection.pending.fields.many", count = count)
+        }
+    }
+}
+
+pub(crate) fn collection_documents(count: usize) -> String {
+    let grouped = grouped_count(count as u64);
+    if count == 1 {
+        dbflux_i18n::t!("document.collection.count.documents.one", count = grouped)
+    } else {
+        dbflux_i18n::t!("document.collection.count.documents.many", count = grouped)
+    }
+}
+
+pub(crate) fn collection_document_count(total: u64) -> String {
+    collection_documents(usize::try_from(total).unwrap_or(usize::MAX))
+}
+
+pub(crate) fn collection_matching(shown: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.matching",
+        shown = grouped_count(shown as u64),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn collection_matching_estimated(shown: usize, total: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.estimated",
+        documents = collection_documents(shown),
+        total = grouped_count(total)
+    )
+}
+
+pub(crate) fn collection_inspector_json_failed(error: &str) -> String {
+    dbflux_i18n::t!("document.collection.inspector.json_failed", error = error)
+}
+
+pub(crate) fn collection_presence_note(sampled: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.count.presence_note",
+        count = grouped_count(sampled)
+    )
+}
+
+pub(crate) fn collection_sampled(sampled: u64, total: Option<u64>) -> String {
+    match total {
+        Some(total) => dbflux_i18n::t!(
+            "document.collection.schema.sampled_of",
+            sampled = grouped_count(sampled),
+            total = grouped_count(total)
+        ),
+        None => dbflux_i18n::t!(
+            "document.collection.schema.sampled",
+            sampled = grouped_count(sampled)
+        ),
+    }
+}
+
+pub(crate) fn collection_mixed_types(percent: u32, type_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.mixed_detail",
+        percent = percent,
+        type_name = type_name
+    )
+}
+
+pub(crate) fn collection_distinct(count: u64, capped: bool) -> String {
+    if capped {
+        dbflux_i18n::t!(
+            "document.collection.schema.distinct_capped",
+            count = grouped_count(count)
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.collection.schema.distinct",
+            count = grouped_count(count)
+        )
+    }
+}
+
+pub(crate) fn collection_array_lengths(min: u64, max: u64, median: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.schema.array_lengths",
+        min = min,
+        max = max,
+        median = median
+    )
+}
+
+pub(crate) fn collection_nested_fields(fields: u64) -> String {
+    dbflux_i18n::t!("document.collection.schema.nested", count = fields)
+}
+
+/// Field paths joined for a sentence: `price.amount, stock`.
+pub(crate) fn dotted_paths(paths: &[dbflux_core::FieldPath]) -> String {
+    paths
+        .iter()
+        .map(|path| dbflux_core::field_path_to_dotted(path))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn collection_conflict_title(label: &str) -> String {
+    dbflux_i18n::t!("document.collection.conflict.title", label = label)
+}
+
+pub(crate) fn collection_conflict_on_top(changed: &str, edited: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.conflict.on_top",
+        changed = changed,
+        edited = edited
+    )
+}
+
+pub(crate) fn collection_conflict_overlap(changed: &str, overlapping: &str) -> String {
+    dbflux_i18n::t!(
+        "document.collection.conflict.overlap",
+        changed = changed,
+        overlapping = overlapping
+    )
+}
+
+pub(crate) fn collection_conflict_replace(changed: &str) -> String {
+    dbflux_i18n::t!("document.collection.conflict.replace", changed = changed)
+}
+
+/// "5 columns" / "1 column" for the schema inspector summary.
+pub(crate) fn schema_inspector_columns(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.columns.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.columns.many",
+            count = count
+        )
+    }
+}
+
+/// "3 indexes" / "1 index" for the schema inspector summary.
+pub(crate) fn schema_inspector_indexes(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.indexes.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.indexes.many",
+            count = count
+        )
+    }
+}
+
+/// "2 foreign keys" / "1 foreign key" for the schema inspector summary.
+pub(crate) fn schema_inspector_foreign_keys(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.foreign_keys.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.count.foreign_keys.many",
+            count = count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -2391,8 +2675,8 @@ mod tests {
     use super::{
         MutationItemKind, VisualMutationTaskMode, add_member_modal_placeholders,
         add_member_modal_section_label, add_member_modal_title, agg_fn_display,
-        assignment_value_kind_label, audit_actor_type_label, audit_category_chip_label,
-        audit_category_label, audit_event_source_connection_not_found, audit_events_load_failed,
+        assignment_value_kind_label, audit_actor_type_label, audit_category_label,
+        audit_event_source_connection_not_found, audit_events_load_failed,
         audit_export_exported_toast, audit_export_failed_error,
         audit_export_unsupported_source_toast, audit_export_write_failed_error,
         audit_level_chip_label, audit_level_label, audit_loading_event_stream_task_label,
@@ -2400,7 +2684,7 @@ mod tests {
         bucket_encryption_choice_label, buckets_table_summary_line, builder_mode_label,
         bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
-        chart_saved_toast, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
+        chart_saved_toast, chart_toolbar_points_label, code_toolbar_last_run_label,
         comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
         context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
         context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
@@ -2413,11 +2697,11 @@ mod tests {
         dump_analysis_summary_line, dump_analysis_task_label, dump_analysis_title,
         error_with_detail_clipboard, execution_count_state_label, execution_mode_label,
         export_running_position_label, export_running_rows_label, export_summary_label,
-        export_table_status_line, export_wizard_task_label, history_items_count_label,
-        history_tab_label, image_decode_error, image_header_error, import_mapping_mode_label,
-        import_rail_labels, import_summary_label, import_table_status_line,
-        import_wizard_task_label, incomplete_aggregate_rows_label, join_kind_label,
-        live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
+        export_table_status_line, export_wizard_task_label, export_wizard_title, history_tab_label,
+        image_decode_error, image_header_error, import_mapping_mode_label, import_rail_labels,
+        import_summary_label, import_table_status_line, import_wizard_task_label,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, metric_picker_custom_dropdown_label,
         metric_picker_dimensions_error_label, metric_picker_period_error_label,
         metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
         migrate_mapping_unmapped_count_label, migrate_running_position_label,
@@ -2442,6 +2726,10 @@ mod tests {
         unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
         versioning_status_label, visual_mutation_task_label,
     };
+    use super::{
+        collection_documents, collection_matching, collection_matching_estimated,
+        collection_pending_count, collection_presence_note, grouped_count,
+    };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
     use crate::schema_diff::apply::TableLevelAction;
@@ -2463,6 +2751,7 @@ mod tests {
         DangerousQueryKind::MongoUpdateMany,
         DangerousQueryKind::MongoDropCollection,
         DangerousQueryKind::MongoDropDatabase,
+        DangerousQueryKind::MongoAggregateWrite,
         DangerousQueryKind::RedisFlushAll,
         DangerousQueryKind::RedisFlushDb,
         DangerousQueryKind::RedisMultiDelete,
@@ -2517,6 +2806,25 @@ mod tests {
         let summary = pending_edits_summary(1, 1, 1).expect("non-zero counts");
 
         assert_eq!(summary, "1 insert · 1 update · 1 delete");
+    }
+
+    #[test]
+    fn collection_labels_group_digits_and_pluralize() {
+        assert_eq!(grouped_count(0), "0");
+        assert_eq!(grouped_count(1_208), "1,208");
+        assert_eq!(grouped_count(48_211_000), "48,211,000");
+        assert_eq!(collection_matching(50, 1_208), "50 of 1,208 matching");
+        assert_eq!(
+            collection_matching_estimated(50, 640),
+            "50 documents \u{00b7} ~640 match, estimated"
+        );
+        assert_eq!(collection_documents(1), "1 document");
+        assert_eq!(collection_pending_count(1, false), "1 field");
+        assert_eq!(collection_pending_count(2, true), "2 documents");
+        assert_eq!(
+            collection_presence_note(1_000),
+            "Presence from a 1,000-document sample"
+        );
     }
 
     #[test]
@@ -2814,13 +3122,13 @@ mod tests {
         );
         assert_eq!(
             copy_query_language_label(Some(QueryLanguage::MongoQuery)),
-            "Copy as Query"
+            "Copy as query"
         );
         assert_eq!(
             copy_query_language_label(Some(QueryLanguage::RedisCommands)),
-            "Copy as Command"
+            "Copy as command"
         );
-        assert_eq!(copy_query_language_label(None), "Copy as Query");
+        assert_eq!(copy_query_language_label(None), "Copy as query");
     }
 
     #[test]
@@ -2900,9 +3208,8 @@ mod tests {
             "document.code.toolbar.cancel",
             "document.code.toolbar.checking",
             "document.code.toolbar.run",
-            "document.code.toolbar.shortcut_hint_with_selection",
+            "document.code.toolbar.last_run",
             "document.code.toolbar.new_tab",
-            "document.code.toolbar.selection",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
             "document.code.toolbar.save",
@@ -2959,7 +3266,7 @@ mod tests {
         let en = dbflux_i18n::t!("document.code.output.running", locale = "en");
         let es = dbflux_i18n::t!("document.code.output.running", locale = "es");
 
-        assert_eq!(en, "Running...");
+        assert_eq!(en, "Running…");
         assert_ne!(en, es);
     }
 
@@ -2982,13 +3289,8 @@ mod tests {
     }
 
     #[test]
-    fn code_toolbar_shortcut_hint_label_with_and_without_selection() {
-        let plain = code_toolbar_shortcut_hint_label("Ctrl+Enter", false);
-        let with_selection = code_toolbar_shortcut_hint_label("Ctrl+Enter", true);
-
-        assert_eq!(plain, "Ctrl+Enter");
-        assert!(with_selection.contains("Ctrl+Enter"));
-        assert_ne!(with_selection, plain);
+    fn code_toolbar_last_run_label_formats_two_decimals() {
+        assert_eq!(code_toolbar_last_run_label(0.3214), "last run 0.32 s");
     }
 
     #[test]
@@ -3185,6 +3487,9 @@ mod tests {
             DangerousQueryKind::MongoDropDatabase => {
                 "document.code.dangerous_query.kind.mongo_drop_database.title"
             }
+            DangerousQueryKind::MongoAggregateWrite => {
+                "document.code.dangerous_query.kind.mongo_aggregate_write.title"
+            }
             DangerousQueryKind::RedisFlushAll => {
                 "document.code.dangerous_query.kind.redis_flush_all.title"
             }
@@ -3226,6 +3531,9 @@ mod tests {
             }
             DangerousQueryKind::MongoDropDatabase => {
                 "document.code.dangerous_query.kind.mongo_drop_database.body"
+            }
+            DangerousQueryKind::MongoAggregateWrite => {
+                "document.code.dangerous_query.kind.mongo_aggregate_write.body"
             }
             DangerousQueryKind::RedisFlushAll => {
                 "document.code.dangerous_query.kind.redis_flush_all.body"
@@ -3444,7 +3752,7 @@ mod tests {
 
     #[test]
     fn history_tab_label_covers_both_variants() {
-        use crate::history_modal::HistoryTab;
+        use crate::history_panel::HistoryTab;
 
         assert_eq!(history_tab_label(HistoryTab::Recent), "Recent");
         assert_eq!(history_tab_label(HistoryTab::Saved), "Saved");
@@ -3455,13 +3763,6 @@ mod tests {
     }
 
     #[test]
-    fn history_items_count_label_one_many() {
-        assert_eq!(history_items_count_label(1), "1 item");
-        assert_eq!(history_items_count_label(2), "2 items");
-        assert_eq!(history_items_count_label(0), "0 items");
-    }
-
-    #[test]
     fn history_modal_keys_resolve_in_both_locales() {
         let keys = [
             "document.key_value.history_modal.search_placeholder",
@@ -3469,8 +3770,6 @@ mod tests {
             "document.key_value.history_modal.tabs.saved",
             "document.key_value.history_modal.empty.recent",
             "document.key_value.history_modal.empty.saved",
-            "document.key_value.history_modal.footer.items.one",
-            "document.key_value.history_modal.footer.items.many",
             "document.key_value.history_modal.save.title",
             "document.key_value.history_modal.save.name_placeholder",
             "document.key_value.history_modal.save.name_required",
@@ -3766,20 +4065,6 @@ mod tests {
         }
     }
 
-    fn audit_category_chip_key(category: EventCategory) -> &'static str {
-        match category {
-            EventCategory::Config => "document.audit.category_chip.config",
-            EventCategory::Connection => "document.audit.category_chip.connection",
-            EventCategory::Query => "document.audit.category_chip.query",
-            EventCategory::Hook => "document.audit.category_chip.hook",
-            EventCategory::Script => "document.audit.category_chip.script",
-            EventCategory::System => "document.audit.category_chip.system",
-            EventCategory::Mcp => "document.audit.category_chip.mcp",
-            EventCategory::Governance => "document.audit.category_chip.governance",
-            EventCategory::ObjectStorage => "document.audit.category_chip.object_storage",
-        }
-    }
-
     fn audit_level_chip_key(level: EventSeverity) -> &'static str {
         match level {
             EventSeverity::Trace => "document.audit.level_chip.trace",
@@ -3803,25 +4088,6 @@ mod tests {
                 "{key} missing from {locale} catalog"
             );
         }
-    }
-
-    #[test]
-    fn audit_category_chip_label_maps_every_variant_to_a_key_in_every_locale() {
-        for category in ALL_EVENT_CATEGORIES {
-            let key = audit_category_chip_key(*category);
-
-            assert_eq!(audit_category_chip_label(*category), dbflux_i18n::t!(key));
-            assert_key_resolves_in_every_locale(key);
-        }
-
-        assert_eq!(
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
-            "CONN"
-        );
-        assert_ne!(
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "en"),
-            dbflux_i18n::t!("document.audit.category_chip.connection", locale = "ko")
-        );
     }
 
     #[test]
@@ -4081,7 +4347,6 @@ mod tests {
             "document.object_browser.status.key_hint.open",
             "document.object_browser.status.key_hint.preview",
             "document.object_browser.status.key_hint.up",
-            "document.object_browser.status.key_hint.filter",
             "document.object_browser.status.key_hint.delete",
             "document.object_browser.status.key_hint.rename",
             "document.object_browser.empty.loading",
@@ -4102,7 +4367,6 @@ mod tests {
             "document.object_browser.preview.versions.count.one",
             "document.object_browser.preview.versions.count.many",
             "document.object_browser.preview.action.download",
-            "document.object_browser.preview.action.open",
             "document.object_browser.preview.action.copy_uri",
             "document.object_browser.preview.action.presign",
             "document.object_browser.preview.action.delete",
@@ -4668,7 +4932,6 @@ mod tests {
             "document.buckets_table.empty.error_detail",
             "document.buckets_table.empty.no_match",
             "document.buckets_table.empty.no_buckets",
-            "document.buckets_table.empty.hint_refresh",
             "document.buckets_table.delete_confirm.title",
             "document.buckets_table.delete_confirm.body",
             "document.buckets_table.delete_confirm.cancel",
@@ -4780,8 +5043,6 @@ mod tests {
             "document.chart.toolbar.save_chart",
             "document.chart.toolbar.points.one",
             "document.chart.toolbar.points.many",
-            "document.chart.shell.run",
-            "document.chart.shell.running",
             "document.chart.shell.save",
             "document.chart.shell.cancel",
             "document.chart.shell.name_placeholder",
@@ -4794,8 +5055,6 @@ mod tests {
             "document.chart.shell.custom_range.apply",
             "document.chart.shell.stats_rail.rebuilding",
             "document.chart.shell.stats_rail.no_stats",
-            "document.chart.shell.stats_rail.unavailable",
-            "document.chart.shell.stats_rail.window_title",
             "document.chart.shell.stats_rail.window.start",
             "document.chart.shell.stats_rail.window.end",
             "document.chart.shell.stats_rail.window.span",
@@ -5695,15 +5954,11 @@ mod tests {
         let keys = [
             "document.governance.refresh",
             "document.governance.no_pending",
-            "document.governance.pending_title",
-            "document.governance.approval_context",
             "document.governance.execution_plan",
             "document.governance.approve",
             "document.governance.reject",
             "document.governance.select_prompt",
             "document.governance.load_failed",
-            "document.governance.semantics_preview",
-            "document.governance.pending_actor",
             "document.shared.result_warnings.context.query",
             "document.shared.result_warnings.context.table_browse",
             "document.shared.result_warnings.context.visual_query",
@@ -6290,6 +6545,12 @@ mod tests {
     }
 
     #[test]
+    fn export_wizard_title_names_the_table_count() {
+        assert_eq!(export_wizard_title(1), "Export 1 table");
+        assert_eq!(export_wizard_title(3), "Export 3 tables");
+    }
+
+    #[test]
     fn migrate_wizard_task_label_one_and_many() {
         let one = migrate_wizard_task_label(1);
         let many = migrate_wizard_task_label(2);
@@ -6472,7 +6733,9 @@ mod tests {
     /// list.
     #[test]
     fn mutation_single_item_task_labels_resolve_and_differ() {
-        let cases: &[(fn() -> String, &str)] = &[
+        type LabelCase = (fn() -> String, &'static str);
+
+        let cases: &[LabelCase] = &[
             (
                 mutation_update_document_field_task_label,
                 "document.data.mutation.task.update_document_field",

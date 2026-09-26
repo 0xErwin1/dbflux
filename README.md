@@ -26,16 +26,16 @@ Choose the path that matches what you want to do.
 
 | Goal                                    | Guide                                                                                                                                                                                               |
 | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Create a connection                     | Start with the [Usage Guide](docs/USAGE.md#1-first-launch-and-creating-a-connection). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
+| Create a connection                     | Start with [Getting Started](docs/GETTING_STARTED.md). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
 | Run queries and follow common workflows | Follow the [Usage Guide](docs/USAGE.md) for querying, browsing results, charting, exporting, and keyboard navigation.                                                                               |
-| View audit events                       | Open the audit viewer with the [Dashboards & Audit User Guide](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer).                                                                                          |
+| View audit events                       | Open the audit viewer with the [audit viewer guide](docs/AUDIT.md#audit-viewer).                                                                                          |
 | Use MCP                                 | Follow the [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md).                                                                                                                                |
 | Check driver support and limitations    | Use [Drivers Overview](docs/DRIVERS.md), the canonical capability and limitations overview.                                                                                                         |
 
 ### More user guides
 
 - [Settings & Hooks](docs/SETTINGS.md) — settings, connection hooks, and access profiles
-- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — data and secret storage, backup, and reset
+- [Data & Privacy](PRIVACY.md#your-data-on-this-machine) — data and secret storage, backup, and reset
 - [Lua Scripting](docs/LUA.md) — the embedded Lua runtime for hooks
 
 ### Contributors

@@ -17,6 +17,20 @@ use crate::governance_service::{
     TrustedClientDto,
 };
 use crate::handlers::approval as approval_handler;
+use crate::server::authorization::{
+    ApprovalGate, ApprovalResolution, AuthorizationError, AuthorizationOutcome,
+    AuthorizationRequest, authorize_request_with_approval,
+};
+
+/// Tools an agent uses to put calls into the approval queue or read it.
+/// When a policy sends their class to approval they run without being queued
+/// themselves: queuing a request for approval would only make a person
+/// approve twice, and reading the queue changes nothing.
+pub const APPROVAL_QUEUE_TOOLS: &[&str] = &[
+    "request_execution",
+    "list_pending_executions",
+    "get_pending_execution",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpRuntimeEvent {
@@ -257,6 +271,7 @@ impl McpGovernanceService for McpRuntime {
     fn reject_pending_execution(
         &self,
         _pending_id: &str,
+        _reason: Option<&str>,
     ) -> Result<ApprovalOutcome, GovernanceError> {
         Err(GovernanceError::Operation(
             "reject_pending_execution requires mutable runtime access".to_string(),
@@ -458,7 +473,8 @@ impl McpRuntime {
         let pending = approval_handler::get_pending_execution(&self.approval_service, pending_id)
             .map_err(|error| GovernanceError::Operation(error.to_string()))?;
         let pending_plan = &pending.plan;
-        let rejection_reason = reason.unwrap_or("rejected by approver");
+        let given_reason = dbflux_approval::normalize_rejection_reason(reason);
+        let rejection_reason = given_reason.as_deref().unwrap_or("rejected by approver");
 
         let ts_ms = now_epoch_ms();
         let event = EventRecord::new(
@@ -493,8 +509,12 @@ impl McpRuntime {
 
         let recorded = self.record_audit_event(event)?;
 
-        approval_handler::reject_execution(&mut self.approval_service, pending_id)
-            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+        approval_handler::reject_execution(
+            &mut self.approval_service,
+            pending_id,
+            given_reason.as_deref(),
+        )
+        .map_err(|error| GovernanceError::Operation(error.to_string()))?;
 
         self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
 
@@ -519,6 +539,65 @@ impl McpRuntime {
             status: format!("{:?}", pending.status).to_ascii_lowercase(),
             created_at_epoch_ms: pending.created_at,
         })
+    }
+
+    /// Uses the approval a person granted for `plan`, if any, so it cannot
+    /// authorize a second call.
+    pub fn consume_approved_execution_mut(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecutionSummary>, GovernanceError> {
+        let consumed = self
+            .approval_service
+            .consume_approved(plan)
+            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+
+        let Some(consumed) = consumed else {
+            return Ok(None);
+        };
+
+        self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
+
+        Ok(Some(PendingExecutionSummary {
+            id: consumed.id.to_string(),
+            actor_id: consumed.plan.actor_id,
+            connection_id: consumed.plan.connection_id,
+            tool_id: consumed.plan.tool_id,
+            classification: consumed.plan.classification,
+            status: format!("{:?}", consumed.status).to_ascii_lowercase(),
+            created_at_epoch_ms: consumed.created_at,
+        }))
+    }
+
+    /// Authorizes a tool call with this runtime's approval queue behind any
+    /// policy decision that requires approval.
+    ///
+    /// `payload` is the call's arguments. A call that matches an approved
+    /// pending execution (same actor, connection, tool and payload) consumes
+    /// it and runs; any other call that needs approval is queued as a new
+    /// pending execution and reported as not allowed.
+    pub fn authorize_with_approval_mut(
+        &mut self,
+        trusted_clients: &TrustedClientRegistry,
+        policy_engine: &dbflux_policy::PolicyEngine,
+        request: &AuthorizationRequest,
+        payload: serde_json::Value,
+        created_at_epoch_ms: i64,
+    ) -> Result<AuthorizationOutcome, AuthorizationError> {
+        let audit_service = self.audit_service.clone();
+        let mut gate = RuntimeApprovalGate {
+            runtime: self,
+            payload,
+        };
+
+        authorize_request_with_approval(
+            trusted_clients,
+            policy_engine,
+            &audit_service,
+            request,
+            Some(&mut gate),
+            created_at_epoch_ms,
+        )
     }
 
     pub fn policy_assignments_for_engine(&self) -> Vec<ConnectionPolicyAssignment> {
@@ -581,6 +660,51 @@ impl McpRuntime {
             actor_id: recorded.actor_id.unwrap_or_default(),
             timestamp_ms: recorded.ts_ms,
         }
+    }
+}
+
+/// Approval gate backed by the runtime's pending execution queue.
+struct RuntimeApprovalGate<'a> {
+    runtime: &'a mut McpRuntime,
+    payload: serde_json::Value,
+}
+
+impl ApprovalGate for RuntimeApprovalGate<'_> {
+    fn resolve(
+        &mut self,
+        request: &AuthorizationRequest,
+    ) -> Result<ApprovalResolution, AuthorizationError> {
+        if APPROVAL_QUEUE_TOOLS.contains(&request.tool_id.as_str()) {
+            return Ok(ApprovalResolution::Exempt);
+        }
+
+        let plan = ExecutionPlan {
+            connection_id: request.connection_id.clone(),
+            actor_id: request.identity.client_id.clone(),
+            tool_id: request.tool_id.clone(),
+            classification: request.classification,
+            payload: self.payload.clone(),
+        };
+
+        let consumed = self
+            .runtime
+            .consume_approved_execution_mut(&plan)
+            .map_err(|error| AuthorizationError::Approval(error.to_string()))?;
+
+        if let Some(consumed) = consumed {
+            return Ok(ApprovalResolution::Granted {
+                pending_id: consumed.id,
+            });
+        }
+
+        let queued = self
+            .runtime
+            .request_execution_mut(plan)
+            .map_err(|error| AuthorizationError::Approval(error.to_string()))?;
+
+        Ok(ApprovalResolution::Queued {
+            pending_id: queued.id,
+        })
     }
 }
 
@@ -763,6 +887,100 @@ mod tests {
         assert_eq!(stored[0].error_message.as_deref(), Some("unsafe change"));
         assert_eq!(stored[0].actor_type.as_deref(), Some("system"));
         assert_eq!(stored[0].source_id.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn rejection_reason_is_capped_audited_and_kept_for_the_requester() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-rejection-reason.sqlite");
+
+        let pending = runtime
+            .request_execution_mut(runtime.classify_plan(
+                dbflux_policy::ExecutionClassification::Write,
+                serde_json::json!({ "sql": "DELETE FROM users" }),
+                "agent-a".to_string(),
+                "conn-a".to_string(),
+                "delete_rows".to_string(),
+            ))
+            .expect("request_execution_mut should succeed");
+
+        let long_reason = format!("  {}", "do not touch production rows ".repeat(30));
+        runtime
+            .reject_pending_execution_with_origin_mut(
+                &pending.id,
+                "local",
+                Some(&long_reason),
+                dbflux_core::observability::EventOrigin::local(),
+            )
+            .expect("rejection should succeed");
+
+        let expected_reason = dbflux_approval::normalize_rejection_reason(Some(&long_reason))
+            .expect("the reason is not blank");
+        assert!(expected_reason.chars().count() <= dbflux_approval::MAX_REJECTION_REASON_CHARS);
+        assert!(expected_reason.starts_with("do not touch production rows"));
+
+        let stored = runtime
+            .audit_service()
+            .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                action: Some(MCP_REJECT_EXECUTION.as_str().to_string()),
+                ..Default::default()
+            })
+            .expect("audit query should succeed");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(
+            stored[0].error_message.as_deref(),
+            Some(expected_reason.as_str())
+        );
+
+        let pending_id = uuid::Uuid::parse_str(&pending.id).expect("pending id is a uuid");
+        let rejected = runtime
+            .approval_service()
+            .get_execution(pending_id)
+            .expect("get_execution should succeed")
+            .expect("the rejected execution stays readable");
+        assert_eq!(rejected.status, dbflux_approval::PendingStatus::Rejected);
+        assert_eq!(
+            rejected.rejection_reason.as_deref(),
+            Some(expected_reason.as_str())
+        );
+    }
+
+    #[test]
+    fn blank_rejection_reason_audits_the_default_and_stores_none() {
+        let mut runtime = runtime_for_tests("dbflux-mcp-runtime-rejection-blank.sqlite");
+
+        let pending = runtime
+            .request_execution_mut(runtime.classify_plan(
+                dbflux_policy::ExecutionClassification::Write,
+                serde_json::json!({ "sql": "DELETE FROM users" }),
+                "agent-a".to_string(),
+                "conn-a".to_string(),
+                "delete_rows".to_string(),
+            ))
+            .expect("request_execution_mut should succeed");
+
+        runtime
+            .reject_pending_execution_as_mut(&pending.id, "local", Some("   "))
+            .expect("rejection should succeed");
+
+        let stored = runtime
+            .audit_service()
+            .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                action: Some(MCP_REJECT_EXECUTION.as_str().to_string()),
+                ..Default::default()
+            })
+            .expect("audit query should succeed");
+        assert_eq!(
+            stored[0].error_message.as_deref(),
+            Some("rejected by approver")
+        );
+
+        let pending_id = uuid::Uuid::parse_str(&pending.id).expect("pending id is a uuid");
+        let rejected = runtime
+            .approval_service()
+            .get_execution(pending_id)
+            .expect("get_execution should succeed")
+            .expect("the rejected execution stays readable");
+        assert!(rejected.rejection_reason.is_none());
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(crate) mod value;
 pub use error::{DbError, TransactionStateNote};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
-    QueryErrorFormatter, sanitize_uri,
+    QueryErrorFormatter, redact_uri_credentials, sanitize_uri,
 };
 pub use execution_session::ExecutionSessionScope;
 pub use log_err::LogErr;
@@ -25,8 +25,8 @@ pub use traits::{
     ConnectionOverrides, DbDriver, DeletePrefixOutcome, DocumentConnection, EventStreamTarget,
     ExecutionSession, ExecutionSessionFactory, KeyValueApi, KeyValueConnection, NoopCancelHandle,
     ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
-    PresignMethod, QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshotAuthority, SourceContextSpec,
-    SourceQueryMode, VersioningStatus,
+    PresignMethod, PublicAccessStatus, QueryCancelHandle, RelationalConnection, SchemaDropTarget,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshotAuthority,
+    SourceContextSpec, SourceQueryMode, VersioningStatus,
 };
 pub use value::Value;

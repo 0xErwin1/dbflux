@@ -46,6 +46,16 @@ impl Tab {
         }
     }
 
+    pub fn side_panels(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<crate::pane::DocumentSidePanel> {
+        match self {
+            Tab::Pane(p) => p.side_panels(window, cx),
+        }
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         match self {
             Tab::Pane(p) => p.focus(window, cx),
@@ -90,9 +100,21 @@ impl Tab {
         }
     }
 
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(gpui::SharedString, gpui::SharedString)> {
+        match self {
+            Tab::Pane(p) => p.key_context_entries(cx),
+        }
+    }
+
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         match self {
             Tab::Pane(p) => p.change_summary(cx),
+        }
+    }
+
+    pub fn tab_tooltip(&self, cx: &App) -> Option<gpui::SharedString> {
+        match self {
+            Tab::Pane(p) => p.tab_tooltip(cx),
         }
     }
 
@@ -333,10 +355,15 @@ impl TabManager {
                         generation_type: *generation_type,
                     });
                 }
-                DocumentEvent::OpenInspector { title, content } => {
+                DocumentEvent::OpenInspector {
+                    title,
+                    content,
+                    content_has_header,
+                } => {
                     cx.emit(TabManagerEvent::OpenInspector {
                         title: title.clone(),
                         content: content.clone(),
+                        content_has_header: *content_has_header,
                     });
                 }
                 DocumentEvent::CloseInspector => {
@@ -364,6 +391,9 @@ impl TabManager {
                         source_title: source_title.clone(),
                         profile_id: *profile_id,
                     });
+                }
+                DocumentEvent::RequestOpenApprovals => {
+                    cx.emit(TabManagerEvent::RequestOpenApprovals);
                 }
                 DocumentEvent::OpenEditorWithContent { profile_id, sql } => {
                     cx.emit(TabManagerEvent::OpenEditorWithContent {
@@ -625,6 +655,18 @@ impl TabManager {
         Some(self.active_tab()?.render(window, cx))
     }
 
+    /// The side panels of the active tab, drawn by the workspace as islands
+    /// beside the document island. Empty when no tab is active.
+    pub fn active_side_panels(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<crate::pane::DocumentSidePanel> {
+        self.active_tab()
+            .map(|tab| tab.side_panels(window, cx))
+            .unwrap_or_default()
+    }
+
     /// Dispatches a command to the active tab.
     ///
     /// Returns `true` when the command was handled, `false` when there is no
@@ -760,6 +802,8 @@ pub enum TabManagerEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+        /// The content draws its own title bar; the rail must not add one.
+        content_has_header: bool,
     },
     /// Request to hide the workspace inspector rail without forgetting the
     /// document's cached inspector state.
@@ -778,6 +822,8 @@ pub enum TabManagerEvent {
         source_title: String,
         profile_id: uuid::Uuid,
     },
+    /// A document asked to open the MCP approvals view.
+    RequestOpenApprovals,
     /// The query builder's "Open in Editor" action was triggered.
     ///
     /// Carries the target connection profile and the fully materialized SQL
@@ -1031,5 +1077,60 @@ mod close_activation_tests {
             .window
             .update(|_, cx| harness.manager.read(cx).active_id());
         assert_eq!(active_id, None);
+    }
+
+    fn active_side_panel_ids(harness: &mut Harness<'_>) -> Vec<(String, gpui::Pixels)> {
+        let manager = harness.manager.clone();
+
+        harness.window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager
+                    .active_side_panels(window, cx)
+                    .into_iter()
+                    .map(|panel| (panel.id.to_string(), panel.width))
+                    .collect()
+            })
+        })
+    }
+
+    /// The history of an editor is a side panel of its tab: the workspace
+    /// draws it while that tab is active and drops it when another tab is.
+    #[gpui::test]
+    fn the_active_tab_hands_its_side_panels_to_the_workspace(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let with_history = open_code_tab(&mut harness);
+        let plain = open_code_tab(&mut harness);
+        let manager = harness.manager.clone();
+
+        assert!(active_side_panel_ids(&mut harness).is_empty());
+
+        harness.window.update(|window, cx| {
+            manager.update(cx, |manager, cx| {
+                manager.activate(with_history, cx);
+                assert!(manager.dispatch_active(
+                    dbflux_app::keymap::Command::ToggleHistoryDropdown,
+                    window,
+                    cx
+                ));
+            });
+        });
+
+        assert_eq!(
+            active_side_panel_ids(&mut harness),
+            vec![(
+                "query-history".to_string(),
+                dbflux_components::tokens::HistoryPanelMetrics::WIDTH
+            )]
+        );
+
+        harness.window.update(|_, cx| {
+            manager.update(cx, |manager, cx| manager.activate(plain, cx));
+        });
+        assert!(active_side_panel_ids(&mut harness).is_empty());
+
+        harness.window.update(|_, cx| {
+            manager.update(cx, |manager, cx| manager.activate(with_history, cx));
+        });
+        assert_eq!(active_side_panel_ids(&mut harness).len(), 1);
     }
 }

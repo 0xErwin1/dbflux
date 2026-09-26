@@ -71,6 +71,19 @@ pub struct StatusSegment {
     pub tooltip: Option<gpui::SharedString>,
 }
 
+/// A panel a document hands to the workspace instead of drawing it inside its
+/// own island: a settings rail, a preview, the query history.
+///
+/// The workspace draws each one as a full-height island of `width` beside the
+/// document island, in the order the document returns them. `content` is
+/// built by the document, so its listeners still act on the document.
+pub struct DocumentSidePanel {
+    /// Stable per document; keys the island's element id.
+    pub id: gpui::SharedString,
+    pub width: gpui::Pixels,
+    pub content: AnyElement,
+}
+
 /// Callback a document supplies when it asks for an object editor tab, invoked
 /// with the object's key after every successful save.
 pub type ObjectSavedCallback = std::rc::Rc<dyn Fn(&str, &mut App)>;
@@ -211,6 +224,16 @@ pub struct PaneHandle {
     /// extra for it, unchanged from today's behavior.
     pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
 
+    /// Returns key=value entries the workspace adds to its root key context
+    /// while this document owns the keyboard (`vim_mode=normal`,
+    /// `language=sql`), so keymap predicates can name them.
+    pub key_context_entries:
+        Option<Box<dyn Fn(&App) -> Vec<(gpui::SharedString, gpui::SharedString)>>>,
+
+    /// Returns the text of the tab's hover tooltip (a script's file path).
+    /// `None`, or a closure returning `None`, shows no tooltip.
+    pub tab_tooltip: Option<Box<dyn Fn(&App) -> Option<gpui::SharedString>>>,
+
     /// Drains a browse-this-bucket intent raised by row activation (Enter),
     /// same `pending_*` + `take()` convention as the other optional helpers.
     /// Only `BucketsTableDocument` populates this — the workspace polls the
@@ -223,6 +246,11 @@ pub struct PaneHandle {
     /// `take_pending_open_bucket`. Only object-browsing documents populate it.
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
+
+    /// Returns the side panels the document currently shows, drawn by the
+    /// workspace as islands beside the document island. `None` for documents
+    /// that never show one.
+    pub side_panels: Option<Box<dyn Fn(&mut Window, &mut App) -> Vec<DocumentSidePanel>>>,
 
     /// Runs document-owned asynchronous teardown before the pane is removed.
     pub on_close: Option<Box<dyn Fn(&mut App)>>,
@@ -312,8 +340,11 @@ impl PaneHandle {
             value_panel_is_open: None,
             set_value_panel_open: None,
             status_segments: None,
+            key_context_entries: None,
+            tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            side_panels: None,
             on_close: None,
             save_for_close: None,
             apply_for_close: None,
@@ -509,6 +540,29 @@ impl PaneHandle {
             .as_ref()
             .map(|f| f(cx))
             .unwrap_or_default()
+    }
+
+    /// Key context entries the document contributes while it owns the
+    /// keyboard; empty for documents that contribute none.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(gpui::SharedString, gpui::SharedString)> {
+        self.key_context_entries
+            .as_ref()
+            .map(|entries| entries(cx))
+            .unwrap_or_default()
+    }
+
+    /// The side panels the document shows right now; empty for documents
+    /// that never show one.
+    pub fn side_panels(&self, window: &mut Window, cx: &mut App) -> Vec<DocumentSidePanel> {
+        self.side_panels
+            .as_ref()
+            .map(|panels| panels(window, cx))
+            .unwrap_or_default()
+    }
+
+    /// The tab's hover tooltip, if the document provides one.
+    pub fn tab_tooltip(&self, cx: &App) -> Option<gpui::SharedString> {
+        self.tab_tooltip.as_ref().and_then(|f| f(cx))
     }
 }
 

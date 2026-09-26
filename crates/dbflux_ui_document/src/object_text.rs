@@ -28,6 +28,11 @@ pub const FIND_SHORTCUT_HINT: &str = "Cmd+F";
 #[cfg(not(target_os = "macos"))]
 pub const FIND_SHORTCUT_HINT: &str = "Ctrl+F";
 
+/// A shortcut hint as one keycap: `Ctrl+S` reads `Ctrl S`.
+pub(crate) fn keycap_text(hint: &str) -> String {
+    hint.replace('+', " ")
+}
+
 /// Line-ending convention of a loaded object.
 ///
 /// The buffer always holds LF internally — the editor component normalises

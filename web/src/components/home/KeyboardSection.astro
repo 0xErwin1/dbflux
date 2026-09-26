@@ -1,0 +1,419 @@
+---
+import Glyph from '../Glyph.astro';
+import { docsUrl } from '../../data/site';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const landing = dictionary(locale).landing;
+const strings = landing.keyboard;
+
+/**
+ * Default bindings from `crates/dbflux_ui_base/src/keymap/defaults.rs`, as
+ * listed in the Keyboard Reference of `docs/USAGE.md`. The last three are
+ * editor bindings; the rest are global.
+ */
+const COMMANDS = [
+  { name: landing.commands.palette, icon: 'search', keys: ['Ctrl', 'Shift', 'P'] },
+  { name: landing.commands.new_tab, icon: 'file', keys: ['Ctrl', 'N'] },
+  { name: landing.commands.run, icon: 'play', keys: ['Ctrl', '↵'] },
+  { name: landing.commands.run_new_tab, icon: 'play', keys: ['Ctrl', 'Shift', '↵'] },
+  { name: landing.commands.open_script, icon: 'square-terminal', keys: ['Ctrl', 'O'] },
+  { name: landing.commands.saved_queries, icon: 'scroll-text', keys: ['Ctrl', 'P'] },
+  { name: landing.commands.audit, icon: 'fingerprint-pattern', keys: ['Ctrl', 'Shift', 'A'] },
+  { name: landing.commands.sidebar, icon: 'layers', keys: ['Ctrl', 'B'] },
+  { name: landing.commands.focus_sidebar, icon: 'database', keys: ['Ctrl', 'Shift', '1'] },
+  { name: landing.commands.focus_editor, icon: 'square-function', keys: ['Ctrl', 'Shift', '2'] },
+  { name: landing.commands.focus_results, icon: 'table', keys: ['Ctrl', 'Shift', '3'] },
+  { name: landing.commands.close_tab, icon: 'x', keys: ['Ctrl', 'W'] },
+  { name: landing.commands.comment, icon: 'square-function', keys: ['Ctrl', '/'] },
+  { name: landing.commands.save, icon: 'file-down', keys: ['Ctrl', 'S'] },
+];
+
+const VISIBLE = 10;
+const BOLT = 'M7.5 0 1 8h4l-1 6 7-8.5H7L7.5 0Z';
+---
+
+<section id="keyboard" class="keys shell reveal-group">
+  <div class="keys__copy">
+    <p class="eyebrow">{strings.eyebrow}</p>
+    <h2 class="display display--section">{strings.title}</h2>
+    <p class="keys__body">{strings.body}</p>
+    <div class="keys__caps" aria-hidden="true">
+      <span class="keys__cap mono c10">Ctrl</span>
+      <span class="keys__plus x">+</span>
+      <span class="keys__cap keys__cap--wide mono c10">Shift</span>
+      <span class="keys__plus x">+</span>
+      <span class="keys__cap keys__cap--accent x c10">P</span>
+    </div>
+    <span class="keys__mac mono">{strings.mac_note}</span>
+    <a class="go" href={`${docsUrl('usage', '', locale)}#7-keyboard-reference`}>
+      {strings.link}
+      <Glyph name="chevron-right" size={14} class="go__chev" />
+    </a>
+  </div>
+
+  <div class="palette c18" data-palette data-count-template={strings.count}>
+    <label class="palette__input">
+      <Glyph name="search" size={17} class="palette__search" />
+      <input
+        type="text"
+        role="combobox"
+        aria-label={strings.palette_label}
+        aria-controls="palette-list"
+        aria-expanded="true"
+        aria-autocomplete="list"
+        placeholder={strings.placeholder}
+        autocomplete="off"
+        spellcheck="false"
+        data-palette-input
+      />
+      <span class="palette__count mono" data-palette-count>
+        {strings.count.replace('{n}', String(COMMANDS.length))}
+      </span>
+    </label>
+    <ul class="palette__list" id="palette-list" role="listbox" aria-label={strings.palette_label}>
+      {
+        COMMANDS.map((command, index) => (
+          <li
+            id={`palette-option-${index}`}
+            class="palette__row"
+            role="option"
+            aria-selected={index === 0 ? 'true' : 'false'}
+            data-palette-row
+            data-name={command.name}
+            hidden={index >= VISIBLE}
+          >
+            <span class="palette__marker" />
+            <Glyph name={command.icon} size={17} class="palette__icon" />
+            <span class="palette__name">{command.name}</span>
+            <span class="palette__keys">
+              {command.keys.map((key) => (
+                <span class="palette__key mono c5">{key}</span>
+              ))}
+            </span>
+          </li>
+        ))
+      }
+      <li class="palette__empty" data-palette-empty hidden>{strings.empty}</li>
+    </ul>
+    <div class="palette__foot">
+      <span class="palette__ran" data-palette-ran data-template={strings.ran} hidden>
+        <svg width="10" height="12" viewBox="0 0 12 14" aria-hidden="true">
+          <path d={BOLT} fill="currentColor"></path>
+        </svg>
+        <span data-palette-ran-text></span>
+      </span>
+      <span class="palette__grow"></span>
+      <span class="mono">{strings.hint}</span>
+    </div>
+  </div>
+</section>
+
+<style>
+  .keys {
+    display: grid;
+    grid-template-columns: 560px minmax(0, 1fr);
+    gap: 72px;
+    padding-top: 40px;
+    padding-bottom: 150px;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  .keys__copy {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 26px;
+    padding-top: 40px;
+  }
+
+  .keys__body {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .keys__caps {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+  }
+
+  .keys__cap {
+    display: flex;
+    align-items: flex-end;
+    width: 132px;
+    height: 96px;
+    padding: 12px 14px;
+    background: var(--raised);
+    color: var(--text-strong);
+    font-size: 18px;
+    line-height: 1.2;
+    box-shadow: inset 0 -6px 0 var(--border-strong);
+  }
+
+  .keys__cap--wide {
+    width: 150px;
+  }
+
+  .keys__cap--accent {
+    width: 96px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 900;
+    font-size: 30px;
+    box-shadow: inset 0 -6px 0 var(--accent-fill-deep);
+  }
+
+  .keys__plus {
+    font-weight: 900;
+    font-size: 28px;
+    color: var(--text-faint);
+  }
+
+  .keys__mac {
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .palette {
+    align-self: start;
+    margin-top: 40px;
+    background: var(--panel);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+
+  .palette__input {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 60px;
+    padding: 0 22px;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .palette__input :global(.palette__search) {
+    color: var(--text-muted);
+  }
+
+  .palette__input input {
+    flex-grow: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: 0;
+    color: var(--text-strong);
+    font: inherit;
+    font-size: 17px;
+  }
+
+  .palette__input input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .palette__input:focus-within {
+    box-shadow: inset 0 -2px 0 var(--accent-fill);
+  }
+
+  .palette__count {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .palette__list {
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+    margin: 0;
+    padding: 8px 0;
+    list-style: none;
+  }
+
+  .palette__row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 42px;
+    padding: 0 22px;
+    font-size: 15px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .palette__row[aria-selected='true'] {
+    background: var(--raised);
+    color: var(--text-strong);
+  }
+
+  .palette__marker {
+    width: 4px;
+    height: 18px;
+    transform: skewX(-18deg);
+    background: transparent;
+  }
+
+  .palette__row[aria-selected='true'] .palette__marker {
+    background: var(--accent-fill);
+  }
+
+  .palette__row :global(.palette__icon) {
+    opacity: 0.85;
+  }
+
+  .palette__name {
+    flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .palette__keys {
+    display: flex;
+    gap: 4px;
+  }
+
+  .palette__key {
+    padding: 3px 7px;
+    background: var(--raised);
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .palette__row[aria-selected='true'] .palette__key {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+  }
+
+  .palette__empty {
+    padding: 24px 22px;
+    color: var(--text-muted);
+  }
+
+  .palette__foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 22px;
+    border-top: var(--bw) solid var(--border);
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .palette__ran {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--success);
+  }
+
+  .palette__grow {
+    flex-grow: 1;
+  }
+
+  @media (max-width: 1180px) {
+    .keys {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 24px;
+    }
+
+    .palette {
+      margin-top: 0;
+      max-width: 720px;
+      width: 100%;
+    }
+  }
+
+  /* The phone layout drops the palette section, as the board does. */
+  @media (max-width: 640px) {
+    .keys {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const palette = document.querySelector<HTMLElement>('[data-palette]');
+
+  if (palette) {
+    const input = palette.querySelector<HTMLInputElement>('[data-palette-input]');
+    const rows = Array.from(palette.querySelectorAll<HTMLElement>('[data-palette-row]'));
+    const count = palette.querySelector<HTMLElement>('[data-palette-count]');
+    const empty = palette.querySelector<HTMLElement>('[data-palette-empty]');
+    const ran = palette.querySelector<HTMLElement>('[data-palette-ran]');
+    const ranText = palette.querySelector<HTMLElement>('[data-palette-ran-text]');
+    const countTemplate = palette.dataset.countTemplate ?? '{n}';
+    const visibleLimit = 10;
+    let visible = rows.slice(0, visibleLimit);
+    let selected = 0;
+
+    const paint = () => {
+      rows.forEach((row) => row.setAttribute('aria-selected', 'false'));
+      const active = visible[selected];
+
+      active?.setAttribute('aria-selected', 'true');
+      if (active) input?.setAttribute('aria-activedescendant', active.id);
+      else input?.removeAttribute('aria-activedescendant');
+    };
+
+    const filter = () => {
+      const query = (input?.value ?? '').trim().toLowerCase();
+      const matches = rows.filter(
+        (row) => !query || (row.dataset.name ?? '').toLowerCase().includes(query),
+      );
+
+      visible = matches.slice(0, visibleLimit);
+      rows.forEach((row) => {
+        row.hidden = !visible.includes(row);
+      });
+      if (empty) empty.hidden = matches.length > 0;
+      if (count) count.textContent = countTemplate.replace('{n}', String(matches.length));
+      selected = 0;
+      paint();
+    };
+
+    const run = (row: HTMLElement | undefined) => {
+      if (!row || !ran || !ranText) return;
+
+      const template = ran.dataset.template ?? '{name}';
+
+      ranText.textContent = template.replace('{name}', row.dataset.name ?? '');
+      ran.hidden = false;
+    };
+
+    input?.addEventListener('input', filter);
+    input?.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        selected = Math.min(selected + 1, Math.max(visible.length - 1, 0));
+        paint();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        selected = Math.max(selected - 1, 0);
+        paint();
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        run(visible[selected]);
+      }
+    });
+
+    rows.forEach((row) => {
+      row.addEventListener('click', () => {
+        selected = Math.max(visible.indexOf(row), 0);
+        paint();
+        run(row);
+      });
+    });
+  }
+</script>

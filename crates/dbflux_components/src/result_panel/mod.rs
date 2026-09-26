@@ -28,8 +28,10 @@
 //! flow, mode changes are forwarded directly to `view.set_mode` first, then
 //! the event is emitted for any remaining listeners.
 
+use crate::icons::AppIcon;
+use crate::primitives::{SegmentedControl, SegmentedItem};
 use crate::result_view::ResultViewMode;
-use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::tokens::{ResultMetrics, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -332,65 +334,71 @@ impl ResultPanel {
         pairs
     }
 
-    /// Build the mode tab strip element.
+    /// Build the view switch: a segmented control with one icon-and-label
+    /// segment per mode (AppByzTable, AppByzEditor).
     fn build_mode_bar_element(
         &self,
         modes: &[ResultViewMode],
         current: ResultViewMode,
-        theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let items: Vec<SegmentedItem> = modes
+            .iter()
+            .map(|mode| {
+                SegmentedItem::new(mode_segment_id(*mode), mode.label()).icon(mode_icon(*mode))
+            })
+            .collect();
+
         let modes: Vec<ResultViewMode> = modes.to_vec();
-        let theme = theme.clone();
+        let panel = cx.entity().downgrade();
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h_full()
-            .gap(Spacing::XS)
-            .children(modes.into_iter().enumerate().map(|(i, mode)| {
-                let is_active = mode == current;
-                let theme = theme.clone();
+        SegmentedControl::new(items, mode_segment_id(current), move |selected, _, cx| {
+            let Some(mode) = modes
+                .iter()
+                .copied()
+                .find(|mode| mode_segment_id(*mode) == selected.as_ref())
+            else {
+                return;
+            };
 
-                div()
-                    .id(ElementId::Name(format!("result-panel-mode-{}", i).into()))
-                    .flex()
-                    .items_center()
-                    .h_full()
-                    .px(Spacing::SM)
-                    .cursor_pointer()
-                    .border_b_2()
-                    .border_color(if is_active {
-                        theme.accent
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .text_color(if is_active {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _window, cx| {
-                            let current = (this.view.current_mode)(cx);
-                            if current != mode {
-                                (this.view.set_mode)(mode, cx);
-                                cx.emit(ResultPanelEvent::ModeChanged(mode));
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .when(is_active, |d| d.font_weight(FontWeight::SEMIBOLD))
-                            .child(SharedString::from(mode.label())),
-                    )
-            }))
-            .into_any()
+            let updated = panel.update(cx, |this, cx| {
+                let current = (this.view.current_mode)(cx);
+                if current != mode {
+                    (this.view.set_mode)(mode, cx);
+                    cx.emit(ResultPanelEvent::ModeChanged(mode));
+                    cx.notify();
+                }
+            });
+
+            if let Err(error) = updated {
+                log::debug!("result panel released before its mode switch: {error}");
+            }
+        })
+        .into_any_element()
+    }
+}
+
+/// Stable segment id of a result-view mode.
+fn mode_segment_id(mode: ResultViewMode) -> &'static str {
+    match mode {
+        ResultViewMode::Table => "table",
+        ResultViewMode::Chart => "chart",
+        ResultViewMode::Both => "both",
+        ResultViewMode::Json => "json",
+        ResultViewMode::Text => "text",
+        ResultViewMode::Raw => "raw",
+    }
+}
+
+/// Icon of a result-view mode in the view switch.
+fn mode_icon(mode: ResultViewMode) -> AppIcon {
+    match mode {
+        ResultViewMode::Table => AppIcon::Table,
+        ResultViewMode::Chart => AppIcon::ChartColumnBig,
+        ResultViewMode::Both => AppIcon::Columns,
+        ResultViewMode::Json => AppIcon::Braces,
+        ResultViewMode::Text => AppIcon::ScrollText,
+        ResultViewMode::Raw => AppIcon::Code,
     }
 }
 
@@ -430,12 +438,12 @@ impl Render for ResultPanel {
                         // its own oversized box. w_full forces the row to the
                         // parent's width so flex_wrap can do its job.
                         .w_full()
-                        .min_h(Heights::TOOLBAR)
-                        .px(Spacing::SM)
-                        .gap(Spacing::SM)
+                        .min_h(ResultMetrics::VIEW_ROW_HEIGHT)
+                        .px(ResultMetrics::FOOTER_PADDING_X)
+                        .py(Spacing::XS)
+                        .gap(ResultMetrics::VIEW_ROW_GAP)
                         .border_b_1()
-                        .border_color(theme.border)
-                        .bg(theme.tab_bar),
+                        .border_color(theme.border),
                     |r, child| r.child(child),
                 ),
             )
@@ -447,6 +455,7 @@ impl Render for ResultPanel {
         // space and chrome's wrap rows render behind the view content.
         div()
             .track_focus(&focus_handle)
+            .key_context(crate::key_contexts::RESULT_PANEL)
             .flex()
             .flex_col()
             .size_full()
@@ -487,8 +496,6 @@ impl ResultPanel {
             return vec![];
         }
 
-        let theme = cx.theme().clone();
-
         struct Entry {
             position: SegmentPosition,
             index: u16,
@@ -499,7 +506,7 @@ impl ResultPanel {
 
         // Built-in mode bar (Left/0).
         if has_mode_bar {
-            let el = self.build_mode_bar_element(&available_modes, current_mode, &theme, cx);
+            let el = self.build_mode_bar_element(&available_modes, current_mode, cx);
             entries.push(Entry {
                 position: SegmentPosition::Left,
                 index: 0,

@@ -1,4 +1,5 @@
 mod context_menu;
+mod documents;
 pub(crate) mod filter_bar;
 pub(crate) mod mutation_confirm;
 pub(crate) mod mutation_executor;
@@ -6,6 +7,7 @@ mod mutations;
 mod navigation;
 mod query;
 mod render;
+mod result_search;
 pub mod row_inspector;
 mod utils;
 pub mod value_panel;
@@ -30,7 +32,9 @@ use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
 };
 use dbflux_components::controls::CompletionProvider;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::modals::cell_editor::{
     CellEditorClosedEvent, CellEditorModal, CellEditorSaveEvent,
@@ -196,9 +200,13 @@ pub enum DataGridEvent {
         generation_type: dbflux_components::SqlGenerationType,
     },
     /// Request to mount arbitrary content into the workspace-level inspector rail.
+    ///
+    /// `content_has_header` tells the rail the content draws its own title
+    /// bar (the row inspector), so the rail must not add one.
     OpenInspector {
         title: SharedString,
         content: AnyView,
+        content_has_header: bool,
     },
     /// Request to hide the workspace inspector rail without losing the
     /// panel's cached inspector state (e.g. when switching to another tab).
@@ -445,6 +453,13 @@ struct PendingActions {
     /// Cell the value panel should open on. Deferred to render because
     /// building the panel's code editor needs a `Window`.
     value_panel: Option<value_panel::ValuePanelTarget>,
+    /// Row action requested from the row inspector's footer, with the row and
+    /// column it applies to. Deferred to render because editing needs a
+    /// `Window`.
+    row_inspector_action: Option<(row_inspector::RowInspectorContentEvent, usize, usize)>,
+    /// The JSON view has to be reloaded with the page. Deferred to render
+    /// because setting an editor's text needs a `Window`.
+    json_reload: bool,
 }
 
 /// How the grid should treat the state held by an existing `DataTableState`
@@ -527,8 +542,8 @@ struct GridTableState {
 
 /// The WHERE/LIMIT inputs and refresh-policy dropdown.
 ///
-/// All four fields are consumed by `render_toolbar` /
-/// `render_filter_bar_as_segment`; they are created together at construction
+/// All four fields are consumed by `render_toolbar`; they are created
+/// together at construction
 /// time and are never individually swapped out.
 struct FilterBarState {
     filter_input: Entity<EditorState>,
@@ -631,9 +646,6 @@ struct FocusState {
 struct ChromeState {
     show_panel_controls: bool,
     is_maximized: bool,
-    /// When `true`, the toolbar has been hoisted into the hosting
-    /// `ResultPanel`'s chrome row; `DataGridPanel` suppresses its own row.
-    toolbar_in_chrome_row: bool,
     export_menu_open: bool,
     result_view_mode: ResultViewMode,
     /// When `true`, the result area shows the active row as a vertical
@@ -661,6 +673,24 @@ struct InspectorState {
     /// rail explicitly (via `DataGridPanel::clear_inspector_state`) or when the
     /// stored row falls outside the new result.
     inspector_row: Option<(usize, usize)>,
+
+    /// The user pinned the inspected row: selection changes no longer move
+    /// the inspector, which keeps showing `inspector_row`.
+    pinned: bool,
+
+    /// Subscription to the row inspector's button events.
+    _row_inspector_subscription: Option<Subscription>,
+
+    /// Debounced lookup and counting of the inspected row's incoming
+    /// references.
+    incoming_references: row_inspector::IncomingReferencesLoader,
+
+    /// The Document panel a document collection shows instead of the row
+    /// inspector, kept alive so its expanded fields survive row changes.
+    document_inspector_content: Option<Entity<documents::inspector::DocumentInspectorContent>>,
+
+    /// Subscription to the Document panel's button events.
+    _document_inspector_subscription: Option<Subscription>,
 
     /// Optional provider for row-level kill/cancel actions.
     ///
@@ -700,9 +730,12 @@ pub(crate) struct BuilderState {
     pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
     /// Subscriptions to `QueryBuilderPanel` events.
     pub(crate) _builder_subscriptions: Vec<Subscription>,
-    /// When `true`, the raw filter input is hidden because the builder owns
-    /// query composition for this panel.
+    /// When `true`, the raw filter input is hidden because an applied builder
+    /// spec owns query composition for this panel.
     pub(crate) filter_input_hidden: bool,
+    /// Whether the builder currently owns the inspector rail. The raw filter
+    /// input is hidden while it is open and comes back once it is closed.
+    pub(crate) builder_open: bool,
     /// Editable-safety binding for the last successfully executed builder SELECT.
     pub(crate) builder_editable_binding: Option<dbflux_core::EditableBinding>,
 }
@@ -721,8 +754,12 @@ pub struct DataGridPanel {
     mutation_confirm: MutationConfirmState,
     focus: FocusState,
     chrome: ChromeState,
+    result_search: result_search::ResultSearch,
     inspector: InspectorState,
     pub(crate) builder: BuilderState,
+    /// Document collection presentation (flattened table, query bar, schema,
+    /// field edits). Inert for other sources.
+    collection: documents::CollectionViewState,
     pk_columns: Vec<String>,
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
@@ -736,6 +773,10 @@ pub struct DataGridPanel {
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
+    /// The hosting document hands this grid's side panels (the chart stats
+    /// rail) to the workspace through `side_panels`, so the grid does not
+    /// dock them inside itself.
+    side_panels_hosted: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
@@ -1124,6 +1165,7 @@ impl DataGridPanel {
 
         // Query results are not editable (no PK info)
         let mut panel = Self::new_internal(source, app_state, Vec::new(), window, cx);
+        panel.install_result_search(window, cx);
         panel.set_result((*result).clone(), cx);
         panel
     }
@@ -1206,6 +1248,9 @@ impl DataGridPanel {
             &filter_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } if this.is_document_collection(cx) => {
+                    this.find_documents(window, cx);
+                }
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -1240,6 +1285,9 @@ impl DataGridPanel {
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } if this.is_document_collection(cx) => {
+                    this.find_documents(window, cx);
+                }
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
@@ -1329,10 +1377,10 @@ impl DataGridPanel {
         )
         .detach();
 
+        let category = Self::connection_category(&source, &app_state, cx);
         let time_series_collection = matches!(source, DataSource::Collection { .. })
-            && Self::connection_category(&source, &app_state, cx)
-                == Some(DatabaseCategory::TimeSeries);
-        let view_config = Self::view_config_for(&source, time_series_collection);
+            && category == Some(DatabaseCategory::TimeSeries);
+        let view_config = Self::view_config_for(&source, category);
         let result_view_mode = ResultViewMode::Table;
 
         let connection_id = match &source {
@@ -1361,7 +1409,7 @@ impl DataGridPanel {
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
                 .disabled(!supports_auto_refresh)
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Primary)
         });
 
         let refresh_policy_sub = cx.subscribe_in(
@@ -1385,6 +1433,18 @@ impl DataGridPanel {
                 this.set_refresh_policy(policy, cx);
             },
         );
+
+        let collection = documents::CollectionViewState::new(window, cx);
+
+        if matches!(source, DataSource::Collection { .. }) && filter_completion_cache.is_none() {
+            let provider: Rc<dyn CompletionProvider> =
+                Rc::new(documents::completion::DocumentFieldCompletionProvider::new(
+                    collection.field_paths.clone(),
+                ));
+            filter_input.update(cx, |state, _| {
+                state.lsp_mut().completion_provider = Some(provider);
+            });
+        }
 
         let runner = {
             let mut r = DocumentTaskRunner::new(app_state.clone());
@@ -1457,17 +1517,22 @@ impl DataGridPanel {
             chrome: ChromeState {
                 show_panel_controls: false,
                 is_maximized: false,
-                toolbar_in_chrome_row: false,
                 export_menu_open: false,
                 result_view_mode,
                 record_mode: false,
                 derived_json: None,
                 derived_text: None,
             },
+            result_search: result_search::ResultSearch::default(),
             inspector: InspectorState {
                 row_inspector_content: None,
                 follow_selection: false,
                 inspector_row: None,
+                pinned: false,
+                _row_inspector_subscription: None,
+                incoming_references: row_inspector::IncomingReferencesLoader::default(),
+                document_inspector_content: None,
+                _document_inspector_subscription: None,
                 row_action_provider: None,
                 value_panel: None,
                 value_panel_open: false,
@@ -1482,8 +1547,10 @@ impl DataGridPanel {
                 builder_panel: None,
                 _builder_subscriptions: Vec::new(),
                 filter_input_hidden: false,
+                builder_open: false,
                 builder_editable_binding: None,
             },
+            collection,
             runner,
             focus_handle,
             panel_origin: Point::default(),
@@ -1492,6 +1559,7 @@ impl DataGridPanel {
             view_config,
             context_menu: None,
             is_active_tab: true,
+            side_panels_hosted: false,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
@@ -1696,9 +1764,12 @@ impl DataGridPanel {
 
     /// Toggle between available view modes for the current data source.
     pub fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
-        use super::data_view::DataViewMode;
+        if self.is_document_collection(cx) {
+            self.cycle_document_view(cx);
+            return;
+        }
 
-        let available = DataViewMode::available_for(&self.source);
+        let available = super::data_view::DataViewMode::available_for(&self.source);
         if available.len() <= 1 {
             return;
         }
@@ -1793,6 +1864,14 @@ impl DataGridPanel {
         self.chrome.result_view_mode
     }
 
+    /// Declares that the hosting document forwards this grid's
+    /// `side_panels` to the workspace. Until then the grid docks its chart
+    /// stats rail inside itself, so a host that does not forward them keeps
+    /// the rail.
+    pub fn set_side_panels_hosted(&mut self, hosted: bool) {
+        self.side_panels_hosted = hosted;
+    }
+
     /// The mode currently displayed in the result view. Alias of
     /// `result_view_mode` used by `ResultPanel` wiring in `DataDocument`.
     pub fn current_result_view_mode(&self) -> ResultViewMode {
@@ -1801,10 +1880,9 @@ impl DataGridPanel {
 
     /// Modes available for the current result shape and connection category.
     ///
-    /// Returns an empty slice for non-QueryResult sources (table/collection
-    /// browses have no alternative views). For QueryResult sources, returns
-    /// the modes available for the shape, plus Chart when chart detection
-    /// succeeded. Independent of the currently active mode — switching to
+    /// Returns an empty slice for sources without result views (a document
+    /// collection browse). Otherwise returns the modes available for the
+    /// shape, plus Chart when chart detection succeeded. Independent of the currently active mode — switching to
     /// Chart and back must not change which modes are offered.
     pub fn available_result_view_modes(&self, cx: &App) -> Vec<ResultViewMode> {
         if !self.has_result_views() {
@@ -1813,13 +1891,19 @@ impl DataGridPanel {
 
         let mut modes = ResultViewMode::available_for_shape(&self.result.shape);
 
+        // Chart follows the shape's own views (Data | JSON | Chart on the
+        // boards) when chart detection succeeded.
         if self.chart_available(cx) && !modes.contains(&ResultViewMode::Chart) {
-            // Insert Chart after Table when chart detection succeeded.
-            if let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Table) {
-                modes.insert(pos + 1, ResultViewMode::Chart);
-            } else {
-                modes.insert(0, ResultViewMode::Chart);
-            }
+            modes.push(ResultViewMode::Chart);
+        }
+
+        // A time-series measurement also offers the chart above the grid.
+        if self.chart.time_series_collection
+            && self.chart_available(cx)
+            && !modes.contains(&ResultViewMode::Both)
+            && let Some(pos) = modes.iter().position(|m| *m == ResultViewMode::Chart)
+        {
+            modes.insert(pos + 1, ResultViewMode::Both);
         }
 
         modes
@@ -1835,9 +1919,23 @@ impl DataGridPanel {
     }
 
     /// Whether the source offers the Data / Chart / JSON result views: every
-    /// query result, and a collection on a time-series connection.
+    /// query result and table browse, and a collection on a time-series
+    /// connection.
     fn has_result_views(&self) -> bool {
-        matches!(self.source, DataSource::QueryResult { .. }) || self.chart.time_series_collection
+        matches!(
+            self.source,
+            DataSource::QueryResult { .. } | DataSource::Table { .. }
+        ) || self.chart.time_series_collection
+    }
+
+    /// Whether the footer carries the view switch (Grid / JSON / Chart): a
+    /// table or collection draws it there (AppByzTable), while a query result
+    /// uses the `ResultPanel` mode bar above its content.
+    pub(super) fn footer_hosts_view_switch(&self) -> bool {
+        matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
     }
 
     fn uses_result_view(&self) -> bool {
@@ -2026,11 +2124,17 @@ impl DataGridPanel {
             // previously open. Builder takes precedence over the row inspector
             // because both share the same rail and the builder is the more
             // recent intentional surface for the user.
-            if let Some(panel) = self.builder.builder_panel.clone() {
+            if let Some(panel) = self
+                .builder
+                .builder_panel
+                .clone()
+                .filter(|_| self.builder.builder_open)
+            {
                 let view: AnyView = AnyView::from(panel);
                 cx.emit(DataGridEvent::OpenInspector {
                     title: "Query Builder".into(),
                     content: view,
+                    content_has_header: true,
                 });
             } else if self.inspector.value_panel_open {
                 // Re-read this grid's own cell. Reusing the cached content
@@ -2038,6 +2142,10 @@ impl DataGridPanel {
                 // user just switched away from.
                 if !self.mount_value_panel_for_active_cell(cx) {
                     cx.emit(DataGridEvent::CloseInspector);
+                }
+            } else if self.inspector.follow_selection && self.inspector.pinned {
+                if let Some((row, col)) = self.inspector.inspector_row {
+                    self.open_row_inspector(row, col, cx);
                 }
             } else if self.inspector.follow_selection {
                 let active = self
@@ -2056,7 +2164,7 @@ impl DataGridPanel {
                 // content on screen.
                 cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_panel.is_some() || self.inspector.value_panel_open {
+        } else if self.builder.builder_open || self.inspector.value_panel_open {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -2068,10 +2176,105 @@ impl DataGridPanel {
     /// the rail does not re-open on tab activation or refresh.
     pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
         self.inspector.follow_selection = false;
+        self.inspector.pinned = false;
         self.inspector.inspector_row = None;
         self.inspector.row_inspector_content = None;
+        self.inspector._row_inspector_subscription = None;
+        self.inspector.incoming_references.cancel();
+        self.inspector.document_inspector_content = None;
+        self.inspector._document_inspector_subscription = None;
         self.inspector.value_panel_open = false;
         self.pending.value_panel = None;
+        self.pending.row_inspector_action = None;
+        self.mark_builder_closed();
+    }
+
+    /// Records that the builder no longer owns the inspector rail.
+    ///
+    /// A draft the user never ran is dropped from the read path, so the raw
+    /// filter that comes back drives the next reload instead of the unrun
+    /// draft. The draft itself stays in the builder panel for the next open.
+    fn mark_builder_closed(&mut self) {
+        self.builder.builder_open = false;
+
+        if !self.builder.filter_input_hidden {
+            self.builder.visual_select = None;
+        }
+    }
+
+    /// Whether the raw WHERE filter input is shown in the toolbar. It is hidden
+    /// while the builder is open or while an applied builder spec drives the
+    /// rows.
+    pub(crate) fn filter_input_visible(&self) -> bool {
+        !self.builder.filter_input_hidden && !self.builder.builder_open
+    }
+
+    /// Whether the filter row shows the "rows come from the builder query"
+    /// notice in place of the WHERE input: the builder is closed while a spec
+    /// it ran still drives the rows. A relational WHERE filter lowers to a
+    /// spec as well, but it keeps its own chip instead of this notice.
+    pub(crate) fn builder_notice_visible(&self) -> bool {
+        self.builder.filter_input_hidden
+            && !self.builder.builder_open
+            && !matches!(
+                self.builder.relational_filter_state,
+                filter_bar::RelationalFilterState::Active { .. }
+            )
+    }
+
+    /// Drops the builder spec and its panel, restores the WHERE filter and
+    /// reloads the rows through the plain table read.
+    ///
+    /// Returns `false` without changing anything when unsaved edits block
+    /// the reload.
+    pub(crate) fn reset_builder_query(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.reload_blocked_by_pending_edits(cx) {
+            return false;
+        }
+
+        self.clear_builder_draft_spec(cx);
+        self.builder.builder_panel = None;
+        self.builder._builder_subscriptions.clear();
+        self.builder.builder_open = false;
+        self.refresh(window, cx);
+
+        true
+    }
+
+    /// Whether the row inspector currently owns the shared rail for this grid.
+    pub fn row_inspector_is_open(&self) -> bool {
+        self.inspector.follow_selection && self.inspector.inspector_row.is_some()
+    }
+
+    /// Open the row inspector on the active cell, or close it if it is open
+    /// (`Command::ToggleRowInspector`).
+    pub fn toggle_row_inspector(&mut self, cx: &mut Context<Self>) {
+        if self.row_inspector_is_open() {
+            self.clear_inspector_state(cx);
+            cx.emit(DataGridEvent::CloseInspector);
+            cx.notify();
+            return;
+        }
+
+        if self.is_grouped_result() || self.builder.builder_open {
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+            self.open_row_inspector(coord.row, coord.col, cx);
+        }
     }
 
     /// Whether the value panel currently owns the shared inspector rail.
@@ -2120,7 +2323,7 @@ impl DataGridPanel {
     /// selection, so the rail shows the new table's cell instead of whatever
     /// the previous tab left there.
     pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
-        if open && self.builder.builder_panel.is_none() {
+        if open && !self.builder.builder_open {
             self.inspector.value_panel_open = true;
         } else if !open {
             self.inspector.value_panel_open = false;
@@ -2253,6 +2456,7 @@ impl DataGridPanel {
         cx.emit(DataGridEvent::OpenInspector {
             title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
             content: AnyView::from(content),
+            content_has_header: false,
         });
     }
 
@@ -2290,7 +2494,7 @@ impl DataGridPanel {
     }
 
     pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
-        if tracking && self.builder.builder_panel.is_none() && !self.is_grouped_result() {
+        if tracking && !self.builder.builder_open && !self.is_grouped_result() {
             self.inspector.follow_selection = true;
         } else if !tracking {
             self.clear_inspector_state(cx);
@@ -2369,20 +2573,26 @@ impl DataGridPanel {
         }));
     }
 
-    /// View configuration a source opens with.
+    /// View configuration a source opens with, given the category of the
+    /// connection behind it.
     ///
-    /// A time-series collection holds flat rows (time, tags, fields), so its
-    /// Data view is the grid rather than the document tree other collections use.
+    /// A collection of a document database opens in the document tree. A
+    /// time-series collection holds flat rows (time, tags, fields), so it opens
+    /// in the grid. Every other source keeps its own recommended view.
     fn view_config_for(
         source: &DataSource,
-        time_series_collection: bool,
+        category: Option<DatabaseCategory>,
     ) -> super::data_view::DataViewConfig {
-        if time_series_collection {
-            super::data_view::DataViewConfig {
-                mode: super::data_view::DataViewMode::Table,
-            }
-        } else {
-            super::data_view::DataViewConfig::for_source(source)
+        use super::data_view::{DataViewConfig, DataViewMode};
+
+        match (source, category) {
+            (DataSource::Collection { .. }, Some(DatabaseCategory::Document)) => DataViewConfig {
+                mode: DataViewMode::Document,
+            },
+            (DataSource::Collection { .. }, Some(DatabaseCategory::TimeSeries)) => DataViewConfig {
+                mode: DataViewMode::Table,
+            },
+            _ => DataViewConfig::for_source(source),
         }
     }
 
@@ -2393,7 +2603,7 @@ impl DataGridPanel {
     /// (`apply_collection_result`), so a time-series collection opens as a
     /// chart the same way a time-series query result can.
     fn apply_chart_for_result(&mut self, result: &QueryResult, cx: &mut Context<Self>) {
-        let was_chart_mode = matches!(self.chrome.result_view_mode, ResultViewMode::Chart);
+        let was_chart_mode = self.chrome.result_view_mode.shows_chart();
 
         let detection = detect_chart_columns(result);
         let detection_ok = matches!(detection, ChartDetection::Ok { .. });
@@ -2448,13 +2658,15 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
-        self.view_config = Self::view_config_for(&self.source, self.chart.time_series_collection);
+        let category = Self::connection_category(&self.source, &self.app_state, cx);
+        self.view_config = Self::view_config_for(&self.source, category);
         self.chrome.derived_json = None;
         self.chrome.derived_text = None;
 
         self.apply_chart_for_result(&result, cx);
 
         self.result = result;
+        self.reapply_result_search_to_new_rows();
         self.rebuild_table(None, cx);
         self.refresh.state = GridState::Ready;
 
@@ -2570,13 +2782,25 @@ impl DataGridPanel {
         // Find PK column indices in result columns. When mutations are
         // disabled (grouped result or no PK), pass an empty set to the table
         // state so `is_editable` returns false.
-        let pk_indices: Vec<usize> = if self.mutations_enabled() {
+        let document_patches = self.commits_document_patches(cx);
+        let stepped_into = self.is_stepped_into();
+
+        let pk_indices: Vec<usize> = if !self.mutations_enabled() {
+            Vec::new()
+        } else if stepped_into {
+            // Rows inside a nested value are addressed by their path in the
+            // document, not by a key column; they are editable only when the
+            // driver writes field patches.
+            if document_patches && !self.result.columns.is_empty() {
+                vec![0]
+            } else {
+                Vec::new()
+            }
+        } else {
             self.pk_columns
                 .iter()
                 .filter_map(|pk_name| self.result.columns.iter().position(|c| c.name == *pk_name))
                 .collect()
-        } else {
-            Vec::new()
         };
 
         log::debug!(
@@ -2598,7 +2822,8 @@ impl DataGridPanel {
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
         ) && self.mutations_enabled()
-            && (self.builder.current_visual_spec.is_none() || binding_insertable);
+            && (self.builder.current_visual_spec.is_none() || binding_insertable)
+            && !stepped_into;
 
         let column_details = self.get_column_details(cx);
 
@@ -2620,7 +2845,18 @@ impl DataGridPanel {
         // Columns tagged Joined are blocked from editing while source-table columns remain
         // editable. This mirrors the FK badge marking pattern above.
         let readonly_indices: std::collections::HashSet<usize> =
-            if let Some(binding) = &self.builder.builder_editable_binding {
+            if self.collection.raw.is_some() && !document_patches {
+                // Without field patches only top-level fields can be saved, through
+                // the generic row save.
+                self.collection
+                    .flat
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, column)| column.path.len() != 1 || stepped_into)
+                    .map(|(ix, _)| ix)
+                    .collect()
+            } else if let Some(binding) = &self.builder.builder_editable_binding {
                 use dbflux_core::ColumnOrigin;
                 self.result
                     .columns
@@ -2635,7 +2871,11 @@ impl DataGridPanel {
                 std::collections::HashSet::new()
             };
 
-        let table_model = Arc::new(TableModel::from(&self.result));
+        let table_model = Arc::new(
+            self.document_table_model()
+                .unwrap_or_else(|| TableModel::from(&self.result)),
+        );
+        let document_presentation = self.document_presentation();
         let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
 
         if let Some(table_state) = self.grid_table.table_state.clone() {
@@ -2665,6 +2905,7 @@ impl DataGridPanel {
                 state.set_insertable(is_insertable);
                 state.set_fk_columns(fk_indices);
                 state.set_readonly_columns(readonly_indices);
+                state.set_document_presentation(document_presentation, cx);
 
                 for (col_ix, options) in enum_options {
                     state.set_enum_options(col_ix, options);
@@ -2692,6 +2933,7 @@ impl DataGridPanel {
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
+            state.set_document_presentation(document_presentation, cx);
 
             if !fk_indices.is_empty() {
                 state.set_fk_columns(fk_indices);
@@ -2732,6 +2974,7 @@ impl DataGridPanel {
                         // cursor so click / arrow-key navigation updates the
                         // rail in place.
                         if this.inspector.follow_selection
+                            && !this.inspector.pinned
                             && let Some(active) = selection.active
                         {
                             this.open_row_inspector(active.row, active.col, cx);
@@ -2745,7 +2988,20 @@ impl DataGridPanel {
                         }
                     }
                     DataTableEvent::SaveRowRequested(row_idx) => {
-                        this.handle_save_row(*row_idx, cx);
+                        if this.commits_document_patches(cx) {
+                            this.commit_document_edits(cx);
+                        } else {
+                            this.handle_save_row(*row_idx, cx);
+                        }
+                    }
+                    DataTableEvent::StepIntoRequested { row, col } => {
+                        this.step_into_document_value(*row, *col, cx);
+                    }
+                    DataTableEvent::ToggleColumnGroupRequested { col } => {
+                        this.toggle_document_column_group(*col, cx);
+                    }
+                    DataTableEvent::StepOutRequested => {
+                        this.step_out_of_document_value(cx);
                     }
                     DataTableEvent::ContextMenuRequested {
                         row,
@@ -2821,6 +3077,11 @@ impl DataGridPanel {
                     DataTableEvent::CommitDeleteRequested(row_idx) => {
                         this.handle_commit_delete(*row_idx, cx);
                     }
+                    DataTableEvent::SaveAllRequested { .. }
+                        if this.commits_document_patches(cx) =>
+                    {
+                        this.commit_document_edits(cx);
+                    }
                     DataTableEvent::SaveAllRequested {
                         pending_deletes,
                         pending_inserts,
@@ -2873,7 +3134,7 @@ impl DataGridPanel {
     fn rebuild_document_tree(&mut self, cx: &mut Context<Self>) {
         let tree_state = cx.new(|cx| {
             let mut state = DocumentTreeState::new(cx);
-            state.load_from_result(&self.result, cx);
+            state.load_from_result(self.collection.raw.as_ref().unwrap_or(&self.result), cx);
             state
         });
 
@@ -2886,7 +3147,11 @@ impl DataGridPanel {
                     cx.emit(DataGridEvent::Focused);
                 }
                 DocumentTreeEvent::InlineEditCommitted { node_id, new_value } => {
-                    this.handle_document_tree_inline_edit(node_id, new_value, cx);
+                    if this.commits_document_patches(cx) {
+                        this.commit_tree_edit(node_id, new_value, cx);
+                    } else {
+                        this.handle_document_tree_inline_edit(node_id, new_value, cx);
+                    }
                 }
                 DocumentTreeEvent::DocumentPreviewRequested {
                     doc_index,
@@ -2938,6 +3203,9 @@ impl DataGridPanel {
                     this.pending.context_menu_focus = true;
                     cx.emit(DataGridEvent::Focused);
                     cx.notify();
+                }
+                DocumentTreeEvent::CycleDataViewRequested => {
+                    this.toggle_view_mode(cx);
                 }
                 DocumentTreeEvent::CursorMoved
                 | DocumentTreeEvent::ExpandToggled
@@ -3362,33 +3630,27 @@ impl DataGridPanel {
     /// Build a `ViewHandle` that erases the concrete `DataGridPanel` type for
     /// use inside a `ResultPanel`.
     ///
-    /// After calling this method, `self.chrome.toolbar_in_chrome_row` is set to `true`
-    /// on the entity, which suppresses `DataGridPanel::render`'s own toolbar row.
-    /// The filter bar is instead exposed as a `Center/0` toolbar segment in the
-    /// returned `ViewHandle::toolbar_segments` closure.
+    /// A table or collection draws its own header, filter row and view
+    /// switch (AppByzTable), so for those sources the handle contributes no
+    /// chrome-row segments and no mode bar; a query result keeps the
+    /// `ResultPanel` mode bar.
     ///
     /// The returned `ViewHandle` captures a clone of `entity`. The entity must
     /// already exist (this is called from `DataDocument::new_with_grid` after
     /// `cx.new(|cx| DataGridPanel::new_for_table(...))`).
     pub fn into_view_handle(
         entity: Entity<Self>,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> dbflux_components::result_panel::ViewHandle {
-        use dbflux_components::result_panel::{SegmentPosition, ToolbarSegment, ViewHandle};
-        use render::render_filter_bar_as_segment;
-
-        // Suppress the grid's own toolbar — it moves to the chrome row.
-        entity.update(cx, |this, _| {
-            this.chrome.toolbar_in_chrome_row = true;
-        });
+        use dbflux_components::result_panel::ViewHandle;
 
         let e_render = entity.clone();
         let e_focus_get = entity.clone();
         let e_focus_do = entity.clone();
-        let e_segs = entity.clone();
         let e_modes = entity.clone();
         let e_current = entity.clone();
         let e_set_mode = entity.clone();
+        let e_segments = entity.clone();
 
         ViewHandle::builder()
             .render(move |_window, _cx| {
@@ -3404,26 +3666,15 @@ impl DataGridPanel {
                 }
             })
             .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
-            .toolbar_segments(move |cx| {
-                let is_table_or_collection = matches!(
-                    e_segs.read(cx).source,
-                    DataSource::Table { .. } | DataSource::Collection { .. }
-                );
-
-                if !is_table_or_collection {
-                    return vec![];
+            .toolbar_segments(move |cx| Self::result_toolbar_segments(&e_segments, cx))
+            .available_modes(move |cx| {
+                let grid = e_modes.read(cx);
+                if grid.footer_hosts_view_switch() {
+                    Vec::new()
+                } else {
+                    grid.available_result_view_modes(cx)
                 }
-
-                let grid = e_segs.clone();
-                vec![ToolbarSegment {
-                    position: SegmentPosition::Center,
-                    index: 0,
-                    builder: Box::new(move |window, cx| {
-                        render_filter_bar_as_segment(&grid, window, cx)
-                    }),
-                }]
             })
-            .available_modes(move |cx| e_modes.read(cx).available_result_view_modes(cx))
             .current_mode(move |cx| e_current.read(cx).current_result_view_mode())
             .set_mode(move |mode, cx| {
                 e_set_mode.update(cx, |grid, cx| grid.set_result_view_mode(mode, cx));
@@ -3822,9 +4073,16 @@ impl DataGridPanel {
 
             self.builder._builder_subscriptions = vec![run_sub];
             self.builder.builder_panel = Some(new_panel.clone());
-            self.builder.filter_input_hidden = true;
             new_panel
         };
+
+        if self.builder.visual_select.is_none()
+            && let Some(spec) = self.builder.builder_draft_spec.clone()
+        {
+            self.builder.visual_select = self.build_visual_select(&spec, cx).unwrap_or(None);
+        }
+
+        self.builder.builder_open = true;
 
         self.spawn_fk_fetch_for_builder(panel.clone(), profile_id, database, source_schema, cx);
 
@@ -3832,6 +4090,7 @@ impl DataGridPanel {
         cx.emit(DataGridEvent::OpenInspector {
             title: "Query Builder".into(),
             content: view,
+            content_has_header: true,
         });
     }
 
@@ -4337,19 +4596,19 @@ impl DataGridPanel {
             }
 
             BuilderEvent::ResetRequested => {
-                if self.reload_blocked_by_pending_edits(cx) {
-                    return;
+                if self.reset_builder_query(window, cx) {
+                    cx.emit(DataGridEvent::CloseInspector);
                 }
-
-                self.clear_builder_draft_spec(cx);
-                cx.emit(DataGridEvent::CloseInspector);
-                self.builder.builder_panel = None;
-                self.builder._builder_subscriptions.clear();
-                self.refresh(window, cx);
             }
 
             BuilderEvent::OpenInEditorRequested => {
                 self.open_builder_in_editor(cx);
+            }
+
+            BuilderEvent::CloseRequested => {
+                self.mark_builder_closed();
+                cx.emit(DataGridEvent::CloseInspector);
+                cx.notify();
             }
 
             BuilderEvent::SaveRequested { name } => {
@@ -5359,6 +5618,109 @@ mod tests {
         assert_eq!(source.collection_ref(), None);
         assert_eq!(source.pagination(), None);
         assert_eq!(source.total_rows(), None);
+    }
+
+    /// The table view's keys go through the keymap: the table's own keys
+    /// move the selection inside the table, and a key of the Results panel
+    /// (Ctrl+Space, the row inspector) reaches the grid as a command.
+    #[gpui::test]
+    fn table_keys_move_the_selection_and_open_the_row_inspector(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let source = DataSource::Table {
+                        profile_id: Uuid::nil(),
+                        database: Some("app".to_string()),
+                        table: TableRef::with_schema("public", "users"),
+                        pagination: Pagination::default(),
+                        order_by: Vec::new(),
+                        total_rows: Some(3),
+                    };
+
+                    let mut panel = DataGridPanel::new_internal(
+                        source,
+                        app_state.clone(),
+                        vec!["id".to_string()],
+                        window,
+                        cx,
+                    );
+                    panel.set_result(
+                        QueryResult::table(
+                            vec![key_column("id", true)],
+                            (1..=3)
+                                .map(|id| vec![dbflux_core::Value::Int(id)])
+                                .collect(),
+                            None,
+                            Duration::ZERO,
+                        ),
+                        cx,
+                    );
+                    panel
+                })
+            },
+            |panel, cx| panel.active_context(cx),
+            DataGridPanel::dispatch_command,
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+        let inspector_requests = Rc::new(RefCell::new(0usize));
+        window.update(|window, cx| {
+            let inspector_requests = inspector_requests.clone();
+            cx.subscribe(&panel, move |_, event: &DataGridEvent, _| {
+                if matches!(event, DataGridEvent::OpenInspector { .. }) {
+                    *inspector_requests.borrow_mut() += 1;
+                }
+            })
+            .detach();
+
+            let table_state = panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("the result builds a table");
+            let focus_handle = table_state.read(cx).focus_handle().clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        let active_row = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                panel
+                    .read(cx)
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active)
+                    .map(|coord| coord.row)
+            })
+        };
+
+        window.simulate_keystrokes("j");
+        let first = active_row(window).expect("`j` selects a row");
+        window.simulate_keystrokes("j");
+        assert_eq!(active_row(window), Some(first + 1), "`j` moves down");
+        window.simulate_keystrokes("k");
+        assert_eq!(active_row(window), Some(first), "`k` moves up");
+
+        window.simulate_keystrokes("ctrl-space");
+        assert!(
+            window
+                .update(|_, cx| host.read(cx).commands.clone())
+                .contains(&Command::ToggleRowInspector),
+            "Ctrl+Space reaches the grid as the row inspector command"
+        );
+        assert_eq!(
+            *inspector_requests.borrow(),
+            1,
+            "the grid opens the inspector"
+        );
     }
 
     #[gpui::test]
@@ -8621,6 +8983,153 @@ mod tests {
     }
 
     #[gpui::test]
+    fn toggle_row_inspector_opens_on_the_cursor_and_closes_again(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                panel.toggle_row_inspector(cx);
+
+                assert!(panel.row_inspector_is_open());
+                assert_eq!(panel.inspector.inspector_row, Some((1, 1)));
+                assert!(panel.inspector.row_inspector_content.is_some());
+
+                panel.toggle_row_inspector(cx);
+
+                assert!(!panel.row_inspector_is_open());
+                assert!(panel.inspector.row_inspector_content.is_none());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn a_pinned_row_inspector_ignores_the_cursor(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                panel.toggle_row_inspector(cx);
+                panel.handle_row_inspector_event(
+                    super::row_inspector::RowInspectorContentEvent::TogglePin,
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, cx| {
+                    state.select_cell(CellCoord::new(0, 0), cx);
+                });
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(panel.inspector.pinned);
+            assert_eq!(
+                panel.inspector.inspector_row,
+                Some((1, 1)),
+                "a pinned inspector keeps the row it was pinned on"
+            );
+            assert!(
+                panel
+                    .inspector
+                    .row_inspector_content
+                    .as_ref()
+                    .expect("inspector content")
+                    .read(app)
+                    .is_pinned()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn closing_the_row_inspector_drops_the_pin(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                panel.toggle_row_inspector(cx);
+                panel.handle_row_inspector_event(
+                    super::row_inspector::RowInspectorContentEvent::TogglePin,
+                    cx,
+                );
+                panel.handle_row_inspector_event(
+                    super::row_inspector::RowInspectorContentEvent::Close,
+                    cx,
+                );
+
+                assert!(!panel.inspector.pinned);
+                assert!(!panel.row_inspector_is_open());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn a_table_browse_offers_its_views_in_the_footer(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+
+            assert!(panel.footer_hosts_view_switch());
+
+            let modes = panel.available_result_view_modes(app);
+            assert!(modes.contains(&super::ResultViewMode::Table));
+            assert!(modes.contains(&super::ResultViewMode::Json));
+        });
+    }
+
+    #[gpui::test]
+    fn a_table_keeps_its_json_view_across_a_reload(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_result_view_mode(super::ResultViewMode::Json, cx);
+                assert!(panel.uses_result_view());
+
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+
+                assert_eq!(panel.result_view_mode(), super::ResultViewMode::Json);
+            });
+        });
+    }
+
+    #[gpui::test]
     fn a_reload_that_cannot_run_does_not_leak_its_intent(cx: &mut TestAppContext) {
         init_test_runtime(cx);
 
@@ -9679,6 +10188,287 @@ mod tests {
     }
 
     #[gpui::test]
+    fn closing_the_builder_restores_the_where_filter(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            assert!(panel.filter_input_visible());
+
+            panel.open_query_builder(window, cx);
+            assert!(
+                !panel.filter_input_visible(),
+                "the builder owns composition while it is open"
+            );
+
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.builder.visual_select = Some(dbflux_core::SelectQuery {
+                sql: "SELECT * FROM users".to_string(),
+                params: Vec::new(),
+            });
+
+            panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+
+            assert!(
+                panel.filter_input_visible(),
+                "closing the builder must bring the WHERE filter back"
+            );
+            assert!(
+                panel.builder.visual_select.is_none(),
+                "an unrun draft must not replace the raw filter on the next reload"
+            );
+            assert!(panel.builder.builder_panel.is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn dismissing_the_rail_restores_the_where_filter(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            assert!(!panel.filter_input_visible());
+
+            panel.clear_inspector_state(cx);
+
+            assert!(panel.filter_input_visible());
+        });
+    }
+
+    struct ShortGridHost {
+        panel: gpui::Entity<DataGridPanel>,
+    }
+
+    impl gpui::Render for ShortGridHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            gpui::div().size_full().child(
+                gpui::div()
+                    .debug_selector(|| "short-grid-host".to_string())
+                    .h(gpui::px(160.0))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(self.panel.clone()),
+            )
+        }
+    }
+
+    // Dragging the editor/results split down used to push the footer under
+    // the next bar while the rows kept their height.
+    #[gpui::test]
+    fn a_short_grid_keeps_its_footer_inside_the_pane(cx: &mut TestAppContext) {
+        let (_, window) = rendered_short_grid(cx);
+
+        let host = window
+            .debug_bounds("short-grid-host")
+            .expect("the host should render");
+        let footer = window
+            .debug_bounds("data-grid-footer")
+            .expect("the footer should render");
+
+        assert!(
+            footer.origin.y >= host.origin.y
+                && footer.origin.y + footer.size.height <= host.origin.y + host.size.height,
+            "footer {footer:?} must stay inside the pane {host:?}"
+        );
+    }
+
+    /// A table grid rendered inside a `ShortGridHost` window.
+    fn rendered_short_grid(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut gpui::VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(2),
+                };
+
+                let panel = cx.new(|cx| {
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+                });
+                panel.update(cx, |panel, cx| {
+                    panel.set_result(keyed_result(&["1", "2"]), cx);
+                });
+                panel_handle.replace(Some(panel.clone()));
+
+                ShortGridHost { panel }
+            });
+
+            Root::new(host, window, cx)
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("the host should build its panel");
+
+        (panel, window)
+    }
+
+    /// Counts the builder rail openings `panel` emits from now on.
+    fn count_builder_openings(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut gpui::VisualTestContext,
+    ) -> (Rc<RefCell<usize>>, gpui::Subscription) {
+        let openings = Rc::new(RefCell::new(0));
+
+        let subscription = window.update(|_, app| {
+            let openings = openings.clone();
+            app.subscribe(panel, move |_, event: &DataGridEvent, _| {
+                if let DataGridEvent::OpenInspector {
+                    content_has_header, ..
+                } = event
+                {
+                    assert!(
+                        *content_has_header,
+                        "the builder draws the rail's only header"
+                    );
+                    *openings.borrow_mut() += 1;
+                }
+            })
+        });
+
+        (openings, subscription)
+    }
+
+    #[gpui::test]
+    fn builder_closed_with_its_button_stays_closed_across_tab_switches(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+        });
+
+        let (openings, _subscription) = count_builder_openings(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 0, "a closed builder must not reopen");
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.open_query_builder(window, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 1, "opening it again must still work");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            *openings.borrow(),
+            2,
+            "an open builder is re-mounted when its tab comes back"
+        );
+    }
+
+    #[gpui::test]
+    fn builder_dismissed_from_the_rail_stays_closed_across_tab_switches(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.clear_inspector_state(cx);
+        });
+
+        let (openings, _subscription) = count_builder_openings(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 0);
+    }
+
+    #[gpui::test]
+    fn closing_the_builder_after_a_run_shows_the_notice_and_reset_restores_where(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, window) = rendered_short_grid(cx);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.open_query_builder(window, cx);
+                panel.apply_builder_draft_spec(make_test_spec(), cx);
+                panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(
+                !panel.filter_input_visible(),
+                "the applied spec drives the rows, so the WHERE input gives way"
+            );
+            assert!(panel.builder_notice_visible());
+            assert!(panel.builder.builder_draft_spec.is_some());
+        });
+        assert!(
+            window.debug_bounds("builder-query-notice").is_some(),
+            "the filter row must say where the rows come from"
+        );
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.reset_builder_query(window, cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(
+                panel.filter_input_visible(),
+                "Reset brings the WHERE input back"
+            );
+            assert!(!panel.builder_notice_visible());
+            assert!(panel.builder.builder_draft_spec.is_none());
+            assert!(panel.builder.builder_panel.is_none());
+        });
+        assert!(window.debug_bounds("builder-query-notice").is_none());
+    }
+
+    #[gpui::test]
+    fn the_notice_is_hidden_while_the_builder_is_open(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.apply_builder_draft_spec(make_test_spec(), cx);
+
+            assert!(!panel.builder_notice_visible());
+            assert!(!panel.filter_input_visible());
+        });
+    }
+
+    #[gpui::test]
     fn fk_rerun_with_pending_edits_is_refused_and_stops_resolving(cx: &mut TestAppContext) {
         use super::filter_bar::RelationalFilterState;
 
@@ -9768,6 +10558,59 @@ mod tests {
                     .record_mode(),
                 "the grid entity itself must stay in record mode"
             );
+        });
+    }
+
+    #[gpui::test]
+    fn document_shaped_query_result_opens_in_the_tree(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(nested_document_rows()),
+                    "db.products.find({})".to_string(),
+                    None,
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert_eq!(panel.result_view_mode(), super::ResultViewMode::Table);
+                assert!(!panel.uses_result_view());
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Document,
+                    "a document-shaped result opens in the tree"
+                );
+
+                panel.set_query_result(
+                    Arc::new(reload_result(&["id", "name"], 2)),
+                    "SELECT id, name FROM users".to_string(),
+                    None,
+                    cx,
+                );
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Table,
+                    "a table-shaped result stays in the grid"
+                );
+            });
         });
     }
 
@@ -10556,7 +11399,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn time_series_collection_browse_opens_as_chart_with_the_driver_query(cx: &mut TestAppContext) {
+    fn time_series_collection_browse_opens_as_chart_and_grid_with_the_driver_query(
+        cx: &mut TestAppContext,
+    ) {
         let (app_state, profile_id) = register_time_series_connection(cx);
         let (panel, window) = open_collection_panel(cx, app_state.clone(), profile_id);
 
@@ -10570,18 +11415,20 @@ mod tests {
 
             assert_eq!(
                 panel.result_view_mode(),
-                super::ResultViewMode::Chart,
-                "a chartable time-series collection must open as a chart"
+                super::ResultViewMode::Both,
+                "a chartable time-series collection must open as the chart above the grid"
             );
             assert!(panel.uses_result_view(), "the chart view must render");
             assert_eq!(
                 panel.available_result_view_modes(app),
                 vec![
                     super::ResultViewMode::Table,
-                    super::ResultViewMode::Chart,
                     super::ResultViewMode::Json,
+                    super::ResultViewMode::Chart,
+                    super::ResultViewMode::Both,
                 ],
-                "the table stays one click away from the chart"
+                "the table and the chart alone stay one click away, Chart after the \
+                 shape's own views (Data | JSON | Chart)"
             );
             assert_eq!(
                 panel.view_config.mode,
@@ -10644,8 +11491,69 @@ mod tests {
         });
     }
 
+    /// The chart stats rail leaves the grid for a workspace island only when
+    /// the host forwards the grid's side panels; otherwise it stays docked.
     #[gpui::test]
-    fn document_collection_keeps_the_document_view_without_result_views(cx: &mut TestAppContext) {
+    fn the_stats_rail_is_a_side_panel_only_for_a_forwarding_host(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let shell = panel
+                    .chart
+                    .chart_shell
+                    .clone()
+                    .expect("the chart view builds its shell on render");
+                shell.update(cx, |shell, _| shell.chart_rail_open = true);
+            });
+        });
+
+        let panel_ids = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, app| {
+                panel.update(app, |panel, cx| {
+                    panel
+                        .side_panels(cx)
+                        .into_iter()
+                        .map(|side| (side.id.to_string(), side.width))
+                        .collect::<Vec<_>>()
+                })
+            })
+        };
+
+        assert!(
+            panel_ids(window).is_empty(),
+            "a grid whose host does not forward side panels keeps the rail docked"
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, _| panel.set_side_panels_hosted(true));
+        });
+        assert_eq!(
+            panel_ids(window),
+            vec![("grid-chart-stats".to_string(), gpui::px(320.0))]
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_result_view_mode(super::ResultViewMode::Table, cx);
+            });
+        });
+        assert!(
+            panel_ids(window).is_empty(),
+            "the rail belongs to the chart, so the table view shows none"
+        );
+    }
+
+    #[gpui::test]
+    fn document_collection_opens_as_a_tree_without_result_views(cx: &mut TestAppContext) {
         let (app_state, profile_id) = register_builder_stub_connection(
             cx,
             dbflux_core::DatabaseCategory::Document,
@@ -10670,13 +11578,223 @@ mod tests {
                 assert!(panel.available_result_view_modes(cx).is_empty());
                 assert_eq!(
                     panel.view_config.mode,
-                    crate::data_view::DataViewMode::Document
+                    crate::data_view::DataViewMode::Document,
+                    "a document collection opens in the tree"
+                );
+                assert!(
+                    panel.collection.raw.is_some(),
+                    "a document collection keeps the driver's page next to the flattened grid"
+                );
+                assert_eq!(
+                    panel.available_view_modes(cx),
+                    vec![
+                        crate::data_view::DataViewMode::Document,
+                        crate::data_view::DataViewMode::Table,
+                        crate::data_view::DataViewMode::Json,
+                    ]
                 );
                 assert_eq!(
                     panel.source_query_labels(cx),
                     ("find", "metrics.system".to_string()),
                     "a driver without a browse query keeps the generic label"
                 );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn document_collection_keeps_the_view_the_user_picked_across_pages(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+                panel.set_document_view_mode(crate::data_view::DataViewMode::Table, cx);
+
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Table,
+                    "a refresh or a new page keeps the picked view"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn empty_project_and_sort_slots_show_their_placeholders(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            let collection = &panel.read(app).collection;
+
+            let projection = collection.projection_input.read(app);
+            assert!(projection.value().is_empty());
+            assert_eq!(
+                projection.presentation().placeholder().as_ref(),
+                dbflux_i18n::t!("document.collection.slot.project_placeholder")
+            );
+
+            let sort = collection.sort_input.read(app);
+            assert!(sort.value().is_empty());
+            assert_eq!(
+                sort.presentation().placeholder().as_ref(),
+                dbflux_i18n::t!("document.collection.slot.sort_placeholder")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn non_document_collection_still_opens_as_a_table(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::KeyValue,
+            dbflux_core::QueryLanguage::RedisCommands,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            assert_eq!(
+                panel.read(app).view_config.mode,
+                crate::data_view::DataViewMode::Table
+            );
+        });
+    }
+
+    /// A page of two products with a nested `price` object and an `items`
+    /// array, the second product lacking `price.currency`.
+    fn nested_document_rows() -> QueryResult {
+        use dbflux_core::Value;
+        use std::collections::BTreeMap;
+
+        let column = |name: &str, is_primary_key: bool| ColumnMeta {
+            name: name.to_string(),
+            type_name: "BSON".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key,
+        };
+
+        let price = |currency: Option<&str>| {
+            let mut fields = BTreeMap::new();
+            fields.insert("amount".to_string(), Value::Decimal("405.00".into()));
+            if let Some(currency) = currency {
+                fields.insert("currency".to_string(), Value::Text(currency.into()));
+            }
+            Value::Document(fields)
+        };
+
+        let items = Value::Array(vec![
+            Value::Document(BTreeMap::from([(
+                "sku".to_string(),
+                Value::Text("a".into()),
+            )])),
+            Value::Document(BTreeMap::from([(
+                "sku".to_string(),
+                Value::Text("b".into()),
+            )])),
+        ]);
+
+        QueryResult::json(
+            vec![
+                column("_id", true),
+                column("price", false),
+                column("items", false),
+            ],
+            vec![
+                vec![Value::Int(1), price(Some("USD")), items.clone()],
+                vec![Value::Int(2), price(None), items],
+            ],
+            Duration::ZERO,
+        )
+    }
+
+    #[gpui::test]
+    fn document_collection_expands_objects_and_steps_into_arrays(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        let column_names = |panel: &DataGridPanel| -> Vec<String> {
+            panel
+                .result
+                .columns
+                .iter()
+                .map(|column| column.name.clone())
+                .collect()
+        };
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+
+                assert_eq!(column_names(panel), vec!["_id", "price", "items"]);
+
+                panel.toggle_document_column_group(1, cx);
+                assert_eq!(
+                    column_names(panel),
+                    vec!["_id", "price.amount", "price.currency", "items"]
+                );
+
+                let model = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .map(|state| state.read(cx).model().clone())
+                    .expect("table state");
+                assert!(
+                    model.cell(1, 2).is_some_and(|cell| cell.is_missing()),
+                    "the second product has no currency"
+                );
+                assert!(model.cell(0, 3).is_some_and(|cell| cell.is_nested()));
+
+                panel.step_into_document_value(0, 3, cx);
+                assert!(panel.is_stepped_into());
+                assert_eq!(column_names(panel), vec!["sku"]);
+                assert_eq!(panel.result.rows.len(), 2);
+
+                panel.step_out_of_document_value(cx);
+                assert!(!panel.is_stepped_into());
+                assert_eq!(column_names(panel), vec!["_id", "price", "items"]);
             });
         });
     }

@@ -2,37 +2,40 @@ import type { Dictionary } from './index';
 
 export const es: Dictionary = {
   nav: {
-    features: 'Funciones',
     drivers: 'Drivers',
+    keyboard: 'Teclado',
+    governance: 'Gobernanza',
+    compare: 'Comparar',
     docs: 'Documentación',
     about: 'Acerca de',
-    github: 'GitHub',
+    source: 'Código',
     download: 'Descargar',
     menu: 'Menú',
     language: 'Idioma',
     theme: 'Tema',
-    theme_system: 'Sistema',
+    theme_system: 'Auto',
     theme_light: 'Claro',
     theme_dark: 'Oscuro',
-    theme_mirage: 'Espejismo',
   },
   footer: {
     product: 'Producto',
-    features: 'Funciones',
     drivers: 'Drivers',
     releases: 'Versiones',
+    changelog: 'Registro de cambios',
     docs: 'Documentación',
     usage: 'Guía de uso',
     connecting: 'Conexión',
     mcp: 'IA + MCP',
+    driver_authoring: 'Escribir un driver',
     project: 'Proyecto',
     about: 'Acerca de',
     contributing: 'Cómo contribuir',
+    compare: 'Comparar',
     source: 'Código fuente',
     trademark: 'Política de marca',
     privacy: 'Política de privacidad',
     tagline:
-      'Un cliente de bases de datos keyboard-first y totalmente de código abierto, desarrollado en abierto.',
+      'Un cliente de bases de datos keyboard-first y totalmente de código abierto, desarrollado en abierto por Ignacio Perez y colaboradores.',
     license: 'MIT o Apache-2.0, a tu elección.',
   },
   search: {
@@ -70,6 +73,8 @@ export const es: Dictionary = {
     report_issue: 'Reportar un problema',
     not_translated: 'Esta página aún no está traducida. Se muestra la versión en inglés.',
     view_in_english: 'Ver en inglés',
+    previous: 'Anterior',
+    next: 'Siguiente',
   },
   docs_index: {
     title: 'Documentación',
@@ -80,129 +85,533 @@ export const es: Dictionary = {
       'Estas páginas existen en esta versión pero no tienen un lugar en el orden de lectura declarado en <code>src/data/nav.ts</code>.',
   },
   landing: {
-    title: 'Todas las bases de datos que usas, en una sola ventana controlada por teclado.',
-    lede: 'Una plataforma de datos extensible y centrada en el teclado. Doce drivers integrados, un núcleo neutral respecto al driver, y lo que necesites además a través del protocolo RPC de drivers.',
-    download_linux: 'Descargar para Linux',
-    download_macos: 'Descargar para macOS',
-    download_windows: 'Descargar para Windows',
-    view_source: 'Ver código fuente',
-    platforms_meta: 'Linux · macOS · Windows — MIT o Apache-2.0',
-    hero_caption: 'Main server — acta.documents',
-    hero_alt:
-      'DBFlux mostrando los resultados de la consulta acta.documents, con una barra lateral de conexiones y detalles de la fila seleccionada.',
-    drivers_eyebrow: 'Drivers integrados',
-    drivers_link: 'Matriz de capacidades →',
-    drivers_note:
-      'Los almacenes relacionales, de documentos, clave-valor, de series temporales y de objetos comparten una misma cuadrícula de resultados, un motor de gráficos y un registro de auditoría. Los drivers externos se registran mediante el protocolo RPC sin necesidad de un fork.',
-    features_eyebrow: 'Qué obtienes',
-    feature: {
-      editor: {
-        title: 'Editor consciente del dialecto',
-        body: 'El autocompletado, la validación y la detección de sentencias peligrosas provienen del driver, no de una suposición compartida. Un DELETE sin WHERE se detecta antes de ejecutarse.',
-      },
-      grid: {
-        title: 'Cuadrícula de resultados editable',
-        body: 'Edita celdas directamente cuando el resultado se corresponde con una sola tabla, navega por millones de filas mediante keyset, y copia cualquier selección como una query nativa.',
-      },
-      charts: {
-        title: 'Gráficos y dashboards',
-        body: 'Convierte cualquier resultado en un gráfico, guárdalo y fíjalo en un dashboard junto a las métricas de instancia de la misma conexión.',
-      },
-      hooks: {
-        title: 'Hooks de conexión',
-        body: 'Ejecuta un comando, un script o Lua en proceso alrededor de la conexión y desconexión, con salida en vivo en el panel de tareas y una política de fallo que eliges.',
-      },
-      reach: {
-        title: 'Llega a todo',
-        body: 'Los túneles SSH, los proxies HTTP y AWS SSO son de primera clase. Los secretos viven en el keyring del sistema operativo, nunca en el archivo de perfil.',
-      },
-      audit: {
-        title: 'Auditable por defecto',
-        body: 'Las queries, hooks, scripts y llamadas MCP escriben en el mismo registro de eventos, con redacción y retención que tú controlas.',
+    eyebrow: 'Nativo · Rust · GPUI · MIT o Apache-2.0',
+    title_1: 'Una ventana.',
+    title_2: 'Todas las',
+    title_3: 'bases.',
+    lede: 'Un cliente keyboard-first escrito en Rust. PostgreSQL, MySQL, SQLite, MongoDB, Redis y más comparten un editor, una grilla de resultados y un registro de auditoría. Cualquier otra se conecta mediante el protocolo RPC de drivers.',
+    lede_short:
+      'Un cliente keyboard-first escrito en Rust. PostgreSQL, MongoDB, Redis y más comparten un editor, una grilla de resultados y un registro de auditoría.',
+    read_docs: 'Leer la documentación',
+    console: {
+      search: 'Busca o ejecuta un comando',
+      dialect: 'Dialecto',
+      run: 'Ejecutar',
+      executing: 'ejecutando…',
+      result_grid: 'Una grilla de resultados',
+      pick_hint: 'Elige un driver y luego Ejecutar',
+      connected: 'Conectado',
+      audit_log: 'Un registro de auditoría',
+      tasks: '0 tareas en segundo plano',
+    },
+    drivers_label: 'Drivers integrados',
+    and_more: 'y más',
+    core: {
+      eyebrow: 'Núcleo neutral',
+      title: 'La interfaz nunca aprende el nombre de un driver.',
+      body: 'Un driver declara qué es. La interfaz lee esa declaración y elige una vista, así que un almacén de documentos recibe un árbol de documentos y una fuente de logs recibe un flujo de eventos, sin ninguna condición sobre el nombre de un driver en toda la aplicación. Elige un driver para verlo.',
+      rpc_more: 'y más, mediante el protocolo RPC',
+      note: 'Los drivers externos completan la misma estructura mediante el protocolo RPC y reciben el mismo trato.',
+      view_chosen: 'vista elegida por la UI',
+      view_short: 'vista',
+      views: {
+        grid: 'Grilla de resultados',
+        tree: 'Árbol de documentos',
+        keys: 'Explorador de claves',
+        events: 'Flujo de eventos',
+        range: 'Selector de rango + gráfico',
+        objects: 'Explorador de objetos',
       },
     },
-    keyboard_eyebrow: 'Basado en teclado',
-    keyboard_title: 'El ratón es opcional, no obligatorio.',
-    keyboard_body:
-      'Cada superficie tiene un atajo y una entrada en la paleta de comandos: abrir una conexión, ejecutar una sentencia, saltar a una tabla, convertir un resultado en gráfico. El estado vacío te muestra los cuatro que necesitas el primer día.',
-    keyboard_link: 'Referencia completa de teclado →',
-    shortcut: {
-      new_query: 'nueva query',
-      command_palette: 'paleta de comandos',
-      open_script: 'abrir script desde disco',
-      new_connection: 'nueva conexión',
+    keyboard: {
+      eyebrow: 'Keyboard-first',
+      title: 'El ratón es opcional.',
+      body: 'Cada acción tiene un atajo y una entrada en la paleta de comandos. Prueba la paleta: escribe para filtrar, usa las flechas y pulsa Enter.',
+      mac_note: 'En macOS, Cmd reemplaza a Ctrl en la mayoría de los atajos.',
+      link: 'Referencia completa del teclado',
+      placeholder: 'Escribe un comando',
+      palette_label: 'Paleta de comandos',
+      count: '{n} comandos',
+      empty: 'Ningún comando coincide.',
+      ran: 'Ejecutado: {name}',
+      hint: '↑↓ mover · ↵ ejecutar',
     },
-    governance_eyebrow: 'Gobernanza',
-    governance_title: 'Dale a un cliente de IA una conexión, no tu base de datos.',
-    governance_body:
-      'El servidor MCP clasifica cada operación — metadata, lectura, escritura, destructiva, administrativa — y un motor de políticas decide por rol y por conexión. Las llamadas de escritura y destructivas pueden requerir aprobación humana.',
-    audit_eyebrow: 'Auditoría',
-    audit_title: 'Cada query, hook y llamada de herramienta, registrada.',
-    audit_body:
-      'Los eventos se registran en un log local de SQLite con categoría, severidad, actor y resultado. El texto de la query se guarda como huella, no en claro; los valores sensibles se redactan, y el log completo se exporta a JSON o CSV.',
-    docs_eyebrow: 'Documentación',
-    docs_link: 'Todas las guías →',
-    doc_card: {
-      usage: {
-        title: 'Guía de uso',
-        body: 'Primer arranque, creación de una conexión, ejecución de queries, exploración de resultados, gráficos y exportación.',
+    commands: {
+      palette: 'Mostrar paleta de comandos',
+      new_tab: 'Nueva pestaña de consulta',
+      run: 'Ejecutar consulta',
+      run_new_tab: 'Ejecutar consulta en pestaña nueva',
+      open_script: 'Abrir archivo de script',
+      saved_queries: 'Abrir consultas guardadas',
+      audit: 'Abrir visor de auditoría',
+      sidebar: 'Mostrar barra lateral',
+      focus_sidebar: 'Enfocar barra lateral',
+      focus_editor: 'Enfocar editor',
+      focus_results: 'Enfocar resultados',
+      close_tab: 'Cerrar pestaña actual',
+      comment: 'Comentar línea',
+      save: 'Guardar consulta',
+    },
+    governance: {
+      eyebrow: 'Gobernanza MCP',
+      title: 'Dale a un agente una conexión, no tu base de datos.',
+      body: 'Cada llamada MCP se clasifica antes de tocar nada. Un motor de políticas decide por rol y por conexión, y las riesgosas esperan a una persona. Elige una llamada y síguela.',
+      outcome: 'Resultado',
+      example: 'Política de ejemplo: rol analyst',
+      stage: {
+        agent: 'Agente',
+        classify: 'Clasificar',
+        policy: 'Política',
+        approval: 'Aprobación',
+        execute: 'Ejecutar',
+        audit: 'Auditoría',
       },
-      connecting: {
-        title: 'Conexión',
-        body: 'Túneles SSH, proxies, AWS SSO y fuentes de valores para todo lo que no sea un host y puerto simples.',
+      note: {
+        agent: 'Llama a una herramienta por stdio con su client id.',
+        classify: 'La operación recibe una clase de ejecución.',
+        policy: 'Deciden el rol y la conexión.',
+        approval: 'Las llamadas riesgosas esperan a una persona.',
+        execute: 'Se ejecuta contra la conexión.',
+        audit: 'Siempre se escribe, pase lo que pase.',
       },
-      mcp: {
-        title: 'IA + MCP',
-        body: 'Conecta un cliente de IA a DBFlux y define los roles, políticas y aprobaciones que lo mantienen dentro de los límites.',
+      hint: {
+        schema: 'esquema',
+        read: 'leer filas',
+        write: 'escritura',
+        destructive: 'destructiva',
       },
+      verdict: {
+        allowed: 'Permitida',
+        waits: 'Te espera',
+        denied: 'Denegada',
+      },
+      detail: {
+        metadata:
+          'Las lecturas de metadatos están permitidas para este rol. La llamada se ejecuta al instante y aun así queda en el registro de auditoría.',
+        read: 'Las lecturas están permitidas. Por defecto, la fila de auditoría guarda una huella del texto de la consulta, no el texto.',
+        write:
+          'Las escrituras quedan como ejecución pendiente. Cuando alguien la aprueba en DBFlux, el agente repite la llamada y se ejecuta una vez. La aprobación también se audita.',
+        destructive:
+          'El DDL irreversible está fuera de este rol. El agente recibe una denegación con el motivo, y el intento queda registrado.',
+      },
+    },
+    audit: {
+      eyebrow: 'Auditoría',
+      title: 'Nada se ejecuta sin registro.',
+      body: 'Consultas, hooks, scripts y llamadas de agentes quedan en un único registro SQLite local con categoría, severidad, actor y resultado.',
+      fingerprint: 'El texto de la consulta se guarda como huella, no completo.',
+      redacted: 'Los valores sensibles se ocultan por defecto.',
+      local: 'Se exporta a JSON o CSV. Nunca sale de la máquina.',
+    },
+    compare: {
+      eyebrow: 'Comparar',
+      title: 'Todo en una sola versión gratuita.',
+      body: 'Qué incluye cada cliente y en qué edición. Un candado significa que la función existe detrás de una edición de pago, no que falte.',
+      feature: 'Función',
+      why: 'Por qué cambiar',
+      leads: 'Dónde {name} va por delante',
+      reviewed: 'Última revisión: {date}',
+      full: 'Comparación completa',
+      legend: {
+        included: 'Incluido',
+        limited: 'Limitado',
+        paid: 'Edición de pago',
+        none: 'No disponible',
+        unknown: 'Sin revisar',
+      },
+      edition: {
+        community: 'Community',
+        commercial: 'Comercial',
+        free_trial: 'Prueba gratuita',
+      },
+      row: {
+        open_source: 'Código abierto',
+        limits: 'Límites de uso',
+        builder: 'Constructor visual de consultas',
+        charts: 'Gráficos desde resultados',
+        s3: 'Explorador de objetos S3',
+        mcp: 'Servidor MCP para clientes de IA',
+        builder_short: 'Constructor de consultas',
+        s3_short: 'Explorador S3',
+        table_editor: 'Editor de tablas y restricciones',
+        query_plan: 'Visualizador de planes de consulta',
+        import_connections: 'Importa conexiones de',
+        commercial_use: 'Trabajo pagado sin costo',
+        diagram: 'Diagrama de esquema',
+        schema_diff: 'Diferencia de esquema',
+        query_log: 'Registro de consultas y auditoría',
+        data_compare: 'Comparación de datos',
+        command_palette: 'Paleta de comandos para acciones',
+        ai_approval: 'Pregunta antes de que una IA ejecute una consulta',
+      },
+      row_note: {
+        limits: 'En la edición comparada',
+        dynamodb: 'Nota 1',
+        builder: 'SELECT, UPDATE, DELETE',
+        s3: 'Compatible con R2 y MinIO',
+      },
+      group: {
+        licence: 'Licencia',
+        engines: 'Motores',
+        query: 'Consultas y visualización',
+        cloud: 'Nube y automatización',
+      },
+      cell: {
+        included: 'Incluido',
+        none: 'Ninguno',
+        no: 'No',
+        not_reviewed: 'Sin revisar',
+        paid_licence: 'Licencia de pago',
+        lite_up: 'Lite y superiores',
+        paid_editions: 'Ediciones de pago',
+        paid_editions_beta: 'Ediciones de pago, beta',
+        beta: 'Beta',
+        beta_macos: 'Beta, macOS',
+        tabs_limit: '2 pestañas, 2 ventanas, 2 filtros',
+        with_roles: 'Con roles y aprobaciones',
+        mcp_dbeaver: 'Team / CloudBeaver EE; CLI dbvr gratuita',
+        mcp_dbgate: 'Solo lectura, build Docker',
+        not_yet: 'Todavía no',
+        not_included: 'No incluido',
+        not_available: 'No disponible',
+        not_stated: 'No se indica',
+        big_data_tools: 'Plugin Big Data Tools',
+        noncommercial_only: 'Solo uso no comercial',
+        commercial_licence: 'Licencia comercial',
+        audit_log: 'Registro de auditoría, filtrable y exportable',
+        sql_log: 'Archivo de registro SQL',
+        console_log: 'Console log, si está activado',
+        user_actions: 'Inicios de sesión y acciones de usuarios',
+        objects_only: 'Encuentra objetos, no acciones',
+        community_plugin: 'Plugin de la comunidad',
+        per_policy: 'Cuando una política lo exige',
+        mcp_dbgate_team: 'Ejecuta consultas y escrituras',
+        db_chat: 'DB chat, con tu permiso',
+      },
+      gain: {
+        dbeaver:
+          'MongoDB, Redis, DynamoDB, el constructor de consultas y los gráficos sin pasar a una edición de pago.',
+        datagrip: 'Bases de datos, almacenamiento de objetos y logs en una app de código abierto.',
+        tableplus: 'Código abierto, y sin límite de pestañas ni ventanas en la versión gratuita.',
+        beekeeper: 'MongoDB y DynamoDB sin una edición de pago.',
+        dbgate: 'El constructor de consultas y los gráficos sin Premium.',
+      },
+      keep: {
+        dbeaver:
+          'Un catálogo de motores mucho más amplio y herramientas maduras de administración y migración.',
+        datagrip: 'Inspecciones SQL, refactorización y análisis de código.',
+        tableplus: 'Una app nativa pulida con larga trayectoria en macOS.',
+        beekeeper: 'Edición de tablas, índices y relaciones en Community.',
+        dbgate: 'SQL, MongoDB y Redis en Community, y una versión web.',
+      },
+    },
+    rules: {
+      eyebrow: 'Cuatro reglas que el código impone',
+      r1_title: 'El teclado antes que el puntero',
+      r1_body:
+        'Si una acción existe, tiene un atajo y una entrada en la paleta de comandos. Ningún flujo depende del ratón.',
+      r2_title: 'Sin nombres de drivers en la UI',
+      r2_body:
+        'La categoría, el lenguaje de consulta y los flags de capacidades deciden qué se muestra. Un comportamiento nuevo añade un punto de extensión al núcleo.',
+      r3_title: 'Denso antes que decorativo',
+      r3_body:
+        'Esquinas cortadas en los controles, bordes rectos en los datos, un solo color de acento. El espacio en pantalla es de tus datos.',
+      r4_title: 'Nada se ejecuta sin registro',
+      r4_body:
+        'Consultas, hooks, scripts y llamadas de agentes comparten un registro de auditoría, con redacción por defecto y solo tuyo.',
     },
   },
   install: {
-    all_downloads: 'Todas las descargas →',
-    copy: 'copiar',
-    copied: 'copiado',
-    copy_fallback: 'usa ctrl+c',
-    hint: {
-      tarball:
-        '¿Prefieres no usar sudo? Añade -s -- --prefix ~/.local para instalar en tu directorio home.',
-      aur: 'Funciona cualquier ayudante de AUR. yay -S dbflux es equivalente.',
-      deb: 'Cambia amd64 por arm64 en máquinas ARM. El .rpm se instala igual con dnf.',
-      appimage: 'Totalmente portable. No se escribe nada fuera de tu directorio home.',
-      nix: 'El paquete por defecto es un binario precompilado. Usa #dbflux-source para compilar desde el código fuente.',
-      dmg: 'El build no está firmado con un certificado de desarrollador de Apple. Para omitir el diálogo: xattr -cr /Applications/DBFlux.app. Requiere macOS 11 Big Sur o posterior.',
-      installer:
-        'El ejecutable no está firmado con un certificado de firma de código de Windows. Requiere Windows 10 o posterior en x86_64; ARM64 aún no es compatible.',
-      portable: 'No se instala nada y no se escribe nada fuera de la carpeta donde extraes.',
+    eyebrow: 'Instalar',
+    title: 'Funcionando en una línea.',
+    body: 'Builds nativos para Linux, macOS y Windows. Doble licencia MIT o Apache-2.0.',
+    all_downloads: 'Todas las descargas y checksums',
+    copy: 'Copiar',
+    copied: 'Copiado',
+    copy_command: 'Copiar comando',
+    platforms_label: 'Plataforma',
+    note: {
+      linux: '¿Prefieres no usar sudo? Añade -s -- --prefix ~/.local.',
+      arch: 'También en AUR mediante yay.',
+      nix: 'También hay una salida nightly del flake.',
+      macos: 'Apple Silicon e Intel. macOS 11 o posterior. Aún sin firmar.',
+      windows: 'Instalador o portable. Windows 10 o posterior, x86_64.',
     },
-    steps: {
-      dmg: [
-        'Descarga dbflux-macos-arm64.dmg para Apple Silicon, o dbflux-macos-amd64.dmg para Intel.',
-        'Abre el DMG y arrastra DBFlux a Aplicaciones.',
-        'En el aviso de "desarrollador no identificado", ve a Ajustes del Sistema → Privacidad y Seguridad y pulsa Abrir de todos modos.',
-      ],
-      installer: [
-        'Descarga dbflux-windows-amd64-setup.exe.',
-        'Ejecútalo y sigue el asistente.',
-        'Si SmartScreen avisa, elige Más información → Ejecutar de todos modos.',
-      ],
-      portable: [
-        'Descarga dbflux-windows-amd64.zip.',
-        'Extráelo donde quieras.',
-        'Ejecuta dbflux.exe.',
-      ],
+  },
+  compare_page: {
+    page_title: 'DBFlux comparado con DBeaver, DataGrip, TablePlus, Beekeeper y DbGate',
+    page_description:
+      'Qué incluye cada cliente de bases de datos, en qué edición y en qué plataforma, verificado con las páginas de cada proveedor.',
+    eyebrow: 'Comparar',
+    h1_1: 'DBFlux junto a',
+    h1_2: 'los clientes que usas.',
+    lede: 'Qué incluye cada cliente, en qué edición y en qué plataforma. Un candado significa que la función existe detrás de una licencia, no que falte. Donde DBFlux se queda corto, la fila lo dice.',
+    meta: 'DBFlux {version} · última revisión {date}',
+    meta_body: 'Redactado a partir de las páginas de precios y funciones de cada proveedor.',
+    legend: {
+      included: 'Incluido en la edición comparada',
+      limited: 'Limitado',
+      paid: 'Edición de pago',
+      none: 'No disponible',
+      unknown: 'Sin revisar todavía',
+    },
+    highlight_hint: 'Haz clic en una columna para resaltarla.',
+    edition_compared: 'Edición comparada',
+    note_dynamodb:
+      '1 — DBFlux ejecuta las operaciones nativas de DynamoDB: scan, query, put, update y delete. PartiQL y las transacciones no están expuestas.',
+    note_datagrip:
+      '2 — DataGrip es gratuito solo para uso no comercial. Aquí se compara la licencia comercial.',
+    sources_title: 'Fuentes',
+    per_client: 'Una comparación por cliente',
+    read_comparison: 'Leer la comparación',
+    feedback: '¿Ves algo desactualizado? Abre un issue y la fila se corrige con su fuente.',
+    feedback_link: 'Abrir un issue',
+    vs: {
+      crumb: 'Comparar',
+      download: 'Descargar DBFlux',
+      on_page: 'En esta página',
+      toc: {
+        gain: 'Qué ganas',
+        gaps: 'Lo que aún no reemplaza',
+        moving: 'Cómo migrar',
+      },
+      col_feature: 'Función',
+      sources: 'Fuentes:',
+      dynamodb_note:
+        'DynamoDB en DBFlux ejecuta operaciones nativas, sin PartiQL ni transacciones.',
+      column: {
+        dbeaver_community: 'DBeaver Community',
+        dbeaver_paid: 'Ediciones de pago de DBeaver',
+        datagrip_noncommercial: 'DataGrip no comercial (gratis)',
+        datagrip_commercial: 'DataGrip comercial (de pago)',
+        tableplus_trial: 'Prueba gratuita de TablePlus',
+        tableplus_paid: 'Licencia de pago de TablePlus',
+        beekeeper_community: 'Beekeeper Community',
+        beekeeper_paid: 'Ediciones de pago de Beekeeper',
+        dbgate_community: 'DbGate Community',
+        dbgate_premium: 'DbGate Premium',
+        dbgate_team: 'DbGate Team Premium',
+      },
+      gain_title: 'Qué ganas',
+      gain: {
+        builder: {
+          title: 'Arma una consulta sin escribir SQL',
+          body: 'Elige tablas, joins, filtros y agregados en el panel del constructor. El SQL que genera usa el dialecto de la conexión, y el resultado sigue siendo editable cuando corresponde a una sola tabla.',
+          link: 'Constructor visual de consultas',
+        },
+        redis: {
+          title: 'SQL y Redis en la misma ventana',
+          body: 'Mantén una pestaña de consulta de PostgreSQL junto a un explorador de claves de Redis, con topologías cluster y sentinel y una comprobación de tamaño antes de cargar un valor grande.',
+          link: 'Exploración clave-valor',
+        },
+        aws: {
+          title: 'Logs y objetos junto a los datos',
+          body: 'Ejecuta Logs Insights sobre CloudWatch, abre después el bucket de S3 donde escribió el proceso, previsualiza un archivo y edítalo en el sitio.',
+          link: 'Drivers de CloudWatch y S3',
+        },
+        governance: {
+          title: 'Clientes de IA bajo tus reglas',
+          body: 'Un cliente MCP recibe solo las herramientas que su rol permite. Cada petición se clasifica como lectura, escritura o cambio destructivo, se comprueba contra la política de esa conexión, espera tu aprobación cuando la política lo indica y queda en el registro de auditoría.',
+          link: 'Gobernanza de IA y MCP',
+        },
+      },
+      mockup: {
+        columns: 'Columnas',
+        joins: 'Joins',
+        filters: 'Filtros',
+        run: 'Ejecutar',
+        keys: 'claves',
+        preview_first: 'Previsualizar primero',
+        unsaved: 'sin guardar',
+        pending: 'Pendiente',
+        approve: 'Aprobar',
+        reject: 'Rechazar',
+      },
+      gaps_title: 'Lo que DBFlux aún no reemplaza',
+      not_yet: 'Todavía no',
+      gap: {
+        table_editor: {
+          name: 'Editor de tablas y restricciones',
+          detail:
+            'Crear y modificar tablas desde un formulario. Hoy el DDL se escribe a mano o se aplica desde una diferencia de esquema.',
+        },
+        formats: {
+          name: 'Más formatos de exportación e importación',
+          detail:
+            'La exportación escribe CSV y JSON, y la importación lee la exportación propia de DBFlux. SQL, Excel y otros formatos no están soportados.',
+        },
+        query_plan: {
+          name: 'Visualizador de planes de consulta',
+          detail: 'Explicar consulta muestra el plan como filas. No se dibuja un árbol con costos.',
+        },
+        users: {
+          name: 'Usuarios, roles y permisos',
+          detail: 'Crear usuarios y otorgar o revocar privilegios desde la interfaz.',
+        },
+        backup: {
+          name: 'Copias de seguridad y restauración',
+          detail:
+            'Volcados y restauraciones nativos. La exportación e importación de tablas mueven datos solo como CSV o JSON.',
+        },
+        data_compare: {
+          name: 'Comparación de datos',
+          detail:
+            'Diferencias fila por fila entre tablas y conexiones. La diferencia de esquema solo compara la estructura.',
+        },
+      },
+      moving_title: 'Cómo migrar',
+      step: {
+        install: {
+          title: 'Instala DBFlux',
+          body: 'Hay builds para Linux, macOS y Windows en la página de descarga. Nada toca tu instalación de {name}.',
+        },
+        query: {
+          title: 'Abre una pestaña de consulta',
+          body: 'Ctrl N abre una en la conexión activa. La paleta de comandos encuentra cualquier otra acción por su nombre.',
+        },
+      },
+      where_title: 'Dónde está cada cosa',
+      term: {
+        sidebar: 'Barra lateral de conexiones',
+        query_tab: 'Pestaña de consulta',
+        diagram: 'Diagrama de esquema',
+        transfer: 'Exportar, importar, migrar',
+        schema_diff: 'Diferencia de esquema',
+        history: 'Historial de consultas',
+        saved: 'Consultas guardadas',
+        ssh: 'Perfiles de túnel SSH, pestaña Acceso',
+        palette: 'Paleta de comandos',
+        no_equivalent: 'Sin equivalente',
+      },
+      others_title: 'Comparar con otros',
+    },
+    vs_client: {
+      dbeaver: {
+        page_title: 'Una alternativa gratuita y de código abierto a DBeaver',
+        page_description:
+          'MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son de pago en DBeaver y forman parte de la única versión gratuita de DBFlux. Qué ganas, qué falta todavía y cómo traer tus conexiones.',
+        h1: 'Una alternativa gratuita y de código abierto a DBeaver.',
+        lede: 'DBeaver Community es gratuito y de código abierto, y es un buen cliente. La diferencia está en dónde cae la línea entre ediciones: MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son funciones PRO en DBeaver y parte de la única versión gratuita de DBFlux.',
+        bring: 'Trae tus conexiones de DBeaver',
+        meta: 'DBFlux {version} · ediciones de DBeaver a {editions} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'DBeaver ofrece una edición Community gratuita y ediciones de escritorio de pago (Lite, Enterprise, Ultimate). Cada fila indica la edición más barata de DBeaver que incluye la función.',
+        editions_page: 'ediciones',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DBeaver instalado por ahora. Todas faltan hoy en DBFlux.',
+        step: {
+          title: 'Importa tus conexiones de DBeaver',
+          body: 'En el gestor de conexiones, elige Importar desde otro cliente y selecciona el data-sources.json de tu workspace. Añade credentials-config.json para llevar las contraseñas guardadas al llavero del sistema. Las conexiones de PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB y Redis se importan sin sus ajustes de SSH y SSL, y cada entrada que DBFlux no puede convertir aparece con el motivo.',
+        },
+      },
+      datagrip: {
+        page_title:
+          'Una alternativa de código abierto a DataGrip, gratuita para el trabajo comercial',
+        page_description:
+          'DataGrip es gratuito solo para uso no comercial. DBFlux es de código abierto y gratuito para cualquier trabajo. Las dos licencias lado a lado, las funciones que DataGrip tiene en ambas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa de código abierto a DataGrip, gratuita para el trabajo comercial.',
+        lede: 'DataGrip es un IDE de bases de datos muy completo y, desde octubre de 2025, es gratuito para uso no comercial con todas las funciones de la versión de pago. El trabajo por el que te pagan sigue necesitando una licencia comercial. DBFlux es de código abierto y gratuito para cualquier uso, y tiene un constructor visual de consultas, que DataGrip no tiene. DataGrip va por delante en comparación de datos, análisis de código SQL y cantidad de motores soportados.',
+        bring: 'Cómo migrar desde DataGrip',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por licencia',
+        edition_body:
+          'DataGrip tiene un único conjunto de funciones bajo dos licencias. La licencia no comercial es gratuita, incluye todas las funciones de la comercial y se renueva cada año. El trabajo por el que te pagan necesita la licencia comercial, una suscripción de pago. Cuando DataGrip tiene una función, las dos columnas lo indican.',
+        editions_page: 'licencias',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DataGrip instalado por ahora. DataGrip tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer el dataSources.xml de DataGrip ni su exportación de ajustes, así que añade cada conexión en el gestor de conexiones. DataGrip deja las contraseñas fuera de esa exportación salvo que formen parte de una URL JDBC, así que tendrías que volver a escribirlas de todos modos.',
+        },
+      },
+      tableplus: {
+        page_title: 'Una alternativa gratuita y de código abierto a TablePlus',
+        page_description:
+          'La versión gratuita de TablePlus es una prueba limitada a dos pestañas, dos ventanas y dos filtros avanzados a la vez. DBFlux es de código abierto y no tiene esos límites. Las licencias lado a lado, qué ganas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa gratuita y de código abierto a TablePlus.',
+        lede: 'TablePlus es un cliente nativo rápido que se vende con licencia perpetua. Su versión gratuita es una prueba sin límite de tiempo que mantiene abiertas dos pestañas, dos ventanas y dos filtros avanzados a la vez. DBFlux es de código abierto y no tiene esos límites. TablePlus documenta MCP y DynamoDB para su aplicación de macOS, y esas filas dicen macOS.',
+        bring: 'Cómo migrar desde TablePlus',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por licencia',
+        edition_body:
+          'TablePlus vende licencias perpetuas con un año de actualizaciones, empezando por Basic como compra única. Sus funciones se reparten por plataforma y no por plan, así que las dos columnas solo difieren en los límites de la prueba.',
+        editions_page: 'precios',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja TablePlus instalado por ahora. TablePlus tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer los archivos .tableplusconnection que exporta TablePlus, así que añade cada conexión en el gestor de conexiones.',
+        },
+      },
+      beekeeper: {
+        page_title: 'Una alternativa gratuita y de código abierto a Beekeeper Studio',
+        page_description:
+          'MongoDB, DynamoDB y el diagrama ER están en las ediciones de pago de Beekeeper Studio y forman parte de la única versión gratuita de DBFlux. Qué ganas, qué falta todavía y cómo importar tus conexiones de Beekeeper.',
+        h1: 'Una alternativa gratuita y de código abierto a Beekeeper Studio.',
+        lede: 'Beekeeper Studio Community es gratuito y de código abierto bajo GPLv3, sin límite de conexiones ni de pestañas, y es un buen cliente. La diferencia está en dónde cae la línea entre ediciones: MongoDB, DynamoDB y el diagrama ER están en las ediciones de pago de Beekeeper y forman parte de la única versión gratuita de DBFlux. Beekeeper Community edita tablas desde un formulario, algo que DBFlux aún no hace.',
+        bring: 'Trae tus conexiones de Beekeeper',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'Beekeeper Studio ofrece una edición Community gratuita bajo GPLv3 y ediciones de pago bajo una licencia comercial. Su README marca qué bases de datos necesitan una edición de pago sin nombrar el plan, así que esas filas dicen Ediciones de pago.',
+        editions_page: 'README',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja Beekeeper Studio instalado por ahora. Beekeeper tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Importa tus conexiones de Beekeeper',
+          body: 'En el gestor de conexiones, elige Importar desde otro cliente y selecciona el app.db de Beekeeper Studio. Las conexiones de PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB y Redis se importan sin sus ajustes de SSH y SSL, y cada entrada que DBFlux no puede convertir aparece con el motivo. Beekeeper cifra las contraseñas guardadas con una clave que no sale de su propia instalación, así que vuelve a escribirlas después de importar.',
+        },
+      },
+      dbgate: {
+        page_title: 'Una alternativa gratuita y de código abierto a DbGate',
+        page_description:
+          'El diseñador de consultas, los gráficos, DynamoDB y la comparación de esquemas son funciones de DbGate Premium y forman parte de la única versión gratuita de DBFlux. Las ediciones lado a lado, qué ganas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa gratuita y de código abierto a DbGate.',
+        lede: 'DbGate Community es gratuito y de código abierto bajo GPL-3.0, incluye MongoDB, Redis y una paleta de comandos, y también funciona como aplicación web. El diseñador de consultas, los gráficos, DynamoDB y la comparación de esquemas son funciones Premium en DbGate, y su registro de auditoría es de Team Premium. En DBFlux forman parte de la única versión gratuita. DBFlux es una aplicación de escritorio y no tiene versión web.',
+        bring: 'Cómo migrar desde DbGate',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'DbGate ofrece Community bajo GPL-3.0, Premium para un usuario en el escritorio y Team Premium para equipos, con aplicación web, administración y proveedores de identidad. Cada columna indica qué incluye esa edición.',
+        editions_page: 'precios',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DbGate instalado por ahora. DbGate las tiene y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer las exportaciones de conexiones de DbGate, así que añade cada conexión en el gestor de conexiones.',
+        },
+      },
     },
   },
   about: {
     page_title: 'Acerca de DBFlux',
     page_description:
       'Por qué existe DBFlux, los principios detrás de él, y cómo está construido el código.',
+    eyebrow: 'Acerca de',
     h1: 'Por qué existe DBFlux',
-    intro_p1:
-      'Todo cliente de bases de datos termina por pedirte que elijas un bando: el nativo rápido que habla un único motor, o el universal que habla todos ellos y te hace esperar. DBFlux toma la tercera opción — un núcleo neutral respecto al driver, drivers que se conectan a él, y una interfaz que nunca aprende el nombre de ninguno de ellos.',
-    intro_p2:
-      'Esa restricción se aplica en el código, no en una guía de estilo. La interfaz se adapta mediante flags de capacidades y metadatos, de modo que un almacén de documentos obtiene una vista de documentos y una fuente de series temporales obtiene un selector de rango sin una sola condición sobre el nombre del driver. Añadir una base de datos es escribir un driver, no parchear la aplicación.',
-    intro_p3:
-      'El objetivo a largo plazo se declara sin rodeos en el README: un único cliente totalmente de código abierto para todas las bases de datos con las que trabajas. Rust y GPUI son lo que lo mantienen lo bastante rápido como para valer la pena cambiarse.',
+    lede: 'Todo cliente de bases de datos termina por pedirte que elijas un bando. DBFlux toma la tercera opción.',
+    p1: 'Esa restricción se aplica en el código, no en una guía de estilo. La interfaz se adapta mediante flags de capacidades y metadatos, de modo que un almacén de documentos obtiene una vista de documentos y una fuente de series temporales obtiene un selector de rango sin una sola condición sobre el nombre del driver. Añadir una base de datos es escribir un driver, no parchear la aplicación.',
+    p2: 'El objetivo a largo plazo se declara sin rodeos en el README: un único cliente totalmente de código abierto para todas las bases de datos con las que trabajas. Rust y GPUI son lo que lo mantienen lo bastante rápido como para valer la pena cambiarse.',
+    card_body: 'Desarrollado en abierto. Doble licencia MIT o Apache-2.0, a tu elección.',
+    options_eyebrow: 'La tercera opción',
+    option: {
+      one: {
+        label: 'Opción uno',
+        title: 'Rápido, pero un solo motor',
+        body: 'Un cliente nativo que habla bien una sola base de datos y te deja con otra app para todo lo demás.',
+      },
+      two: {
+        label: 'Opción dos',
+        title: 'Universal, pero lento',
+        body: 'Un cliente que las habla todas y te hace esperar a un runtime pesado en cada pestaña que abres.',
+      },
+      three: {
+        label: 'La tercera opción',
+        title: 'Un núcleo, drivers que se conectan',
+        body: 'Un núcleo neutral respecto al driver, drivers que se conectan a él, y una interfaz que nunca aprende el nombre de ninguno.',
+      },
+    },
     principles_eyebrow: 'Principios',
     principle: {
       p01: {
@@ -215,44 +624,46 @@ export const es: Dictionary = {
       },
       p03: {
         title: 'Denso antes que decorativo',
-        body: 'Esquinas cuadradas, bordes finos, un solo color de acento, monoespaciado en todas partes. El espacio en pantalla pertenece a tus datos.',
+        body: 'Esquinas cortadas en los controles, bordes rectos en los datos, un solo color de acento. El espacio en pantalla pertenece a tus datos.',
       },
       p04: {
         title: 'Nada se ejecuta sin quedar registrado',
-        body: 'Las queries, hooks, scripts y llamadas de herramientas de IA escriben todas en el mismo registro de auditoría, redactado por defecto y solo tuyo — nunca sale de la máquina.',
+        body: 'Las consultas, hooks, scripts y llamadas de herramientas de IA escriben todas en el mismo registro de auditoría, redactado por defecto y solo tuyo. Nunca sale de la máquina.',
       },
     },
-    layers_eyebrow: 'Cómo está construido',
+    arch_eyebrow: 'Arquitectura',
+    arch_title: 'Cómo está construido',
+    arch_body:
+      'El mapa completo de crates y los flujos entre crates viven en la guía de arquitectura. Si quieres escribir un driver, empieza por la guía de autoría de drivers.',
+    arch_link: 'Guía de arquitectura',
+    authoring_link: 'Autoría de drivers',
     layer: {
       ui: {
+        name: 'Crates de UI',
         detail: 'Seis crates, cero dependencias de driver y cero feature flags por driver.',
       },
       app: {
+        name: 'Capa de aplicación',
         detail: 'Registra drivers, resuelve servicios RPC, gestiona el estado de conexión.',
       },
       core: {
+        name: 'Contratos del núcleo',
         detail:
           'DbDriver, Connection, capabilities, metadata, language services, query generators.',
       },
       drivers: {
-        detail:
-          'Doce integrados como crates de Rust; cualquier otro a través del protocolo RPC de drivers.',
+        name: 'Drivers',
+        detail: 'Integrados como crates de Rust, y más mediante el protocolo RPC de drivers.',
       },
-    },
-    muted_links: {
-      prefix: 'El mapa completo de crates y los flujos entre crates viven en la ',
-      architecture: 'guía de arquitectura',
-      middle: '. Si quieres escribir un driver, empieza por la ',
-      driver_authoring: 'guía de autoría de drivers',
-      suffix: '.',
     },
     maintainer_title: 'Mantenedor',
     maintainer_body:
       'Ignacio Perez, desarrollador backend y de sistemas que trabaja en Rust y C. DBFlux es suyo, y la gran mayoría de sus commits también.',
+    maintainer_link: '@0xErwin1 en GitHub',
     contribute_title: 'Contribuir',
     contribute_body:
       'Se aceptan issues, drivers y documentación. La guía de contribución cubre las verificaciones que debe pasar un pull request antes de la revisión.',
-    contribute_link: 'Lee la guía de contribución →',
+    contribute_link: 'Lee la guía de contribución',
   },
   notfound: {
     title: 'Esa página no existe.',

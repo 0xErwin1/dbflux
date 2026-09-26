@@ -1,11 +1,19 @@
 use std::collections::HashMap;
 
-use super::{Command, ContextId, KeyChord};
+use super::{Command, ContextId, KeyChord, KeySequence};
 
 /// A single layer of keybindings for a specific context.
+///
+/// Besides the lookup table the layer keeps the order in which key sequences
+/// were first bound, so lists built from it (the settings page) follow the
+/// order the keymap declares them in.
+#[derive(Clone)]
 pub struct KeymapLayer {
     context: ContextId,
-    bindings: HashMap<KeyChord, Command>,
+    bindings: HashMap<KeySequence, Command>,
+    order: Vec<KeySequence>,
+    /// Bindings that match a narrower predicate than the context's own.
+    predicates: HashMap<KeySequence, &'static str>,
 }
 
 impl KeymapLayer {
@@ -13,32 +21,78 @@ impl KeymapLayer {
         Self {
             context,
             bindings: HashMap::new(),
+            order: Vec::new(),
+            predicates: HashMap::new(),
         }
     }
 
-    pub fn bind(&mut self, chord: KeyChord, command: Command) {
-        self.bindings.insert(chord, command);
+    /// Binds `keys` (a chord or a key sequence) to `command`. Binding the
+    /// same keys again replaces their command and keeps their original
+    /// position.
+    pub fn bind(&mut self, keys: impl Into<KeySequence>, command: Command) {
+        let keys = keys.into();
+
+        if self.bindings.insert(keys.clone(), command).is_none() {
+            self.order.push(keys);
+        }
     }
 
+    /// Binds `keys` to `command` under `predicate` instead of the context's
+    /// default predicate, for a binding that must stay out of part of the
+    /// context (a text field inside it, for example).
+    pub fn bind_with_predicate(
+        &mut self,
+        keys: impl Into<KeySequence>,
+        command: Command,
+        predicate: &'static str,
+    ) {
+        let keys = keys.into();
+        self.predicates.insert(keys.clone(), predicate);
+        self.bind(keys, command);
+    }
+
+    /// The default predicate of the binding on `keys`.
+    pub fn predicate_for(&self, keys: &KeySequence) -> &'static str {
+        self.predicates
+            .get(keys)
+            .copied()
+            .unwrap_or_else(|| self.context.default_predicate())
+    }
+
+    /// Bindings of this layer in the order their keys were first bound.
+    pub fn ordered_bindings(&self) -> impl Iterator<Item = (&KeySequence, Command)> {
+        self.order
+            .iter()
+            .filter_map(|keys| self.bindings.get(keys).map(|command| (keys, *command)))
+    }
+
+    /// The command bound to the single chord `chord`.
     pub fn get(&self, chord: &KeyChord) -> Option<Command> {
-        self.bindings.get(chord).copied()
+        self.get_sequence(&KeySequence::from(chord.clone()))
     }
 
-    #[allow(dead_code)]
+    pub fn get_sequence(&self, keys: &KeySequence) -> Option<Command> {
+        self.bindings.get(keys).copied()
+    }
+
     pub fn context(&self) -> ContextId {
         self.context
     }
 
     #[allow(dead_code)]
-    pub fn bindings(&self) -> &HashMap<KeyChord, Command> {
+    pub fn bindings(&self) -> &HashMap<KeySequence, Command> {
         &self.bindings
     }
 }
 
 /// Manages keybindings across all contexts with hierarchical resolution.
 ///
-/// When resolving a key chord, the stack first checks the current context,
-/// then falls back to parent contexts (ending at Global) if no match is found.
+/// When resolving keys, the stack first checks the current context, then
+/// falls back to parent contexts (ending at Global) if no match is found.
+/// Key dispatch itself goes through GPUI's keymap (see
+/// `dbflux_ui_base::keymap`); the stack answers lookups such as the keys a
+/// command has, for shortcut labels.
+#[derive(Clone)]
 pub struct KeymapStack {
     layers: HashMap<ContextId, KeymapLayer>,
 }
@@ -55,14 +109,25 @@ impl KeymapStack {
         self.layers.insert(layer.context, layer);
     }
 
-    /// Resolves a key chord to a command, checking the given context first,
-    /// then falling back to parent contexts.
+    /// Returns the layer holding the bindings declared for `context` itself.
+    pub fn layer(&self, context: ContextId) -> Option<&KeymapLayer> {
+        self.layers.get(&context)
+    }
+
+    /// Resolves a single chord to a command, checking the given context
+    /// first, then falling back to parent contexts.
     pub fn resolve(&self, context: ContextId, chord: &KeyChord) -> Option<Command> {
+        self.resolve_sequence(context, &KeySequence::from(chord.clone()))
+    }
+
+    /// Resolves a key sequence to a command, checking the given context
+    /// first, then falling back to parent contexts.
+    pub fn resolve_sequence(&self, context: ContextId, keys: &KeySequence) -> Option<Command> {
         let mut current = Some(context);
 
         while let Some(ctx) = current {
             if let Some(layer) = self.layers.get(&ctx)
-                && let Some(cmd) = layer.get(chord)
+                && let Some(cmd) = layer.get_sequence(keys)
             {
                 return Some(cmd);
             }
@@ -73,17 +138,19 @@ impl KeymapStack {
     }
 
     /// Returns all keybindings for a given context, including inherited ones.
-    #[allow(dead_code)]
-    pub fn bindings_for_context(&self, context: ContextId) -> Vec<(KeyChord, Command, ContextId)> {
+    pub fn bindings_for_context(
+        &self,
+        context: ContextId,
+    ) -> Vec<(KeySequence, Command, ContextId)> {
         let mut result = Vec::new();
-        let mut seen_chords = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::new();
         let mut current = Some(context);
 
         while let Some(ctx) = current {
             if let Some(layer) = self.layers.get(&ctx) {
-                for (chord, cmd) in layer.bindings() {
-                    if seen_chords.insert(chord.clone()) {
-                        result.push((chord.clone(), *cmd, ctx));
+                for (keys, cmd) in layer.ordered_bindings() {
+                    if seen.insert(keys.clone()) {
+                        result.push((keys.clone(), cmd, ctx));
                     }
                 }
             }
@@ -94,30 +161,38 @@ impl KeymapStack {
     }
 
     /// Returns the shortcut string for a command in the given context, if any.
-    #[allow(dead_code)]
     pub fn shortcut_for_command(&self, context: ContextId, command: Command) -> Option<String> {
-        self.chord_for_command(context, command)
-            .map(|chord| chord.to_string())
+        self.keys_for_command(context, command)
+            .map(|keys| keys.to_string())
     }
 
-    /// Returns the chord bound to a command in the given context, falling back
-    /// to parent contexts the same way [`KeymapStack::resolve`] does.
+    /// Returns the keys bound to a command in the given context, falling
+    /// back to parent contexts the same way [`KeymapStack::resolve`] does.
     ///
-    /// When one layer binds the command to several chords, which of them is
-    /// returned is unspecified.
-    pub fn chord_for_command(&self, context: ContextId, command: Command) -> Option<&KeyChord> {
+    /// When one layer binds the command to several key sequences, the one
+    /// bound first is returned.
+    pub fn keys_for_command(&self, context: ContextId, command: Command) -> Option<&KeySequence> {
         let mut current = Some(context);
 
         while let Some(ctx) = current {
             if let Some(layer) = self.layers.get(&ctx)
-                && let Some((chord, _)) = layer.bindings().iter().find(|(_, cmd)| **cmd == command)
+                && let Some((keys, _)) = layer
+                    .ordered_bindings()
+                    .find(|(_, bound_command)| *bound_command == command)
             {
-                return Some(chord);
+                return Some(keys);
             }
             current = ctx.parent();
         }
 
         None
+    }
+
+    /// The first chord of the keys bound to `command`, see
+    /// [`KeymapStack::keys_for_command`].
+    pub fn chord_for_command(&self, context: ContextId, command: Command) -> Option<&KeyChord> {
+        self.keys_for_command(context, command)
+            .map(KeySequence::first)
     }
 }
 
@@ -197,6 +272,32 @@ mod tests {
 
         let chord = KeyChord::new("p", Modifiers::ctrl_shift());
         assert_eq!(stack.resolve(ContextId::CommandPalette, &chord), None);
+    }
+
+    #[test]
+    fn sequences_resolve_only_as_a_whole() {
+        let mut tree = KeymapLayer::new(ContextId::DocumentTree);
+        let d_d = KeySequence::parse("d d").expect("valid sequence");
+        tree.bind(d_d.clone(), Command::Delete);
+
+        let mut stack = KeymapStack::new();
+        stack.add_layer(tree);
+
+        assert_eq!(
+            stack.resolve_sequence(ContextId::DocumentTree, &d_d),
+            Some(Command::Delete)
+        );
+        assert_eq!(
+            stack.resolve(
+                ContextId::DocumentTree,
+                &KeyChord::new("d", Modifiers::none())
+            ),
+            None
+        );
+        assert_eq!(
+            stack.keys_for_command(ContextId::DocumentTree, Command::Delete),
+            Some(&d_d)
+        );
     }
 
     #[test]

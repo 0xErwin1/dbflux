@@ -137,7 +137,13 @@ impl Workspace {
                 // The DataDocument's auto-select logic will switch to Chart mode
                 // after the data loads (TimeSeries shape triggers auto-select).
                 let collection = collection_ref.clone();
-                self.open_collection_document(chart.profile_id, collection, window, cx);
+                self.open_collection_document(
+                    chart.profile_id,
+                    collection,
+                    TabPlacement::ReuseExisting,
+                    window,
+                    cx,
+                );
             }
             dbflux_components::saved_chart::SavedChartSource::Query { .. }
             | dbflux_components::saved_chart::SavedChartSource::Metric { .. }
@@ -960,7 +966,7 @@ impl Workspace {
 
     /// Open the "New Dashboard" creation modal for the given profile.
     ///
-    /// Called when the user selects "New Dashboard..." from the sidebar context
+    /// Called when the user selects "New dashboard…" from the sidebar context
     /// menu on a DashboardsFolder node.
     pub(in crate::ui::views::workspace) fn create_dashboard_from_sidebar(
         &mut self,
@@ -973,7 +979,7 @@ impl Workspace {
         });
     }
 
-    /// Open the "New Dashboard..." modal from the command palette.
+    /// Open the "New dashboard…" modal from the command palette.
     ///
     /// Uses the active connection's profile as the target profile. If no
     /// connection is active but profiles exist, uses the first profile.

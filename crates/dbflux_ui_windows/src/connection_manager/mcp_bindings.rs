@@ -92,10 +92,15 @@ mod mcp_feature {
     /// The union of tools and policy classes a binding effectively grants,
     /// mirroring the union `PolicyEngine::evaluate` computes from direct
     /// policies plus each assigned role's policies.
+    ///
+    /// `classes` run without approval. `approval_classes` need a person's
+    /// approval: some policy asks for them and no policy allows them, since
+    /// the most permissive decision wins.
     #[derive(Debug, Clone, PartialEq, Eq, Default)]
     pub struct EffectivePermissions {
         pub tools: Vec<String>,
         pub classes: Vec<String>,
+        pub approval_classes: Vec<String>,
     }
 
     /// Filters `clients` by a case-insensitive substring match on name or id.
@@ -137,6 +142,7 @@ mod mcp_feature {
 
         let mut tools = std::collections::BTreeSet::new();
         let mut classes = std::collections::BTreeSet::new();
+        let mut approval_classes = std::collections::BTreeSet::new();
 
         for policy_id in policy_ids {
             let Some(policy) = policies.iter().find(|policy| policy.id == policy_id) else {
@@ -145,11 +151,18 @@ mod mcp_feature {
 
             tools.extend(policy.allowed_tools.iter().cloned());
             classes.extend(policy.allowed_classes.iter().cloned());
+            approval_classes.extend(policy.approval_classes.iter().cloned());
         }
+
+        let approval_classes = approval_classes
+            .into_iter()
+            .filter(|class| !classes.contains(class))
+            .collect();
 
         EffectivePermissions {
             tools: tools.into_iter().collect(),
             classes: classes.into_iter().collect(),
+            approval_classes,
         }
     }
 }
@@ -364,11 +377,13 @@ mod tests {
                     id: "direct-policy".to_string(),
                     allowed_tools: vec!["list_tables".to_string()],
                     allowed_classes: vec!["Metadata".to_string()],
+                    approval_classes: Vec::new(),
                 },
                 ToolPolicyDto {
                     id: "read-policy".to_string(),
                     allowed_tools: vec!["read_query".to_string()],
                     allowed_classes: vec!["Read".to_string()],
+                    approval_classes: Vec::new(),
                 },
             ];
 
@@ -382,6 +397,41 @@ mod tests {
                 effective.classes,
                 vec!["Metadata".to_string(), "Read".to_string()]
             );
+        }
+
+        #[test]
+        fn effective_permissions_separates_ask_classes_and_lets_allow_win() {
+            let binding = super::super::ConnectionMcpPolicyBinding {
+                actor_id: "agent-1".to_string(),
+                role_ids: vec!["writer".to_string()],
+                policy_ids: vec!["asks".to_string()],
+            };
+            let roles = vec![PolicyRoleDto {
+                id: "writer".to_string(),
+                policy_ids: vec!["allows-write".to_string()],
+            }];
+            let policies = vec![
+                ToolPolicyDto {
+                    id: "asks".to_string(),
+                    allowed_tools: vec!["update_records".to_string()],
+                    allowed_classes: vec!["read".to_string()],
+                    approval_classes: vec!["write".to_string(), "destructive".to_string()],
+                },
+                ToolPolicyDto {
+                    id: "allows-write".to_string(),
+                    allowed_tools: vec!["update_records".to_string()],
+                    allowed_classes: vec!["write".to_string()],
+                    approval_classes: Vec::new(),
+                },
+            ];
+
+            let effective = effective_permissions(&binding, &roles, &policies);
+
+            assert_eq!(
+                effective.classes,
+                vec!["read".to_string(), "write".to_string()]
+            );
+            assert_eq!(effective.approval_classes, vec!["destructive".to_string()]);
         }
 
         #[test]
@@ -419,6 +469,7 @@ mod tests {
                 id: "shared-policy".to_string(),
                 allowed_tools: vec!["read_query".to_string()],
                 allowed_classes: vec!["Read".to_string()],
+                approval_classes: Vec::new(),
             }];
 
             let effective = effective_permissions(&binding, &roles, &policies);

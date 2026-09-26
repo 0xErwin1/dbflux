@@ -37,6 +37,9 @@ impl From<PolicyRoleDto> for PolicyRole {
     }
 }
 
+/// A tool policy as exchanged with the UI and persistence. A class listed in
+/// `allowed_classes` is Allow, a class listed in `approval_classes` requires
+/// approval (Ask), and a class in neither is Deny.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicyDto {
     pub id: String,
@@ -44,27 +47,51 @@ pub struct ToolPolicyDto {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_classes: Vec<String>,
+}
+
+/// The persisted id of an execution class, as stored in policies.
+pub fn execution_class_id(classification: ExecutionClassification) -> &'static str {
+    match classification {
+        ExecutionClassification::Metadata => "metadata",
+        ExecutionClassification::Read => "read",
+        ExecutionClassification::Write => "write",
+        ExecutionClassification::Destructive => "destructive",
+        ExecutionClassification::Admin => "admin",
+        ExecutionClassification::AdminSafe => "admin_safe",
+        ExecutionClassification::AdminDestructive => "admin_destructive",
+    }
+}
+
+/// Parses a persisted execution class id.
+pub fn parse_execution_class_id(id: &str) -> Result<ExecutionClassification, String> {
+    match id {
+        "read" => Ok(ExecutionClassification::Read),
+        "write" => Ok(ExecutionClassification::Write),
+        "destructive" => Ok(ExecutionClassification::Destructive),
+        "admin" => Ok(ExecutionClassification::Admin),
+        "metadata" => Ok(ExecutionClassification::Metadata),
+        "admin_safe" => Ok(ExecutionClassification::AdminSafe),
+        "admin_destructive" => Ok(ExecutionClassification::AdminDestructive),
+        _ => Err(format!("invalid classification: {}", id)),
+    }
 }
 
 impl From<ToolPolicy> for ToolPolicyDto {
     fn from(policy: ToolPolicy) -> Self {
+        let class_ids = |classes: &[ExecutionClassification]| {
+            classes
+                .iter()
+                .map(|class| execution_class_id(*class).to_string())
+                .collect()
+        };
+
         Self {
+            allowed_classes: class_ids(&policy.allowed_classes),
+            approval_classes: class_ids(&policy.approval_classes),
             id: policy.id,
             allowed_tools: policy.allowed_tools,
-            allowed_classes: policy
-                .allowed_classes
-                .iter()
-                .map(|c| match c {
-                    ExecutionClassification::Metadata => "metadata",
-                    ExecutionClassification::Read => "read",
-                    ExecutionClassification::Write => "write",
-                    ExecutionClassification::Destructive => "destructive",
-                    ExecutionClassification::Admin => "admin",
-                    ExecutionClassification::AdminSafe => "admin_safe",
-                    ExecutionClassification::AdminDestructive => "admin_destructive",
-                })
-                .map(str::to_string)
-                .collect(),
         }
     }
 }
@@ -73,25 +100,17 @@ impl TryFrom<ToolPolicyDto> for ToolPolicy {
     type Error = String;
 
     fn try_from(dto: ToolPolicyDto) -> Result<Self, Self::Error> {
-        let allowed_classes = dto
-            .allowed_classes
-            .iter()
-            .map(|c| match c.as_str() {
-                "read" => Ok(ExecutionClassification::Read),
-                "write" => Ok(ExecutionClassification::Write),
-                "destructive" => Ok(ExecutionClassification::Destructive),
-                "admin" => Ok(ExecutionClassification::Admin),
-                "metadata" => Ok(ExecutionClassification::Metadata),
-                "admin_safe" => Ok(ExecutionClassification::AdminSafe),
-                "admin_destructive" => Ok(ExecutionClassification::AdminDestructive),
-                _ => Err(format!("invalid classification: {}", c)),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let parse_all = |ids: &[String]| {
+            ids.iter()
+                .map(|id| parse_execution_class_id(id))
+                .collect::<Result<Vec<_>, _>>()
+        };
 
         Ok(Self {
+            allowed_classes: parse_all(&dto.allowed_classes)?,
+            approval_classes: parse_all(&dto.approval_classes)?,
             id: dto.id,
             allowed_tools: dto.allowed_tools,
-            allowed_classes,
         })
     }
 }
@@ -176,8 +195,11 @@ pub trait McpGovernanceService {
         pending_id: &str,
     ) -> Result<ApprovalOutcome, GovernanceError>;
 
+    /// Rejects a pending execution. `reason` is returned to the requesting
+    /// agent and recorded in the audit event.
     fn reject_pending_execution(
         &self,
         pending_id: &str,
+        reason: Option<&str>,
     ) -> Result<ApprovalOutcome, GovernanceError>;
 }

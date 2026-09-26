@@ -10,6 +10,8 @@ use dbflux_core::QueryResultShape;
 pub enum ResultViewMode {
     Table,
     Chart,
+    /// The chart above the data grid, as a time-series measurement opens.
+    Both,
     Json,
     Text,
     Raw,
@@ -44,6 +46,7 @@ impl ResultViewMode {
         match self {
             Self::Table => "Data",
             Self::Chart => "Chart",
+            Self::Both => "Both",
             Self::Json => "JSON",
             Self::Text => "Text",
             Self::Raw => "Raw",
@@ -52,5 +55,10 @@ impl ResultViewMode {
 
     pub fn is_table(&self) -> bool {
         matches!(self, Self::Table)
+    }
+
+    /// Whether the mode draws the chart (alone or above the grid).
+    pub fn shows_chart(&self) -> bool {
+        matches!(self, Self::Chart | Self::Both)
     }
 }

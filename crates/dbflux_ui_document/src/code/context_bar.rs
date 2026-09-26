@@ -1,9 +1,27 @@
 use super::*;
 use crate::result_view::ResultViewMode;
 use dbflux_components::composites::control_shell;
-use dbflux_components::primitives::{Icon, Text, focus_frame};
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::primitives::{FocusShape, Icon, Text, focus_ring};
+use dbflux_components::tokens::{ChamferCut, EditorMetrics, Fields};
+use dbflux_components::typography::AppFonts;
+use dbflux_core::ConnectionEnvironment;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+
+/// `path` with a leading `home` directory written as `~`, the way the board
+/// shows a script location (`~/.local/share/dbflux/scripts/Query 7.sql`).
+fn home_relative_path(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    let Some(relative) = home.and_then(|home| path.strip_prefix(home).ok()) else {
+        return path.display().to_string();
+    };
+
+    if relative.as_os_str().is_empty() {
+        return "~".to_string();
+    }
+
+    format!("~{}{}", std::path::MAIN_SEPARATOR, relative.display())
+}
 
 fn context_dropdown_min_width(index: usize) -> Pixels {
     match index {
@@ -11,6 +29,26 @@ fn context_dropdown_min_width(index: usize) -> Pixels {
         1 => px(120.0),
         _ => px(100.0),
     }
+}
+
+/// The inside of a context selector (AppByzEditor): a leading icon, then the
+/// dropdown with its value and chevron. The caller wraps it in the select
+/// field shape.
+fn context_selector(icon: Icon, dropdown: Entity<Dropdown>) -> gpui::Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(Fields::GAP)
+        .w_full()
+        .child(icon)
+        .child(div().flex_1().min_w_0().child(dropdown))
+}
+
+/// The chevron between two context selectors.
+fn context_separator(theme: &gpui_component::theme::Theme) -> impl IntoElement {
+    Icon::new(AppIcon::ChevronRight)
+        .size(EditorMetrics::SEPARATOR_ICON)
+        .color(theme.input)
 }
 
 fn context_slot_is_keyboard_focused(
@@ -106,6 +144,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.connection"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -196,6 +235,8 @@ impl CodeDocument {
                 state.set_highlighter(editor_mode, cx);
             }
         });
+
+        self.refresh_statements(cx);
     }
 
     pub(super) fn current_source_context_spec(
@@ -586,9 +627,12 @@ impl CodeDocument {
             .connection_id
             .is_some_and(|id| self.app_state.read(cx).connections().contains_key(&id));
 
+        let environment = self.connection_environment(cx);
+
         self.source.connection_dropdown.update(cx, |dd, cx| {
             dd.set_items(connection_items, cx);
             dd.set_selected_index(selected_connection_index, cx);
+            dd.set_label_environment(environment, cx);
         });
 
         if has_selected_connection {
@@ -714,6 +758,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.database"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -748,6 +793,7 @@ impl CodeDocument {
                     "document.code.context_bar.placeholder.schema"
                 ))
                 .toolbar_style(true)
+                .mono_label(true)
         });
 
         let sub = cx.subscribe_in(
@@ -1326,6 +1372,150 @@ impl CodeDocument {
 
     // === Render the context bar ===
 
+    /// The profile of the connection the context bar is bound to, only while
+    /// that connection is open. A tab restored with a profile that is not
+    /// connected shows "No connection", so it must not carry that profile's
+    /// driver logo or environment either.
+    fn connected_profile<'a>(&self, cx: &'a App) -> Option<&'a dbflux_core::ConnectionProfile> {
+        let connection_id = self.source.exec_ctx.connection_id.or(self.connection_id)?;
+
+        self.app_state
+            .read(cx)
+            .connections()
+            .get(&connection_id)
+            .map(|connected| &connected.profile)
+    }
+
+    /// Driver logo and tone for the connection selector, or a muted database
+    /// icon while no connection is open.
+    pub(super) fn connection_driver_icon(&self, cx: &App) -> (AppIcon, Hsla) {
+        let fallback = (AppIcon::Database, cx.theme().muted_foreground);
+
+        let Some(profile) = self.connected_profile(cx) else {
+            return fallback;
+        };
+
+        let Some(driver) = self.app_state.read(cx).drivers().get(&profile.driver_id()) else {
+            return fallback;
+        };
+
+        let metadata = driver.metadata();
+        (
+            AppIcon::for_driver(metadata.icon, metadata.category),
+            DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+        )
+    }
+
+    /// The open connection's environment, shown as an EnvTag in the
+    /// connection selector; a production environment also raises the
+    /// production banner. `None` while no connection is open.
+    pub(super) fn connection_environment(&self, cx: &App) -> Option<ConnectionEnvironment> {
+        self.connected_profile(cx)?.environment()
+    }
+
+    /// The production banner under the context bar (AppByzEditor): a danger
+    /// stripe warning that dangerous statements ask for confirmation.
+    pub(super) fn render_production_banner(&self, cx: &App) -> Option<AnyElement> {
+        if self.connection_environment(cx)? != ConnectionEnvironment::Production {
+            return None;
+        }
+
+        let theme = cx.theme();
+
+        Some(
+            div()
+                .id("production-banner")
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(EditorMetrics::BANNER_GAP)
+                .h(EditorMetrics::BANNER_HEIGHT)
+                .px(EditorMetrics::BANNER_PADDING_X)
+                .bg(theme.danger.opacity(EditorMetrics::BANNER_FILL_ALPHA))
+                .border_b_1()
+                .border_color(theme.danger.opacity(EditorMetrics::BANNER_LINE_ALPHA))
+                .text_size(Fields::TEXT)
+                .child(
+                    Icon::new(AppIcon::TriangleAlert)
+                        .size(EditorMetrics::BANNER_ICON)
+                        .color(theme.danger),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.danger)
+                        .child(dbflux_i18n::t!(
+                            "document.code.context_bar.production.title"
+                        )),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.foreground)
+                        .child(dbflux_i18n::t!("document.code.context_bar.production.body")),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The script file readout at the end of the context bar (AppByzEditor):
+    /// the file path with the home directory as `~`, then "saved" with a
+    /// check while the buffer matches the file, or a muted "unsaved". `None`
+    /// for a buffer with no file behind it.
+    fn render_script_file_state(&self, cx: &App) -> Option<AnyElement> {
+        let path = self.path()?;
+        let theme = cx.theme();
+
+        let state = if self.editor.is_dirty {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .child(dbflux_i18n::t!("document.code.context_bar.file.unsaved"))
+        } else {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(EditorMetrics::FILE_STATE_GAP)
+                .text_color(theme.success)
+                .child(
+                    Icon::new(AppIcon::Check)
+                        .size(EditorMetrics::FILE_ICON)
+                        .color(theme.success),
+                )
+                .child(dbflux_i18n::t!("document.code.context_bar.file.saved"))
+        };
+
+        Some(
+            div()
+                .id("script-file-state")
+                .flex()
+                .min_w_0()
+                .ml_auto()
+                .items_center()
+                .gap(EditorMetrics::FILE_GAP)
+                .font_family(AppFonts::MONO)
+                .text_size(EditorMetrics::FILE_FONT)
+                .text_color(theme.muted_foreground)
+                .child(
+                    Icon::new(AppIcon::File)
+                        .size(EditorMetrics::FILE_ICON)
+                        .color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(home_relative_path(path, std::env::home_dir().as_deref())),
+                )
+                .child(state)
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_context_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         if !self.supports_connection_context() {
             return div().id("exec-context-bar").into_any_element();
@@ -1344,7 +1534,7 @@ impl CodeDocument {
             .result_tabs
             .active_result_index
             .and_then(|i| self.result_tabs.result_tabs.get(i))
-            .map(|t| t.grid.read(cx).result_view_mode() == ResultViewMode::Chart)
+            .map(|t| t.grid.read(cx).result_view_mode().shows_chart())
             .unwrap_or(false);
 
         // Determine whether the custom date-range picker is active.  When it
@@ -1365,35 +1555,35 @@ impl CodeDocument {
         // Build the primary (always-visible) controls row.
         // flex_wrap() allows controls to wrap to the next line on narrow viewports
         // rather than overflowing the bar's right edge.
+        let (connection_icon, connection_icon_color) = self.connection_driver_icon(cx);
+        let script_file_state = self.render_script_file_state(cx);
+
         let main_row = div()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap(Spacing::SM)
-            .child(
-                // flex_none keeps the label+control pair together on the same wrap line.
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap_1()
-                    .child(Icon::new(AppIcon::Database).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.code.context_bar.label.connection"
-                    ))),
-            )
+            .gap(EditorMetrics::CONTEXT_GAP)
             .child(
                 div()
                     .flex_none()
                     .min_w(context_dropdown_min_width(0))
-                    .child(focus_frame(
+                    .child(focus_ring(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
                             ContextBarSlot::Connection,
                         ),
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(theme.ring),
-                        control_shell(self.source.connection_dropdown.clone(), cx),
+                        control_shell(
+                            context_selector(
+                                Icon::new(connection_icon)
+                                    .size(EditorMetrics::SELECTOR_ICON)
+                                    .color(connection_icon_color),
+                                self.source.connection_dropdown.clone(),
+                            ),
+                            cx,
+                        ),
                         cx,
                     )),
             )
@@ -1416,12 +1606,13 @@ impl CodeDocument {
                                 )),
                             )
                             .child(
-                                div().flex_none().min_w(px(180.0)).child(focus_frame(
+                                div().flex_none().min_w(px(180.0)).child(focus_ring(
                                     context_slot_is_keyboard_focused(
                                         self.focus_mode,
                                         self.context_bar_slot,
                                         ContextBarSlot::SourceQueryMode,
                                     ),
+                                    FocusShape::Chamfer(ChamferCut::CONTROL),
                                     Some(theme.ring),
                                     control_shell(
                                         self.source.source_query_mode_dropdown.clone(),
@@ -1435,16 +1626,17 @@ impl CodeDocument {
                     // "Source:" is the generic label for the target-selector dropdown
                     // across all drivers.  The driver-specific label (spec.targets_label)
                     // is intentionally not used here — the placeholder already carries
-                    // driver-specific phrasing (e.g. "Select bucket...").
+                    // driver-specific phrasing (e.g. "Select bucket…").
                     .child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
                         "document.code.context_bar.label.source"
                     ))))
-                    .child(div().flex_none().min_w(px(260.0)).child(focus_frame(
+                    .child(div().flex_none().min_w(px(260.0)).child(focus_ring(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
                             self.context_bar_slot,
                             ContextBarSlot::SourceTargets,
                         ),
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         Some(theme.ring),
                         control_shell(self.source.source_targets.clone(), cx),
                         cx,
@@ -1495,14 +1687,18 @@ impl CodeDocument {
                                     }),
                             )),
                         )
-                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::SourceStart,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source.source_start_input), cx),
+                            control_shell(
+                                Input::new(&self.source.source_start_input).appearance(false),
+                                cx,
+                            ),
                             cx,
                         )))
                         .child(
@@ -1514,67 +1710,76 @@ impl CodeDocument {
                                     }),
                             )),
                         )
-                        .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
+                        .child(div().flex_none().min_w(px(180.0)).child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::SourceEnd,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(Input::new(&self.source.source_end_input), cx),
+                            control_shell(
+                                Input::new(&self.source.source_end_input).appearance(false),
+                                cx,
+                            ),
                             cx,
                         )))
                     },
                 )
             })
             .when(!show_source_controls && show_db, |el| {
-                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
-                    "document.code.context_bar.label.database"
-                ))))
-                .child(
+                el.child(context_separator(theme)).child(
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(1))
-                        .child(focus_frame(
+                        .child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::Database,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(self.source.database_dropdown.clone(), cx),
+                            control_shell(
+                                context_selector(
+                                    Icon::new(AppIcon::Database)
+                                        .size(EditorMetrics::SELECTOR_ICON)
+                                        .color(theme.muted_foreground),
+                                    self.source.database_dropdown.clone(),
+                                ),
+                                cx,
+                            ),
                             cx,
                         )),
                 )
             })
             .when(!show_source_controls && show_schema, |el| {
-                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
-                    "document.code.context_bar.label.schema"
-                ))))
-                .child(
+                el.child(context_separator(theme)).child(
                     div()
                         .flex_none()
                         .min_w(context_dropdown_min_width(2))
-                        .child(focus_frame(
+                        .child(focus_ring(
                             context_slot_is_keyboard_focused(
                                 self.focus_mode,
                                 self.context_bar_slot,
                                 ContextBarSlot::Schema,
                             ),
+                            FocusShape::Chamfer(ChamferCut::CONTROL),
                             Some(theme.ring),
-                            control_shell(self.source.schema_dropdown.clone(), cx),
+                            control_shell(
+                                context_selector(
+                                    Icon::new(AppIcon::Layers)
+                                        .size(EditorMetrics::SELECTOR_ICON)
+                                        .color(theme.muted_foreground),
+                                    self.source.schema_dropdown.clone(),
+                                ),
+                                cx,
+                            ),
                             cx,
                         )),
                 )
             })
-            .child(div().flex_1())
-            .when_some(self.editor.path.as_ref(), |el, path| {
-                el.child(
-                    div()
-                        .overflow_x_hidden()
-                        .child(Text::caption(path.display().to_string())),
-                )
-            });
+            .when_some(script_file_state, |el, state| el.child(state));
 
         // Outer bar: column layout so the custom date-range row can sit below
         // the main controls without stretching the bar's width.
@@ -1582,11 +1787,13 @@ impl CodeDocument {
             .id("exec-context-bar")
             .flex()
             .flex_col()
-            .px(Spacing::SM)
+            .justify_center()
+            .min_h(EditorMetrics::BAR_HEIGHT)
+            .px(EditorMetrics::BAR_PADDING_X)
             .py(Spacing::XS)
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.tab_bar)
+            .bg(theme.popover)
             .child(main_row)
             // Custom date-range second row — only visible when Custom is active.
             // This avoids overflowing the single-line bar with the date picker,
@@ -1604,7 +1811,6 @@ impl CodeDocument {
                                 "ctx-time-range-apply",
                                 dbflux_i18n::t!("document.code.context_bar.apply"),
                             )
-                            .small()
                             .disabled(!can_apply)
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -1629,9 +1835,37 @@ impl CodeDocument {
 mod tests {
     use super::{
         ContextBarSlot, LanguageBinding, SqlQueryFocus, build_source_window_context,
-        context_dropdown_min_width, context_slot_is_keyboard_focused, parse_source_datetime_input,
-        resolve_effective_language, resolve_query_mode_selection,
+        context_dropdown_min_width, context_slot_is_keyboard_focused, home_relative_path,
+        parse_source_datetime_input, resolve_effective_language, resolve_query_mode_selection,
     };
+
+    #[test]
+    fn script_paths_under_home_start_with_a_tilde() {
+        let home = std::path::Path::new("/home/ana");
+        let script = home
+            .join(".local")
+            .join("share")
+            .join("dbflux")
+            .join("scripts")
+            .join("Query 7.sql");
+
+        assert_eq!(
+            home_relative_path(&script, Some(home)),
+            format!(
+                "~{sep}.local{sep}share{sep}dbflux{sep}scripts{sep}Query 7.sql",
+                sep = std::path::MAIN_SEPARATOR
+            )
+        );
+        assert_eq!(home_relative_path(home, Some(home)), "~");
+        assert_eq!(
+            home_relative_path(std::path::Path::new("/srv/q.sql"), Some(home)),
+            "/srv/q.sql"
+        );
+        assert_eq!(
+            home_relative_path(&script, None),
+            script.display().to_string()
+        );
+    }
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use gpui::px;
 
@@ -1880,10 +2114,9 @@ mod tests {
             "document.code.context_bar.placeholder.connection",
             "document.code.context_bar.placeholder.database",
             "document.code.context_bar.placeholder.schema",
-            "document.code.context_bar.label.connection",
             "document.code.context_bar.label.source",
-            "document.code.context_bar.label.database",
-            "document.code.context_bar.label.schema",
+            "document.code.context_bar.production.title",
+            "document.code.context_bar.production.body",
             "document.code.context_bar.fallback.syntax",
             "document.code.context_bar.fallback.sources",
             "document.code.context_bar.fallback.time",

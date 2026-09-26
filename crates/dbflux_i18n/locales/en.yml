@@ -34,16 +34,13 @@ access:
   ssh_tunnel_label: SSH Tunnel
   ssh_server_saved: SSH Server (saved tunnel)
   test_ssh: Test SSH
-  testing_ssh: Testing SSH connection...
+  testing_ssh: Testing SSH connection…
   ssh_success: SSH connection successful
   ssh_failed: SSH connection failed
   save_as_tunnel: Save as tunnel
   ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
 audit:
   toast:
-    focus_existing_viewer: Focusing existing audit viewer
-    opened_viewer: Opened audit viewer
-    opened_mcp_approvals: Opened MCP approvals
     mcp_governance_persisted: MCP governance state persisted
   error:
     open_viewer_failed: "Cannot open audit viewer: %{error}"
@@ -57,6 +54,9 @@ chart:
       avg: avg
       min: min
       max: max
+  legend:
+    hide_series: "Click to hide this series"
+    show_series: "Click to show this series"
   engine:
     no_data: No data
   point_inspector:
@@ -134,6 +134,14 @@ charts:
     error:
       create_editable_failed: "Failed to create editable dashboard: %{error}"
 components:
+  environment:
+    development: "Development"
+    staging: "Staging"
+    production: "Production"
+  env_tag:
+    development: "Dev"
+    staging: "Staging"
+    production: "Prod"
   value_panel:
     empty: No cell selected
     error:
@@ -149,6 +157,9 @@ components:
       position: "Row %{row} of %{total}"
       value_header: Value
   json_editor:
+    valid:
+      one: "valid JSON · %{count} line"
+      many: "valid JSON · %{count} lines"
     empty_error: Document cannot be empty
     format: Format
     compact: Compact
@@ -175,7 +186,26 @@ controls:
     more:
       one: "+%{count} more"
       many: "+%{count} more"
+    summary_all: "%{name} · all"
+    summary_count: "%{name} · %{count}"
 connection_manager:
+  tab_badge:
+    mcp_clients:
+      many: "%{count} clients"
+      one: "1 client"
+    ssm: "SSM"
+    proxy: "Proxy"
+    ssh: "SSH"
+  environment:
+    none: "None"
+    help: "Marks which environment this connection points at."
+    label: "Environment"
+  enter_as:
+    uri: "Connection URI"
+    fields: "Fields"
+    label: "Enter as"
+  form:
+    required_hint: "Fields marked in red are required"
   placeholder:
     seconds: seconds
     connection_name: Connection name
@@ -214,11 +244,11 @@ connection_manager:
     on: "On"
     off: "Off"
   form_title:
-    edit: "Edit %{driver} Connection"
-    new: "New %{driver} Connection"
+    edit: "Edit %{driver} connection"
+    new: "New %{driver} connection"
   connection_overrides_title: Connection Overrides
   connection_hooks_title: Connection Hooks
-  new_auth_profile: "New Auth Profile..."
+  new_auth_profile: "New auth profile…"
   aws_sso_wizard_title: AWS SSO Wizard
   aws_sso_open_failed: Failed to open AWS SSO wizard window
   select_ssh_key_title: Select SSH Private Key
@@ -231,11 +261,11 @@ connection_manager:
   auth:
     profile_created_sso: Selected profile created by AWS SSO wizard.
     profile_created_wizard: Selected profile created by wizard.
-    refreshing_sessions: Refreshing auth profile sessions...
+    refreshing_sessions: Refreshing auth profile sessions…
     select_before_login: Select an auth profile before logging in.
     provider_unavailable: "Auth provider '%{provider_id}' is not available."
     interactive_login_unavailable: Interactive login is not available for this auth profile.
-    login_starting: "Starting auth-provider login for '%{name}'..."
+    login_starting: "Starting auth-provider login for '%{name}'…"
     login_completed: Auth-provider login completed.
     login_failed: "Auth-provider login failed: %{error}"
     session_status_valid_expires: "Session status: valid (expires at %{expires_at})"
@@ -263,6 +293,8 @@ connection_manager:
   additional_policies_optional: Additional policies (optional)
   mcp_effective_tools: "Tools: %{tools}"
   mcp_effective_classes: "Classes: %{classes}"
+  mcp_effective_approval_classes: "Needs approval: %{classes}"
+  mcp_effective_asks_badge: "asks"
   mcp_effective_none: none
   mcp_orphan_bindings:
     one: 1 binding references a client that no longer exists.
@@ -291,20 +323,28 @@ connection_manager:
   action:
     copy: Copy
     back: Back
-    test_connection: Test Connection
+    test_connection: "Test connection"
     save: Save
     browse: Browse
   window_title: Connection Manager
   driver_select:
-    search_placeholder: "Filter by name, driver, port…"
-    title: New Connection
-    subtitle: choose a database type
+    search_placeholder: "Filter by name, driver or port"
+    title: "New connection"
+    subtitle: "Pick what you are connecting to."
     empty_state: No drivers match your filter
     import_from_file: "Import from file…"
     import_from_client: "Import from another client…"
     cancel: Cancel
     configure: Configure
     configure_named: "Configure %{name}"
+    section:
+      relational: "Relational"
+      document: "Document"
+      key_value: "Key-value"
+      wide_column: "Wide column"
+      time_series_and_logs: "Time series and logs"
+      graph: "Graph"
+      object_storage: "Object storage"
   export:
     target:
       connection: connection
@@ -505,9 +545,9 @@ connections:
   toast:
     export_from_menu: "Export a connection from its menu"
     export_from_menu_body: "Right-click a connection in the sidebar and choose Export."
-    disconnecting: "Disconnecting from %{name}..."
+    disconnecting: "Disconnecting from %{name}…"
     no_active_connection: No active connection
-    refreshing_schema: Refreshing schema...
+    refreshing_schema: Refreshing schema…
   error:
     refresh_schema_failed: "Failed to refresh schema: %{error}"
 diagnostics:
@@ -520,18 +560,118 @@ diagnostics:
     action: "New queries are kept in the session store instead, so your work is preserved. Check that the data directory is writable and has free space, then restart DBFlux."
   shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
+  collection:
+    inspector:
+      title: "Document"
+      expand: "Open JSON editor"
+      json_failed: "Could not build the document JSON: %{error}"
+      missing: "missing"
+    menu:
+      unset_field: "Unset field"
+      revert_change: "Revert change"
+    view:
+      json: "JSON"
+    find: "Find"
+    history: "Query history"
+    tab:
+      documents: "Documents"
+      schema: "Schema"
+      aggregate: "Aggregate"
+    aggregate:
+      placeholder: "[{ \"$match\": { \"status\": \"paid\" } }, { \"$group\": { \"_id\": \"$region\", \"total\": { \"$sum\": \"$amount\" } } }]"
+      run: "Run"
+      history: "Pipeline history"
+      read_only_hint: "Results are read-only"
+      empty: "Write a pipeline and run it to see its result documents"
+      running: "Running the pipeline…"
+      no_results: "The pipeline returned no documents"
+      capped: "Showing the first %{count} documents"
+      failed: "Aggregation failed: %{error}"
+      read_only_edit: "Aggregate results are read-only"
+      task: "Aggregate %{collection}"
+      error:
+        syntax: "Invalid JSON: %{error}"
+        not_array: "The pipeline must be an array of stages"
+        stage_not_document: "Stage %{stage} must be a document"
+        stage_field_count: "Stage %{stage} must name exactly one stage operator"
+        stage_not_operator: "Stage %{stage}: %{name} is not a stage operator"
+    hint:
+      steps_in: "on an object or array steps in, with a breadcrumb"
+      steps_out: "steps out"
+      expands: "expands an object column in place"
+      steps_into_array: "steps into an array"
+    pending:
+      label: "Pending changes:"
+      one_field: "Pending:"
+      fields:
+        one: "%{count} field"
+        many: "%{count} fields"
+      documents:
+        one: "%{count} document"
+        many: "%{count} documents"
+    commit:
+      button: "Commit"
+      busy: "Wait for the current commit to finish"
+      invalid_value: "Cannot save %{path}: %{reason}"
+      done:
+        one: "Committed %{count} document"
+        many: "Committed %{count} documents"
+    count:
+      documents:
+        one: "%{count} document"
+        many: "%{count} documents"
+      matching: "%{shown} of %{total} matching"
+      estimated: "%{documents} · ~%{total} match, estimated"
+      presence_note: "Presence from a %{count}-document sample"
+    slot:
+      not_object: "The %{slot} slot must be a JSON object"
+      invalid: "Invalid JSON in %{slot}: %{error}"
+      project_placeholder: "e.g. {\"name\": 1, \"_id\": 0}"
+      sort_placeholder: "e.g. {\"created_at\": -1}"
+      tooltip:
+        filter: "Documents to return"
+        project: "Fields to return (1 include, 0 exclude)"
+        sort: "Order of results (1 ascending, -1 descending)"
+        limit: "Maximum documents per page"
+    schema:
+      sample_size: "Sample %{count}"
+      sampled_of: "Sampled %{sampled} of %{total} documents"
+      sampled: "Sampled %{sampled} documents"
+      not_sampled: "Not sampled yet"
+      resample: "Resample"
+      click_hint: "Click a value to add it to the filter"
+      loading: "Sampling documents…"
+      empty: "No fields in the sample"
+      failed: "Schema sample failed: %{error}"
+      column:
+        field: "Field"
+        types: "Types"
+        presence: "Presence"
+        values: "Values"
+      unique: "unique"
+      distinct: "%{count} distinct"
+      distinct_capped: "%{count}+ distinct"
+      array_lengths: "length %{min}–%{max}, median %{median}"
+      nested: "up to %{count} fields"
+      only_null: "only null"
+      mixed: "mixed types"
+      mixed_detail: "mixed types: %{percent}% stored as %{type_name}"
+    json:
+      not_array: "The JSON view must hold an array of documents"
+      count_changed: "The JSON view cannot add or remove documents; use Add Document or Delete instead"
+      not_document: "Every element of the JSON view must be a document"
+      identity_changed: "The JSON view cannot change or reorder document identities (_id)"
+      invalid: "The JSON view cannot be committed: %{error}"
+    conflict:
+      title: "%{label} changed on the server"
+      on_top: "Someone changed %{changed} after this page loaded. Your change only touches %{edited}, so it can apply on top."
+      overlap: "Someone changed %{changed} after this page loaded, including %{overlapping}, which your change also writes. Applying it overwrites their value."
+      replace: "Someone changed %{changed} after this page loaded. Replacing the whole document overwrites those changes."
+      deleted: "The document was deleted on the server after this page loaded"
+      reload: "Reload document"
+      apply: "Apply my change"
   audit:
     title: "Audit"
-    category_chip:
-      config: "CONFIG"
-      connection: "CONN"
-      query: "QUERY"
-      hook: "HOOK"
-      script: "SCRIPT"
-      system: "SYS"
-      mcp: "MCP"
-      governance: "GOV"
-      object_storage: "STORAGE"
     level_chip:
       trace: "TRACE"
       debug: "DEBUG"
@@ -567,6 +707,7 @@ document:
         many: "Exported %{count} events to %{path}"
       write_failed: "Export failed to write file: %{error}"
       failed: "Export failed: %{error}"
+      hint: "asks where to save"
     task:
       loading_event_stream: "Loading event stream: %{title}"
     detail:
@@ -587,6 +728,10 @@ document:
       source: Source
       summary: Summary
       time: Time
+      tool: "Tool"
+      classification: "Classification"
+      decision: "Decision"
+      reason: "Reason"
     filter:
       bar:
         search: "Search:"
@@ -606,8 +751,8 @@ document:
       group_label: "Group:"
       loading: "Loading…"
       placeholder:
-        search_events: "Search events..."
-        filter_events: "Filter events..."
+        search_events: "Search events…"
+        filter_events: "Filter events…"
         all_time: "All time"
         last_12_hours: "Last 12 h"
         local: Local
@@ -626,13 +771,13 @@ document:
       trace: Trace
       warn: Warning
     menu:
-      copy_row_as_csv: Copy Row as CSV
-      copy_summary: Copy Summary
+      copy_row_as_csv: Copy row as CSV
+      copy_summary: Copy summary
       export: Export
       export_format:
         csv: CSV
         json: JSON
-      filter_by_correlation: Filter by Correlation
+      filter_by_correlation: Filter by correlation
     outcome:
       cancelled: Cancelled
       failure: Failure
@@ -654,6 +799,15 @@ document:
       loading:
         external: "Loading events…"
         internal: "Loading audit events…"
+    subtitle: "every query, hook, script and agent call on this machine"
+    timeline:
+      events: "events"
+      errors: "errors"
+      drag_to_zoom: "drag to zoom"
+    action:
+      copy_json: "Copy row as JSON"
+      filter_by_correlation: "Filter by correlation"
+      open_approval: "Open approval"
   buckets_table:
     title: "Buckets — %{connection}"
     search_placeholder: "Find buckets by name…"
@@ -667,13 +821,20 @@ document:
       size: Size
       versioning: Versioning
       created: Created
+      encryption: Encryption
+      public_access: Public access
     versioning:
       on: "On"
       suspended: Suspended
       off: "Off"
+    public_access:
+      blocked: Blocked
+      partial: Partial
+      open: Open
     details:
       calculate_size: Calculate size
       calculating: "Calculating…"
+      browse: "Browse"
     footer:
       buckets:
         one: "%{count} bucket"
@@ -682,16 +843,16 @@ document:
         one: "%{count} region"
         many: "%{count} regions"
       hint:
-        open: Enter browse
-        properties: Space properties
-        delete: x delete (empty only)
+        open: "browse"
+        properties: "details"
+        delete: "delete empty"
+        new: "new"
     empty:
       loading: "Loading buckets…"
       error: Failed to list buckets
       error_detail: "Failed to list buckets: %{error}"
       no_match: "No buckets match \"%{query}\""
       no_buckets: This connection has no buckets
-      hint_refresh: "%{key} refresh"
     delete_confirm:
       title: Delete bucket?
       body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."
@@ -727,6 +888,7 @@ document:
       toast:
         created: "Created bucket \"%{name}\""
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
+    breadcrumb: "Buckets"
   chart:
     toolbar:
       type_label: TYPE
@@ -736,8 +898,6 @@ document:
         one: "%{count} pt"
         many: "%{count} pts"
     shell:
-      run: Run
-      running: "Running…"
       save: Save
       cancel: Cancel
       name_placeholder: Chart name
@@ -753,14 +913,18 @@ document:
       stats_rail:
         rebuilding: "Rebuilding chart…"
         no_stats: "No stats available for this series."
-        unavailable: unavailable
-        window_title: Window
         window:
           start: Start
           end: End
           span: Span
           points: Points
         source_title: Source
+        max: "Max"
+        min: "Min"
+        mean: "Mean"
+        last: "Last"
+        series: "Series"
+      saved_badge: "saved"
     status:
       task_label: Chart query
     toast:
@@ -798,14 +962,27 @@ document:
         connection_not_found: Connection not found or not active
         catalog_unsupported: Connection does not support metric catalog
   code:
+    gutter:
+      run_statement: Run this statement
+    history:
+      title: History
+      search: Search history
+      age:
+        now: now
+        minutes: "%{count} min ago"
+        hours: "%{count} h ago"
+        days: "%{count} d ago"
+      duration_ms: "%{count} ms"
     toolbar:
+      statements:
+        one: "%{count} statement"
+        many: "%{count} statements"
       refresh: Refresh
       cancel: Cancel
       checking: "Checking…"
       run: Run
-      shortcut_hint_with_selection: "%{shortcut} (selection/full)"
+      last_run: "last run %{seconds} s"
       new_tab: New tab
-      selection: Selection
       read_only: Read-only
       saved: Saved
       save: Save
@@ -820,8 +997,13 @@ document:
       visual: "VISUAL"
       visual_line: "VISUAL LINE"
       visual_block: "VISUAL BLOCK"
+      search:
+        label: "Vim search"
+        placeholder: "Search forward"
+        run: "search"
+        cancel: "cancel"
     output:
-      running: "Running..."
+      running: "Running…"
       stopped: Stopped
       output: Output
       lines:
@@ -829,6 +1011,8 @@ document:
         many: "%{count} lines"
       truncated: "(truncated at %{limit} lines)"
     result:
+      statement_lines: "Statement L%{start}–%{end}"
+      search_placeholder: Search in results
       count:
         one: "%{count} result"
         many: "%{count} results"
@@ -884,6 +1068,9 @@ document:
         mongo_drop_database:
           title: dropDatabase()
           body: dropDatabase() will permanently remove the entire database
+        mongo_aggregate_write:
+          title: "aggregate() writes to a collection"
+          body: "aggregate() with $out or $merge will write its result into a collection"
         redis_flush_all:
           title: FLUSHALL
           body: FLUSHALL will delete all keys in all databases
@@ -900,15 +1087,15 @@ document:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
     context_bar:
+      file:
+        saved: saved
+        unsaved: unsaved
       placeholder:
         connection: No connection
         database: Database
         schema: Schema
       label:
-        connection: "Connection:"
         source: "Source:"
-        database: "Database:"
-        schema: "Schema:"
       fallback:
         syntax: Syntax
         sources: Sources
@@ -918,9 +1105,11 @@ document:
       apply: Apply
       connect_error: "Cannot connect to database '%{database}'"
       connect_failed: "Failed to connect to database '%{database}': %{error}"
+      production:
+        title: "Production connection."
+        body: "Dangerous statements ask for confirmation before they run."
     execution:
       toast:
-        select_query: Select query text to run
         enter_query: Enter a query to run
         no_active_connection: No active connection
         connection_not_found: Connection not found
@@ -929,7 +1118,7 @@ document:
         enter_query_to_explain: Enter a query to explain
         enter_script_content: Enter script content to run
         write_query_first: Write a query first to open it in a chart
-        connecting: "Connecting to database '%{database}', please wait..."
+        connecting: "Connecting to database '%{database}', please wait…"
         redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
       result_title:
         query_failed: Query failed
@@ -1001,10 +1190,10 @@ document:
     toolbar:
       add_panel: + Add Panel
       apply: Apply
-      edit_mode_tooltip: Edit dashboard
-      exit_edit_mode_tooltip: Exit edit mode
       save_as_editable: Save as editable
       save_as_editable_tooltip: Clone this overview into a new editable dashboard
+      mode_view: "View"
+      mode_edit: "Edit"
   data:
     chart_dock:
       toolbar:
@@ -1084,28 +1273,29 @@ document:
           host: host
           region: region
     context_menu:
+      header: "%{column} · row %{row}"
       item:
         copy: Copy
-        view_document: View Document
-        add_document: Add Document
-        duplicate_document: Duplicate Document
-        delete_document: Delete Document
+        view_document: View document
+        add_document: Add document
+        duplicate_document: Duplicate document
+        delete_document: Delete document
         paste: Paste
         edit: Edit
-        edit_in_modal: Edit in Modal
-        set_default: Set to Default
+        edit_in_modal: Edit in modal…
+        set_default: Set to default
         set_null: Set to NULL
-        add_row: Add Row
-        inspect_row: Inspect Row
-        view_value: View Value
-        duplicate_row: Duplicate Row
-        delete_row: Delete Row
+        add_row: Add row
+        inspect_row: Inspect row
+        view_value: View value
+        duplicate_row: Duplicate row
+        delete_row: Delete row
         chart_this_query: Chart this query
       submenu:
         copy_query:
           sql: Copy as SQL
-          query: Copy as Query
-          command: Copy as Command
+          query: Copy as query
+          command: Copy as command
       delete_confirm:
         title:
           one: Delete row?
@@ -1161,6 +1351,8 @@ document:
           many: "%{count} unsaved changes"
         save: Save
         revert: Revert
+        undo: "Undo"
+        redo: "Redo"
         reload_blocked: Save or revert your unsaved changes first
         edits_dropped:
           one: "Unsaved changes on %{count} row were dropped: the row is not in the reloaded results"
@@ -1172,7 +1364,7 @@ document:
         switch_to_table: Switch to Table View
       mode:
         table: Table
-        document: Document
+        document: Tree
       editing:
         aggregated: Aggregated results cannot be edited
         no_primary_key: This table has no primary key - editing is disabled
@@ -1189,7 +1381,9 @@ document:
         raw: Raw
         truncated: "(truncated at %{max_lines} lines)"
         empty: "(empty)"
+        both: "Both"
       status:
+        read_only: read-only result
         rows:
           one: "%{count} row"
           many: "%{count} rows"
@@ -1232,6 +1426,9 @@ document:
         chart_name: Chart name
       filter:
         open_in_builder: Open in builder
+        builder_notice: Rows come from the builder query
+        edit_in_builder: Edit in builder
+        reset_builder: Reset
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
@@ -1318,24 +1515,20 @@ document:
           one: "Mutation cancelled after %{count} row processed"
           many: "Mutation cancelled after %{count} rows processed"
     row_inspector:
-      badge:
-        primary_key: PK
-        foreign_key: FK
-      meta:
-        name: Name
-        type: Type
-        nullable: Nullable
-        primary_key: Primary Key
-        foreign_key: Foreign Key
-        yes: "yes"
-        no: "no"
+      action:
+        copy: "Copy row as JSON"
+        pin: "Pin this row"
+        unpin: "Follow the selection"
+        close: "Close"
+        edit: "Edit"
+        duplicate: "Duplicate"
+        delete: "Delete"
       references:
         empty: No references
         loading: "Loading schema…"
         not_found: "— not found"
         resolving: "Resolving…"
       section:
-        column: COLUMN
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
@@ -1374,24 +1567,28 @@ document:
           size: Serialized size
   export_wizard:
     title: Export Data
+    title_tables:
+      one: "Export %{count} table"
+      many: "Export %{count} tables"
     task:
       one: "Export %{count} table from %{profile}"
       many: "Export %{count} tables from %{profile}"
     rail:
       tables: Tables
-      format_options: Format & Options
+      format_options: "Format"
       confirm: Confirm
       run: Run
     tables:
       selected_count: "%{count} table(s) selected for export"
     format_options:
       format_label: Format
-      output_folder_label: Output folder
+      output_folder_label: "Folder"
       no_folder_chosen: No folder chosen
-      choose_folder: "Choose Folder..."
-      choosing: "Choosing..."
+      choose_folder: "Choose"
+      choosing: "Choosing…"
       dialog_title: Choose Export Folder
-      segment_size_label: Segment / chunk size (advanced)
+      segment_size_label: "Chunk size"
+      segment_size_hint: "rows per file segment"
       segment_size_placeholder: Segment / chunk size
       segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
       error:
@@ -1402,7 +1599,7 @@ document:
       segment_size: "Segment / chunk size: %{size}"
       start_export: Start Export
     running:
-      title: "Exporting..."
+      title: "Exporting…"
       position:
         of_total: "Table %{index} of %{total}"
         preparing: Preparing
@@ -1432,17 +1629,39 @@ document:
       continue: Continue
       close: Close
   governance:
-    semantics_preview: "requester: %{requester} | connection: %{connection} | classification: %{classification}"
-    pending_actor: "actor: %{actor}"
-    refresh: Refresh Pending
+    refresh: "Refresh"
     no_pending: No pending executions
-    pending_title: "Pending %{id}"
-    approval_context: Approval context
-    execution_plan: Execution plan
-    approve: Approve
+    execution_plan: "What it will run"
+    approve: "Approve and run"
     reject: Reject
+    reject_reason_placeholder: "Reason (sent back to the agent when rejecting)"
     select_prompt: Select a pending request to review details.
     load_failed: "Failed to load pending execution %{id}: %{error}"
+    title: "MCP approvals"
+    subtitle: "agent calls that a policy parked for a person"
+    pending_count: "Pending · %{count}"
+    list_hint: "move · decisions are written to the audit log"
+    requested_by: "Requested by"
+    connection: "Connection"
+    classification_label: "Classification"
+    tool: "Tool"
+    requested_at: "Requested at"
+    waiting_label: "Waiting"
+    exec_id: "exec %{id}"
+    status:
+      pending: "Pending"
+    waiting:
+      just_now: "waiting just now"
+      minutes: "waiting %{count} min"
+      hours: "waiting %{count} h"
+    classification:
+      metadata: "Metadata"
+      read: "Read"
+      write: "Write"
+      destructive: "Destructive"
+      admin: "Admin"
+      admin_safe: "Admin (safe)"
+      admin_destructive: "Admin (destructive)"
   import_wizard:
     title: Import Data
     task:
@@ -1455,8 +1674,8 @@ document:
       run: Run
     pick_folder:
       description: "Choose the folder that contains manifest.json and the exported table files."
-      choose_folder: "Choose Folder..."
-      reading_manifest: "Reading manifest..."
+      choose_folder: "Choose Folder…"
+      reading_manifest: "Reading manifest…"
       dialog_title: Choose Import Folder
       error:
         no_connection: No active connection for this profile
@@ -1482,7 +1701,7 @@ document:
       back: Back
       proceed: "Yes, proceed"
     running:
-      title: "Importing..."
+      title: "Importing…"
       progress:
         of_total: "%{done} / %{total} rows"
         only: "%{done} rows"
@@ -1520,6 +1739,178 @@ document:
     empty: No data. Connect and click Refresh.
     kill_failed_cause: "Action '%{action_label}' on inspector '%{metric_id}' failed"
   key_value:
+    bulk_delete:
+      menu_item: "Delete keys matching the pattern…"
+      title: "Delete %{count} keys"
+      title_scanning: "Delete matching keys (%{count} so far)"
+      scope: "Every key in %{database} that matches %{pattern}."
+      scope_typed: "Every key in %{database} that matches %{pattern} and is a %{key_type}."
+      matches_label: "Matches, from a full scan"
+      more: "…%{count} more"
+      no_matches: "No keys match."
+      scanning: "Scanning the whole keyspace, %{count} matches so far"
+      stop: "Stop"
+      scan_stopped: "The scan was stopped, so the count is incomplete and deleting is off."
+      scan_failed: "The scan failed: %{error}"
+      type_prefix: "Type"
+      type_suffix: "to confirm"
+      note: "Runs as UNLINK in batches of %{count} and is recorded in Audit"
+      export: "Export keys first"
+      exported: "Keys exported"
+      export_dialog_title: "Export keys before deleting"
+      cancel: "Cancel"
+      confirm: "Delete %{count} keys"
+      toast_deleted: "Deleted %{count} keys matching %{pattern}"
+      toast_exported: "Keys exported to %{path}"
+    console:
+      title: "Command"
+      subtitle: "runs against %{database}, dangerous commands ask first"
+      placeholder: "Type a command and press Enter"
+      binary: "<%{count} bytes of binary data>"
+      empty: "(empty)"
+      more_lines: "… %{count} more lines"
+      cancelled: "Not run."
+      run_anyway: "Run anyway"
+      cancel: "Cancel"
+      destructive_title: "Run a destructive command?"
+      destructive_body: "This command can delete data and cannot be undone."
+    expiry:
+      title: "Expiry"
+      mode:
+        never: "Never"
+        in: "In"
+        at: "At"
+      duration_placeholder: "7d"
+      never_body: "The key will not expire."
+      expires: "Expires"
+      local_command: "local · %{command}"
+      never_command: "Never expires · %{command}"
+      preview_pending: "Enter a duration or a date and time."
+      apply: "Apply"
+      error:
+        empty: "Enter a duration such as 7d or 90m."
+        duration: "Durations use s, m, h, d and w, for example 1h30m."
+        date_time: "Use a local date and time such as 2026-09-30 17:30."
+        past: "That time has already passed."
+    footer:
+      loaded: "Loaded"
+      scanned: "Scanned"
+      of_total: "of %{total}"
+      load_more: "Load more"
+      hint_list: "sorted by name"
+      hint_pattern: "pattern sent as typed"
+    gate:
+      title: "%{key} is %{size}, over the %{limit} preview limit"
+      body: "Showing metadata only. Loading reads the whole value into memory."
+      preview: "Preview first %{size}"
+    hint:
+      hash: "Enter edits a value · o adds a field · x deletes · y copies"
+      sorted_set: "Enter edits a score · o adds a member · x removes · t sets expiry, value edits keep it"
+      collection: "Enter edits a value · o adds a member · x removes · y copies"
+      stream: "o adds an entry · x deletes an entry · t sets expiry"
+    list:
+      column_key: "Key"
+      column_ttl: "TTL"
+      column_size: "Size"
+      empty: "No keys in this database."
+      no_matches: "No keys match so far."
+    meta:
+      ttl: "TTL"
+      no_expiry: "No expiry"
+      fields:
+        one: "%{count} field"
+        many: "%{count} fields"
+      members:
+        one: "%{count} member"
+        many: "%{count} members"
+      entries:
+        one: "%{count} entry"
+        many: "%{count} entries"
+      groups:
+        one: "%{count} group"
+        many: "%{count} groups"
+    search:
+      title:
+        one: "Searching, 1 match so far"
+        many: "Searching, %{count} matches so far"
+      body: "SCAN keeps reading until the page is full or the whole keyspace is read. The server can return empty batches, so no result is final until the scan ends."
+      stop: "Stop"
+      whole_keyspace: "Search whole keyspace"
+    stream:
+      newest_first: "Newest first"
+      oldest_first: "Oldest first"
+      start_placeholder: "- (start)"
+      end_placeholder: "+ (end)"
+      loaded_summary: "%{command} · %{loaded} of %{total}"
+      load_more: "Load more"
+      column_id: "Entry ID"
+      column_time: "Time"
+      time_today: "today %{time}"
+      groups_title: "Consumer groups"
+      column_group: "Group"
+      column_readers: "Readers"
+      column_pending: "Pending"
+      column_last_read: "Last read"
+      no_groups: "This stream has no consumer groups."
+      callout_title: "%{group} has %{count} pending"
+      callout_idle: "Oldest idle %{idle}. "
+      callout_body: "Claim moves them to another reader."
+      view_pending: "View pending"
+      claim: "Claim"
+      claim_confirm: "Claim all"
+      claim_placeholder: "Reader to receive the entries"
+      pending_title: "Pending in %{group}"
+    toolbar:
+      bulk_actions: "Bulk actions"
+      new_key: "New key"
+      type_all: "All"
+      layout_list: "List"
+      layout_tree: "Tree"
+      key_total:
+        one: "1 key"
+        many: "%{count} keys"
+    tree:
+      folder_count:
+        one: "%{count} key"
+        many: "%{count} keys"
+        partial: "≥ %{count} keys"
+    value:
+      add_field: "Add field"
+      add_member: "Add member"
+      add_entry: "Add entry"
+      reload: "Reload"
+      view_table: "Table"
+      view_document: "Document"
+      view_entries: "Entries"
+      column_field: "Field"
+      column_format: "Format"
+      loaded_summary: "%{command} · %{shown} of %{loaded} loaded"
+      edit: "Edit"
+    view_as:
+      label: "View as"
+      auto: "Auto"
+      text: "Text"
+      compression: "Compression"
+      compression_none: "None"
+      detected:
+        json: "JSON detected"
+        msgpack: "MsgPack detected"
+        image: "%{format} image detected"
+      error:
+        decompress: "Could not decompress as %{compression}: %{reason}"
+        too_large: "The decompressed value is over the %{limit} limit."
+        not_json: "Not valid JSON; shown as text."
+        not_msgpack: "Not valid MessagePack; shown as hex."
+      truncated_lines: "Showing the first %{count} lines."
+    zset:
+      highest_first: "Highest first"
+      lowest_first: "Lowest first"
+      loaded_summary: "ZRANGE · %{loaded} of %{total} loaded"
+      load_more: "Load %{count} more"
+      column_rank: "Rank"
+      column_member: "Member"
+      column_score: "Score"
+      column_relative: "Relative to top"
     add_member_modal:
       cancel: Cancel
       error:
@@ -1537,34 +1928,30 @@ document:
         sorted_set: Add Sorted Set Members
         stream: Add Stream Entry
     context_menu:
-      add_entry: Add Entry
-      add_member: Add Member
-      copy_as_command: Copy as Command
-      copy_entry: Copy Entry
-      copy_key: Copy Key
-      copy_member: Copy Member
-      copy_value: Copy Value
-      delete_entry: Delete Entry
-      delete_key: Delete Key
-      delete_member: Delete Member
-      edit_member: Edit Member
-      edit_value: Edit Value
-      new_key: New Key
+      add_entry: Add entry…
+      add_member: Add member…
+      copy_as_command: Copy as command
+      copy_entry: Copy entry
+      copy_key: Copy key
+      copy_member: Copy member
+      copy_value: Copy value
+      delete_entry: Delete entry
+      delete_key: Delete key
+      delete_member: Delete member
+      edit_member: Edit member
+      edit_value: Edit value
+      new_key: New key…
       rename: Rename
     history_modal:
       empty:
         recent: No history yet
         saved: No saved queries
-      footer:
-        items:
-          one: "%{count} item"
-          many: "%{count} items"
       save:
         name_placeholder: Query name
         name_required: Enter a name for the query
         success_toast: Saved query
         title: Save Query
-      search_placeholder: "Search..."
+      search_placeholder: "Search…"
       tabs:
         recent: Recent
         saved: Saved
@@ -1614,10 +2001,6 @@ document:
       error:
         background_task_limit: Too many background tasks running, please wait
     parsing:
-      preview:
-        binary:
-          one: "%{count} byte (binary)"
-          many: "%{count} bytes (binary)"
       type:
         string: String
         bytes: Bytes
@@ -1629,7 +2012,6 @@ document:
         stream: Stream
         unknown: "?"
     render:
-      size_bytes: "%{size} B"
       delete_key:
         title: Delete key?
         message: 'Delete "%{key}"? This action cannot be undone.'
@@ -1639,55 +2021,31 @@ document:
       delete_confirm:
         cancel: Cancel
         delete: Delete
-      unknown_type: Unknown
       value_header: Value
-      id_header: ID
-      fields_header: Fields
-      field_score_header: Field/Score
-      click_to_edit: Click or press Enter to edit
       select_key_prompt: Select a key to inspect
-      prev: Prev
-      next: Next
-      page: "Page %{page}"
-      keys_count:
-        one: "%{count} key on this page"
-        many: "%{count} keys on this page"
-      keys_total: "%{count} total"
       filter:
-        keys_placeholder: "Filter keys..."
-        members_placeholder: "Filter members..."
+        keys_placeholder: "Pattern, for example user:*"
+        members_placeholder: "Filter members…"
       ttl:
         no_limit: No limit
         missing: Missing
         expired: Expired
       gate:
-        too_large: "Value is %{size}, over the %{limit} preview limit"
         load_anyway: Load anyway
         truncated: "Partial value — showing %{returned} of %{total}"
         truncated_unknown_total: "Partial value — showing %{returned}"
       decode:
-        choice:
-          auto: "Auto"
-          raw: "Raw"
-        preview:
-          image:
-            one: "%{count} byte (image: %{format})"
-            many: "%{count} bytes (image: %{format})"
-        failed: failed to decode
-        too_large: decoded output too large
-        edit_locked: Switch to Raw to edit
-        kind:
-          text: text
-          bytes: bytes
-          image: image
+        edit_locked: "Set Compression to None and View as to Auto, JSON or Text to edit"
   migrate_wizard:
-    title: Migrate Data
+    title: Migrate data
+    already_running: "A migration is already running. It was brought to the front; wait for it to finish before starting another one."
+    already_running_in_tasks: "A migration is already running in the Tasks panel. Wait for it to finish or cancel it before starting another one."
     task:
       one: "Migrate %{count} table"
       many: "Migrate %{count} tables"
     rail:
-      source_target: Source & Target
-      tables_mapping: Tables Mapping
+      source_target: Source and target
+      tables_mapping: Table mapping
       options: Options
       confirm: Confirm
       run: Run
@@ -1719,6 +2077,9 @@ document:
         down: Down
         accept: Use this order
     running:
+      table_header: "Table"
+      progress_header: "Progress"
+      rows_header: "Rows"
       title: "Migrating…"
       position:
         of_total: "Table %{index} of %{total}"
@@ -1780,6 +2141,8 @@ document:
       target_connection_gone: Target connection is gone
       cross_database_error: "A migration has a single source database. Only tables in '%{source}' can be selected — tables in '%{other}' can't be mixed in."
     footer:
+      cancel_migration: "Cancel migration"
+      referential_integrity_off: "Referential integrity is disabled until the run finishes"
       back: Back
       continue: Continue
       loading: "Loading…"
@@ -1797,15 +2160,15 @@ document:
       item:
         preview: Preview
         open_in_editor: Open in editor
-        download: Download
-        rename: Rename
+        download: Download…
+        rename: Rename…
         presign: Presign
         copy_uri: Copy S3 URI
         delete: Delete
         collapse: Collapse
         expand: Expand
         open: Open
-        new_folder_inside: New folder inside
+        new_folder_inside: New folder inside…
         delete_folder: Delete folder
     create_folder:
       cancel: Cancel
@@ -1922,7 +2285,6 @@ document:
         copy_uri: Copy URI
         delete: Delete
         download: Download
-        open: Open
         presign: Presign
       body:
         text_kind:
@@ -1949,6 +2311,7 @@ document:
       header:
         open_in_editor: Open in editor
         open_in_system_viewer: Open in system viewer
+        close: "Close preview"
       versions:
         count:
           one: "%{count} version"
@@ -1971,12 +2334,11 @@ document:
         one: "%{count} folder"
         many: "%{count} folders"
       key_hint:
-        delete: x delete
-        filter: / filter
-        open: Enter open
-        preview: Space preview
-        rename: r rename
-        up: "← up a level"
+        delete: "delete"
+        open: "open"
+        preview: "preview"
+        rename: "rename"
+        up: "up"
       load_more: Load more
       loading_more: "Loading more…"
       objects:
@@ -1990,6 +2352,8 @@ document:
       tree: Tree
       upload: Upload
       filter_prefix_placeholder: "Filter this prefix…"
+      list: "List"
+      up: "Up a level"
     transfer:
       dialog_title: Save Object As
       dialog_filter_all_files: All Files
@@ -2044,8 +2408,11 @@ document:
       save: Save
       reset: Reset
       untitled_query: Untitled query
+      close: "Close builder"
     columns:
       all_columns: "All columns (*)"
+      selected_count: "%{selected} of %{total}"
+      add_column: "+ column"
     comparator:
       eq: "="
       neq: "≠"
@@ -2079,6 +2446,9 @@ document:
       bool_op:
         and: AND
         or: OR
+      add_filter_link: "+ Filter"
+      add_group_link: "+ Group"
+      remove: "Remove"
     group_by:
       managed_select_notice: "Grouped query — SELECT is managed automatically"
       heading: Group by columns
@@ -2114,7 +2484,7 @@ document:
       execution: EXECUTION
       filters: FILTERS
       filters_where: FILTERS (WHERE)
-      sort: SORT
+      sort_limit: "SORT AND LIMIT"
       sql_preview: SQL PREVIEW
     sort:
       direction:
@@ -2124,6 +2494,7 @@ document:
       key_order_named: "Sort key order (%{name})"
       key_limited_hint: Ordering is limited to the sort key for this driver.
       invalid_column: "\"%{column}\" is not in the GROUP BY columns or aggregate aliases"
+      add: "+ Sort"
     status:
       limit: Limit
       offset: Offset
@@ -2218,14 +2589,23 @@ document:
       no_database: No database specified
       no_layout: No layout computed
     inspector:
-      columns: COLUMNS
+      count:
+        columns:
+          one: "%{count} column"
+          many: "%{count} columns"
+        foreign_keys:
+          one: "%{count} foreign key"
+          many: "%{count} foreign keys"
+        indexes:
+          one: "%{count} index"
+          many: "%{count} indexes"
       foreign_keys: FOREIGN KEYS
       indexes: INDEXES
-      summary: "%{columns} columns · %{indexes} indexes"
-      table: TABLE
+      referenced_by: "Referenced by"
+      summary_full: "%{columns} · %{indexes} · %{foreign_keys} · referenced by %{referenced_by}"
     layout:
       compact: Compact
-      left_right: Left-Right
+      left_right: Left to right
       snowflake: Snowflake
     menu:
       copy_as: Copy as
@@ -2234,8 +2614,8 @@ document:
       focus_table: Focus on this table
       inspect_schema: Inspect schema
       layout: Layout
-      zoom_in: Zoom In
-      zoom_out: Zoom Out
+      zoom_in: Zoom in
+      zoom_out: Zoom out
     node:
       column_count: "%{count} cols"
       indexes: Indexes
@@ -2259,8 +2639,10 @@ document:
       indexes: Indexes
       reset: Reset
       types: Types
+      zoom_in: "Zoom in"
+      zoom_out: "Zoom out"
     view:
-      title: "Schema: %{name}"
+      title: "%{name} · schema"
       title_default_database: database
   shared:
     add: Add
@@ -2288,13 +2670,14 @@ document:
   tabs:
     menu:
       close: Close
-      close_all: Close All
-      close_left: Close to the Left
-      close_others: Close Others
-      close_right: Close to the Right
+      close_all: Close all
+      close_left: Close to the left
+      close_others: Close others
+      close_right: Close to the right
+    new: New tab
     unsaved_changes: Unsaved changes
 document_tree:
-  search_placeholder: Search...
+  search_placeholder: Search…
   view:
     tree: Tree View
     raw_json: Raw JSON
@@ -2367,12 +2750,13 @@ form:
     pipeline_stage_failed: "Pipeline stage '%{stage}': %{source}"
 hooks:
   kind:
+    lua: "Lua"
     command: Command
     script: Script
   source:
     file: File
   script:
-    placeholder: "Enter script content..."
+    placeholder: "Enter script content…"
   execution:
     blocking: Blocking
     detached: Detached
@@ -2405,11 +2789,11 @@ hooks:
 language:
   native_name: English
 login:
-  window_title: Connection Flow
+  window_title: Sign in to continue
   field:
     verification_url: Verification URL
   action:
-    open_browser: Open Browser
+    open_browser: Open browser
     copy_url: Copy URL
     cancel: Cancel
     close: Close
@@ -2417,12 +2801,11 @@ login:
   banner:
     connection_failed: Connection failed
     completed: Login completed
-    closing: Authentication succeeded. Closing this dialog...
+    closing: Authentication succeeded. Closing this dialog…
   body:
-    sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
-    instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
-    waiting: Waiting for you to authorize in the browser…
-    elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
+    sign_in_prompt: 'Sign in with %{provider} to open %{profile}.'
+    waiting: Waiting for the browser
+    code_hint: code shown in the browser
     browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
   error:
     timed_out: Login timed out after 5 minutes
@@ -2451,7 +2834,7 @@ modals:
     saved:
       empty: 'No saved charts on this connection. Use "From query" or "From metric" to create one directly.'
       search_label: Search
-      search_placeholder: Search charts...
+      search_placeholder: Search charts…
     tab:
       saved: Saved charts
       query: From query
@@ -2481,6 +2864,7 @@ modals:
       no_metrics_filtered: No metrics match the filter.
     cancel: Cancel
   cell_editor:
+    title_column: "Edit %{column} (%{type_name})"
     title_json: Edit JSON
     title_text: Edit Text
   create_dashboard:
@@ -2511,11 +2895,12 @@ modals:
   document_preview:
     title: Document Preview
   drop_table:
+    title_named: "Drop table %{table}"
     title: Drop table
     confirm: Drop table
     cancel: Cancel
     confirm_placeholder: Type table name to confirm
-    confirm_prompt: 'Type "%{table}" to confirm'
+    confirm_prompt: 'Type %{table} to confirm'
     cascade_warning: "Dependent objects will also be dropped (CASCADE):"
     dependents_heading: "Objects that depend on this table:"
     delete_warning: This will permanently delete the table and any dependent objects.
@@ -2554,10 +2939,11 @@ modals:
     cancel: Cancel
     confirm: Rename
   schema_drift:
-    title: Schema has changed since this query was opened
-    column_header: column
-    local_header: local cache
-    remote_header: remote
+    lead: "%{table} differs from the cached schema."
+    title: Schema changed since this tab opened
+    column_header: Column
+    local_header: Cached
+    remote_header: Now
     change:
       new_column: new column
       removed: removed
@@ -2576,11 +2962,12 @@ modals:
     continue_stale: Continue with stale schema
     cancel: Cancel
     refreshing: Refreshing…
-    refresh: Refresh and re-run
+    refresh: Refresh and run again
   tunnel_auth:
+    hide_passphrase: "Hide passphrase"
+    show_passphrase: "Show passphrase"
+    tunnel_label: "Tunnel"
     title: SSH passphrase required
-    prompt: 'Enter the passphrase for tunnel "%{tunnel}"'
-    connection_detail: "Host: %{host}:%{port} · User: %{user}"
     placeholder: Enter passphrase
     incorrect: Incorrect passphrase. Try again.
     empty_error: Passphrase cannot be empty
@@ -2606,16 +2993,21 @@ modals:
     cancel: Cancel
 palette:
   footer:
-    navigate: "navigate"
+    navigate: "move"
     run: "run"
+    open_in_new_tab: "open in new tab"
+    commands_only: "commands only"
+    tables_only: "tables only"
+  connection:
+    connected: "connected"
   search:
-    placeholder: Search commands, connections, tables, scripts...
+    placeholder: Search commands, connections, tables, scripts…
   empty: No matching items
   section:
     connections: Connections
     commands: Commands
     charts: Charts
-    tables: Tables
+    tables: Tables and collections
     scripts: Scripts
   kind:
     connection: Connection
@@ -2629,72 +3021,72 @@ palette:
     no_saved_charts: "No saved charts for the current profile"
     browse_suffix: "[browse]"
   import_dashboard:
-    name: Import Dashboard from JSON...
+    name: Import dashboard from JSON…
   command:
     new_query_tab:
-      name: New Query Tab
+      name: New query tab
     run_query:
-      name: Run Query
+      name: Run query
     run_query_in_new_tab:
-      name: Run Query in New Tab
+      name: Run query in new tab
     save_query:
-      name: Save Query
+      name: Save query
     save_file_as:
-      name: Save File As
+      name: Save file as…
     open_script_file:
-      name: Open Script File
+      name: Open script file…
     toggle_comment:
-      name: Toggle Comment
+      name: Toggle line comment
     open_history:
-      name: Open Query History
+      name: Open query history
     cancel_query:
-      name: Cancel Running Query
+      name: Cancel running query
     close_tab:
-      name: Close Current Tab
+      name: Close tab
     next_tab:
-      name: Next Tab
+      name: Next tab
     prev_tab:
-      name: Previous Tab
+      name: Previous tab
     export_results:
-      name: Export Results
+      name: Export results
     open_connection_manager:
-      name: Open Connection Manager
+      name: Open connection manager
     disconnect:
-      name: Disconnect Current
+      name: Disconnect current
     refresh_schema:
-      name: Refresh Schema
+      name: Refresh schema
     focus_sidebar:
-      name: Focus Sidebar
+      name: Focus sidebar
     focus_editor:
-      name: Focus Editor
+      name: Focus editor
     focus_results:
-      name: Focus Results
+      name: Focus results
     focus_tasks:
-      name: Focus Tasks Panel
+      name: Focus tasks panel
     toggle_sidebar:
-      name: Toggle Sidebar
+      name: Toggle sidebar
     toggle_editor:
-      name: Toggle Editor Panel
+      name: Toggle editor panel
     toggle_results:
-      name: Toggle Results Panel
+      name: Toggle results panel
     toggle_tasks:
-      name: Toggle Tasks Panel
+      name: Toggle tasks panel
     open_settings:
-      name: Open Settings
+      name: Open settings
     open_login_modal:
-      name: Open Auth Profile Login
+      name: Open auth profile login
     open_sso_wizard:
-      name: Open AWS SSO Wizard
+      name: Open AWS SSO wizard
     open_mcp_approvals:
-      name: Open MCP Approvals
+      name: Open MCP approvals
     refresh_mcp_governance:
-      name: Refresh MCP Governance
+      name: Refresh MCP governance
     open_audit_viewer:
-      name: Open Audit Viewer
+      name: Open audit viewer
     open_saved_chart:
-      name: "Open Chart..."
+      name: "Open chart…"
     new_dashboard:
-      name: "New Dashboard..."
+      name: "New dashboard…"
     analyze_dump_file:
       name: "Analyze database dump…"
   category:
@@ -2718,6 +3110,13 @@ scripts:
   error:
     read_file_failed: "Failed to read file %{path}: %{error}"
 settings:
+  field:
+    hide_secret: "Hide value"
+    show_secret: "Show value"
+  footer:
+    unsaved:
+      many: "%{count} unsaved changes"
+      one: "1 unsaved change"
   action:
     default_connection_name: connection
     close: Close
@@ -2731,29 +3130,35 @@ settings:
   mcp_governance:
     persist_error: "Failed to persist MCP governance: %{error}"
   general:
+    unit:
+      mebibytes: "MiB"
+      seconds: "s"
+      milliseconds: "ms"
     header:
       title: General
-      subtitle: Configure startup, session, refresh, and safety behavior
+      subtitle: "Appearance, startup, refresh and the safety net for dangerous statements."
     appearance:
       group: Appearance
     startup:
-      group: Startup & Session
+      group: "Startup and session"
     refresh:
-      group: Refresh & Background
+      group: "Refresh and background"
     safety:
-      group: Execution Safety
+      group: "Execution safety"
     object_storage:
-      group: Object Storage
+      group: "Object storage"
     storage:
       group: Storage
     theme:
+      help: "Byzantium in both. Follow system switches with the OS."
       option:
-        ayu_dark: "Ayu Dark"
-        ayu_mirage: "Ayu Mirage"
-        ayu_light: "Ayu Light"
+        follow_system: "Follow system"
+        dark: "Dark"
+        light: "Light"
       label: Theme
     style:
-      label: Style
+      help: "Compact lowers row height to 24 and text by 1 px."
+      label: "Density"
       option:
         default: "Default"
         compact: "Compact"
@@ -2761,26 +3166,26 @@ settings:
       label: Language
       option:
         system: System
-      notice: Language changes apply after restarting DBFlux.
+      notice: "Applies after restarting DBFlux."
     editor:
       group: "Editor"
     vim_mode:
       label: "Vim mode in code editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
     restore_session:
-      label: Restore session on startup
+      label: "Restore open tabs on startup"
     reopen_connections:
-      label: Reopen last connections
+      label: "Reconnect to the connections that were open"
     default_focus:
-      label: Default focus
+      label: "Focus on launch"
       option:
         sidebar: Sidebar
-        last_tab: Last Tab
+        last_tab: "Last tab"
     max_history:
-      label: Max history entries
+      label: "History entries"
       error: Max history entries must be a number >= 10
     auto_save_interval:
-      label: Auto-save interval (ms)
+      label: "Auto-save every"
       error: Auto-save interval must be >= 500 ms
     refresh_policy:
       label: Default refresh policy
@@ -2788,7 +3193,7 @@ settings:
         manual: Manual
         interval: Interval
     refresh_interval:
-      label: Default refresh interval (seconds)
+      label: "Default refresh interval"
       error: Refresh interval must be >= 1 second
     max_background_tasks:
       label: Max concurrent background tasks
@@ -2798,23 +3203,24 @@ settings:
     refresh_only_if_visible:
       label: Auto-refresh only if tab is visible
     confirm_dangerous:
-      label: Confirm dangerous queries
+      hint: "DELETE or UPDATE without WHERE, DROP, TRUNCATE, FLUSHALL and the like."
+      label: "Confirm dangerous statements"
     requires_where:
-      label: Require WHERE for DELETE/UPDATE
+      label: "Require WHERE for DELETE and UPDATE"
     requires_preview:
-      label: Always require preview (ignore suppressions)
+      label: "Always preview, even when a statement was dismissed before"
     editor_row_limit:
       label: Editor row limit
       error: Editor row limit must be a whole number from 1 to 9223372036854775807
     object_preview_limit:
-      label: Object preview size limit (MiB)
+      label: "Object preview size limit"
       error: Object preview size limit must be >= 1 MiB
     object_preview_hint:
       label: "Objects larger than this are never downloaded for preview; the browser shows their metadata only."
     key_value:
-      group: Key-Value Preview
+      group: "Key-value preview"
     key_value_size_limit:
-      label: Key-value preview size limit (MiB)
+      label: "Key-value preview size limit"
       error: Key-value preview size limit must be >= 1 MiB
     key_value_size_limit_hint:
       label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
@@ -2842,124 +3248,180 @@ settings:
     lucide: UI icons from Lucide (ISC License)
     simple_icons: Brand icons from Simple Icons (CC0 1.0)
   keybindings:
-    title: Keyboard Shortcuts
-    subtitle: View all keyboard shortcuts by context
-    filter_placeholder: Filter keybindings...
+    filter_label: "Filter shortcuts"
+    title: "Keyboard shortcuts"
+    subtitle: "Every command and its keys, by context. Press the pencil to record a new chord."
+    filter_placeholder: "Filter by command or key"
     binding_count:
-      one: (1 binding)
-      many: "(%{count} bindings)"
+      one: "1 binding"
+      many: "%{count} bindings"
     inherits_from: "inherits from %{parent}"
     inherited: inherited
+    context_filter:
+      all: "All contexts"
+    no_shortcut: "No shortcut"
+    recording:
+      prompt: "Press the new shortcut…"
+      cancel_hint: "to cancel"
+      pause_hint: "Pause to save"
+    action:
+      edit: "Change shortcut"
+      reset: "Reset to default"
+      remove: "Remove shortcut"
+      cancel: "Cancel"
+      replace: "Replace"
+      reset_all: "Reset to defaults"
+      edit_context: "Edit context"
     conflict:
-      title: "Conflict: %{chord} also bound to %{others}"
-      body: Two or more commands share this chord in this context.
-      unknown_other: another binding
+      title: "%{chord} is already used by %{bindings}"
+      holder: "%{command} (%{context})"
+      body: "Replace gives the shortcut to %{command}. The other binding keeps no shortcut until you reset it."
+      badge: "conflicts with %{context}"
+    footer:
+      conflicts:
+        one: "1 conflict"
+        many: "%{count} conflicts"
+      overridden:
+        one: "1 overridden"
+        many: "%{count} overridden"
+    save_error: "Could not save the keyboard shortcuts: %{error}"
+    context_editor:
+      label: "Context"
+      placeholder: "Editor && vim_mode == normal"
+      save: "Save"
+      invalid: "Invalid context: %{error}"
+      unknown: "Never matches: nothing in the app is named %{names}"
+    warning:
+      prefix: "shares a key sequence"
+      typed_text: "takes typed text"
+    switch_to_tab_indexed: "Switch to tab %{index}"
     command:
-      toggle_command_palette: Toggle Command Palette
-      new_query_tab: New Query Tab
-      close_tab: Close Current Tab
-      next_tab: Next Tab
-      prev_tab: Previous Tab
-      switch_to_tab: Switch to Tab
-      open_tab_menu: Open Tab Menu
-      focus_sidebar: Focus Sidebar
-      focus_editor: Focus Editor
-      focus_results: Focus Results
-      focus_tasks: Focus Background Tasks
-      cycle_focus_forward: Cycle Focus Forward
-      cycle_focus_backward: Cycle Focus Backward
-      focus_left: Focus Left
-      focus_right: Focus Right
-      focus_up: Focus Up
-      focus_down: Focus Down
-      select_next: Select Next
-      select_prev: Select Previous
-      select_first: Select First
-      select_last: Select Last
-      page_down: Page Down
-      page_up: Page Up
-      extend_select_next: Extend Selection Down
-      extend_select_prev: Extend Selection Up
-      toggle_selection: Toggle Selection
-      move_selected_up: Move Selected Up
-      move_selected_down: Move Selected Down
-      column_left: Column Left
-      column_right: Column Right
+      toggle_command_palette: Toggle command palette
+      new_query_tab: New query tab
+      close_tab: Close tab
+      next_tab: Next tab
+      prev_tab: Previous tab
+      switch_to_tab: Switch to tab
+      open_tab_menu: Open tab menu
+      focus_sidebar: Focus sidebar
+      focus_editor: Focus editor
+      focus_results: Focus results
+      focus_tasks: Focus background tasks
+      cycle_focus_forward: Cycle focus forward
+      cycle_focus_backward: Cycle focus backward
+      focus_left: Focus left
+      focus_right: Focus right
+      focus_up: Focus up
+      focus_down: Focus down
+      select_next: Select next
+      select_prev: Select previous
+      select_first: Select first
+      select_last: Select last
+      page_down: Page down
+      page_up: Page up
+      extend_select_next: Extend selection down
+      extend_select_prev: Extend selection up
+      toggle_selection: Toggle selection
+      move_selected_up: Move selected up
+      move_selected_down: Move selected down
+      column_left: Column left
+      column_right: Column right
       execute: Execute
       cancel: Cancel
-      expand_collapse: Expand/Collapse
+      expand_collapse: Expand/collapse
       delete: Delete
       rename: Rename
-      focus_search: Focus Search
-      toggle_favorite: Toggle Favorite
-      run_query: Run Query
-      run_query_in_new_tab: Run Query in New Tab
-      cancel_query: Cancel Query
-      open_history: Toggle History Dropdown
-      open_saved_queries: Open Saved Queries
+      focus_search: Focus search
+      toggle_favorite: Toggle favorite
+      run_query: Run query
+      run_query_in_new_tab: Run query in new tab
+      cancel_query: Cancel query
+      open_history: Toggle history dropdown
+      open_saved_queries: Open saved queries
       save_query: Save
-      save_file_as: Save File As
-      open_script_file: Open Script File
-      toggle_comment: Toggle Comment
-      export_results: Export Results
-      results_next_page: Results Next Page
-      results_prev_page: Results Previous Page
-      focus_toolbar: Focus Toolbar
-      toggle_panel: Toggle Panel
-      results_delete_row: Delete Row
-      results_add_row: Add Row
-      results_duplicate_row: Duplicate Row
-      results_copy_row: Copy Row
-      results_copy_cell: Copy Cell
-      toggle_record_view: Toggle Record View
-      toggle_value_panel: Toggle Value Panel
-      results_set_null: Set Cell to NULL
-      open_context_menu: Open Context Menu
-      menu_up: Menu Up
-      menu_down: Menu Down
-      menu_select: Menu Select
-      menu_back: Menu Back
-      sidebar_next_tab: Sidebar Next Tab
-      refresh_schema: Refresh Schema
-      open_connection_manager: Open Connection Manager
-      export_connections: "Export Connections…"
+      save_file_as: Save file as…
+      open_script_file: Open script file…
+      toggle_comment: Toggle line comment
+      export_results: Export results
+      results_next_page: Results next page
+      results_prev_page: Results previous page
+      focus_toolbar: Focus toolbar
+      toggle_panel: Toggle panel
+      results_delete_row: Delete row
+      results_add_row: Add row
+      results_duplicate_row: Duplicate row
+      results_copy_row: Copy row
+      results_copy_cell: Copy cell
+      toggle_record_view: Toggle record view
+      cycle_document_view: Cycle tree / table / JSON
+      toggle_value_panel: Toggle value panel
+      toggle_row_inspector: Toggle row inspector
+      results_set_null: Set cell to NULL
+      open_context_menu: Open context menu
+      menu_up: Menu up
+      menu_down: Menu down
+      menu_select: Menu select
+      menu_back: Menu back
+      sidebar_next_tab: Sidebar next tab
+      refresh_schema: Refresh schema
+      open_connection_manager: Open connection manager
+      export_connections: "Export connections"
       disconnect: Disconnect
-      open_item_menu: Open Item Menu
-      create_folder: Create Folder
-      toggle_editor: Toggle Editor Panel
-      toggle_results: Toggle Results Panel
-      toggle_tasks: Toggle Tasks Panel
-      toggle_sidebar: Toggle Sidebar
-      open_settings: Open Settings
-      open_login_modal: Open Auth Profile Login
-      open_sso_wizard: Open AWS SSO Wizard
-      open_audit_viewer: Open Audit Viewer
-      open_mcp_approvals: Open MCP Approvals
-      refresh_mcp_governance: Refresh MCP Governance
-      open_saved_chart: "Open Chart..."
-      import_dashboard: "Import Dashboard from JSON..."
-      new_dashboard: "New Dashboard..."
-      preview_document: Preview Document
-      toggle_raw_view: Toggle Raw JSON View
-      next_match: Next Match
-      prev_match: Previous Match
-      zoom_in: Zoom In
-      zoom_out: Zoom Out
-      pan_left: Pan Left
-      pan_right: Pan Right
-      pan_up: Pan Up
-      pan_down: Pan Down
-      select_table_left: Select Table Left
-      select_table_right: Select Table Right
-      select_table_up: Select Table Up
-      select_table_down: Select Table Down
-      move_table_left: Move Table Left
-      move_table_right: Move Table Right
-      move_table_up: Move Table Up
-      move_table_down: Move Table Down
-      layout_left_right: Left-Right Layout
-      layout_snowflake: Snowflake Layout
-      layout_compact: Compact Layout
+      open_item_menu: Open item menu
+      create_folder: Create folder
+      toggle_editor: Toggle editor panel
+      toggle_results: Toggle results panel
+      toggle_tasks: Toggle tasks panel
+      toggle_sidebar: Toggle sidebar
+      open_settings: Open settings
+      open_login_modal: Open auth profile login
+      open_sso_wizard: Open AWS SSO wizard
+      open_audit_viewer: Open audit viewer
+      open_mcp_approvals: Open MCP approvals
+      refresh_mcp_governance: Refresh MCP governance
+      open_saved_chart: "Open chart…"
+      import_dashboard: "Import dashboard from JSON…"
+      new_dashboard: "New dashboard…"
+      preview_document: Preview document
+      toggle_raw_view: Toggle raw JSON view
+      next_match: Next match
+      prev_match: Previous match
+      zoom_in: Zoom in
+      zoom_out: Zoom out
+      pan_left: Pan left
+      pan_right: Pan right
+      pan_up: Pan up
+      pan_down: Pan down
+      select_table_left: Select table left
+      select_table_right: Select table right
+      select_table_up: Select table up
+      select_table_down: Select table down
+      move_table_left: Move table left
+      move_table_right: Move table right
+      move_table_up: Move table up
+      move_table_down: Move table down
+      layout_left_right: Left-right layout
+      layout_snowflake: Snowflake layout
+      layout_compact: Compact layout
+      extend_select_left: Extend selection left
+      extend_select_right: Extend selection right
+      move_to_row_start: Move to row start
+      move_to_row_end: Move to row end
+      extend_select_row_start: Extend selection to row start
+      extend_select_row_end: Extend selection to row end
+      extend_select_first: Extend selection to first row
+      extend_select_last: Extend selection to last row
+      select_all: Select all
+      save_row: Save row changes
+      undo: Undo
+      redo: Redo
+      toggle_column_group: Expand or collapse column
+      step_out: Step out of nested value
+      trigger_completion: Show completions
+      close_window: Close window
+      toggle_console: Toggle console
+      load_more: Load more
+      edit_expiry: Edit expiry…
     context:
       global: Global
       sidebar: Sidebar
@@ -2982,6 +3444,11 @@ settings:
       event_streams_picker: Event Streams Picker
       schema_viz: Schema Viz
       document_tree: Document Tree
+      data_table: Data Table
+      input: Text Field
+      modal: Modal Dialog
+      key_value: Key-Value Browser
+      settings: Settings Window
     category:
       global: Global
       focus: Focus
@@ -2995,14 +3462,16 @@ settings:
   hooks:
     header:
       title: Hooks
-      subtitle: Create reusable hooks and associate them from connection settings
+      subtitle: "Commands, scripts and Lua that run around connect and disconnect. Connections pick them in their Settings tab."
     list:
-      new: New Hook
+      new: "New hook"
       empty: No hooks defined
       unreadable:
         title: Unreadable hook rows
         hint: Unreadable — cannot be edited
     form:
+      group:
+        hook: "Hook"
       title:
         edit: Edit Hook
         new: New Hook
@@ -3010,12 +3479,12 @@ settings:
       kind: Type
       command: Command
       args: Arguments
-      args_hint: Arguments separated by spaces
+      args_hint: "Separated by spaces"
       language: Language
-      file_path: File Path
+      file_path: "File path"
       file_path_hint: Scripts are edited in the app editor and stored under hooks/ by default
-      open_in_app: Open in App
-      open_in_editor: Open in Editor
+      open_in_app: "Open in app"
+      open_in_editor: "Open in editor"
       interpreter: Interpreter
       interpreter_hint: "Leave empty for %{default_interpreter}"
       interpreter_auto: "auto (%{value})"
@@ -3027,20 +3496,20 @@ settings:
         connection_metadata: Connection metadata
         process_run: Controlled process run
         process_run_hint: "Enables `dbflux.process.run(...)` without exposing the Lua `os` library"
-      execution_mode: Execution Mode
+      execution_mode: "Run as"
       execution_mode_hint: Detached runs in background and does not block connect/disconnect
-      ready_signal: Ready Signal
+      ready_signal: "Ready signal"
       ready_signal_hint: DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks.
-      cwd: Working Directory
+      cwd: "Working directory"
       env: Environment
       env_hint: Comma-separated KEY=value pairs
-      env_denylist: Env Denylist
+      env_denylist: "Env denylist"
       env_denylist_hint: Comma-separated variable names to strip from inherited env
-      timeout: Timeout (ms)
-      resolved_command: Resolved Command
+      timeout: "Timeout"
+      resolved_command: "Resolved command"
       enabled: Enabled
       inherit_env: Inherit parent environment
-      on_failure: On Failure
+      on_failure: "On failure"
       preview_placeholder: "<enter a command>"
     status:
       unsupported_platform: Unsupported on this platform
@@ -3070,9 +3539,15 @@ settings:
       deleted: Hook deleted
       unreadable_deleted: Unreadable hook row deleted
   auth_profiles:
+    session_unknown: "Not logged in from this window"
+    session_attention: "Session needs attention"
+    session_valid: "Session valid"
+    disabled_badge: "off"
+    group:
+      profile: "Profile"
     profiles_label: Profiles
-    new_profile: New Auth Profile
-    import: "Import…"
+    new_profile: "New profile"
+    import: "Import"
     source_label: Source
     leave_blank_hint: Leave blank to keep the current value.
     auth_profile_label: Auth Profile
@@ -3083,7 +3558,7 @@ settings:
     provider_label: Provider
     placeholder_name: Profile name
     select_provider_ellipsis: "Select provider…"
-    select_ellipsis: "Select..."
+    select_ellipsis: "Select…"
     select_none: "— None —"
     enabled: Enabled
     export: Export
@@ -3099,20 +3574,20 @@ settings:
     select_before_login: Select an auth provider before login.
     interactive_login_unavailable: Interactive login is not available for this provider.
     fields_required_before_login: Provide a profile name and provider fields before login.
-    starting_login: "Starting auth-provider login for profile '%{name}'..."
+    starting_login: "Starting auth-provider login for profile '%{name}'…"
     login_completed: "Auth-provider login completed for profile '%{name}'."
     login_failed: "Auth-provider login failed for profile '%{name}': %{error}"
     login_cancelled: Login cancelled by user.
     login_url_panel_description: Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.
     open_browser: Open Browser
     copy_url: Copy URL
-    login_action: Login
-    logging_in: "Logging in..."
+    login_action: "Log in"
+    logging_in: "Logging in…"
     runs_interactive_login_hint: Runs interactive login for this auth profile
     update: Update
     create: Create
-    section_title: Auth Profiles
-    section_description: Manage reusable authentication profiles for connection access
+    section_title: "Auth profiles"
+    section_description: "Reusable sign-ins for secrets, parameters and SSO. Connections reference them by name."
     delete_dialog_title: Delete Auth Profile
     delete_dialog:
       body_none: 'Are you sure you want to delete "%{name}"?'
@@ -3192,12 +3667,6 @@ settings:
       get_pending_execution:
         name: Get Pending
         description: Retrieve details of a specific pending execution
-      approve_execution:
-        name: Approve Execution
-        description: Approve and trigger a pending mutation
-      reject_execution:
-        name: Reject Execution
-        description: Reject and discard a pending mutation
       query_audit_logs:
         name: Query Audit Logs
         description: Search and filter the audit trail
@@ -3220,10 +3689,19 @@ settings:
       destructive:
         label: Destructive
         description: "DELETE, DROP, TRUNCATE and other irreversible operations"
+      admin_safe:
+        label: "Admin (safe)"
+        description: "CREATE TABLE, CREATE INDEX, ADD COLUMN and other additive schema changes"
       admin:
-        label: Admin
-        description: Approving executions, exporting audit logs, and privileged actions
+        label: "Admin"
+        description: "Risky schema changes (DROP COLUMN, RENAME, ALTER COLUMN), exporting audit logs, and privileged actions"
+      admin_destructive:
+        label: "Admin (destructive)"
+        description: "DROP TABLE, DROP DATABASE, TRUNCATE TABLE and other irreversible schema changes"
     group:
+      policy: "Policy"
+      role: "Role"
+      client: "Client"
       discovery: Discovery
       schema: Schema
       query: Query
@@ -3236,9 +3714,10 @@ settings:
     roles_title: Roles
     roles_description: Manage named role bundles for MCP governance
     roles_form_description: Group policies into named roles assigned to actors per connection
-    policies_title: Policies
-    policies_description: Manage tool and execution-class policy rules for MCP governance
-    policies_form_description: Define which tools and execution classes are allowed
+    policies_title: MCP policies
+    policies_description: "What each role may run through MCP, per execution class: allowed, asked for approval, or denied."
+    policies_defaults_hint: "Defaults: Allow for Metadata and Read, Ask for every class that changes data. Ask waits in Approvals; an agent can never approve its own request."
+    policies_form_description: "Define which tools a policy covers and whether each execution class is allowed, needs approval, or is denied"
     new_client: New Trusted Client
     new_role: New Role
     new_policy: New Policy
@@ -3247,6 +3726,7 @@ settings:
       roles: No roles configured.
       policies: No policies configured.
     field:
+      allowed_tools_count: "Allowed tools · %{selected} of %{total}"
       client_id: Client ID
       name: Name
       issuer_optional: Issuer (optional)
@@ -3254,7 +3734,7 @@ settings:
       role_id: Role ID
       policies: Policies
       policy_id: Policy ID
-      allowed_execution_classes: Allowed Execution Classes
+      execution_classes: "Execution classes"
       allowed_tools: Allowed Tools
       policy_count:
         one: 1 policy
@@ -3287,6 +3767,12 @@ settings:
     status:
       unsaved: Unsaved form changes
       saved: All changes applied
+    decision:
+      allow: "Allow"
+      ask: "Ask"
+      deny: "Deny"
+    warning:
+      allow_all_without_approval: "Turns every Ask into Allow for this policy. The agent could run DROP DATABASE without asking."
     action:
       update_client: Update Client
       create_client: Create Client
@@ -3297,20 +3783,22 @@ settings:
       create_role: Create Role
       update_policy: Update Policy
       create_policy: Create Policy
+      allow_all_without_approval: "Allow all without approval"
+      allow_all: "Allow all"
   drivers:
     section_title: Drivers
-    section_description: Configure per-driver overrides and driver-defined settings
+    section_description: "Per-driver overrides and settings the driver declares."
     empty: No registered drivers
     select_hint: Select a driver to configure settings
     action:
       save: Save
     field:
       capabilities: Capabilities
-      global_overrides: Global Overrides
-      driver_settings: Driver Settings
+      global_overrides: "Overrides for this driver"
+      driver_settings: "Driver settings"
     global_overrides_hint: Enable override to replace the global default for this driver.
     no_custom_settings: No custom settings for this driver.
-    use_global: Use Global
+    use_global: "use global"
     error:
       refresh_interval_empty: Refresh interval override must not be empty
       refresh_interval_invalid: Refresh interval override must be a number greater than 0
@@ -3360,8 +3848,10 @@ settings:
       graph_traversal: Graph Traversal
       edge_properties: Edge Properties
   rpc_services:
-    section_title: RPC Services
-    section_description: Manage configured RPC services. Changes require restart.
+    group:
+      service: "Service"
+    section_title: "RPC services"
+    section_description: "External drivers and auth providers DBFlux starts over RPC. Changes apply after a restart."
     empty: No RPC services configured
     edit_title: Edit RPC Service
     new_title: New RPC Service
@@ -3377,56 +3867,79 @@ settings:
       saved: RPC service saved. Restart required to apply changes.
       deleted: RPC service deleted. Restart required to apply changes.
     field:
-      disabled: Disabled
+      env_value: "Variable value"
+      env_key: "Variable name"
+      disabled: "off"
       socket_id: Socket ID
       command: Command
-      startup_timeout: Startup Timeout (ms)
+      startup_timeout: "Startup timeout"
       enable: Enable this service
-      service_type: Service Type
+      service_type: "Service type"
       arguments: Arguments
-      env_vars: Environment Variables
+      env_vars: "Environment"
       default_command: (default)
     kind:
       driver: Driver
       auth_provider: Auth Provider
     action:
+      add_variable: "Add variable"
+      add_argument: "Add argument"
+      remove: "Remove"
       delete: Delete
       update: Update
       create: Create
   ssh_tunnels:
+    list:
+      password: "password"
+      key: "key"
+    group:
+      authentication: "Authentication"
+      tunnel: "Tunnel"
     placeholder_name: SSH tunnel
     placeholder_password: password
     placeholder_passphrase: passphrase
-    section_title: SSH Tunnels
-    section_description: Manage reusable SSH tunnels for bastion and jump-host access
+    section_title: "SSH tunnels"
+    section_description: "Reusable bastion and jump-host tunnels. Connections pick one in their Access tab."
     empty: No saved SSH tunnels
-    new: New Tunnel
+    new: "New tunnel"
     field:
+      keep_in_keyring: "Keep in the OS keyring"
+      password: "Password"
+      passphrase: "Passphrase"
+      key_file: "Key file"
+      method: "Method"
+      user: "User"
+      host_port: "Host and port"
       name: Name
     delete_dialog_title: Delete SSH Tunnel
     delete_dialog:
       body: 'Are you sure you want to delete "%{name}"?'
     action:
-      import: "Import…"
+      test: "Test tunnel"
+      import: "Import"
       export: Export
       delete: Delete
     error:
       host_and_user_required: Host and user are required
       save_failed: "Failed to save SSH tunnel profiles: %{error}"
   proxies:
+    group:
+      authentication: "Authentication"
+      proxy: "Proxy"
     placeholder_name: Proxy name
     placeholder_username: username
     placeholder_password: password
-    section_title: Proxy Profiles
-    section_description: Manage proxy configurations for database connections
+    section_title: "Proxies"
+    section_description: "HTTP and SOCKS proxies. Connections pick one in their Access tab."
     empty: No saved proxies
-    new: New Proxy
+    new: "New proxy"
     panel_title: Proxy
     kind:
       http: HTTP
       https: HTTPS
       socks5: SOCKS5
     field:
+      host_port: "Host and port"
       name: Name
       protocol: Protocol
       authentication: Authentication
@@ -3434,10 +3947,10 @@ settings:
       password: Password
       host: Host
       port: Port
-      no_proxy: No Proxy
-      enabled: Enabled
+      no_proxy: "Bypass for"
+      enabled: "Enabled"
     hint:
-      no_proxy_list: Comma-separated hosts/CIDRs to bypass the proxy
+      no_proxy_list: "Comma-separated hosts and CIDRs that skip the proxy."
     auth:
       none: None
       basic: Basic
@@ -3447,7 +3960,7 @@ settings:
       save_failed: "Failed to save proxy profiles: %{error}"
     action:
       save: Save
-      import: "Import…"
+      import: "Import"
       export: Export
       delete: Delete
       update: Update
@@ -3509,33 +4022,44 @@ settings:
     toast:
       saved: Audit settings saved.
   nav:
+    no_results: "No settings match"
+    search_placeholder: "Search settings"
     general_group: General
     general: General
     keybindings: Keybindings
+    updates: Updates
     audit: Audit
     about: About
     network: Network
-    ssh_tunnels: SSH Tunnels
-    proxies: Proxy
-    auth_profiles: Access Providers
-    connection: Connection
+    ssh_tunnels: "SSH tunnels"
+    proxies: "Proxies"
+    auth_profiles: "Auth profiles"
+    connection: "Connections"
     hooks: Hooks
     drivers: Drivers
-    services: RPC Services
-    mcp_governance: MCP Governance
+    services: "RPC services"
+    mcp_governance: "MCP governance"
     mcp_clients: Clients
     mcp_roles: Roles
     mcp_policies: Policies
 
 shutdown:
-  signal_sent: Shutting down...
-  cancelling_tasks: Cancelling tasks...
-  closing_connections: Closing connections...
-  flushing_logs: Flushing logs...
+  signal_sent: Shutting down…
+  cancelling_tasks: Cancelling tasks…
+  closing_connections: Closing connections…
+  flushing_logs: Flushing logs…
   complete: Shutdown complete
   failed: Shutdown failed
 
 sidebar:
+  header:
+    new_dashboard: "New Dashboard"
+    add: "Add"
+    filter: "Filter"
+  failure:
+    retry: "Retry"
+    edit: "Edit connection"
+    audit: "View in Audit"
   confirm:
     delete_hint: Press x to confirm delete, ESC to cancel
     items:
@@ -3555,26 +4079,27 @@ sidebar:
     cannot_load_schema_foreign_keys: Cannot load schema foreign keys
     cannot_load_schema_routines: Cannot load schema routines
   filter:
-    connections_placeholder: Filter connections and schema...
-    scripts_placeholder: Filter scripts...
-    stream_placeholder: Filter stream names...
+    dashboards_placeholder: "Filter dashboards…"
+    connections_placeholder: Filter connections and schema
+    scripts_placeholder: Filter scripts…
+    stream_placeholder: Filter stream names…
   menu:
     open: Open
-    browse_event_streams: Browse Event Streams
-    view_schema: View Schema
-    view_schema_diagram: View Schema Diagram
-    view_relationships: View Relationships
+    browse_event_streams: Browse event streams
+    view_schema: View schema
+    view_schema_diagram: View schema diagram
+    view_relationships: View relationships
     refresh: Refresh
     generate_sql: Generate SQL
-    export_table: Export Table…
-    export_tables_many: "Export %{count} Tables…"
-    migrate_table: Migrate Table…
-    migrate_tables_many: "Migrate %{count} Tables…"
-    drop_view: Drop View
-    drop_table: Drop Table
-    query_measurement: Query Measurement
-    generate_query: Generate Query
-    drop_collection: Drop Collection
+    export_table: Export table…
+    export_tables_many: "Export %{count} tables…"
+    migrate_table: Migrate table…
+    migrate_tables_many: "Migrate %{count} tables…"
+    drop_view: Drop view
+    drop_table: Drop table
+    query_measurement: Query measurement
+    generate_query: Generate query
+    drop_collection: Drop collection
     connect: Connect
     retry_connect: Retry
     disconnect: Disconnect
@@ -3583,33 +4108,32 @@ sidebar:
     rename: Rename
     export_ellipsis: Export…
     import_ellipsis: Import…
-    compare_schema: Compare Schema…
-    move_to: Move to...
+    compare_schema: Compare schema…
+    move_to: Move to
     delete: Delete
     delete_count: "Delete %{count} items"
     close: Close
-    new_query: New Query
-    drop_database: Drop Database
-    new_connection: New Connection
-    new_folder: New Folder
+    new_query: New query
+    drop_database: Drop database
+    new_connection: New connection
+    new_folder: New folder
     root: Root
-    new_script_file: New File
-    new_script_folder: New Folder
-    reveal_file_manager: Reveal in File Manager
-    copy_path: Copy Path
+    new_script_file: New file
+    new_script_folder: New folder
+    reveal_file_manager: Reveal in file manager
+    copy_path: Copy path
     schema_diff_unsupported: Schema diff is only available for relational connections.
-    new_dashboard: New Dashboard...
-    import_dashboard: Import Dashboard from JSON...
-    rename_ellipsis: Rename...
-    delete_ellipsis: Delete...
-    copy_metric_id: Copy Metric ID
-    copy_inspector_id: Copy Inspector ID
+    new_dashboard: New dashboard…
+    import_dashboard: Import dashboard from JSON…
+    rename_ellipsis: Rename…
+    copy_metric_id: Copy metric ID
+    copy_inspector_id: Copy inspector ID
   overlay:
-    add_folder: New Folder
-    add_connection: New Connection
-    add_script_file: New File
-    add_script_folder: New Folder
-    import_file: Import File
+    add_folder: New folder
+    add_connection: New connection
+    add_script_file: New file
+    add_script_folder: New folder
+    import_file: Import file
     child_picker:
       title: "Event streams: %{name}"
       column_name: Stream name
@@ -3624,9 +4148,13 @@ sidebar:
       one: 1 table outside the active profile/database was skipped
       many: "%{count} tables outside the active profile/database were skipped"
   status:
+    connected: "%{count} connected"
+    idle: "%{count} idle"
+    no_connections: "No connections yet"
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
   tabs:
+    dashboards: "Dashboards"
     connections: CONNECTIONS
     scripts: SCRIPTS
   task:
@@ -3686,7 +4214,7 @@ sidebar:
       routines: "Failed to load routines: %{error}"
     list_buckets_failed: "Failed to list buckets: %{error}"
     code_generation_failed: "Code generation failed: %{error}"
-    loading_event_streams: Loading event streams...
+    loading_event_streams: Loading event streams…
     load_schema_failed: "Failed to load schema: %{error}"
     connect_database_failed: "Failed to connect to database: %{error}"
     refresh_database_failed: "Failed to refresh database: %{error}"
@@ -3716,7 +4244,11 @@ sidebar:
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
     folder:
+      empty_databases:
+        one: "%{count} empty database"
+        many: "%{count} empty databases"
       databases: Databases
+      buckets: Buckets
       new_default: New Folder
       fields: "Fields (%{count})"
       indexes: "Indexes (%{count})"
@@ -3740,6 +4272,8 @@ sidebar:
       instance_overview: Instance Overview
       untitled_chart: Untitled chart
     status:
+      connecting_inline: "connecting"
+      retry_inline: "retry"
       loading: Loading…
       profile_connecting: "Connecting to %{name}…"
       database_loading: "%{name} (loading…)"
@@ -3763,6 +4297,12 @@ sidebar:
       metrics: No metrics available
       inspectors: No inspectors available
       remote_dashboards: No dashboards in this account/region
+  dashboards:
+    unassigned: "No connection"
+    empty_title: "No dashboards yet"
+    empty_hint: "Use + to create a dashboard"
+    no_matches_title: "No dashboards match"
+    no_matches_hint: "Try another name or connection"
 sql_preview:
   title:
     sql: SQL Preview
@@ -3798,7 +4338,7 @@ ssh:
   private_key_hint: "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"
   auth_label: Auth
 sso_wizard:
-  title: AWS SSO Wizard
+  title: AWS SSO
   step:
     start: Start URL
     account: Account
@@ -3811,36 +4351,38 @@ sso_wizard:
     account_id: Account ID
     role_name: Role name
   account:
-    hint: Use account ID from AWS SSO account discovery
-    discovering: Discovering accounts...
+    discovering: Discovering accounts…
     discover_button: Login + Discover Accounts
     no_matches: No matching accounts for current filter
   role:
-    hint: Use role name from AWS SSO role listing
-    discovering: Discovering roles...
+    discovering: Discovering roles…
     discover_button: Discover Roles for Selected Account
     no_matches: No matching roles for current filter
-  confirm:
-    profile: "Profile: %{value}"
-    start_url: "Start URL: %{value}"
-    region: "Region: %{value}"
-    account: "Account: %{value}"
-    role: "Role: %{value}"
   back: Back
   next: Next
   save: Save
   status:
     missing_required: Profile name, start URL, and region are required
     fill_before_account_discovery: Fill profile name, start URL, and region before discovery
-    discovering_accounts: Logging in and fetching SSO accounts...
+    discovering_accounts: Logging in and fetching SSO accounts…
     accounts_discovered: SSO account discovery completed
     accounts_failed: "Failed to discover accounts: %{error}"
     fill_before_role_discovery: Fill profile/region/start URL and select an account first
-    discovering_roles: Fetching SSO roles...
+    discovering_roles: Fetching SSO roles…
     roles_discovered: SSO role discovery completed
     roles_failed: "Failed to discover roles: %{error}"
     profile_created: Created AWS SSO auth profile
 status_bar:
+  no_connection: "No connection"
+  ready: "Ready"
+  connected_to: "Connected to %{name}"
+  tasks_failed: "%{count} failed"
+  background_tasks:
+    one: "1 background task"
+    many: "%{count} background tasks"
+  approvals:
+    one: "1 approval"
+    many: "%{count} approvals"
   disconnected: disconnected
   read_only:
     profile:
@@ -3854,21 +4396,48 @@ status_bar:
     one: "1 running"
     many: "%{count} running"
 tasks_panel:
+  title: "Background tasks"
+  running: "%{count} running"
+  failed: "%{count} failed"
+  clear_finished: "Clear finished"
+  cancel: "Cancel task"
+  dismiss: "Dismiss"
   empty: No background tasks
-  output_truncated: ... output truncated in panel
+  output_truncated: "… output truncated in panel"
 toast:
   action:
     copy: Copy
     show_details: Show details
     hide_details: Hide details
 workspace:
+  rail:
+    connections: "Connections"
+    scripts: "Scripts"
+    dashboards: "Dashboards"
+    approvals: "MCP approvals"
+    audit: "Audit"
+    settings: "Settings"
+  title_bar:
+    command_search: "Search or run a command"
+  empty:
+    title: "No tab open"
+    subtitle: "Open something from the sidebar, or start here."
+    start: "Start"
+    recent: "Recent"
+  recent:
+    just_now: "just now"
+    minutes_ago: "%{count} min ago"
+    hours_ago: "%{count} h ago"
+    yesterday: "yesterday"
+    days_ago: "%{count} days ago"
   background_tasks: Background Tasks
   empty_documents: No documents open
+  empty_hint: "Open a table from the sidebar, or start with one of these."
   hint:
-    new_query: new query
-    command_palette: command palette
-    open: open script from disk
-    new_connection: new connection
+    new_query: New query
+    command_palette: Command palette
+    open: Open script from disk
+    new_connection: New connection
   mcp_approvals: MCP Approvals
   event_streams: Event Streams
   action:
@@ -3883,3 +4452,104 @@ workspace:
     delete_folder: 'Delete folder "%{name}"?'
     delete_connection: 'Delete connection "%{name}"?'
   default_object_type: Object
+updates:
+  settings:
+    title: Updates
+    subtitle: New version checks and the changelog after updates.
+    group: Updates
+    new_versions: New versions
+    check_on_startup: Check GitHub for a new release at startup
+    status: Status
+    up_to_date: Up to date
+    available: "%{version} available"
+    failed: Could not check
+    checking: Checking
+    not_checked: Not checked yet
+    detail: "%{version} · %{channel} · checked %{ago}"
+    detail_unchecked: "%{version} · %{channel}"
+    check_now: Check now
+    changelog: Changelog
+    show_whats_new: Show what is new after each update
+    open_whats_new: Open what is new
+    show_welcome: Show welcome again
+    reset: Reset to defaults
+    save: Save
+    saved: Update settings saved.
+    save_error: "Could not save the update settings: %{error}"
+  ago:
+    just_now: just now
+    minutes: "%{count} min ago"
+    hours: "%{count} h ago"
+    days: "%{count} d ago"
+  toast:
+    title: "DBFlux %{version} is available"
+    download_body: "You have %{current}. The download page opens in your browser."
+    nix_body: "You have %{current}. Installed with Nix, so update it with your usual rebuild."
+    aur_body: "You have %{current}. Installed from the AUR, so update it with your AUR helper."
+    flatpak_body: "You have %{current}. Installed with Flatpak, so update it with flatpak update."
+    download: Download
+    release_notes: Release notes
+    skip: Skip
+    skip_version: Skip this version
+    skip_error: "Could not skip this version: %{error}"
+  sections:
+    added: Added
+    changed: Changed
+    deprecated: Deprecated
+    removed: Removed
+    fixed: Fixed
+    security: Security
+  whats_new:
+    title: What is new
+    releases_since:
+      one: "1 release since you last opened DBFlux"
+      many: "%{count} releases since you last opened DBFlux"
+    this_release: The version you are running
+    unreleased: Unreleased
+    show_after_update: Show what is new after each update
+    full_changelog: Full changelog
+    close: Close
+    empty: No changes are listed for this version.
+  welcome:
+    title: Welcome to DBFlux
+    tagline: A keyboard-first client for SQL, documents, key-value, time series and object storage.
+    whats_new: What is new
+    updates: Updates
+    notify: Tell me when a new version is out
+    notify_hint: At startup DBFlux asks GitHub for the latest release. Nothing about you is sent.
+    show_whats_new: Show what is new after each update
+    show_whats_new_hint: Opens this changelog once, the first time a new version starts.
+    change_later: Change these later in Settings › Updates
+    get_started: Get started
+    full_changelog: Full changelog
+notifications:
+  title: Notifications
+  unread: "%{count} unread"
+  mark_all_read: Mark all read
+  close: Close
+  filter:
+    all: All
+    approvals: Approvals
+    errors: Errors
+    updates: Updates
+  group:
+    needs_you: Needs you
+    updates: Updates
+    earlier: Earlier
+  footer:
+    hint: Click a row to open it
+    clear_read: Clear read
+  empty:
+    title: You are up to date
+    message: Approvals, updates and failed tasks show up here. Read items are kept until you clear them.
+  approval:
+    meta: "%{connection} · %{client} · %{waiting}"
+    review: Review
+  update:
+    meta: "%{channel} · you have %{current} · checked %{ago}"
+    meta_unchecked: "%{channel} · you have %{current}"
+    install: Install
+    whats_new: What is new
+    later: Later
+  task:
+    finished: "%{task} finished"

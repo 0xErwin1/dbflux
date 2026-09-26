@@ -125,6 +125,12 @@ pub struct TreeNode {
     pub value: NodeValue,
     pub depth: usize,
     pub parent_id: Option<NodeId>,
+    /// Order of this document's fields as the source returned them. Fields
+    /// not listed follow in key order.
+    pub field_order: Option<Arc<[String]>>,
+    /// Text shown instead of the field count while the node is collapsed,
+    /// naming the fields that identify the document.
+    pub summary: Option<Arc<str>>,
 }
 
 impl TreeNode {
@@ -136,7 +142,19 @@ impl TreeNode {
             value,
             depth,
             parent_id,
+            field_order: None,
+            summary: None,
         }
+    }
+
+    pub fn with_field_order(mut self, order: Arc<[String]>) -> Self {
+        self.field_order = Some(order);
+        self
+    }
+
+    pub fn with_summary(mut self, summary: Option<String>) -> Self {
+        self.summary = summary.map(Arc::from);
+        self
     }
 
     pub fn is_expandable(&self) -> bool {
@@ -147,8 +165,8 @@ impl TreeNode {
     pub fn children(&self) -> Vec<TreeNode> {
         match &self.value {
             NodeValue::Scalar(_) => Vec::new(),
-            NodeValue::Document(fields) => fields
-                .iter()
+            NodeValue::Document(fields) => ordered_fields(fields, self.field_order.as_deref())
+                .into_iter()
                 .map(|(k, v)| {
                     let child_id = self.id.child(k);
                     TreeNode::new(child_id, k, NodeValue::from_value(v), Some(self.id.clone()))
@@ -170,6 +188,60 @@ impl TreeNode {
                 .collect(),
         }
     }
+}
+
+/// The fields of a document in `order` first, then every other field by key.
+pub fn ordered_fields<'a>(
+    fields: &'a BTreeMap<String, Value>,
+    order: Option<&[String]>,
+) -> Vec<(&'a String, &'a Value)> {
+    let Some(order) = order else {
+        return fields.iter().collect();
+    };
+
+    let mut ordered: Vec<(&String, &Value)> = order
+        .iter()
+        .filter_map(|key| fields.get_key_value(key))
+        .collect();
+
+    ordered.extend(fields.iter().filter(|(key, _)| !order.contains(key)));
+    ordered
+}
+
+/// Up to `limit` fields that identify a document at a glance: the first short
+/// text or integer fields in document order, `_id` excluded. Rendered as
+/// `{ sku: "CAT-00335", name: "Walnut lamp 335" }`.
+pub fn identifying_summary(
+    fields: &BTreeMap<String, Value>,
+    order: Option<&[String]>,
+    limit: usize,
+) -> Option<String> {
+    const MAX_VALUE_CHARS: usize = 40;
+
+    let parts: Vec<String> = ordered_fields(fields, order)
+        .into_iter()
+        .filter(|(key, _)| key.as_str() != "_id")
+        .filter_map(|(key, value)| match value {
+            Value::Text(text) if !text.is_empty() && text.chars().count() <= MAX_VALUE_CHARS => {
+                Some(format!("{key}: \"{text}\""))
+            }
+            Value::Int(integer) => Some(format!("{key}: {integer}")),
+            _ => None,
+        })
+        .take(limit)
+        .collect();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let more = if fields.len() > parts.len() + 1 {
+        ", \u{2026}"
+    } else {
+        ""
+    };
+
+    Some(format!("{{ {}{} }}", parts.join(", "), more))
 }
 
 const MAX_PREVIEW_LEN: usize = 80;
@@ -277,5 +349,61 @@ fn format_date_relative(d: &NaiveDate) -> String {
         "yesterday".to_string()
     } else {
         format!("{} days ago", days)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fields(entries: &[(&str, Value)]) -> BTreeMap<String, Value> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn ordered_fields_follow_the_given_order_then_the_rest() {
+        let document = fields(&[
+            ("a", Value::Int(1)),
+            ("sku", Value::Int(2)),
+            ("_id", Value::Int(3)),
+        ]);
+        let order = vec!["_id".to_string(), "sku".to_string()];
+
+        let keys: Vec<&str> = ordered_fields(&document, Some(&order))
+            .into_iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+
+        assert_eq!(keys, vec!["_id", "sku", "a"]);
+    }
+
+    #[test]
+    fn identifying_summary_names_the_first_short_text_fields() {
+        let document = fields(&[
+            ("_id", Value::ObjectId("a".repeat(24))),
+            ("sku", Value::Text("CAT-00335".into())),
+            ("name", Value::Text("Walnut lamp 335".into())),
+            ("price", Value::Document(BTreeMap::new())),
+            ("zone", Value::Text("north".into())),
+        ]);
+        let order: Vec<String> = ["_id", "sku", "name", "price", "zone"]
+            .iter()
+            .map(|key| key.to_string())
+            .collect();
+
+        assert_eq!(
+            identifying_summary(&document, Some(&order), 2).as_deref(),
+            Some("{ sku: \"CAT-00335\", name: \"Walnut lamp 335\", \u{2026} }")
+        );
+    }
+
+    #[test]
+    fn identifying_summary_is_none_without_scalar_fields() {
+        let document = fields(&[("_id", Value::Int(1)), ("items", Value::Array(Vec::new()))]);
+
+        assert_eq!(identifying_summary(&document, None, 2), None);
     }
 }

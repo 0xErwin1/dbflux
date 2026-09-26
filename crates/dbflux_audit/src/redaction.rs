@@ -41,8 +41,9 @@ const SENSITIVE_JSON_KEYS: &[&str] = &[
 ];
 
 /// Regex patterns for detecting sensitive values in strings.
-/// These patterns match common credential formats.
-const SENSITIVE_PATTERNS: &[(&str, &str); 8] = &[
+/// These patterns match common credential formats. Credentials embedded in
+/// URLs are handled separately by `dbflux_core::redact_uri_credentials`.
+const SENSITIVE_PATTERNS: &[(&str, &str); 6] = &[
     // AWS access key ID (AKIA...)
     ("aws_access_key", r"(?i)AKIA[0-9A-Z]{16}"),
     // AWS secret access key (40 hex chars)
@@ -54,10 +55,6 @@ const SENSITIVE_PATTERNS: &[(&str, &str); 8] = &[
         "jwt_token",
         r"(?i)eyJ[0-9A-Za-z_-]+\.eyJ[0-9A-Za-z_-]+\.[0-9A-Za-z_-]+",
     ),
-    // Connection string with password
-    ("connection_string", r"(?i)[psq]g?sql://[^:]+:[^@]+@"),
-    // URL with credentials
-    ("url_credentials", r"https?://[^:]+:[^@]+@"),
     // Base64-encoded secrets (at least 32 chars, only base64 chars)
     ("base64_secret", r"(?i)[A-Za-z0-9+/]{40,}={0,2}"),
     // Hex-encoded secrets (at least 32 chars)
@@ -112,15 +109,10 @@ pub fn redact_json(input: &str, redact_sensitive: bool) -> RedactionResult {
 
     // If not valid JSON, treat as plain text and apply pattern-based redaction
     if redact_sensitive {
-        let mut result = input.to_string();
-        for (_, pattern) in SENSITIVE_PATTERNS {
-            let redactions = count_regex_matches(&result, pattern);
-            count += redactions;
-            result = regex_replace(&result, pattern, REDACTED);
-        }
+        let (result, redactions) = redact_sensitive_text(input);
         RedactionResult {
             redacted: result,
-            redaction_count: count,
+            redaction_count: redactions,
         }
     } else {
         RedactionResult {
@@ -179,8 +171,16 @@ fn redact_json_value(
 
 /// Apply pattern-based redaction to a string value.
 fn redact_string_values(input: &str, count: &mut usize) -> (String, usize) {
-    let mut result = input.to_string();
-    let mut redaction_count = 0;
+    let (result, redaction_count) = redact_sensitive_text(input);
+
+    *count += redaction_count;
+
+    (result, redaction_count)
+}
+
+/// Redacts URL credentials first, then every value matching `SENSITIVE_PATTERNS`.
+fn redact_sensitive_text(input: &str) -> (String, usize) {
+    let (mut result, mut redaction_count) = dbflux_core::redact_uri_credentials(input, REDACTED);
 
     for (_, pattern) in SENSITIVE_PATTERNS {
         let matches = count_regex_matches(&result, pattern);
@@ -189,8 +189,6 @@ fn redact_string_values(input: &str, count: &mut usize) -> (String, usize) {
             result = regex_replace(&result, pattern, REDACTED);
         }
     }
-
-    *count += redaction_count;
 
     (result, redaction_count)
 }
@@ -220,14 +218,7 @@ pub fn redact_error_message(input: &str, redact_sensitive: bool) -> RedactionRes
         };
     }
 
-    let mut result = input.to_string();
-    let mut count = 0;
-
-    for (_, pattern) in SENSITIVE_PATTERNS {
-        let matches = count_regex_matches(&result, pattern);
-        count += matches;
-        result = regex_replace(&result, pattern, REDACTED);
-    }
+    let (result, count) = redact_sensitive_text(input);
 
     RedactionResult {
         redacted: result,
@@ -335,6 +326,49 @@ mod tests {
         // whether any patterns match is a property of the regex set, not this fallback.
         let input = "password=secret123";
         let _ = redact_json(input, true);
+    }
+
+    #[test]
+    fn test_redact_error_message_covers_every_connection_scheme() {
+        let urls = [
+            "postgres://u:hunter2pw@h:5432/db",
+            "postgresql://u:hunter2pw@h:5432/db",
+            "mysql://u:hunter2pw@h:3306/db",
+            "mariadb://u:hunter2pw@h/db",
+            "mongodb://u:hunter2pw@h1,h2/db",
+            "mongodb+srv://u:hunter2pw@cluster.example.net/db",
+            "redis://:hunter2pw@h:6379",
+            "rediss://default:hunter2pw@h:6380",
+            "sqlserver://sa:hunter2pw@h:1433",
+            "clickhouse://u:hunter2pw@h:8123",
+            "http://u:hunter2pw@h:8086",
+            "https://u:hunter2pw@h",
+            "postgresql://u:hunter%40pw@[::1]:5432/db",
+            "postgresql://h/db?password=hunter2pw",
+        ];
+
+        for url in urls {
+            let result = redact_error_message(&format!("connect failed: {url} refused"), true);
+            assert!(
+                !result.redacted.contains("hunter"),
+                "password leaked for {url}: {}",
+                result.redacted
+            );
+            assert!(result.redacted.contains("[REDACTED]"));
+            assert!(result.redaction_count >= 1);
+        }
+    }
+
+    #[test]
+    fn test_redact_json_value_with_postgresql_url_under_neutral_key() {
+        let json = r#"{"detail": "dial postgresql://alice:hunter2pw@db:5432/app failed"}"#;
+        let result = redact_json(json, true);
+        assert!(!result.redacted.contains("hunter2pw"));
+        assert!(
+            result
+                .redacted
+                .contains("postgresql://alice:[REDACTED]@db:5432/app")
+        );
     }
 
     #[test]

@@ -3,7 +3,8 @@ use dbflux_components::composites::{
     render_menu_container as render_shared_menu_container, render_menu_item,
 };
 use dbflux_components::controls::{Input, InputState};
-use dbflux_components::primitives::focus_frame;
+use dbflux_components::primitives::{FocusShape, focus_ring};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_ui::theme;
 use dbflux_ui::ui::components::context_menu::{MenuItem, render_menu_container};
 use dbflux_ui::ui::icons::AppIcon;
@@ -115,10 +116,11 @@ impl Render for FocusWrapperHarness {
                     .id("first-shell")
                     .debug_selector(|| "first-shell".to_string())
                     .w(px(220.0))
-                    .child(focus_frame(
+                    .child(focus_ring(
                         false,
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         None,
-                        control_shell(Input::new(&self.first_input).w_full(), cx),
+                        control_shell(Input::new(&self.first_input).w_full().appearance(false), cx),
                         cx,
                     )),
             )
@@ -127,10 +129,14 @@ impl Render for FocusWrapperHarness {
                     .id("second-shell")
                     .debug_selector(|| "second-shell".to_string())
                     .w(px(220.0))
-                    .child(focus_frame(
+                    .child(focus_ring(
                         false,
+                        FocusShape::Chamfer(ChamferCut::CONTROL),
                         None,
-                        control_shell(Input::new(&self.second_input).w_full(), cx),
+                        control_shell(
+                            Input::new(&self.second_input).w_full().appearance(false),
+                            cx,
+                        ),
                         cx,
                     )),
             )

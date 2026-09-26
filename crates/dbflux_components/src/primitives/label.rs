@@ -2,7 +2,6 @@ use gpui::prelude::*;
 use gpui::{App, Hsla, SharedString, Window, div};
 
 use crate::primitives::Text;
-use crate::typography::RequiredMarker;
 
 /// Stateless field label with an optional required marker.
 #[derive(IntoElement)]
@@ -40,8 +39,8 @@ impl Label {
 
     fn build_text(text: SharedString, color_override: Option<Hsla>) -> Text {
         match color_override {
-            Some(color) => Text::field_label(text).text_color(color),
-            None => Text::field_label(text).muted_foreground(),
+            Some(color) => Text::body(text).text_color(color),
+            None => Text::body(text).muted_foreground(),
         }
     }
 
@@ -65,7 +64,7 @@ impl RenderOnce for Label {
             .child(div().min_w_0().child(label));
 
         if self.required {
-            el = el.child(RequiredMarker::new());
+            el = el.child(Text::body("*").danger());
         }
 
         el
@@ -81,11 +80,10 @@ mod tests {
     fn label_defaults_to_muted_field_label_typography() {
         let label = Label::new("Host").text();
 
-        assert_eq!(
-            label.role_contract(),
-            TextVariant::FieldLabel.role_contract()
-        );
-        assert!(label.uses_muted_foreground_override());
-        assert!(!label.uses_role_default_color());
+        let inspection = label.inspect();
+
+        assert_eq!(inspection.variant, TextVariant::Body);
+        assert!(inspection.uses_muted_foreground_override);
+        assert!(!inspection.uses_role_default_color);
     }
 }

@@ -14,8 +14,6 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 `-dev.N` 渠道已**废弃**。nightly 已取代它。旧的 `-dev.N` 标签仍保留在 GitHub 上，但不会再创建新的。
 
-各渠道的应用程序图标在 [issue #183](https://github.com/0xErwin1/dbflux/issues/183) 中跟踪。请勿在此处实现。
-
 ## 更新日志模型
 
 两个产物，各自只有一个编写来源：
@@ -93,13 +91,14 @@ git push origin vX.Y.Z[-suffix.N]
 2. 准备稳定化时，从 `main` HEAD 切出 `release/v0.7`。
    - 在 `release/v0.7` 上：将每个带版本号的制品更新到 `0.7.0-rc.0`。提交并推送。
    - 在 `main` 上：将每个带版本号的制品更新到 `0.8.0-dev.0`。提交并推送。`main` 现在指向下一个次版本。
+   - 在 `main` 上：将 `v0.7` 加入 `web/versions.json`，不标记为 current。站点仍在 `/docs/` 提供 `v0.6`。
    - 在发布分支上打标签 `v0.7.0-rc.0`。git-cliff 会自动将未发布区间渲染为 rc 的发布说明正文。
 3. rc 期间发现一个 bug：
    - 在 `main` 上提交修复。
    - 通过 `git cherry-pick -x <sha>` 拣选到 `release/v0.7`。
    - 更新到 `v0.7.0-rc.1` 并打标签。
 4. 当状态干净时，将发布分支从 `v0.7.0-rc.N` 更新到 `v0.7.0`，并在同一个提交中将 `CHANGELOG.md` 顶部的标题重命名为 `## [0.7.0] - <date>`。打标签 `v0.7.0`。git-cliff 会将自 `v0.6.0` 起的完整区间渲染为稳定版发布说明正文。
-5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。一个提交关闭已发布的 `[Unreleased]` 章节，并在其上方打开全新的章节。
+5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。一个提交关闭已发布的 `[Unreleased]` 章节，并在其上方打开全新的章节；另一个提交将 `web/versions.json` 中的 `"current": true` 从 `v0.6` 移到 `v0.7`。
 6. 补丁（`v0.7.1`、`v0.7.2`……）通过从 `main` 拣选提交，来自同一条发布分支，并且每个补丁都会向 `CHANGELOG.md` 前置插入生成的 `## [0.7.N]` 章节。
 
 ## 制品身份与签名
@@ -147,14 +146,16 @@ bundle 在 `build.yml` 中于创建 DMG 之前签名。该 job 把证书导入�
 变更时，从 `resources/branding/<channel>/` 重新生成：
 
 ```bash
-magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
-# ... 128、64 来自 mark.svg；48、32、16 来自 mark-small.svg
-magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+scripts/branding/generate-icons.sh
 ```
 
-旁边的 macOS `.icns` 文件（`dbflux.icns`、`dbflux-nightly.icns`）用 `libicns`
-的 `png2icns` 以同样方式构建，额外加入 512 和 1024 尺寸，并以 `AppIcon.icns`
-的名字进入 bundle。
+该脚本用 `mark.svg`（完整图标）渲染 48 px 及以上的尺寸，用 `mark-small.svg`
+（字形）渲染 32 px 及以下的尺寸。它还会重建旁边的 macOS `.icns` 文件
+（`dbflux.icns`、`dbflux-nightly.icns`，额外加入 512 和 1024 尺寸，并以
+`AppIcon.icns` 的名字进入 bundle）、`packaging/icons/<size>/apps/` 下的 hicolor
+PNG、各渠道目录中的应用内 PNG 与组合标识 `wordmark.svg`，以及
+`web/public/brand/` 中的网站副本。缺少 `rsvg-convert`、`icotool`、`png2icns`
+或带 `fonttools` 与 `uharfbuzz` 的 Python 时，脚本会在 Nix shell 中重新运行自身。
 
 ## 切出流程：`main` → `release/vX.Y`
 
@@ -177,7 +178,17 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
    - 将每个带版本号的制品更新到 `X.(Y+1).0-dev.0`（`main` 现在指向下一个次版本）。
    - 提交信息：`chore(version): move main to X.(Y+1).0-dev.0 marker`。
    - 推送。
-6. 在发布分支上打标签 `vX.Y.0-rc.0`。
+6. 仍在 `main` 上，在网站中登记该次版本。`release/vX.Y` 必须已经在 origin 上（第 4 步）；原因见[网站](#网站)。将条目加在 `nightly` 之后，不带 `current`——rc 不是当前发布：
+
+   ```json
+   { "id": "nightly", "ref": "main", "noindex": true },
+   { "id": "vX.Y", "ref": "release/vX.Y" },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
+   ```
+
+   - 提交信息：`chore(web): add vX.Y to the site versions`。
+   - 推送。
+7. 在发布分支上打标签 `vX.Y.0-rc.0`。
 
 rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全不需要任何 CHANGELOG 步骤。
 
@@ -197,6 +208,15 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 3. 提交信息：`chore(release): promote release/vX.Y to vX.Y.0`。
 4. 在发布分支上打标签 `vX.Y.0`，并推送分支与标签。
 5. CI 会根据自上一个稳定版标签以来的每个用户可见提交，生成稳定版发布说明正文。
+6. 在 `main` 上，将新的次版本设为站点的当前发布：在 `web/versions.json` 中，把 `"current": true` 从 `vX.(Y-1)` 移到 `vX.Y`。
+
+   ```json
+   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
+   ```
+
+   - 提交信息：`chore(web): make vX.Y the current site version`。
+   - 推送。站点从 `main` 部署，因此这个提交会把 `/docs/` 切换到 `vX.Y`，并把首页和对比页面显示的产品版本切换到 `X.Y.0`。
 
 发布工作流会拒绝发布一个在 `CHANGELOG.md` 中没有对应 `## [X.Y.Z]` 章节的稳定版标签，因此第 2 步不可能被无声地跳过。
 
@@ -205,6 +225,20 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 `main` 会在**切出 `release/vX.Y` 时**更新到 `X.(Y+1).0-dev.0`（见切出流程第 5 步）。稳定版标签发布后无需再更新 `main`。nightly 构建会从 `main` HEAD 自动持续进行，在整个稳定化窗口期间生成 `X.(Y+1).0-nightly+<sha>`。
 
 稳定版标签推送后，`main` 会得到一个提交，以同样的方式关闭已发布的章节（将 `## [Unreleased]` 重命名为 `## [X.Y.0] - <date>`），并在其上方打开全新的 `## [Unreleased]`，让仓库更新日志保留已发布的历史。`7a13aceb` 就是这样一个提交的例子。切出之后落在 `main` 上、但未随本次发布的工作，归属新的 `[Unreleased]`，而不是已发布的章节；这一拆分是该模型唯一一处需要手工完成的地方。
+
+## 网站
+
+站点为每个次版本发布一套文档，列在 `web/versions.json` 中（字段说明见 `web/src/data/versions.ts`）。它不随每次发布更新：只在一个次版本生命周期中的三个时间点变化，并且总是通过 `main` 上的提交完成，因为站点从 `main` 部署（`.github/workflows/web.yml`）。
+
+| 事件 | `web/versions.json` 中的变更 | 提交信息 |
+|------|------------------------------|----------|
+| 切出（`release/vX.Y` 已推送） | 在 `nightly` 之后加入 `{ "id": "vX.Y", "ref": "release/vX.Y" }` | `chore(web): add vX.Y to the site versions` |
+| 稳定版（`vX.Y.0` 已打标签并推送） | 将 `"current": true` 移到 `vX.Y` | `chore(web): make vX.Y the current site version` |
+| EOL（删除 `release/vX.Y` 之前） | 将 `vX.Y` 的 `ref` 改为其最后一个标签，例如 `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
+
+- **ref 必须先存在于 origin 上。** `web/scripts/fetch-docs.ts` 从每个条目的 git ref 读取文档，克隆中缺少该 ref 时会从 `origin` 拉取。无法读取的 ref 只会被跳过并给出警告，但随后构建会在渲染该版本页面时失败（`No materialised documentation for version "vX.Y"`）。在其分支推送之前合入的条目，或仍指向已删除分支的条目，都会让 `main` 上的每次站点部署失败。
+- **产品版本不在任何地方手写。** 站点从每个 ref 的 `Cargo.toml` 读取它，因此它会跟随发布分支的版本更新（`X.Y.0-rc.N`，然后 `X.Y.0`，然后补丁版本），无需修改站点。
+- **新次版本的站点文案要等到稳定版发布。** 描述 `vX.Y` 功能的首页或对比页面文案，不得早于将 `vX.Y` 设为 current 的提交进入 `main`；在此之前站点描述的是 `vX.(Y-1)`。
 
 ## 需要更新的文件
 
@@ -218,6 +252,8 @@ rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全�
 在该标签的 GitHub Release 制品发布之后，还需更新：
 
 - `nix/release-info.nix` — `version` 以及两个预构建 tarball 的 `url` 与 `hash`（见[本仓库的 Nix flake](#本仓库的-nix-flake) 下文）。这是一个按分支的渠道指针。它需要已发布的制品，因此在发布工作流完成后才作为后续提交合入。
+
+`web/versions.json` 不属于每次发布的版本更新；它在次版本的切出、升级为稳定版和 EOL 时变化（见[网站](#网站)）。
 
 AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳定版标签时更新。
 
@@ -338,6 +374,8 @@ nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 - 推送 AUR 更新时 `pkgver` 含有连字符。
 - 从 `main` HEAD 切出 `release/vX.Y`，但该 HEAD 的 `release.yml` 中不包含 `Classify release` 作业。
 - 创建新的 `-dev.N` 标签（该渠道已废弃，请改用 nightly）。
+- 在 `web/versions.json` 中将处于 rc 阶段的次版本标记为 `"current": true`，或在 `vX.Y.0` 发布后仍让上一个次版本保持 current。
+- 在 ref 尚未推送到 origin 时就向 `web/versions.json` 添加条目，或删除仍被某个条目指向的 `release/vX.Y` 分支。
 
 ## 打标签前的本地校验
 
@@ -357,4 +395,5 @@ cargo test --workspace
 - `.github/workflows/build.yml` — 可复用的构建作业（由 release 与 nightly 调用）
 - `.github/release-template.md` — 追加到每个发布说明正文中的安装章节
 - `cliff.toml` — 用于更新日志生成的 git-cliff 配置
+- `web/versions.json` — 站点发布的文档版本，以及哪一个是当前版本
 - `skills/dbflux-release/SKILL.md` — 自动化此流程、面向智能体的技能

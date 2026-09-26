@@ -98,10 +98,31 @@ impl Workspace {
             | Command::MoveTableDown
             | Command::LayoutLeftRight
             | Command::LayoutSnowflake
-            | Command::LayoutCompact => Some(
+            | Command::LayoutCompact
+            // Element commands (grids, inputs) normally run as the element's
+            // own action; a user binding that sends one here reaches the
+            // active document, which decides whether it applies.
+            | Command::ExtendSelectLeft
+            | Command::ExtendSelectRight
+            | Command::MoveToRowStart
+            | Command::MoveToRowEnd
+            | Command::ExtendSelectRowStart
+            | Command::ExtendSelectRowEnd
+            | Command::ExtendSelectFirst
+            | Command::ExtendSelectLast
+            | Command::SelectAll
+            | Command::SaveRow
+            | Command::Undo
+            | Command::Redo
+            | Command::ToggleColumnGroup
+            | Command::StepOut
+            | Command::TriggerCompletion => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),
+
+            // Closing a window belongs to the settings window.
+            Command::CloseWindow => Some(false),
 
             _ => None,
         }

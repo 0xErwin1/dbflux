@@ -124,7 +124,18 @@ When stabilization for a minor begins:
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-7. Tag `vX.Y.0-rc.0` on the release branch (see "Tag Procedure").
+7. Still on `main`, register the minor on the website (see "Website"). Only after step 5's push: the ref must exist on origin or every site deploy from `main` fails. Add the entry right after `nightly` in `web/versions.json`, without `current` (an RC is not the current release):
+
+   ```json
+   { "id": "nightly", "ref": "main", "noindex": true },
+   { "id": "vX.Y", "ref": "release/vX.Y" },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
+   ```
+
+   - Commit: `chore(web): add vX.Y to the site versions`.
+   - Push.
+
+8. Tag `vX.Y.0-rc.0` on the release branch (see "Tag Procedure").
 
 **No CHANGELOG edit is needed at an RC.** git-cliff generates RC notes from conventional commits automatically.
 
@@ -144,6 +155,15 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body via git-cliff (all user-visible commits since the previous stable tag).
+6. On `main`, make `vX.Y` the site's current release: in `web/versions.json`, move `"current": true` from `vX.(Y-1)` to `vX.Y`.
+
+   ```json
+   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
+   ```
+
+   - Commit: `chore(web): make vX.Y the current site version`.
+   - Push. The site deploys from `main`, so this switches `/docs/` to `vX.Y` and the product version shown on the landing and compare pages to `X.Y.0`.
 
 After the GitHub Release publishes, run post-release steps (see "Post-Release Channels").
 
@@ -185,6 +205,22 @@ These must all carry the exact same version number per release:
 Post-release (requires published artifacts):
 
 - `nix/release-info.nix` — see "Nix Bump" below.
+
+Not per release: `web/versions.json` changes only at the cut, the stable promote and the EOL of a minor (see "Website").
+
+## Website
+
+`web/versions.json` lists the documentation sets the site publishes, one per minor (fields documented in `web/src/data/versions.ts`). Every change is a commit on `main`, because the site deploys from `main` (`.github/workflows/web.yml`).
+
+| Event | Change | Commit |
+|-------|--------|--------|
+| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
+| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
+
+- The ref must exist on origin. `web/scripts/fetch-docs.ts` skips an unreadable ref with a warning, then the build fails rendering that version (`No materialised documentation for version "vX.Y"`).
+- The product version is read from each ref's `Cargo.toml`; never type it into the site.
+- Site copy describing features of `vX.Y` lands on `main` no earlier than the commit that makes `vX.Y` current.
 
 ## Cherry-Pick Discipline
 
@@ -253,6 +289,8 @@ Refuse, with a clear message, if any of these are requested:
 - Creating a new `-dev.N` tag (this channel is retired; use nightly instead).
 - Running `git-cliff --prepend CHANGELOG.md` at a stable promote: that file is curated, and the heading rename is the only edit there. `--prepend` belongs to patch releases.
 - Cutting a `release/vX.Y` branch from a `main` HEAD where `.github/workflows/release.yml` is missing the `classify` job.
+- Marking an RC minor `"current": true` in `web/versions.json`, or leaving the previous minor current after `vX.Y.0` is published.
+- Adding a `web/versions.json` entry before its ref is on origin, or deleting a `release/vX.Y` branch that an entry still points at.
 
 ## Inspection Commands
 
@@ -284,3 +322,4 @@ git log --grep='cherry picked from' release/vX.Y
 - `cliff.toml` — git-cliff configuration
 - `Cargo.toml`, `flake.nix`, `nix/release-info.nix`, `resources/windows/installer.iss`
 - `examples/custom_driver/Cargo.toml` (standalone, review manually)
+- `web/versions.json` — documentation versions the site publishes, and which one is current

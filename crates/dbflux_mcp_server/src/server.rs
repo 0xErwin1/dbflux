@@ -665,6 +665,21 @@ impl DbFluxServer {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DbFluxServer {
+    /// Dispatches a tool call with its arguments in scope, so governance can
+    /// queue a call that needs approval and match it to an approval later.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let arguments = serde_json::Value::Object(request.arguments.clone().unwrap_or_default());
+        let tool_call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+
+        crate::governance::TOOL_CALL_ARGUMENTS
+            .scope(arguments, self.tool_router.call(tool_call))
+            .await
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "DBFlux MCP Server - AI-powered database client with governance controls.\n\
@@ -675,7 +690,17 @@ impl ServerHandler for DbFluxServer {
              • SQLite\n\
              \n\
              All operations are subject to role-based access control and audit logging.\n\
-             Destructive operations may require manual approval before execution.",
+             \n\
+             Approvals: a policy can require a person to approve a call. Such a call does not \
+             run; it fails with error data code \"approval_required\" and a \"pending_id\". \
+             Then: (1) tell the user that pending execution <pending_id> is waiting for their \
+             approval in DBFlux (Workspace > Pending Approvals); (2) wait, and never call \
+             approve_execution or reject_execution, which are always denied to MCP clients; \
+             (3) check the status with get_pending_execution: while its status is \"pending\", \
+             it is still waiting, and status \"rejected\" carries the user's reason; (4) after \
+             the user approves it, repeat the identical call (same tool, same arguments) and \
+             it runs once. A rejected or expired call, or one \
+             repeated with different arguments, is queued again instead of running.",
         )
     }
 }

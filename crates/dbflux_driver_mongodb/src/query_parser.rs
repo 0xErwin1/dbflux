@@ -812,105 +812,12 @@ fn parse_relaxed_json(input: &str) -> Result<Document, DbError> {
     // Try to fix common relaxed JSON patterns:
     // - Unquoted keys: {name: "value"} -> {"name": "value"}
     // - Single quotes: {'name': 'value'} -> {"name": "value"}
-    let normalized = normalize_relaxed_json(trimmed);
+    let normalized = dbflux_core::normalize_relaxed_json(trimmed);
 
     let json: serde_json::Value = serde_json::from_str(&normalized)
         .map_err(|e| DbError::query_failed(format!("Invalid JSON: {}", e)))?;
 
     json_to_bson_doc(&json)
-}
-
-/// Normalize relaxed JSON to strict JSON
-// All indexing is guarded by explicit `i < chars.len()` checks in the loop body.
-#[allow(clippy::indexing_slicing)]
-fn normalize_relaxed_json(input: &str) -> String {
-    let mut result = String::with_capacity(input.len() * 2);
-    let chars: Vec<char> = input.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let ch = chars[i];
-
-        // Handle strings (preserve as-is, just convert single to double quotes)
-        if ch == '"' || ch == '\'' {
-            let quote = ch;
-            let target_quote = '"';
-            result.push(target_quote);
-            i += 1;
-
-            while i < chars.len() {
-                let inner = chars[i];
-                if inner == '\\' && i + 1 < chars.len() {
-                    result.push(inner);
-                    result.push(chars[i + 1]);
-                    i += 2;
-                } else if inner == quote {
-                    result.push(target_quote);
-                    i += 1;
-                    break;
-                } else {
-                    result.push(inner);
-                    i += 1;
-                }
-            }
-            continue;
-        }
-
-        // Check for unquoted key after { or ,
-        if ch == '{' || ch == ',' {
-            result.push(ch);
-            i += 1;
-
-            // Skip whitespace
-            while i < chars.len() && chars[i].is_whitespace() {
-                result.push(chars[i]);
-                i += 1;
-            }
-
-            // Check if this looks like an unquoted key
-            if i < chars.len() && is_key_start_char(chars[i]) {
-                // Collect the key
-                let key_start = i;
-                while i < chars.len() && is_key_char(chars[i]) {
-                    i += 1;
-                }
-                let key = &chars[key_start..i];
-
-                // Skip whitespace after key
-                while i < chars.len() && chars[i].is_whitespace() {
-                    i += 1;
-                }
-
-                // Check if followed by colon (confirming it's a key)
-                if i < chars.len() && chars[i] == ':' {
-                    result.push('"');
-                    for &c in key {
-                        result.push(c);
-                    }
-                    result.push('"');
-                } else {
-                    // Not a key, output as-is
-                    for &c in key {
-                        result.push(c);
-                    }
-                }
-            }
-            continue;
-        }
-
-        result.push(ch);
-        i += 1;
-    }
-
-    result
-}
-
-fn is_key_start_char(ch: char) -> bool {
-    ch.is_alphabetic() || ch == '_' || ch == '$'
-}
-
-fn is_key_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_' || ch == '$'
 }
 
 /// Parse JSON format (backward compatibility)

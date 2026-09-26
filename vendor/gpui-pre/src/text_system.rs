@@ -526,6 +526,27 @@ impl WindowTextSystem {
         wrap_width: Option<Pixels>,
         line_clamp: Option<usize>,
     ) -> Result<SmallVec<[WrappedLine; 1]>> {
+        self.shape_text_with_letter_spacing(
+            text,
+            font_size,
+            runs,
+            wrap_width,
+            line_clamp,
+            Pixels::ZERO,
+        )
+    }
+
+    /// Like [`Self::shape_text`], adding `letter_spacing` after every character.
+    /// Line wrapping accounts for the extra space.
+    pub fn shape_text_with_letter_spacing(
+        &self,
+        text: SharedString,
+        font_size: Pixels,
+        runs: &[TextRun],
+        wrap_width: Option<Pixels>,
+        line_clamp: Option<usize>,
+        letter_spacing: Pixels,
+    ) -> Result<SmallVec<[WrappedLine; 1]>> {
         let mut runs = runs.iter().filter(|run| run.len > 0).cloned().peekable();
         let mut font_runs = self.font_runs_pool.lock().pop().unwrap_or_default();
 
@@ -592,6 +613,7 @@ impl WindowTextSystem {
                 &font_runs,
                 wrap_width,
                 max_wrap_lines.map(|max| max.saturating_sub(wrapped_lines)),
+                letter_spacing,
             );
             wrapped_lines += layout.wrap_boundaries.len();
 

@@ -196,7 +196,6 @@ export default defineConfig({
       themes: {
         light: 'ayu-light',
         dark: 'ayu-dark',
-        mirage: 'ayu-mirage',
       },
       defaultColor: false,
       wrap: false,

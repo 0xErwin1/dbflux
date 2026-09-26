@@ -1,13 +1,13 @@
+use crate::controls::Button;
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::{Icon, Text, surface_raised};
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{Icon, SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
-use gpui_component::button::{Button, ButtonVariants};
 
 /// Debug selector of the box that shows the connection name, for layout tests.
 pub const DELETE_CONNECTION_NAME_SELECTOR: &str = "delete-connection-name";
@@ -30,7 +30,7 @@ pub struct DeleteConnectionRequest {
 
 /// Modal entity for confirming connection deletion.
 ///
-/// Uses `ModalShell::Danger` (460 px, 2 px red top-border).
+/// Uses `Modal` (`ModalVariant::Danger`) (460 px, 2 px red top-border).
 /// The parent opens via `pending_modal_open: Option<DeleteConnectionRequest>` and
 /// subscribes to `DeleteConnectionOutcome` events.
 pub struct ModalDeleteConnection {
@@ -126,7 +126,7 @@ impl Render for ModalDeleteConnection {
                     ),
             )
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .debug_selector(|| DELETE_CONNECTION_NAME_SELECTOR.to_string())
                     .w_full()
                     .px(Spacing::SM)
@@ -161,38 +161,41 @@ impl Render for ModalDeleteConnection {
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Button::new("delete-conn-cancel")
-                    .label(dbflux_i18n::t!("modals.delete_connection.cancel"))
-                    .on_click(on_cancel),
+                Button::new(
+                    "delete-conn-cancel",
+                    dbflux_i18n::t!("modals.delete_connection.cancel"),
+                )
+                .on_click(on_cancel),
             )
             .child(
-                Button::new("delete-conn-confirm")
-                    .label(dbflux_i18n::t!("modals.delete_connection.confirm"))
-                    .danger()
-                    .on_click(on_confirm),
+                Button::new(
+                    "delete-conn-confirm",
+                    dbflux_i18n::t!("modals.delete_connection.confirm"),
+                )
+                .danger()
+                .on_click(on_confirm),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.delete_connection.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Danger)
-        .width(px(460.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.delete_connection.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Delete)
+            .variant(ModalVariant::Danger)
+            .width(px(460.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 

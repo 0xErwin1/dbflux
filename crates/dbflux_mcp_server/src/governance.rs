@@ -9,7 +9,7 @@ use dbflux_core::observability::{
 use dbflux_mcp::{
     McpGovernanceService,
     server::{
-        authorization::{AuthorizationOutcome, AuthorizationRequest, authorize_request},
+        authorization::{APPROVAL_REQUIRED_CODE, AuthorizationOutcome, AuthorizationRequest},
         request_context::RequestIdentity,
     },
 };
@@ -29,6 +29,22 @@ use crate::state::ServerState;
 #[derive(Default)]
 pub struct AuditDetails {
     pub query: Option<String>,
+}
+
+tokio::task_local! {
+    /// Arguments of the MCP tool call being served, set by
+    /// `DbFluxServer::call_tool` for the duration of the call. A call that a
+    /// policy sends to approval is queued and matched against approvals by
+    /// these arguments.
+    pub(crate) static TOOL_CALL_ARGUMENTS: serde_json::Value;
+}
+
+/// The arguments of the tool call being served, or an empty object when the
+/// middleware runs outside `call_tool` (direct calls in tests).
+fn current_tool_call_arguments() -> serde_json::Value {
+    TOOL_CALL_ARGUMENTS
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
 }
 
 /// Helper to get current epoch time in milliseconds
@@ -72,7 +88,7 @@ impl GovernanceMiddleware {
             true
         };
 
-        let runtime = self.state.runtime.read().await;
+        let mut runtime = self.state.runtime.write().await;
 
         let trusted_clients_dto = runtime.list_trusted_clients().map_err(|e| {
             McpError::internal_error(format!("Failed to list trusted clients: {}", e), None)
@@ -108,29 +124,20 @@ impl GovernanceMiddleware {
             correlation_id: Some(correlation_id.clone()),
         };
 
-        let outcome = authorize_request(
-            &trusted_clients,
-            &policy_engine,
-            runtime.audit_service(),
-            &auth_request,
-            now_epoch_ms(),
-        )
-        .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
+        let outcome = runtime
+            .authorize_with_approval_mut(
+                &trusted_clients,
+                &policy_engine,
+                &auth_request,
+                current_tool_call_arguments(),
+                now_epoch_ms(),
+            )
+            .map_err(|e| McpError::internal_error(format!("Authorization error: {}", e), None))?;
 
         drop(runtime);
 
         if !outcome.allowed {
-            return Err(McpError::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                outcome
-                    .deny_reason
-                    .as_deref()
-                    .unwrap_or("authorization denied")
-                    .to_string(),
-                outcome
-                    .deny_code
-                    .map(|code| serde_json::json!({ "code": code })),
-            ));
+            return Err(authorization_error(&outcome, tool_id, classification));
         }
 
         let handler_result = handler().await;
@@ -282,6 +289,69 @@ impl GovernanceMiddleware {
 
         Ok(())
     }
+}
+
+/// Builds the error returned for a call that authorization did not allow.
+///
+/// A call queued for approval carries its pending execution id and the exact
+/// steps an agent must follow, so it can hand the decision to the user and
+/// retry correctly without guessing.
+fn authorization_error(
+    outcome: &AuthorizationOutcome,
+    tool_id: &str,
+    classification: ExecutionClassification,
+) -> McpError {
+    let reason = outcome
+        .deny_reason
+        .as_deref()
+        .unwrap_or("authorization denied");
+
+    if outcome.deny_code == Some(APPROVAL_REQUIRED_CODE) {
+        let pending_id = outcome.pending_execution_id.as_deref().unwrap_or("unknown");
+
+        return McpError::new(
+            rmcp::model::ErrorCode::INVALID_REQUEST,
+            approval_required_message(tool_id, classification, pending_id),
+            Some(serde_json::json!({
+                "code": APPROVAL_REQUIRED_CODE,
+                "status": "pending",
+                "pending_id": outcome.pending_execution_id,
+                "tool_id": tool_id,
+                "next_action": "wait_for_human_approval_then_repeat_identical_call",
+                "status_tool": "get_pending_execution",
+            })),
+        );
+    }
+
+    McpError::new(
+        rmcp::model::ErrorCode::INVALID_REQUEST,
+        reason.to_string(),
+        outcome
+            .deny_code
+            .map(|code| serde_json::json!({ "code": code })),
+    )
+}
+
+/// Instructions returned to the agent when a call is queued for approval.
+pub fn approval_required_message(
+    tool_id: &str,
+    classification: ExecutionClassification,
+    pending_id: &str,
+) -> String {
+    format!(
+        "Approval required: the policy requires a person to approve '{tool_id}' calls of class \
+         {classification:?}. This call has NOT run; it was queued as pending execution \
+         {pending_id}. Next steps: (1) Tell the user that pending execution {pending_id} is \
+         waiting for their approval in DBFlux (Workspace > Pending Approvals). (2) Wait for the \
+         user. Do not call approve_execution or reject_execution; they are always denied to MCP \
+         clients. (3) To check the status, call get_pending_execution with \
+         {{\"pending_id\": \"{pending_id}\"}}: while its status is 'pending', it is still \
+         waiting for a decision; status 'rejected' means the user rejected it, and its 'reason' \
+         field carries what they wrote; once it is no longer found, it was approved or has \
+         expired. (4) After the user approves it, repeat this exact call: the same tool \
+         '{tool_id}' with identical arguments. It then runs once. If it was rejected or expired, \
+         repeating it queues a new request instead of running."
+    )
 }
 
 /// Returns the appropriate typed audit action for a tool execution.
@@ -468,6 +538,33 @@ mod tests {
                 dbflux_core::NoopSecretStore,
             ))),
             mcp_enabled_by_default: true,
+        }
+    }
+
+    #[test]
+    fn approval_required_message_tells_the_agent_exactly_what_to_do() {
+        let message = approval_required_message(
+            "delete_records",
+            ExecutionClassification::Destructive,
+            "1234",
+        );
+
+        for expected in [
+            "has NOT run",
+            "pending execution 1234",
+            "Pending Approvals",
+            "Do not call approve_execution or reject_execution",
+            "get_pending_execution",
+            "\"pending_id\": \"1234\"",
+            "repeat this exact call",
+            "identical arguments",
+            "'delete_records'",
+            "Destructive",
+        ] {
+            assert!(
+                message.contains(expected),
+                "missing {expected:?} in {message}"
+            );
         }
     }
 

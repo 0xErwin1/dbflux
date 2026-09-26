@@ -731,7 +731,14 @@ impl TextLayout {
                         )
                     } else if let Some(unclipped) = window
                         .text_system()
-                        .shape_text(text.clone(), font_size, &runs, None, None)
+                        .shape_text_with_letter_spacing(
+                            text.clone(),
+                            font_size,
+                            &runs,
+                            None,
+                            None,
+                            text_style.letter_spacing,
+                        )
                         .log_err()
                         && unclipped
                             .iter()
@@ -760,12 +767,13 @@ impl TextLayout {
 
                 let Some(lines) = window
                     .text_system()
-                    .shape_text(
+                    .shape_text_with_letter_spacing(
                         text,
                         font_size,
                         &runs,
                         wrap_width,            // Wrap if we know the width.
                         text_style.line_clamp, // Limit the number of lines if line_clamp is set.
+                        text_style.letter_spacing,
                     )
                     .log_err()
                 else {

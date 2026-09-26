@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["프레젠테이션 — 6개 UI 크레이트"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — dbflux_app 의존 없음)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, 키맵 헬퍼,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, 키맵 헬퍼,<br/>toast + throttle, user_error,<br/>platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(탭/창 시스템, 문서,<br/>data_grid_panel, 거버넌스)"]
         uisidebar["dbflux_ui_sidebar<br/>(연결 + 스크립트 사이드바 트리)"]
         uiwindows["dbflux_ui_windows<br/>(connection_manager + 설정 창)"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # 아이콘 렌더링 헬퍼
       primitives/           # 저수준 빌딩 블록 (배지, 배너, 레이블, 버튼 등)
       controls/             # 입력 컨트롤 (버튼, 확인란, 드롭다운, 입력 필드, 선택 등)
-      composites/           # 조합 패턴 (modal_frame, tab_strip, section_header 등)
+      composites/           # 조합 패턴 (header, tabs, split_button 등)
       components/           # 도메인 컴포넌트
         data_table/         # 커스텀 가상화 데이터 테이블
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # 인라인 JSON 편집기 컴포넌트
         multi_select.rs     # 다중 선택 드롭다운 컴포넌트
         value_source_selector.rs # 값 소스 드롭다운 (환경 변수/비밀/매개변수/인증)
-      modals/               # 재사용 가능한 모달 컴포넌트 (cell_editor, document_preview 등)
+      modals/               # 공유 `Modal`과 그 위에 만든 모달 (cell_editor, document_preview 등)
       result_panel/         # ResultPanel + ViewHandle 범용 크롬 호스트
       chart/                # 차트 엔진 (detect, spec, decimate, axis, legend, engine)
       saved_chart.rs        # SavedChart + SavedChartStore 타입 별칭
@@ -170,12 +170,11 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity 래퍼 (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested 이벤트, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # 키맵 엔진: 기본 레이어, 오버라이드, 네이티브 GPUI 바인딩
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # 심각도 인식 토큰 버킷 스로틀이 있는 Toast + ToastHost
       user_error/           # 중앙화된 사용자 대면 오류 보고 (UserFacingError,
                             # ErrorKind, report_error, report_error_async) + 스로틀
-      modal_frame.rs        # 재사용 가능한 모달 크롬/프레임
       platform.rs           # X11/Wayland 감지, 창 옵션
       sql_preview_modal.rs  # SQL/쿼리 미리보기 모달 (이중 모드: SQL 및 범용)
       sso_wizard.rs         # SSO 계정/역할 탐색 마법사 [cfg aws]
@@ -193,7 +192,7 @@ crates/
       data_view_trait.rs    # DataView 트레이트 (available_view_modes, focus_handle, active_context)
       chrome.rs             # 공유 크롬 유틸리티
       governance.rs         # 대기 중 실행을 위한 MCP 승인 뷰
-      history_modal.rs      # 최근/저장된 쿼리 모달
+      history_panel.rs      # 최근/저장된 쿼리 사이드 패널
       add_member_modal.rs   # Redis set/list/sorted-set 멤버 추가 모달
       new_key_modal.rs      # 새 Redis 키 생성 모달
       chart_document/       # ChartDocument: 저장된/대화형 차트 탭
@@ -334,14 +333,11 @@ crates/
           # 이전 오버레이 경로의 shim이 dbflux_ui_base / dbflux_components에서 재노출:
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # Shim: pub use dbflux_ui_document::*
         icons/mod.rs        # Shim: AppIcon + embedded_bytes 재노출 (SVG 리소스는 여기에 위치)
         theme.rs            # Shim: pub use dbflux_components::theme::*
         tokens.rs           # Shim: pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # Shim: → dbflux_ui_base::modal_frame
           toast.rs          # Shim: → dbflux_ui_base::toast
         windows/mod.rs      # Shim: pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # Shim: pub use dbflux_ui_sidebar::*
@@ -518,7 +514,7 @@ crates/
   dbflux_approval/           # 지연 실행을 위한 승인 서비스
     src/lib.rs              # ApprovalService 및 대기 저장소 내보내기
     src/service.rs          # ApprovalService (승인/거부 수명 주기)
-    src/store.rs            # InMemoryPendingExecutionStore 및 ExecutionPlan
+    src/store.rs            # PendingExecutionStore 트레이트, InMemoryPendingExecutionStore (테스트용), ExecutionPlan
   dbflux_audit/             # 감사 로깅
     src/lib.rs              # AuditService: 검증, 지문 생성, 마스킹, 기록
     src/query.rs            # AuditQueryFilter (행위자, 범주, 작업, 결과, 날짜 범위)
@@ -647,8 +643,8 @@ crates/
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
-- 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
-- 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
+- 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다.
+- 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다.
 - 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다.
 
 ### 대시보드 및 저장된 차트
@@ -795,7 +791,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 
 **실행 컨텍스트**: `crates/dbflux_core/src/connection/context.rs`는 탭별 연결, 데이터베이스, 스키마와 드라이버가 선언한 일반 소스 컨텍스트를 추적합니다. 현재의 일반 소스 윈도우 형태는 `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`입니다. 연결/데이터베이스/스키마 주석만 저장된 파일 헤더에 직렬화됩니다.
 
-**기록 모달**: `crates/dbflux_ui_document/src/history_modal.rs`는 검색, 즐겨찾기, 이름 바꾸기를 지원하는 최근 쿼리 및 저장된 쿼리 탐색용 통합 모달을 제공합니다.
+**기록 패널**: `crates/dbflux_ui_document/src/history_panel.rs`는 검색, 즐겨찾기, 이름 바꾸기를 지원하는 최근 쿼리 및 저장된 쿼리 탐색용 사이드 패널을 편집기 옆에 제공합니다. 문서는 이런 패널을 `PaneHandle::side_panels`(`DocumentSidePanel`)로 워크스페이스에 넘기고, 워크스페이스는 각각을 문서 아일랜드 옆의 아일랜드로 그립니다. 차트 레일, 그리드 차트의 통계 레일, 객체 미리보기, 스트림 컨슈머 그룹도 같은 방식을 씁니다.
 
 ### 릴리스 채널 및 브랜딩
 
@@ -883,9 +879,9 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 
 **정책 엔진** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()`는 액터, 연결, 도구, 분류를 받습니다
-- `PolicyDecision::Allow` 또는 `PolicyDecision::Deny(reason)`를 반환합니다
+- `PolicyDecision::Allow`, `PolicyDecision::RequireApproval`, `PolicyDecision::Deny(reason)` 중 하나를 반환합니다. 도구를 나열한 정책 중 가장 관대한 클래스 결정이 적용됩니다 (Allow > Ask > Deny)
 - `PolicyRole`은 여러 도구 정책을 조합합니다
-- `ToolPolicy`는 허용된 도구와 분류 수준을 정의합니다
+- `ToolPolicy`는 허용된 도구와 클래스별 `ClassDecision`(Allow / Ask / Deny)을 정의하며, `allowed_classes` + `approval_classes`로 저장됩니다
 - `ConnectionPolicyAssignment`는 액터/연결을 역할과 정책에 바인딩합니다
 
 **신뢰할 수 있는 클라이언트** (`dbflux_policy/trusted_clients.rs`):
@@ -894,7 +890,8 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 
 **승인 흐름** (`dbflux_approval`):
 - `ApprovalService`는 지연된 실행에 대한 승인/거부 수명 주기를 관리합니다
-- `InMemoryPendingExecutionStore`는 사람의 승인을 기다리는 대기 중 실행을 보관합니다
+- 대기 중인 실행은 `SqlitePendingExecutionStore`(`crates/dbflux_storage/src/pending_executions.rs`)를 통해 `dbflux.db`의 `app_pending_executions`에 저장되며, 앱과 독립 실행형 `dbflux mcp` 서버가 공유합니다. 이 저장소를 열 수 없을 때는 `InMemoryPendingExecutionStore`가 대체로 쓰이며 테스트도 이를 사용합니다
+- 클래스가 Ask인 호출은 큐에 들어가고, 사람이 앱에서 승인하거나 거부하며, 동일한 호출을 반복하면 승인이 한 번 소비됩니다 (`PendingStatus::Consumed`). MCP 클라이언트는 `approve_execution` / `reject_execution`을 절대 호출할 수 없습니다
 - `ExecutionPlan`은 지연 실행을 위해 원래 요청 컨텍스트를 캡처합니다
 
 **감사** (`dbflux_audit`):
@@ -938,15 +935,16 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 - 쿼리 미리보기: `SqlPreviewModal`(`crates/dbflux_ui_base/src/sql_preview_modal.rs`에 있고 이전 오버레이 경로에 셰임이 있음)은 행, 테이블, 뷰 미리보기를 위해 관계형 읽기/DML 미리보기를 `QueryGenerator`로 라우팅하고, DDL은 `CodeGenerator`에 남아 있습니다. 비 SQL 언어(MongoDB, Redis)는 여전히 정적 텍스트와 언어별 구문 강조가 있는 일반 미리보기 모드를 사용합니다.
 - 스키마 새로고침: `Workspace::refresh_schema`는 백그라운드 실행자에서 `Connection::schema`를 실행하고 `AppState`를 갱신합니다 (`crates/dbflux_ui/src/ui/views/workspace/`).
 - 지연 로딩: 드라이버는 초기 연결 시가 아니라 사이드바에서 항목이 확장될 때 테이블/컬렉션 메타데이터(열, 인덱스)를 필요할 때 가져옵니다 (대규모 데이터베이스를 위한 성능 최적화).
-- 기록 흐름: 완료된 쿼리는 `HistoryStore`에 저장되고 JSON으로 영속화되며, 기록 모달을 통해 접근할 수 있습니다 (`crates/dbflux_core/src/storage/history.rs`). 기록 모달 UI는 `crates/dbflux_ui_document/src/history_modal.rs`에 있습니다.
-- 저장된 쿼리 흐름: 사용자는 `SavedQueryStore`를 통해 쿼리를 이름과 함께 저장할 수 있고, 기록 모달(Ctrl+P)에서 저장된 쿼리를 탐색, 검색, 불러올 수 있습니다 (`crates/dbflux_core/src/storage/saved_query.rs`).
+- 기록 흐름: 완료된 쿼리는 `HistoryStore`에 저장되고 JSON으로 영속화되며, 기록 패널을 통해 접근할 수 있습니다 (`crates/dbflux_core/src/storage/history.rs`). 기록 패널 UI는 `crates/dbflux_ui_document/src/history_panel.rs`에 있습니다.
+- 저장된 쿼리 흐름: 사용자는 `SavedQueryStore`를 통해 쿼리를 이름과 함께 저장할 수 있고, 기록 패널(Ctrl+P)에서 저장된 쿼리를 탐색, 검색, 불러올 수 있습니다 (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## 키보드 및 포커스 아키텍처
 
-- 키맵 시스템: `crates/dbflux_ui/src/keymap/`(`dbflux_ui`에 유지됨)은 키맵 접착 코드(`actions.rs`, `dispatcher.rs`)를 정의합니다. 키맵 헬퍼(`default_keymap`, `key_chord_from_gpui`)는 `crates/dbflux_ui_base/src/keymap.rs`에 있습니다. 도메인 명령 타입(`Command`, `ContextId`)은 `dbflux_core::keymap_types`에 정의되어 `crates/dbflux_app/src/keymap/`을 통해 다시 내보내집니다(re-export).
-- 명령 디스패치: `Workspace`는 `CommandDispatcher` 트레이트를 구현하며, `views/workspace/dispatch.rs`의 `dispatch()`는 `focus_target`(Document, Sidebar, BackgroundTasks)에 따라 명령을 라우팅합니다.
+- 키맵 엔진: `crates/dbflux_ui_base/src/keymap/`은 기본 레이어(`defaults.rs`, `ContextId`마다 하나)를 담고, 유효 키맵(기본값과 `dbflux_app::keymap`의 사용자 오버라이드)을 네이티브 GPUI 키 바인딩으로 바꿉니다. 각 바인딩은 키 시퀀스와 GPUI 언어로 된 컨텍스트 조건식(`Editor && vim_mode == normal`)을 가지므로, 우선순위와 시퀀스, 그 대기 시간은 GPUI가 처리합니다. 도메인 명령 타입(`Command`, `ContextId`)은 `dbflux_core::keymap_types`에 정의되어 `crates/dbflux_app/src/keymap/`을 통해 다시 내보내지며(re-export), 이 모듈에는 오버라이드 모델과 저장소, 설정 편집기의 녹화기도 있습니다.
+- 키 컨텍스트: 각 창의 루트(워크스페이스, 설정 창, 연결 관리자)는 포커스 모델로 계산한, 키보드를 가진 컨텍스트의 식별자를 설정하고, 그 컨텍스트가 전역 바인딩을 상속하면 `Global`과 활성 문서의 항목(`vim_mode`, `language`)도 추가합니다. 이 컨텍스트들의 바인딩은 루트가 처리하는 `RunCommand`를 디스패치합니다. 요소는 자신의 컨텍스트(`DataTable`, `Input`, `Modal`, `DocumentTree`, 모달 편집기, `KeyValueView`)를 설정하며, 그 바인딩은 요소의 액션을 디스패치하고 더 깊이 있으므로 우선합니다. 컨테이너는 사용자 조건식 전용의 설명적 식별자(`SidebarPanel`, `CodeEditor`, `ResultPanel`, …)를 추가합니다. 벤더링된 GPUI에는 엔진에 필요한 디스패치 변경이 들어 있습니다(`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- 명령 디스패치: `Workspace`는 `CommandDispatcher` 트레이트를 구현하며, `views/workspace/dispatch.rs`의 `dispatch()`는 `focus_target`(Document, Sidebar, BackgroundTasks)에 따라 명령을 라우팅합니다. 일부 명령을 소유한 문서는 자신의 루트에서 `RunCommand`를 먼저 처리하고 나머지는 통과시킵니다.
 - 문서 중심 설계: FocusTarget은 Editor/Results/Sidebar/BackgroundTasks에서 Document/Sidebar/BackgroundTasks로 단순화되어, 문서가 자체 내부 포커스 상태를 관리하도록 했습니다.
-- 포커스 레이어: 각 컨텍스트는 vim 스타일 바인딩(j/k/h/l 탐색)이 있는 자체 키맵 레이어를 갖습니다.
+- 포커스 레이어: 각 컨텍스트는 vim 스타일 바인딩(j/k/h/l 탐색)이 있는 자체 키맵 레이어를 갖습니다. 전역 바인딩을 상속하는 컨텍스트는 `!Modal`을 요구하므로, 열린 대화상자가 키보드를 가져갑니다.
 - 패널 포커스 모드: 데이터 테이블 같은 복잡한 패널은 중첩된 키보드 탐색을 처리하기 위해 내부 포커스 상태 머신(`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`)을 갖습니다.
 - 마우스/키보드 동기화: 마우스 핸들러는 키보드와 마우스 탐색의 일관성을 유지하기 위해 포커스 상태를 갱신하며, `switching_input` 플래그가 입력 블러 이벤트 중 경쟁 상태를 방지합니다.
 

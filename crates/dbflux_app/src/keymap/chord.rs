@@ -156,6 +156,83 @@ impl KeyChord {
         }
     }
 
+    /// Text form used to persist a chord: the lowercase modifier names in a
+    /// fixed order, each followed by `+`, then the key (`ctrl+shift+p`).
+    ///
+    /// The key is always the last segment, so keys such as `+` or `-`
+    /// survive the round trip through [`KeyChord::from_storage_string`].
+    pub fn to_storage_string(&self) -> String {
+        let mut text = String::new();
+
+        for (enabled, name) in [
+            (self.modifiers.platform, "cmd"),
+            (self.modifiers.ctrl, "ctrl"),
+            (self.modifiers.alt, "alt"),
+            (self.modifiers.shift, "shift"),
+        ] {
+            if enabled {
+                text.push_str(name);
+                text.push('+');
+            }
+        }
+
+        text.push_str(&self.key);
+        text
+    }
+
+    /// Parses the text produced by [`KeyChord::to_storage_string`].
+    pub fn from_storage_string(text: &str) -> Result<Self, ParseError> {
+        let mut modifiers = Modifiers::default();
+        let mut rest = text;
+
+        loop {
+            let (flag, remainder) = if let Some(remainder) = rest.strip_prefix("cmd+") {
+                (&mut modifiers.platform, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("ctrl+") {
+                (&mut modifiers.ctrl, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("alt+") {
+                (&mut modifiers.alt, remainder)
+            } else if let Some(remainder) = rest.strip_prefix("shift+") {
+                (&mut modifiers.shift, remainder)
+            } else {
+                break;
+            };
+
+            if remainder.is_empty() {
+                break;
+            }
+
+            *flag = true;
+            rest = remainder;
+        }
+
+        if rest.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        Ok(Self::new(rest, modifiers))
+    }
+
+    /// Text form of a key sequence: the storage form of each chord, separated
+    /// by single spaces (`ctrl+k ctrl+s`). A chord's storage form never holds
+    /// a space, because the space key is named `space`.
+    pub fn sequence_to_storage_string(chords: &[KeyChord]) -> String {
+        chords
+            .iter()
+            .map(KeyChord::to_storage_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Parses the text produced by [`KeyChord::sequence_to_storage_string`].
+    pub fn sequence_from_storage_string(text: &str) -> Result<Vec<Self>, ParseError> {
+        if text.is_empty() {
+            return Err(ParseError::Empty);
+        }
+
+        text.split(' ').map(Self::from_storage_string).collect()
+    }
+
     /// Returns true if this chord has the Ctrl or Platform (Cmd) modifier.
     #[allow(dead_code)]
     pub fn has_ctrl_or_cmd(&self) -> bool {
@@ -202,6 +279,82 @@ impl fmt::Display for KeyChord {
 
         parts.push(key_display);
         write!(f, "{}", parts.join("+"))
+    }
+}
+
+/// The longest key sequence a binding may hold.
+pub const MAX_SEQUENCE_LENGTH: usize = 4;
+
+/// The keys of one binding: one chord, or several pressed one after the
+/// other (`g g`, `Ctrl+K Ctrl+S`). Never empty.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KeySequence(Vec<KeyChord>);
+
+impl KeySequence {
+    /// A sequence of `chords`, or `None` when there are none.
+    pub fn new(chords: Vec<KeyChord>) -> Option<Self> {
+        (!chords.is_empty()).then_some(Self(chords))
+    }
+
+    pub fn chords(&self) -> &[KeyChord] {
+        &self.0
+    }
+
+    /// The first chord, the one the sequence starts with.
+    pub fn first(&self) -> &KeyChord {
+        &self.0[0]
+    }
+
+    /// Number of chords; a sequence always has at least one.
+    pub fn chord_count(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the sequence is a single chord.
+    pub fn is_single(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    /// Whether `self` is a strict prefix of `other`: pressing `self` leaves
+    /// the keyboard waiting to see whether `other` follows.
+    pub fn is_prefix_of(&self, other: &KeySequence) -> bool {
+        self.0.len() < other.0.len() && other.0.starts_with(&self.0)
+    }
+
+    /// Parses chords in [`KeyChord::parse`] form separated by whitespace
+    /// (`Ctrl+K Ctrl+S`, `g g`).
+    pub fn parse(text: &str) -> Result<Self, ParseError> {
+        let chords = text
+            .split_whitespace()
+            .map(KeyChord::parse)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Self::new(chords).ok_or(ParseError::Empty)
+    }
+
+    /// Text form used to persist the sequence, see
+    /// [`KeyChord::sequence_to_storage_string`].
+    pub fn to_storage_string(&self) -> String {
+        KeyChord::sequence_to_storage_string(&self.0)
+    }
+
+    /// Parses the text produced by [`KeySequence::to_storage_string`].
+    pub fn from_storage_string(text: &str) -> Result<Self, ParseError> {
+        let chords = KeyChord::sequence_from_storage_string(text)?;
+        Self::new(chords).ok_or(ParseError::Empty)
+    }
+}
+
+impl From<KeyChord> for KeySequence {
+    fn from(chord: KeyChord) -> Self {
+        Self(vec![chord])
+    }
+}
+
+impl fmt::Display for KeySequence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let parts: Vec<String> = self.0.iter().map(KeyChord::to_string).collect();
+        write!(f, "{}", parts.join(" "))
     }
 }
 
@@ -267,6 +420,89 @@ mod tests {
             },
         };
         assert_eq!(chord.to_string(), "Cmd+Shift+p");
+    }
+
+    #[test]
+    fn storage_string_round_trips_modifiers_and_symbol_keys() {
+        let chords = [
+            KeyChord::new("p", Modifiers::ctrl_shift()),
+            KeyChord::new("+", Modifiers::ctrl()),
+            KeyChord::new("-", Modifiers::none()),
+            KeyChord::new(
+                "enter",
+                Modifiers {
+                    platform: true,
+                    alt: true,
+                    ..Modifiers::none()
+                },
+            ),
+        ];
+
+        for chord in chords {
+            let text = chord.to_storage_string();
+            assert_eq!(KeyChord::from_storage_string(&text), Ok(chord));
+        }
+
+        assert_eq!(
+            KeyChord::new("p", Modifiers::ctrl_shift()).to_storage_string(),
+            "ctrl+shift+p"
+        );
+        assert_eq!(KeyChord::from_storage_string(""), Err(ParseError::Empty));
+    }
+
+    #[test]
+    fn storage_sequences_round_trip() {
+        let sequence = vec![
+            KeyChord::new("k", Modifiers::ctrl()),
+            KeyChord::new("space", Modifiers::none()),
+            KeyChord::new("+", Modifiers::shift()),
+        ];
+
+        let text = KeyChord::sequence_to_storage_string(&sequence);
+        assert_eq!(text, "ctrl+k space shift++");
+        assert_eq!(KeyChord::sequence_from_storage_string(&text), Ok(sequence));
+
+        assert_eq!(
+            KeyChord::sequence_from_storage_string("g"),
+            Ok(vec![KeyChord::new("g", Modifiers::none())])
+        );
+        assert_eq!(
+            KeyChord::sequence_from_storage_string(""),
+            Err(ParseError::Empty)
+        );
+        assert_eq!(
+            KeyChord::sequence_from_storage_string("ctrl+k  g"),
+            Err(ParseError::Empty)
+        );
+    }
+
+    #[test]
+    fn key_sequences_parse_display_and_round_trip() {
+        let sequence = KeySequence::parse("Ctrl+K  ctrl+s").expect("valid sequence");
+        assert_eq!(sequence.chord_count(), 2);
+        assert_eq!(sequence.to_string(), "Ctrl+k Ctrl+s");
+        assert_eq!(sequence.to_storage_string(), "ctrl+k ctrl+s");
+        assert_eq!(
+            KeySequence::from_storage_string("ctrl+k ctrl+s"),
+            Ok(sequence.clone())
+        );
+
+        let single = KeySequence::from(KeyChord::new("g", Modifiers::none()));
+        assert!(single.is_single());
+        assert_eq!(KeySequence::parse(""), Err(ParseError::Empty));
+        assert_eq!(KeySequence::new(Vec::new()), None);
+    }
+
+    #[test]
+    fn prefix_is_strict() {
+        let g = KeySequence::parse("g").expect("valid");
+        let g_g = KeySequence::parse("g g").expect("valid");
+        let g_h = KeySequence::parse("g h").expect("valid");
+
+        assert!(g.is_prefix_of(&g_g));
+        assert!(!g_g.is_prefix_of(&g_g));
+        assert!(!g_g.is_prefix_of(&g));
+        assert!(!g_h.is_prefix_of(&g_g));
     }
 
     #[test]

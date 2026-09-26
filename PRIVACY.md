@@ -3,8 +3,8 @@
 DBFlux is a local-first desktop application. It does not collect, transmit, or
 store any information about you or your usage. The project website sets no
 cookies and loads no third-party scripts. This document says what that means
-in practice and names the two infrastructure providers that see traffic on the
-way to you.
+in practice and names the infrastructure providers that see traffic on the way
+to you.
 
 ## Quick path
 
@@ -12,8 +12,11 @@ way to you.
    only what is needed to run the queries you ask for.
 2. There is no telemetry, no crash reporting, no usage analytics, and no
    account. Nothing phones home.
-3. The website and documentation are static pages. They set no cookies, run no
-   analytics script, and keep no record of individual visitors.
+3. The website and documentation are static pages. They set no cookies, load
+   no third-party script, and keep no record of individual visitors. An
+   anonymous measurement of page usage, handled by the project's own server,
+   is described under [Website usage measurement](#website-usage-measurement);
+   it is not active yet.
 
 ## The application
 
@@ -30,32 +33,294 @@ Connections to a database, an SSH host, a proxy, or a cloud provider go
 directly from your machine to the server you named. The project operates none
 of those servers and has no visibility into that traffic.
 
-[Data & Privacy](docs/DATA_AND_PRIVACY.md) documents the files DBFlux writes,
-what the audit log records, how secrets are stored, and how to back up or fully
-reset the application.
+[Your data on this machine](#your-data-on-this-machine) documents the files
+DBFlux writes, what the audit log records, how secrets are stored, and how to
+back up or fully reset the application.
+
+## Your data on this machine
+
+Where DBFlux stores your data, how it protects your credentials, what the audit
+log keeps, and how to back up or fully reset.
+
+### At a glance
+
+| Your data | Where it lives |
+|-----------|----------------|
+| Connection profiles, settings, history, saved charts/queries, audit log | One SQLite file: `dbflux.db` in the data directory |
+| Open tabs / session | The same `dbflux.db`, plus script files and scratch/shadow files on disk |
+| Passwords, passphrases, API secrets | Your **OS keyring** — never in `dbflux.db` |
+| IPC/MCP auth token | A `0600` file in the config directory |
+
+DBFlux keeps almost everything in a single SQLite database. Secrets are the
+deliberate exception: they go to the operating system's keyring, and the database
+only stores a *reference* to them.
+
+### Data locations
+
+DBFlux uses your platform's standard directories.
+
+| Platform | Data directory | Config directory |
+|----------|----------------|------------------|
+| **Linux** | `~/.local/share/dbflux/` | `~/.config/dbflux/` |
+| **macOS** | `~/Library/Application Support/dbflux/` | `~/Library/Application Support/dbflux/` |
+| **Windows** | `%APPDATA%\dbflux\` | `%APPDATA%\dbflux\` |
+
+The data directory holds:
+
+- **`dbflux.db`** — the unified database (everything below in [What's in the
+  database](#whats-in-the-database)).
+- **`sessions/`** — scratch and shadow files for open editor tabs: untitled
+  content, plus a recovery copy of unsaved edits.
+- **`ipc_auth_token`** — the IPC/MCP auth token (see [below](#ipcmcp-auth-token)).
+- **`ssh_known_hosts`** — accepted SSH host keys (TOFU).
+
+DBFlux no longer uses the config directory. Older versions stored the IPC auth
+token and SSH known-hosts there; leftover files may remain after upgrading and
+can be removed.
+
+#### Stable vs. Nightly
+
+A Nightly build uses a separate database file, `dbflux-nightly.db`, so a
+pre-release migration can never touch your stable data. Stable and release
+candidate builds both use `dbflux.db`.
+
+You can make a Nightly build share the stable database via **Settings → General →
+Storage → Use the stable database** (applies on next launch). Internally this
+just drops an empty `use-stable-db` marker file in the data directory.
+
+### What's in the database
+
+`dbflux.db` is a single SQLite file. Its tables are grouped by prefix:
+
+| Prefix | Contains |
+|--------|----------|
+| `cfg_*` | Configuration: connection profiles, auth/proxy/SSH tunnel profiles, RPC services, connection hooks, MCP governance, and the General/Audit settings. (Secret *values* are **not** here — only keyring references.) |
+| `st_*` | Workbench state: open sessions/tabs, **query history** (full query text), saved queries, recent items, schema cache, UI state. |
+| `aud_*` | The audit log and saved audit filters. |
+| `viz_*` | Saved charts and dashboards. |
+| `qry_*` | Visual Query Builder saved queries. |
+| `sys_*` | Internal: schema migration version, app metadata. |
+
+> **Note on query history.** The workbench query history (`st_*`) stores the
+> **full text** of queries you run, in the clear. This is separate from the audit
+> log, which fingerprints query text by default (see below). If you don't want
+> query text retained, lower **Max history entries** in Settings → General, or
+> clear history from the editor's history view.
+
+### Secrets and the OS keyring
+
+Passwords, SSH passphrases, proxy credentials, and provider secrets are stored in
+your operating system's keyring, **not** in `dbflux.db`.
+
+| Platform | Keyring backend |
+|----------|-----------------|
+| **Linux** | Secret Service (GNOME Keyring / KWallet, via libsecret) |
+| **macOS** | Keychain |
+| **Windows** | Windows Credential Manager |
+
+All entries are stored under the service name **`dbflux`**. The database holds
+only a reference string per secret:
+
+| Secret | Reference |
+|--------|-----------|
+| Connection password | `dbflux:conn:<profile-id>` |
+| Inline SSH password/passphrase | `dbflux:ssh:<profile-id>` |
+| Saved SSH tunnel | `dbflux:ssh_tunnel:<tunnel-id>` |
+| Proxy credential | `dbflux:proxy:<proxy-id>` |
+| Auth-profile field | `dbflux:auth:<profile-id>:<field>` (one per field) |
+
+#### When secrets are (and aren't) saved
+
+- A connection password is only stored when you tick **Save password**; SSH and
+  proxy secrets only when you tick their **Save** checkbox.
+- If no keyring is available, DBFlux hides the **Save** checkboxes and does not
+  persist secrets — you re-enter them each session.
+- A *locked* keyring still counts as available: writes may fail until you unlock
+  it, but DBFlux keeps secret support enabled.
+
+### Session and tabs restore
+
+Which tabs you have open — their kind, file paths, order, active tab, and pin
+state — is recorded in `dbflux.db` (`st_sessions` / `st_session_tabs`). The
+scratch/shadow copies used to restore them live under `sessions/` in the data
+directory. A script backed by a file is saved to that file itself: on the
+auto-save interval, when you close its tab, and when you quit. Unsaved untitled
+content is kept in the sessions folder. Those automatic writes never overwrite
+a script file that changed outside dbflux: such a write is refused, and the
+pending edits stay in the editor (and in the sessions-folder copy). `Ctrl+s`
+and **Save File As** are deliberate: they write the file as you asked. On
+startup DBFlux
+restores this session when **Settings → General → Restore session on startup**
+is on (the default).
+
+### Audit and privacy
+
+DBFlux logs significant operations (queries, connections, hooks, scripts, config
+changes, MCP/governance decisions) to the audit log in `dbflux.db`. It's designed
+to be privacy-preserving by default:
+
+| Behavior | Default | Effect |
+|----------|---------|--------|
+| **Capture query text** | Off | Query text is replaced with a SHA-256 **fingerprint** plus its length — the full text is never stored in the audit row. |
+| **Redact sensitive values** | On | Sensitive patterns (AWS keys, JWTs, connection strings with credentials, etc.) are replaced with `[REDACTED]`. |
+| **Detail size cap** | 64 KiB | Oversized event payloads are truncated to a small partial envelope. |
+
+Sensitive **JSON keys** (`password`, `token`, `secret`, `api_key`,
+`access_key`, `session_token`, `connection_string`, `url`, …) are always redacted
+— even if you turn off pattern-based redaction.
+
+> Remember the [query-history caveat](#whats-in-the-database): the audit log
+> fingerprints query text, but the *workbench history* stores it in full. They're
+> two different stores.
+
+For the complete event schema, categories, and the viewer, see
+[Audit](docs/AUDIT.md), including its [Audit viewer](docs/AUDIT.md#audit-viewer)
+section.
+
+### IPC/MCP auth token
+
+DBFlux exposes a local IPC surface (used by the MCP server and external RPC
+services). It authenticates callers with a token stored at:
+
+```
+<data dir>/dbflux/ipc_auth_token
+```
+
+(on Linux, `~/.local/share/dbflux/ipc_auth_token`). It's a random value regenerated on
+each startup, written with owner-only `0600` permissions, and also exported to the
+`DBFLUX_IPC_TOKEN`, `DBFLUX_DRIVER_IPC_TOKEN`, and `DBFLUX_AUTH_PROVIDER_IPC_TOKEN`
+environment variables for child processes.
+
+This token is **process-identity only** — any local process that can read it can
+connect. Do not expose the IPC/MCP surface beyond localhost without an additional
+authentication layer. See [AI + MCP Integration](docs/MCP_AI_INTEGRATION.md) for the
+trust model.
+
+### Backup and reset
+
+DBFlux has no dedicated backup/restore command, but because everything lives in
+one file, both are straightforward.
+
+#### Back up
+
+Copy the single database file while DBFlux is closed:
+
+```
+~/.local/share/dbflux/dbflux.db        # Linux (adjust per platform)
+```
+
+That file contains your profiles, history, saved charts/queries, and audit log.
+Your **secrets are not in it** — they stay in the OS keyring — so a copied
+database on another machine will reference keyring entries that don't exist there
+until you re-enter the secrets.
+
+#### Full reset
+
+To wipe DBFlux's data:
+
+1. Delete the **data directory** (`~/.local/share/dbflux/` on Linux) — removes the
+   database, session files, IPC auth token, and SSH known-hosts.
+2. **Older versions only:** delete the legacy config directory
+   (`~/.config/dbflux/` on Linux) if it still exists — current versions no longer
+   use it.
+3. **Clear keyring entries manually.** Secrets under the `dbflux` service remain
+   in your OS keyring after deleting the directories; remove them with your
+   platform's keyring tool if you want a complete wipe.
+
+> Deleting the data directory is irreversible. Back up `dbflux.db` first if you
+> might want your profiles or history back.
 
 ## The website and documentation
 
 `dbflux.dev` and `docs.dbflux.dev` are static sites built from this
 repository. They:
 
-- set no cookies, first-party or third-party;
-- load no analytics, advertising, or tracking script;
-- serve their fonts and assets from the same host, so a page view contacts no
-  other domain;
+- set no cookies, first-party or third-party, and store only one thing in your
+  browser: the theme you pick (Auto, Light, or Dark), which stays in local
+  storage and is never sent anywhere;
+- load no third-party analytics, advertising, or tracking script;
+- serve their fonts, assets, and scripts from the same host, so a page view
+  contacts no other domain;
 - keep no server-side log the project can read per visitor.
 
 The documentation search runs in your browser against an index file fetched
 from the same host. The query never leaves the page.
 
+## Website usage measurement
+
+> **Status: not active.** This section describes the measurement before it
+> ships. The version that enables it announces the change in its release notes,
+> and this line changes in the same commit.
+
+To learn which pages people read and how fast they load, each page view sends
+a small anonymous report. The script, the collector, and the schema that
+defines every accepted field live in this repository.
+
+### What a report contains
+
+| Field | Example | Where it comes from |
+|-------|---------|---------------------|
+| Host | `site` or `docs` | The page |
+| Page | The route, such as `/docs/usage/`. Never the query string or fragment. | The page, checked against the list of pages in the build |
+| Documentation version and page language | `v0.7`, `es` | The page |
+| Browser language | `es`, the primary language only | The browser |
+| Screen class | `mobile`, `tablet`, or `desktop` | The browser |
+| Origin of the visit | `none`, `internal`, `search`, `github`, `social`, or `other`. Never the address. | The browser |
+| Load timing | Time to first byte, DOM ready, full load, and largest contentful paint, in milliseconds | The browser |
+| Time on page | Visible time only, in milliseconds | The browser |
+| Reading depth | Furthest scroll position in 25% steps, and visible time per section heading | The browser |
+| Country | Two-letter code, such as `AR` | Cloudflare, from the request, before forwarding |
+| Browser and operating system | Family and major version, such as Firefox 131 on Linux | Derived from the User-Agent before forwarding; the full string is discarded |
+
+Every text field accepts only a fixed list of values or a strict pattern. The
+collector rejects anything else, so a report cannot carry free text.
+
+### What is never collected
+
+- The IP address. The Cloudflare Worker that receives a report builds a new
+  request that contains only the fields above, so the project's server never
+  receives the visitor's address.
+- The full User-Agent string, the full referrer address, query strings, or
+  fragments.
+- Cookies, browser storage, fingerprints, or identifiers of any kind: the
+  measurement neither reads nor writes them. Two reports from the same person
+  cannot be linked, and the project does not count unique visitors.
+- Mouse movement, clicks, keystrokes, form input, or page content.
+
+### How to opt out
+
+The script sends nothing when the browser signals Global Privacy Control or Do
+Not Track, and the Worker drops any report that arrives with either signal.
+Blocking the script with a content blocker also works; pages behave the same
+without it.
+
+### Where the data lives
+
+Reports are stored on a server the project rents from OVHcloud in the European
+Union, not in an analytics service. Raw reports are kept for 90 days; the daily
+totals derived from them are kept indefinitely. Only the maintainer reads them,
+over a private network the project runs itself. Backups are encrypted before
+they leave the server and are stored in Cloudflare R2, which holds the
+encrypted copy but not the key.
+
+### Removing data
+
+A report contains nothing that identifies a person, so there is no record to
+look up for a given visitor. If you believe a report carried something it
+should not have, report it privately through
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+rather than in a public issue. The affected data is removed from storage and
+from the backups that contain it.
+
 ## Infrastructure providers
 
-Two services sit between the project and you. Neither is used to identify
-individual visitors.
+These services sit between the project and you, or hold data on the project's
+behalf. None is used to identify individual visitors.
 
 | Provider | Role | What it sees |
 |----------|------|--------------|
-| Cloudflare | Hosts the website, the documentation, and the documentation MCP endpoint at `mcp.dbflux.dev`. | Every HTTP request to those hosts, including the IP address and user agent, as any host does. Cloudflare exposes aggregate traffic counts to the project. It does not expose per-visitor records, and the project has enabled no feature that would. |
+| Cloudflare | Hosts the website, the documentation, and the documentation MCP endpoint at `mcp.dbflux.dev`. Runs the Worker that forwards usage reports, and stores the encrypted backups of those reports in R2. | Every HTTP request to those hosts, including the IP address and user agent, as any host does, and the contents of a usage report while forwarding it. Cloudflare exposes aggregate traffic counts to the project. It does not expose per-visitor records, and the project has enabled no feature that would. In R2 it holds only encrypted backups. |
+| OVHcloud | Hosts the server that stores website usage reports, in a data center in the European Union. | The stored reports, as the operator of the machine they live on. It never receives an IP address or User-Agent from a visitor, because reports reach the server without them. It has no role in the application. |
 | Google Search Console | Reports how the site appears in Google search results. | Only what Google's crawler and search results already know. No script from Google is loaded on any page. |
 
 Cloudflare's own handling of request data is described in the
@@ -84,4 +349,12 @@ release notes of the version that introduces it.
 ## Contact
 
 Questions go to an issue in this repository with the title prefix
-`[privacy]`.
+`[privacy]`. To report data that should not be public, use
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+instead.
+
+## Related
+
+- [Settings & Hooks](docs/SETTINGS.md) — the General/Audit/Storage controls referenced here.
+- [Connecting → Advanced Setup](docs/CONNECTIONS.md) — where secrets are entered.
+- [Audit](docs/AUDIT.md) — the full audit event schema and redaction details.

@@ -1,5 +1,5 @@
 use super::{SettingsSection, SettingsSectionId};
-use dbflux_components::typography::{Body, FieldLabel, Headline, MonoCaption};
+use dbflux_components::primitives::Text;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -52,103 +52,114 @@ impl Render for AboutSection {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+            .child(dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.about.title"),
                 dbflux_i18n::t!("settings.about.subtitle"),
                 cx,
             ))
             .child(
-                div().flex_1().min_h_0().overflow_y_scrollbar().p_6().child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .child(img(mark_path).size(px(65.0)))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(Headline::new("DBFlux").xl())
-                                        .child(MonoCaption::new(format!(
-                                            "{} ({})",
-                                            VERSION, PROFILE
-                                        ))),
-                                ),
-                        )
-                        .child(
-                            div().child(
-                                // items_baseline + Body-wrapped fillers keeps
-                                // the link rows and the surrounding plain text
-                                // on the same baseline; bare &str children
-                                // sit on a different metric and look pulled up.
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px(crate::tokens::SettingsMetrics::BODY_PADDING_X)
+                    .py(dbflux_components::tokens::Spacing::LG)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(
                                 div()
                                     .flex()
-                                    .items_baseline()
-                                    .gap_1()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(img(mark_path).size(px(65.0)))
                                     .child(
                                         div()
-                                            .id("about-link-issues")
-                                            .cursor_pointer()
-                                            .hover(|d| d.underline())
-                                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                                cx.open_url(&issues_url);
-                                            })
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(Text::heading("DBFlux"))
                                             .child(
-                                                Body::new(dbflux_i18n::t!(
-                                                    "settings.about.report_bug"
-                                                ))
-                                                .color(theme.link),
+                                                Text::code(format!("{} ({})", VERSION, PROFILE))
+                                                    .muted_foreground(),
                                             ),
-                                    )
-                                    .child(Body::new(dbflux_i18n::t!("settings.about.or")))
-                                    .child(
-                                        div()
-                                            .id("about-link-repo")
-                                            .cursor_pointer()
-                                            .hover(|d| d.underline())
-                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                cx.open_url(REPOSITORY);
-                                            })
-                                            .child(
-                                                Body::new(dbflux_i18n::t!(
-                                                    "settings.about.view_source"
-                                                ))
-                                                .color(theme.link),
-                                            ),
-                                    )
-                                    .child(Body::new(dbflux_i18n::t!("settings.about.on_github"))),
-                            ),
-                        )
-                        .child(Body::new(copyright_line))
-                        .child(Body::new(license_line))
-                        .child(
-                            div()
-                                .mt_4()
-                                .pt_4()
-                                .border_t_1()
-                                .border_color(theme.border)
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(FieldLabel::new(dbflux_i18n::t!(
-                                    "settings.about.third_party_licenses"
-                                )))
-                                .child(
-                                    Body::new(dbflux_i18n::t!("settings.about.lucide"))
-                                        .color(theme.muted_foreground),
-                                )
-                                .child(
-                                    Body::new(dbflux_i18n::t!("settings.about.simple_icons"))
-                                        .color(theme.muted_foreground),
+                                    ),
+                            )
+                            .child(
+                                div().child(
+                                    // items_baseline + Body-wrapped fillers keeps
+                                    // the link rows and the surrounding plain text
+                                    // on the same baseline; bare &str children
+                                    // sit on a different metric and look pulled up.
+                                    div()
+                                        .flex()
+                                        .items_baseline()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .id("about-link-issues")
+                                                .cursor_pointer()
+                                                .hover(|d| d.underline())
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_, _, cx| {
+                                                        cx.open_url(&issues_url);
+                                                    },
+                                                )
+                                                .child(
+                                                    Text::body(dbflux_i18n::t!(
+                                                        "settings.about.report_bug"
+                                                    ))
+                                                    .color(theme.link),
+                                                ),
+                                        )
+                                        .child(Text::body(dbflux_i18n::t!("settings.about.or")))
+                                        .child(
+                                            div()
+                                                .id("about-link-repo")
+                                                .cursor_pointer()
+                                                .hover(|d| d.underline())
+                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                    cx.open_url(REPOSITORY);
+                                                })
+                                                .child(
+                                                    Text::body(dbflux_i18n::t!(
+                                                        "settings.about.view_source"
+                                                    ))
+                                                    .color(theme.link),
+                                                ),
+                                        )
+                                        .child(Text::body(dbflux_i18n::t!(
+                                            "settings.about.on_github"
+                                        ))),
                                 ),
-                        ),
-                ),
+                            )
+                            .child(Text::body(copyright_line))
+                            .child(Text::body(license_line))
+                            .child(
+                                div()
+                                    .mt_4()
+                                    .pt_4()
+                                    .border_t_1()
+                                    .border_color(theme.border)
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(Text::body(dbflux_i18n::t!(
+                                        "settings.about.third_party_licenses"
+                                    )))
+                                    .child(
+                                        Text::body(dbflux_i18n::t!("settings.about.lucide"))
+                                            .color(theme.muted_foreground),
+                                    )
+                                    .child(
+                                        Text::body(dbflux_i18n::t!("settings.about.simple_icons"))
+                                            .color(theme.muted_foreground),
+                                    ),
+                            ),
+                    ),
             )
     }
 }

@@ -11,6 +11,7 @@ impl Workspace {
         profile_id: uuid::Uuid,
         table: dbflux_core::TableRef,
         database: Option<String>,
+        placement: TabPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -33,7 +34,7 @@ impl Workspace {
             None
         };
 
-        match decide_open_document(has_connection, existing_id) {
+        match decide_open_document_with_placement(has_connection, existing_id, placement) {
             OpenDocumentDecision::ErrorNoConnection => {
                 let message = documents_no_active_connection_message(NoActiveConnectionKind::Table);
                 Toast::error(message.clone())
@@ -80,6 +81,7 @@ impl Workspace {
         &mut self,
         profile_id: uuid::Uuid,
         collection: dbflux_core::CollectionRef,
+        placement: TabPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -123,7 +125,7 @@ impl Workspace {
             None
         };
 
-        match decide_open_document(has_connection, existing_id) {
+        match decide_open_document_with_placement(has_connection, existing_id, placement) {
             OpenDocumentDecision::ErrorNoConnection => {
                 let message =
                     documents_no_active_connection_message(NoActiveConnectionKind::Collection);
@@ -258,6 +260,7 @@ impl Workspace {
         &mut self,
         profile_id: uuid::Uuid,
         database: String,
+        placement: TabPlacement,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -279,7 +282,7 @@ impl Workspace {
             None
         };
 
-        match decide_open_document(has_connection, existing_id) {
+        match decide_open_document_with_placement(has_connection, existing_id, placement) {
             OpenDocumentDecision::ErrorNoConnection => {
                 let message =
                     documents_no_active_connection_message(NoActiveConnectionKind::KeyValueDb);

@@ -92,11 +92,90 @@ By default, `AuditService` runs with these settings:
 
 These can be changed at runtime via `AuditService::set_*()` methods. The MCP server exposes some of these via governance settings.
 
+## Audit viewer
+
+The audit viewer is the single place to review everything DBFlux logged: queries,
+connections, hooks, scripts, config changes, and AI/MCP governance decisions.
+
+### Open it
+
+- Keyboard: **Ctrl+Shift+A** (**Cmd+Shift+A** on macOS).
+- Command palette: **Open audit viewer**.
+
+There's one audit tab; reopening focuses the existing one.
+
+### What you see
+
+A timeline above the list draws one bar per slice of the time range, with the
+errors stacked on top of the other events. Drag across the bars to zoom the time
+range to them; the custom range pickers then show the zoomed window.
+
+Each row shows the time, a **level** badge (ERROR/WARN/INFO), the **category**,
+the summary, the actor, the duration, and the **outcome**. Expand a row to see
+its details (time, action, actor, connection, source, correlation id, and the
+tool, classification and decision of an agent call), its error, and its
+structured details. The expanded row offers **Filter by correlation**, **Copy
+row as JSON**, and, for an agent call parked for approval, **Open approval**,
+which opens the MCP approvals view.
+
+Categories at a glance:
+
+| Category | Covers |
+|----------|--------|
+| **Query** | Query execution and scans. |
+| **Connection** | Connect / disconnect / reconnect. |
+| **Hook** | Connection-hook runs. |
+| **Script** | Lua / Python / Bash script runs. |
+| **Mcp** | AI client tool calls. |
+| **Governance** | Policy decisions. |
+| **Config** | Profile and settings changes. |
+| **System** | Startup, migrations, and internal log events. |
+
+### Filter
+
+The toolbar offers free-text **search**, the **time range** presets (the same as
+dashboards, plus Custom), a **timestamp mode** (Local / UTC), and multi-select
+filters for **Level** (Error/Warn/Info), **Category**, and **Outcome**
+(Success/Failure/Cancelled). **Clear** resets them, and **Table / Chart**
+switches between the event list and a chart of the events grouped by category,
+outcome, or level. From the keyboard, activating the time presets moves to the
+next one.
+
+A row's context menu adds **Copy row as CSV**, **Copy summary**, and — when the
+event has a correlation id — **Filter by correlation**.
+
+### Follow an error to its audit row
+
+When something you did fails, DBFlux shows a toast with a **View in Audit** action.
+Clicking it opens the audit viewer filtered to that exact event (matched by a
+correlation id shared between the toast and the audit row). The error also stays
+in the notifications center under the title-bar bell, whose row has the same
+**View in Audit** action. The **error badge** in the status bar opens the viewer
+pre-filtered to recent user-facing failures.
+
+### Export
+
+The **Export** button writes the currently visible events to **CSV** or **JSON**,
+using the extended schema (all fields, including structured details). A save
+dialog asks where to write the file and proposes a timestamped name
+(`audit_export_20260923-140507.csv`), so a second export does not replace the
+first. Cancelling the dialog writes nothing. When no native file picker is
+available, the file goes to `~/.local/share/dbflux/exports/` instead, as with
+the other exports. A success toast reports how many events were written and
+where.
+
+### Retention
+
+Old events can be purged on a retention schedule when configured (see
+[Settings → Audit](SETTINGS.md#audit)). The audit log otherwise grows with use; it
+lives in the same `dbflux.db` as everything else
+([Data & Privacy](../PRIVACY.md#audit-and-privacy)).
+
 ## Viewing Audit Events
 
 ### In the DBFlux UI
 
-Navigate to **Workspace → Audit**. The unified audit view supports:
+The [audit viewer](#audit-viewer) above supports:
 
 - Filtering by actor, tool/action, date range, decision, category
 - Exporting filtered results to CSV or JSON
@@ -219,6 +298,8 @@ Action strings are defined in `dbflux_core/src/observability/actions.rs`. Use co
 |----------|--------|----------|
 | `QUERY_EXECUTE` | `query_execute` | Query |
 | `QUERY_EXECUTE_FAILED` | `query_execute_failed` | Query |
+| `KEY_BULK_DELETE` | `key_bulk_delete` | Query |
+| `KEY_BULK_DELETE_FAILED` | `key_bulk_delete_failed` | Query |
 | `CONNECTION_CONNECT` | `connection_connect` | Connection |
 | `CONNECTION_DISCONNECT` | `connection_disconnect` | Connection |
 | `HOOK_EXECUTE` | `hook_execute` | Hook |
@@ -377,7 +458,7 @@ The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord
 
 There are two paths from the UI back into the audit document:
 
-- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast.
+- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast. `report_error` also records the error in the session's notifications center (`AppStateEntity::notifications`), whose row offers the same action through the same event.
 - **Status-bar error badge click** — emits `OpenAuditRequested(None)`. The workspace opens the Audit document with the default user-error filter (`target = dbflux_ui::user_error` over a recent time window) so the user can browse every recent user-facing failure.
 
 Both events flow through `AppStateEntity::request_open_audit` so the workspace subscribes once.

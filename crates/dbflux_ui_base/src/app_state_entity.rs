@@ -16,6 +16,7 @@ use gpui_component::Root;
 use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
+use crate::notifications::NotificationCenter;
 use crate::object_tree::{ObjectTreeCoordinator, ObjectTreeEvent};
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
@@ -209,6 +210,22 @@ pub struct AppStateEntity {
     /// Optional per-entity Save As override. `None` preserves the normal
     /// native-dialog / fallback-export behavior.
     save_target_override: Option<SaveTargetProvider>,
+
+    /// Update dialog requested by Settings or the startup flow, taken by the
+    /// first workspace that handles [`crate::updates::UpdateDialogRequested`].
+    pub pending_update_dialog: Option<crate::updates::UpdateDialogRequest>,
+
+    /// Label of the release whose notice was already shown this session, so
+    /// a repeated check does not raise a second toast for the same version.
+    pub notified_update_label: Option<String>,
+
+    /// Reported errors, finished tasks and the read state behind the
+    /// title-bar notifications center. Session-scoped.
+    pub notifications: NotificationCenter,
+
+    /// Pending MCP execution the approvals document should select the next
+    /// time it refreshes, set when a notification's "Review" opens it.
+    pub pending_approval_focus: Option<String>,
 }
 
 impl AppStateEntity {
@@ -244,6 +261,10 @@ impl AppStateEntity {
             hook_load_diagnostics,
             scripts_directory_diagnostics,
             save_target_override: None,
+            pending_update_dialog: None,
+            notified_update_label: None,
+            notifications: NotificationCenter::new(),
+            pending_approval_focus: None,
         })
     }
 
@@ -281,6 +302,10 @@ impl AppStateEntity {
             hook_load_diagnostics,
             scripts_directory_diagnostics,
             save_target_override: None,
+            pending_update_dialog: None,
+            notified_update_label: None,
+            notifications: NotificationCenter::new(),
+            pending_approval_focus: None,
         })
     }
 
@@ -363,6 +388,7 @@ impl EventEmitter<AuthProfileCreated> for AppStateEntity {}
 impl EventEmitter<ObjectTreeEvent> for AppStateEntity {}
 impl EventEmitter<UserErrorReported> for AppStateEntity {}
 impl EventEmitter<OpenAuditRequested> for AppStateEntity {}
+impl EventEmitter<crate::updates::UpdateDialogRequested> for AppStateEntity {}
 
 #[cfg(feature = "mcp")]
 impl EventEmitter<McpRuntimeEventRaised> for AppStateEntity {}

@@ -106,7 +106,7 @@ pub enum RunState {
     Done,
 }
 
-/// Default segment/chunk size offered by the Format & Options phase — the
+/// Default segment/chunk size offered by the Format phase — the
 /// same default `ExportOptions` used before the wizard existed.
 pub const DEFAULT_SEGMENT_SIZE: u32 = 500;
 

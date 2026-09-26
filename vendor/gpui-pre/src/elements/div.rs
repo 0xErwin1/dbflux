@@ -3084,6 +3084,10 @@ impl Interactivity {
                 });
 
                 if is_focused {
+                    if !click_listeners.is_empty() {
+                        window.claim_activation_keys();
+                    }
+
                     // Record the focus generation at which an enter/space key
                     // down event happened on this element. The next key up
                     // event will be mapped to a click event if both of the

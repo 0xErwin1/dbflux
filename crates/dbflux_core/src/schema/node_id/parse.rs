@@ -4,19 +4,20 @@ use uuid::Uuid;
 use super::ParseSchemaNodeIdError;
 use super::SchemaNodeId;
 use super::{
-    P_BASE_TYPE, P_BUCKET, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX,
-    P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
-    P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
-    P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
-    P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX,
-    P_INDEXES_FOLDER, P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF,
-    P_INST_METRICS_FOLDER, P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER,
-    P_METRICS_FOLDER, P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM,
-    P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
-    P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
-    P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER,
-    P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
+    P_BASE_TYPE, P_BUCKET, P_BUCKETS_FOLDER, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER,
+    P_COLL_INDEX, P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE,
+    P_COLLECTIONS_FOLDER, P_COLUMN, P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT,
+    P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE, P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE,
+    P_DATABASES_FOLDER, P_DB_IDX_FOLDER, P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER,
+    P_EMPTY_DATABASES_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX, P_INDEXES_FOLDER,
+    P_INST_INSPECTOR_LEAF, P_INST_INSPECTORS_FOLDER, P_INST_METRIC_LEAF, P_INST_METRICS_FOLDER,
+    P_INST_OVERVIEW_LEAF, P_LOADING, P_METRIC_LEAF, P_METRIC_NS_FOLDER, P_METRICS_FOLDER,
+    P_PLACEHOLDER, P_PROFILE, P_REMOTE_DASHBOARD_ITEM, P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE,
+    P_ROUTINES_FOLDER, P_ROUTINES_LOADING, P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA,
+    P_SCHEMA_FK, P_SCHEMA_FK_FOLDER, P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER,
+    P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE, P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM,
+    P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
+    P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -50,9 +51,13 @@ impl FromStr for SchemaNodeId {
         }
 
         match prefix {
-            P_CONN_FOLDER | P_PROFILE | P_DATABASES_FOLDER | P_DATABASE | P_LOADING | P_SCHEMA => {
-                parse_connection_scope(prefix, &parts, err)
-            }
+            P_CONN_FOLDER
+            | P_PROFILE
+            | P_DATABASES_FOLDER
+            | P_DATABASE
+            | P_EMPTY_DATABASES_FOLDER
+            | P_LOADING
+            | P_SCHEMA => parse_connection_scope(prefix, &parts, err),
 
             P_TABLES_FOLDER | P_VIEWS_FOLDER | P_TYPES_FOLDER | P_TYPES_LOADING
             | P_SCHEMA_IDX_FOLDER | P_SCHEMA_IDX_LOADING | P_SCHEMA_FK_FOLDER
@@ -107,7 +112,8 @@ impl FromStr for SchemaNodeId {
             | P_INST_INSPECTORS_FOLDER
             | P_INST_INSPECTOR_LEAF
             | P_INST_OVERVIEW_LEAF
-            | P_BUCKET => parse_instance_variants(prefix, &parts, err),
+            | P_BUCKET
+            | P_BUCKETS_FOLDER => parse_instance_variants(prefix, &parts, err),
 
             _ => Err(err()),
         }
@@ -133,6 +139,11 @@ fn parse_connection_scope(
         P_DATABASES_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             Ok(SchemaNodeId::DatabasesFolder { profile_id })
+        }
+
+        P_EMPTY_DATABASES_FOLDER => {
+            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+            Ok(SchemaNodeId::EmptyDatabasesFolder { profile_id })
         }
 
         P_DATABASE => {
@@ -843,6 +854,11 @@ fn parse_instance_variants(
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             let name = parts.get(2).ok_or_else(err)?.to_string();
             Ok(SchemaNodeId::Bucket { profile_id, name })
+        }
+
+        P_BUCKETS_FOLDER => {
+            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+            Ok(SchemaNodeId::BucketsFolder { profile_id })
         }
 
         _ => Err(err()),

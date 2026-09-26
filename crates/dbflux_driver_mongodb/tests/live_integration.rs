@@ -497,3 +497,519 @@ fn mongodb_script_single_statement_behaves_identically_to_stage_one() -> Result<
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Document field patches, replacement, reads by identity
+// ---------------------------------------------------------------------------
+
+/// Ids of every document of `collection`, in natural order.
+fn document_ids(
+    connection: &dyn dbflux_core::Connection,
+    collection: &str,
+) -> Result<Vec<Value>, DbError> {
+    let page = connection.browse_collection(
+        &CollectionBrowseRequest::new(CollectionRef::new("testdb", collection)).with_pagination(
+            Pagination::Offset {
+                limit: 1_000,
+                offset: 0,
+            },
+        ),
+    )?;
+    let id_index = page
+        .columns
+        .iter()
+        .position(|column| column.name == "_id")
+        .expect("_id column");
+
+    Ok(page.rows.iter().map(|row| row[id_index].clone()).collect())
+}
+
+/// Creates the field at `path` as a Decimal128 through a field patch, which is
+/// the only typed write path (the shell parser reads plain JSON numbers). The
+/// field must not exist yet: a patch keeps the type an existing field has.
+fn set_decimal(
+    connection: &dyn dbflux_core::Connection,
+    collection: &str,
+    id: &Value,
+    path: &str,
+    decimal: &str,
+) -> Result<(), DbError> {
+    connection.patch_document(&dbflux_core::DocumentPatchRequest {
+        collection: CollectionRef::new("testdb", collection),
+        identity: vec![("_id".to_string(), id.clone())],
+        patch: dbflux_core::DocumentPatch {
+            set: vec![(
+                dbflux_core::parse_field_path(path),
+                Value::Decimal(decimal.to_string()),
+            )],
+            unset: Vec::new(),
+        },
+    })?;
+
+    Ok(())
+}
+
+fn seed_product(
+    connection: &dyn dbflux_core::Connection,
+    collection: &str,
+) -> Result<Value, DbError> {
+    connection.insert_document(
+        &DocumentInsert::one(
+            collection.to_string(),
+            serde_json::json!({
+                "sku": "CAT-00735",
+                "price": {"currency": "USD"},
+                "stock": 3,
+                "legacy": true
+            }),
+        )
+        .with_database("testdb".to_string()),
+    )?;
+
+    let id = document_ids(connection, collection)?
+        .into_iter()
+        .next()
+        .expect("seeded document");
+    set_decimal(connection, collection, &id, "price.amount", "405.00")?;
+
+    Ok(id)
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_patch_document_sets_and_unsets_paths_keeping_types() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+        let id = seed_product(connection.as_ref(), "patch_test")?;
+        let collection = CollectionRef::new("testdb", "patch_test");
+        let identity = vec![("_id".to_string(), id.clone())];
+
+        let patch = dbflux_core::DocumentPatch {
+            set: vec![(
+                dbflux_core::parse_field_path("price.amount"),
+                Value::Decimal("119.00".into()),
+            )],
+            unset: vec![dbflux_core::parse_field_path("legacy")],
+        };
+        let result = connection.patch_document(&dbflux_core::DocumentPatchRequest {
+            collection: collection.clone(),
+            identity: identity.clone(),
+            patch,
+        })?;
+        assert_eq!(result.affected_rows, 1);
+
+        let current = connection
+            .fetch_document(&dbflux_core::DocumentFetchRequest {
+                collection,
+                identity,
+            })?
+            .expect("document still exists");
+
+        assert_eq!(
+            dbflux_core::value_at_path(&current, &dbflux_core::parse_field_path("price.amount")),
+            Some(&Value::Decimal("119.00".into()))
+        );
+        assert_eq!(
+            dbflux_core::value_at_path(&current, &dbflux_core::parse_field_path("price.currency")),
+            Some(&Value::Text("USD".into()))
+        );
+        assert_eq!(
+            dbflux_core::value_at_path(&current, &dbflux_core::parse_field_path("legacy")),
+            None
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_replace_document_keeps_identity_and_drops_missing_fields() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+        let id = seed_product(connection.as_ref(), "replace_test")?;
+        let collection = CollectionRef::new("testdb", "replace_test");
+        let identity = vec![("_id".to_string(), id.clone())];
+
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("_id".to_string(), id);
+        fields.insert("sku".to_string(), Value::Text("CAT-00735".into()));
+        fields.insert("stock".to_string(), Value::Int(9));
+
+        connection.replace_document(&dbflux_core::DocumentReplaceRequest {
+            collection: collection.clone(),
+            identity: identity.clone(),
+            document: Value::Document(fields),
+        })?;
+
+        let current = connection
+            .fetch_document(&dbflux_core::DocumentFetchRequest {
+                collection,
+                identity,
+            })?
+            .expect("document still exists");
+
+        let Value::Document(current_fields) = current else {
+            panic!("expected a document");
+        };
+        assert_eq!(current_fields.get("stock"), Some(&Value::Int(9)));
+        assert!(!current_fields.contains_key("price"));
+        assert!(!current_fields.contains_key("legacy"));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_fetch_document_reports_a_deleted_document_and_patch_refuses_it() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+        let id = seed_product(connection.as_ref(), "fetch_test")?;
+        let collection = CollectionRef::new("testdb", "fetch_test");
+        let identity = vec![("_id".to_string(), id)];
+
+        connection.execute(&QueryRequest::new("db.fetch_test.deleteMany({})"))?;
+
+        let current = connection.fetch_document(&dbflux_core::DocumentFetchRequest {
+            collection: collection.clone(),
+            identity: identity.clone(),
+        })?;
+        assert!(current.is_none());
+
+        let patched = connection.patch_document(&dbflux_core::DocumentPatchRequest {
+            collection,
+            identity,
+            patch: dbflux_core::DocumentPatch {
+                set: vec![(vec!["stock".to_string()], Value::Int(1))],
+                unset: Vec::new(),
+            },
+        });
+        assert!(patched.is_err());
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Query slots, schema sampling, count estimate
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_browse_applies_projection_and_sort() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let docs: Vec<serde_json::Value> = (1..=5)
+            .map(|i| serde_json::json!({"name": format!("item_{}", i), "rank": i, "secret": "x"}))
+            .collect();
+        connection.insert_document(
+            &DocumentInsert::many("slots_test".to_string(), docs).with_database("testdb".into()),
+        )?;
+
+        let page = connection.browse_collection(
+            &CollectionBrowseRequest::new(CollectionRef::new("testdb", "slots_test"))
+                .with_projection(serde_json::json!({"secret": 0}))
+                .with_sort(serde_json::json!({"rank": -1})),
+        )?;
+
+        assert!(!page.columns.iter().any(|column| column.name == "secret"));
+        let rank_index = page
+            .columns
+            .iter()
+            .position(|column| column.name == "rank")
+            .expect("rank column");
+        assert_eq!(page.rows[0][rank_index], Value::Int(5));
+        assert_eq!(page.rows[4][rank_index], Value::Int(1));
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_sample_collection_schema_reports_types_presence_and_values() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let docs: Vec<serde_json::Value> = (0..20)
+            .map(|index| {
+                let mut customer = serde_json::json!({
+                    "tier": if index % 3 == 0 { "team" } else { "free" }
+                });
+                if index % 2 == 0 {
+                    customer["company"] = serde_json::json!("Northwind");
+                }
+                let mut document = serde_json::json!({
+                    "customer": customer,
+                    "items": [{"sku": "a"}]
+                });
+                if index == 0 {
+                    document["total"] = serde_json::json!(12.5);
+                }
+                document
+            })
+            .collect();
+        connection.insert_document(
+            &DocumentInsert::many("schema_test".to_string(), docs).with_database("testdb".into()),
+        )?;
+
+        for (index, id) in document_ids(connection.as_ref(), "schema_test")?
+            .iter()
+            .enumerate()
+            .skip(1)
+        {
+            set_decimal(
+                connection.as_ref(),
+                "schema_test",
+                id,
+                "total",
+                &format!("{index}.00"),
+            )?;
+        }
+
+        let sample =
+            connection.sample_collection_schema(&dbflux_core::CollectionSchemaRequest::new(
+                CollectionRef::new("testdb", "schema_test"),
+                100,
+            ))?;
+
+        assert_eq!(sample.sampled_documents, 20);
+        assert_eq!(sample.total_documents, Some(20));
+        assert_eq!(
+            sample.fields.first().map(|field| field.path.as_str()),
+            Some("_id")
+        );
+
+        let company = sample.field("customer.company").expect("company stats");
+        assert_eq!(company.presence, 10);
+
+        let total = sample.field("total").expect("total stats");
+        assert_eq!(total.dominant_type(), Some("Decimal128"));
+        assert!(total.has_mixed_types());
+
+        let tier = sample.field("customer.tier").expect("tier stats");
+        assert!(matches!(
+            tier.summary,
+            dbflux_core::FieldValueSummary::TopValues(_)
+        ));
+
+        assert!(sample.field("items.sku").is_some());
+
+        let filtered =
+            connection.sample_collection_schema(&dbflux_core::CollectionSchemaRequest {
+                collection: CollectionRef::new("testdb", "schema_test"),
+                sample_size: 100,
+                filter: Some(serde_json::json!({"customer.tier": "team"})),
+            })?;
+        assert_eq!(filtered.sampled_documents, 7);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_aggregate_collection_runs_match_and_group_with_a_cap() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        assert!(
+            connection
+                .document_features()
+                .contains(dbflux_core::DocumentFeatures::AGGREGATE)
+        );
+
+        let docs: Vec<serde_json::Value> = (1..=10)
+            .map(|index| {
+                serde_json::json!({
+                    "region": if index % 2 == 0 { "north" } else { "south" },
+                    "paid": index <= 8,
+                    "amount": index,
+                })
+            })
+            .collect();
+        connection.insert_document(
+            &DocumentInsert::many("aggregate_test".to_string(), docs)
+                .with_database("testdb".into()),
+        )?;
+
+        let collection = CollectionRef::new("testdb", "aggregate_test");
+        let pipeline = dbflux_core::parse_aggregate_pipeline(
+            "[{ $match: { paid: true } },
+              { $group: { _id: '$region', orders: { $sum: 1 }, total: { $sum: '$amount' } } },
+              { $sort: { _id: 1 } }]",
+        )
+        .expect("pipeline parses");
+
+        let result = connection.aggregate_collection(
+            &dbflux_core::CollectionAggregateRequest::new(collection.clone(), pipeline.clone(), 50),
+        )?;
+
+        let column = |name: &str| {
+            result
+                .columns
+                .iter()
+                .position(|column| column.name == name)
+                .unwrap_or_else(|| panic!("{name} column"))
+        };
+        let (id, orders, total) = (column("_id"), column("orders"), column("total"));
+
+        assert_eq!(result.rows.len(), 2);
+        assert!(!result.rows_truncated());
+        assert_eq!(result.rows[0][id], Value::Text("north".to_string()));
+        assert_eq!(result.rows[0][orders], Value::Int(4));
+        assert_eq!(result.rows[0][total], Value::Int(20));
+        assert_eq!(result.rows[1][id], Value::Text("south".to_string()));
+        assert_eq!(result.rows[1][total], Value::Int(16));
+
+        let capped = connection.aggregate_collection(
+            &dbflux_core::CollectionAggregateRequest::new(collection.clone(), pipeline, 1),
+        )?;
+        assert_eq!(capped.rows.len(), 1);
+        assert!(capped.rows_truncated(), "a cut result says so");
+
+        let written =
+            connection.aggregate_collection(&dbflux_core::CollectionAggregateRequest::new(
+                collection,
+                vec![
+                    serde_json::json!({ "$match": { "region": "north" } }),
+                    serde_json::json!({ "$out": "aggregate_out_test" }),
+                ],
+                50,
+            ))?;
+        assert!(written.rows.is_empty(), "$out returns no documents");
+        assert_eq!(
+            connection.count_collection(&CollectionCountRequest::new(CollectionRef::new(
+                "testdb",
+                "aggregate_out_test"
+            )))?,
+            5,
+            "$out stays the last stage, so every matched document is written"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_estimate_collection_count_is_estimated_only_without_a_filter() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let docs: Vec<serde_json::Value> =
+            (1..=12).map(|i| serde_json::json!({"index": i})).collect();
+        connection.insert_document(
+            &DocumentInsert::many("estimate_test".to_string(), docs).with_database("testdb".into()),
+        )?;
+
+        let collection = CollectionRef::new("testdb", "estimate_test");
+
+        let unfiltered = connection
+            .estimate_collection_count(&CollectionCountRequest::new(collection.clone()))?;
+        assert_eq!(unfiltered.count, 12);
+        assert!(!unfiltered.exact);
+
+        let filtered = connection.estimate_collection_count(
+            &CollectionCountRequest::new(collection)
+                .with_filter(serde_json::json!({"index": {"$gt": 10}})),
+        )?;
+        assert_eq!(filtered.count, 2);
+        assert!(filtered.exact);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_patch_and_replace_keep_numeric_widths() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        connection.insert_document(
+            &DocumentInsert::one(
+                "width_test".to_string(),
+                serde_json::json!({"wide": 3, "ratio": 1.5}),
+            )
+            .with_database("testdb".to_string()),
+        )?;
+
+        let id = document_ids(connection.as_ref(), "width_test")?
+            .into_iter()
+            .next()
+            .expect("seeded document");
+        let collection = CollectionRef::new("testdb", "width_test");
+        let identity = vec![("_id".to_string(), id.clone())];
+
+        // `narrow` is new, so its type is inferred (Int32); `price` is Decimal128.
+        connection.patch_document(&dbflux_core::DocumentPatchRequest {
+            collection: collection.clone(),
+            identity: identity.clone(),
+            patch: dbflux_core::DocumentPatch {
+                set: vec![(vec!["narrow".to_string()], Value::Int(1))],
+                unset: Vec::new(),
+            },
+        })?;
+        set_decimal(connection.as_ref(), "width_test", &id, "price", "405.00")?;
+
+        let count_of_type = |field: &str, bson_type: &str| -> Result<usize, DbError> {
+            let result = connection.execute(&QueryRequest::new(format!(
+                "db.width_test.find({{\"{field}\": {{\"$type\": \"{bson_type}\"}}}})"
+            )))?;
+            Ok(result.rows.len())
+        };
+
+        connection.patch_document(&dbflux_core::DocumentPatchRequest {
+            collection: collection.clone(),
+            identity: identity.clone(),
+            patch: dbflux_core::DocumentPatch {
+                set: vec![
+                    (vec!["wide".to_string()], Value::Int(7)),
+                    (vec!["narrow".to_string()], Value::Int(8)),
+                    (vec!["ratio".to_string()], Value::Int(2)),
+                    (vec!["price".to_string()], Value::Int(119)),
+                ],
+                unset: Vec::new(),
+            },
+        })?;
+
+        assert_eq!(count_of_type("wide", "long")?, 1, "Int64 stays Int64");
+        assert_eq!(count_of_type("narrow", "int")?, 1, "Int32 stays Int32");
+        assert_eq!(count_of_type("ratio", "double")?, 1, "Double stays Double");
+        assert_eq!(
+            count_of_type("price", "decimal")?,
+            1,
+            "Decimal128 stays Decimal128"
+        );
+
+        let current = connection
+            .fetch_document(&dbflux_core::DocumentFetchRequest {
+                collection: collection.clone(),
+                identity: identity.clone(),
+            })?
+            .expect("document exists");
+        connection.replace_document(&dbflux_core::DocumentReplaceRequest {
+            collection,
+            identity,
+            document: current,
+        })?;
+
+        assert_eq!(
+            count_of_type("wide", "long")?,
+            1,
+            "a replacement keeps Int64"
+        );
+        assert_eq!(
+            count_of_type("narrow", "int")?,
+            1,
+            "a replacement keeps Int32"
+        );
+        assert_eq!(count_of_type("ratio", "double")?, 1);
+        assert_eq!(count_of_type("price", "decimal")?, 1);
+
+        Ok(())
+    })
+}

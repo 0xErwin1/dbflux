@@ -1,244 +1,128 @@
-use super::context_menu::KvMenuTarget;
-use super::decode::{self, KvEncodingChoice};
-use super::parsing::{key_type_icon, key_type_label};
-use super::view::{icon_button_base, render_delete_confirm_modal, render_kv_context_menu};
-use super::{KeyValueFocusMode, KvValueViewMode, TtlState};
-use crate::buckets_table::format_bytes;
+//! Layout of the key-value document: the document toolbar, the pattern and
+//! type filter row, the key list beside the value pane, the command console
+//! and the overlays (bulk actions menu, confirmations, context menu).
+
+use super::KeyValueDocument;
+use super::bulk_delete::{
+    BULK_DELETE_BATCH_SIZE, BULK_DELETE_PREVIEW_KEYS, BulkDeleteStage, BulkDeleteState,
+    BulkScanState,
+};
+use super::key_tree::{KeyListLayout, group_thousands};
+use super::metadata::{format_ttl, ttl_tone};
+use super::parsing::{database_label, key_type_label, type_badge};
+use super::view::{render_delete_confirm_modal, render_kv_context_menu};
 use crate::handle::DocumentEvent;
-use dbflux_components::controls::{Dropdown, Input};
-use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::{
+    Breadcrumb, BreadcrumbSegment, MenuItem, refresh_split_button, render_menu_items,
+    render_menu_overlay,
+};
+use dbflux_components::controls::{Button, ButtonVariant, Input};
+use dbflux_components::icons::{AppIcon, DriverIconTone};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{
+    Badge, BadgeTone, Chamfer, Icon, Kbd, SegmentedControl, SegmentedItem, Text, vdivider,
+};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, FontSizes, KeyValueMetrics, Spacing};
+use dbflux_components::typography::AppFonts;
+use dbflux_core::{KeyType, KeyValueFeatures};
+use dbflux_ui_base::keymap::RunCommand;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 
-/// Theme colors used by the size-gate placeholder and truncation notice,
-/// copied out of `cx.theme()` up front since those renderers also need a
-/// mutable `cx` for their `cx.listener(...)` handlers.
-#[derive(Clone, Copy)]
-struct KvGateColors {
-    border: Hsla,
-    warning: Hsla,
-    muted_foreground: Hsla,
-    list_active: Hsla,
-}
+/// Types offered by the server-side type filter, in toolbar order.
+const TYPE_FILTERS: [KeyType; 7] = [
+    KeyType::String,
+    KeyType::Hash,
+    KeyType::List,
+    KeyType::Set,
+    KeyType::SortedSet,
+    KeyType::Stream,
+    KeyType::Json,
+];
 
-impl super::KeyValueDocument {
-    fn render_kv_gate_too_large(
-        &self,
-        size_bytes: u64,
-        limit_bytes: u64,
-        colors: KvGateColors,
-        cx: &Context<Self>,
-    ) -> impl IntoElement + use<> {
-        div()
-            .flex_1()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(Spacing::SM)
-            .p(Spacing::LG)
-            .border_l_1()
-            .border_color(colors.border)
-            .child(Icon::new(AppIcon::TriangleAlert).color(colors.warning))
-            .child(
-                Text::body(dbflux_i18n::t!(
-                    "document.key_value.render.gate.too_large",
-                    size = format_bytes(size_bytes),
-                    limit = format_bytes(limit_bytes)
-                ))
-                .color(colors.muted_foreground),
-            )
-            .child(
-                div()
-                    .id("kv-load-anyway")
-                    .cursor_pointer()
-                    .px(Spacing::MD)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(colors.border)
-                    .hover(|d| d.bg(colors.list_active))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            this.load_selected_value_without_limit(cx);
-                        }),
-                    )
-                    .child(Text::body(dbflux_i18n::t!(
-                        "document.key_value.render.gate.load_anyway"
-                    ))),
-            )
-    }
-
-    fn render_kv_truncated_notice(
-        &self,
-        returned_bytes: u64,
-        total_bytes: Option<u64>,
-        colors: &KvGateColors,
-    ) -> impl IntoElement + use<> {
-        let message = match total_bytes {
-            Some(total) => dbflux_i18n::t!(
-                "document.key_value.render.gate.truncated",
-                returned = format_bytes(returned_bytes),
-                total = format_bytes(total)
-            ),
-            None => dbflux_i18n::t!(
-                "document.key_value.render.gate.truncated_unknown_total",
-                returned = format_bytes(returned_bytes)
-            ),
-        };
-
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::XS)
-            .px(Spacing::MD)
-            .py(Spacing::XS)
-            .border_b_1()
-            .border_l_1()
-            .border_color(colors.border)
-            .bg(colors.warning.opacity(0.1))
-            .child(
-                Icon::new(AppIcon::TriangleAlert)
-                    .small()
-                    .color(colors.warning),
-            )
-            .child(Text::caption(message).color(colors.muted_foreground))
+pub(super) fn type_filter_id(type_filter: Option<KeyType>) -> &'static str {
+    match type_filter {
+        None => "all",
+        Some(KeyType::String) | Some(KeyType::Bytes) => "string",
+        Some(KeyType::Hash) => "hash",
+        Some(KeyType::List) => "list",
+        Some(KeyType::Set) => "set",
+        Some(KeyType::SortedSet) => "zset",
+        Some(KeyType::Stream) => "stream",
+        Some(KeyType::Json) => "json",
+        Some(KeyType::Unknown) => "all",
     }
 }
 
-/// Page key count, followed by the keyspace total when one is known.
-fn keys_label(key_count: usize, key_total: Option<u64>) -> String {
-    let page_label = if key_count == 1 {
-        dbflux_i18n::t!(
-            "document.key_value.render.keys_count.one",
-            count = key_count
-        )
+pub(super) fn type_filter_from_id(id: &str) -> Option<KeyType> {
+    TYPE_FILTERS
+        .into_iter()
+        .find(|key_type| type_filter_id(Some(*key_type)) == id)
+}
+
+fn layout_id(layout: KeyListLayout) -> &'static str {
+    match layout {
+        KeyListLayout::List => "list",
+        KeyListLayout::Tree => "tree",
+    }
+}
+
+/// Runs `update` on the document if it is still alive; a closed document
+/// simply ignores the late UI callback.
+pub(super) fn update_document(
+    entity: &WeakEntity<KeyValueDocument>,
+    cx: &mut App,
+    update: impl FnOnce(&mut KeyValueDocument, &mut Context<KeyValueDocument>),
+) {
+    if let Err(error) = entity.update(cx, update) {
+        log::debug!("key-value document closed before a UI callback: {error}");
+    }
+}
+
+/// Key count chip of the breadcrumb: `1,474 keys`.
+pub(super) fn key_total_label(total: u64) -> String {
+    if total == 1 {
+        dbflux_i18n::t!("document.key_value.toolbar.key_total.one")
     } else {
         dbflux_i18n::t!(
-            "document.key_value.render.keys_count.many",
-            count = key_count
+            "document.key_value.toolbar.key_total.many",
+            count = group_thousands(total)
         )
-    };
-
-    match key_total {
-        Some(total) => format!(
-            "{page_label} · {}",
-            dbflux_i18n::t!("document.key_value.render.keys_total", count = total)
-        ),
-        None => page_label,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::keys_label;
+/// Type badge used in the key list, the value header and the bulk-delete
+/// matches: short name on a 4 px chamfer, 26 x 18 px.
+pub(super) fn type_badge_element(key_type: Option<KeyType>, cx: &App) -> impl IntoElement {
+    let (label, tone) = type_badge(key_type);
+    let color = tone.text_color(cx.theme());
 
-    #[test]
-    fn key_value_refresh_label_differs_between_locales() {
-        let english = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "en");
-        let spanish = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "es");
-
-        assert_eq!(english, "Refresh");
-        assert_eq!(spanish, "Actualizar");
-        assert_ne!(english, spanish);
-    }
-
-    #[test]
-    fn key_value_render_keys_resolve_in_both_locales() {
-        let keys = [
-            "document.key_value.render.delete_key.title",
-            "document.key_value.render.delete_key.message",
-            "document.key_value.render.delete_member.title",
-            "document.key_value.render.delete_member.message",
-            "document.key_value.render.unknown_type",
-            "document.key_value.render.value_header",
-            "document.key_value.render.id_header",
-            "document.key_value.render.fields_header",
-            "document.key_value.render.field_score_header",
-            "document.key_value.render.click_to_edit",
-            "document.key_value.render.select_key_prompt",
-            "document.key_value.render.prev",
-            "document.key_value.render.next",
-            "document.key_value.render.page",
-            "document.key_value.render.keys_count.one",
-            "document.key_value.render.keys_count.many",
-            "document.key_value.render.keys_total",
-            "document.key_value.render.filter.keys_placeholder",
-            "document.key_value.render.filter.members_placeholder",
-            "document.key_value.render.ttl.no_limit",
-            "document.key_value.render.ttl.missing",
-            "document.key_value.render.ttl.expired",
-        ];
-
-        for key in keys {
-            for locale in ["en", "es"] {
-                let value = dbflux_i18n::t!(key, locale = locale);
-
-                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
-                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
-                assert_ne!(
-                    value,
-                    format!("{locale}.{key}"),
-                    "{key} missing from {locale} catalog"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn key_value_delete_key_message_interpolates_key_name() {
-        let message = dbflux_i18n::t!(
-            "document.key_value.render.delete_key.message",
-            locale = "en",
-            key = "session:42"
-        );
-
-        assert!(message.contains("session:42"));
-    }
-
-    #[test]
-    fn key_value_keys_total_resolves_in_every_locale() {
-        for locale in ["en", "es", "ko", "zh_Hans"] {
-            let value = dbflux_i18n::t!(
-                "document.key_value.render.keys_total",
-                locale = locale,
-                count = 3400
-            );
-
-            assert!(value.contains("3400"), "{locale}: {value}");
-            assert!(
-                !value.contains("keys_total"),
-                "keys_total missing from {locale} catalog"
-            );
-        }
-    }
-
-    #[test]
-    fn keys_label_appends_the_total_only_when_known() {
-        assert_eq!(keys_label(12, None), "12 keys on this page");
-        assert_eq!(
-            keys_label(12, Some(3400)),
-            "12 keys on this page · 3400 total"
-        );
-        assert_eq!(keys_label(1, Some(1)), "1 key on this page · 1 total");
-    }
-
-    #[test]
-    fn key_value_page_label_interpolates_page_number() {
-        let page = dbflux_i18n::t!("document.key_value.render.page", locale = "en", page = 3);
-
-        assert!(page.contains('3'));
-    }
+    div()
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .w(KeyValueMetrics::TYPE_BADGE_WIDTH)
+        .h(KeyValueMetrics::TYPE_BADGE_HEIGHT)
+        .child(
+            Chamfer::new(ChamferCut::KEYCAP)
+                .fill(color.opacity(KeyValueMetrics::TYPE_BADGE_FILL_ALPHA)),
+        )
+        .child(
+            div()
+                .font_family(AppFonts::MONO)
+                .text_size(KeyValueMetrics::TYPE_BADGE_FONT)
+                .font_weight(FontWeight::BOLD)
+                .text_color(color)
+                .child(label),
+        )
 }
 
-impl Render for super::KeyValueDocument {
+impl Render for KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Handle deferred modal opens before borrowing theme
         if self.pending_open_new_key_modal {
             self.pending_open_new_key_modal = false;
             self.new_key_modal
@@ -250,13 +134,15 @@ impl Render for super::KeyValueDocument {
                 .update(cx, |modal, cx| modal.open(key_type, window, cx));
         }
 
-        let theme = cx.theme();
+        if let Some((action, target)) = self.pending_menu_action.take() {
+            self.execute_menu_action(action, target, window, cx);
+        }
 
-        let error_message = self.last_error.clone();
-        let is_structured = self.is_structured_type();
-        let needs_value_col = self.needs_value_column();
+        self.flush_pending_stream_pane(window, cx);
+        self.ensure_bulk_delete_input(window, cx);
 
-        // Delete confirmation state (capture before building UI)
+        let theme = cx.theme().clone();
+
         let has_pending_delete =
             self.pending_key_delete.is_some() || self.pending_member_delete.is_some();
         let (delete_title, delete_message) = if let Some(pending) = &self.pending_key_delete {
@@ -279,841 +165,43 @@ impl Render for super::KeyValueDocument {
             (String::new(), String::new())
         };
 
-        let filter_text = self
-            .members_filter_input
-            .read(cx)
-            .value()
-            .trim()
-            .to_ascii_lowercase();
-        let filtered_members: Vec<(usize, &super::parsing::MemberEntry)> = self
-            .cached_members
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| {
-                filter_text.is_empty() || m.display.to_ascii_lowercase().contains(&filter_text)
-            })
-            .collect();
+        let toolbar = self.render_document_toolbar(cx);
+        let filter_row = self.render_filter_row(cx);
+        let key_list = self.render_key_list_section(cx);
+        let value_pane = self.render_value_section(cx);
+        let console = self.render_console(cx);
+        let bulk_modal = self
+            .bulk_delete
+            .as_ref()
+            .map(|state| self.render_bulk_delete_modal(state, cx));
+        let bulk_menu_overlay = self
+            .bulk_actions_open
+            .then(|| self.render_bulk_actions_overlay(cx));
 
-        // -- Right panel --
-        let right_panel = if let Some(value) = &self.selected_value {
-            let key_name = value.entry.key.clone();
-            let type_label = value
-                .entry
-                .key_type
-                .map(key_type_label)
-                .unwrap_or_else(|| dbflux_i18n::t!("document.key_value.render.unknown_type"));
-            let ttl_color = match self.ttl_state {
-                TtlState::Expired => theme.danger,
-                TtlState::Missing => theme.warning,
-                _ => theme.muted_foreground,
-            };
-
-            let size_label = value
-                .entry
-                .size_bytes
-                .map(|size| dbflux_i18n::t!("document.key_value.render.size_bytes", size = size))
-                .unwrap_or_default();
-
-            let mut panel = div().flex_1().flex().flex_col().overflow_hidden();
-
-            // Header bar
-            panel = panel.child(
-                div()
-                    .h(Heights::TOOLBAR)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(Spacing::MD)
-                    .border_b_1()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(Icon::new(AppIcon::KeyRound).small().muted())
-                            .child(Text::body(key_name)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .when(is_structured, |d| {
-                                d.child(
-                                    icon_button_base("kv-add-member", AppIcon::Plus, theme)
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                if let Some(key_type) = this.selected_key_type() {
-                                                    this.pending_open_add_member_modal =
-                                                        Some(key_type);
-                                                    cx.notify();
-                                                }
-                                            }),
-                                        ),
-                                )
-                            })
-                            .when(self.supports_document_view(), |d| {
-                                let toggle_icon = match self.value_view_mode {
-                                    KvValueViewMode::Table => AppIcon::Braces,
-                                    KvValueViewMode::Document => AppIcon::Table,
-                                };
-                                d.child(
-                                    icon_button_base("kv-toggle-view", toggle_icon, theme)
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, _, cx| {
-                                                this.toggle_value_view_mode(cx);
-                                            }),
-                                        ),
-                                )
-                            })
-                            .child(
-                                icon_button_base("kv-refresh-val", AppIcon::RefreshCcw, theme)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.reload_selected_value(cx);
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                icon_button_base("kv-delete-key", AppIcon::Delete, theme)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.request_delete_key(cx);
-                                        }),
-                                    ),
-                            ),
-                    ),
-            );
-
-            // Metadata row
-            panel = panel.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::LG)
-                    .px(Spacing::MD)
-                    .py(Spacing::XS)
-                    .border_b_1()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .child(Text::caption(type_label)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .child(Icon::new(AppIcon::Clock).small().color(ttl_color))
-                            .child(Text::body(self.ttl_display.clone()).color(ttl_color)),
-                    )
-                    .child(Text::caption(size_label)),
-            );
-
-            let load_state = value.load_state;
-            let is_too_large = matches!(load_state, dbflux_core::KeyLoadState::TooLarge { .. });
-            let gate_colors = KvGateColors {
-                border: theme.border,
-                warning: theme.warning,
-                muted_foreground: theme.muted_foreground,
-                list_active: theme.list_active,
-            };
-
-            if let dbflux_core::KeyLoadState::TooLarge {
-                size_bytes,
-                limit_bytes,
-            } = load_state
-            {
-                panel = panel.child(self.render_kv_gate_too_large(
-                    size_bytes,
-                    limit_bytes,
-                    gate_colors,
-                    cx,
-                ));
-            }
-
-            if let dbflux_core::KeyLoadState::Truncated {
-                returned_bytes,
-                total_bytes,
-            } = load_state
-            {
-                panel = panel.child(self.render_kv_truncated_notice(
-                    returned_bytes,
-                    total_bytes,
-                    &gate_colors,
-                ));
-            }
-
-            if is_too_large {
-                // The gate placeholder above is the entire content: `value`
-                // is empty for `TooLarge`, so there is nothing to preview.
-            } else if is_structured
-                && self.value_view_mode == KvValueViewMode::Document
-                && self.supports_document_view()
-            {
-                // -- Document tree view for Hash / Stream --
-                if let Some(tree) = &self.document_tree {
-                    panel = panel.child(
-                        div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(tree.clone()),
-                    );
-                } else {
-                    panel = panel.child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(Text::muted(dbflux_i18n::t!("document.data.grid.empty"))),
-                    );
-                }
-            } else if is_structured {
-                // -- Table view for structured types --
-
-                // Members filter
-                panel = panel.child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .px(Spacing::MD)
-                        .py(Spacing::XS)
-                        .border_b_1()
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .child(Icon::new(AppIcon::Search).small().muted())
-                        .child(
-                            div()
-                                .flex_1()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.focus_mode = KeyValueFocusMode::TextInput;
-                                        cx.stop_propagation();
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    Input::new(&self.members_filter_input)
-                                        .small()
-                                        .cleanable(true)
-                                        .w_full(),
-                                ),
-                        ),
-                );
-
-                // Members list header
-                let mut header = div()
-                    .flex()
-                    .items_center()
-                    .px(Spacing::MD)
-                    .h(Heights::ROW_COMPACT)
-                    .border_b_1()
-                    .border_l_1()
-                    .border_color(theme.border)
-                    .bg(theme.secondary);
-
-                let is_stream = self.is_stream_type();
-                header = header.child(div().w(px(30.0)).child(Text::caption("#")));
-                header = header.child(div().flex_1().child(Text::caption(if is_stream {
-                    dbflux_i18n::t!("document.key_value.render.id_header")
-                } else {
-                    dbflux_i18n::t!("document.key_value.render.value_header")
-                })));
-                if needs_value_col {
-                    header = header.child(div().w(px(200.0)).child(Text::caption(if is_stream {
-                        dbflux_i18n::t!("document.key_value.render.fields_header")
-                    } else {
-                        dbflux_i18n::t!("document.key_value.render.field_score_header")
-                    })));
-                }
-                header = header.child(div().w(Heights::ICON_MD));
-
-                panel = panel.child(header);
-
-                // Members list
-                let mut members_list = div()
-                    .flex_1()
-                    .overflow_y_scrollbar()
-                    .border_l_1()
-                    .border_color(theme.border);
-
-                for (original_index, member) in &filtered_members {
-                    let idx = *original_index;
-                    let is_editing = self.editing_member_index == Some(idx);
-                    let is_selected = self.focus_mode == KeyValueFocusMode::ValuePanel
-                        && self.selected_member_index == Some(idx);
-
-                    let mut row = div()
-                        .flex()
-                        .items_center()
-                        .px(Spacing::MD)
-                        .h(Heights::ROW)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .text_size(FontSizes::SM)
-                        .when(is_selected, |d| d.bg(theme.list_active))
-                        .when(!is_selected, |d| d.hover(|d| d.bg(theme.list_active)))
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.focus_mode = KeyValueFocusMode::ValuePanel;
-                                this.selected_member_index = Some(idx);
-                                cx.emit(DocumentEvent::RequestFocus);
-                                this.open_context_menu(
-                                    KvMenuTarget::Value,
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        );
-
-                    row = row.child(div().w(px(30.0)).child(Text::caption(format!("{}", idx))));
-
-                    if is_editing {
-                        if let Some(input) = &self.member_edit_input {
-                            row =
-                                row.child(div().flex_1().child(Input::new(input).small().w_full()));
-                            if let Some(score_input) = &self.member_edit_score_input {
-                                row = row.child(
-                                    div()
-                                        .w(px(200.0))
-                                        .child(Input::new(score_input).small().w_full()),
-                                );
-                            }
-                        }
-                    } else {
-                        let value_cell = div().flex_1().child(member.display.clone());
-
-                        row = row.child(if is_stream {
-                            value_cell
-                        } else {
-                            value_cell.cursor_pointer().on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    cx.stop_propagation();
-                                    this.start_member_edit(idx, window, cx);
-                                }),
-                            )
-                        });
-
-                        if needs_value_col {
-                            row = row.child(
-                                div().w(px(200.0)).child(Text::caption(
-                                    member
-                                        .field
-                                        .clone()
-                                        .or(member.score.map(|s| s.to_string()))
-                                        .unwrap_or_default(),
-                                )),
-                            );
-                        }
-
-                        row = row.child(
-                            icon_button_base(
-                                ElementId::Name(format!("del-member-{}", idx).into()),
-                                AppIcon::Delete,
-                                theme,
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.request_delete_member(idx, cx);
-                                }),
-                            ),
-                        );
-                    }
-
-                    members_list = members_list.child(row);
-                }
-
-                panel = panel.child(members_list);
-            } else if let Some(input) = &self.string_edit_input {
-                // Inline editing for String/JSON values
-                panel = panel.child(
-                    div()
-                        .flex_1()
-                        .overflow_y_scrollbar()
-                        .p(Spacing::MD)
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .child(Input::new(input).small().w_full()),
-                );
-            } else {
-                // Read-only value preview for String/JSON/Binary
-                let key_type = value
-                    .entry
-                    .key_type
-                    .unwrap_or(dbflux_core::KeyType::Unknown);
-                let is_editable = decode::may_edit_value(
-                    key_type,
-                    value.repr,
-                    self.kv_encoding_choice,
-                    self.kv_decode_outcome.as_ref(),
-                );
-                let is_binary = value.repr == dbflux_core::ValueRepr::Binary;
-                let value_preview = decode::render_value_preview_with_decode(
-                    value,
-                    self.kv_encoding_choice,
-                    self.kv_decode_outcome.as_ref(),
-                );
-                let could_edit_if_raw = !is_editable
-                    && matches!(
-                        key_type,
-                        dbflux_core::KeyType::String | dbflux_core::KeyType::Json
-                    )
-                    && is_binary
-                    && !matches!(self.kv_encoding_choice, KvEncodingChoice::Raw);
-
-                if is_binary {
-                    let summary = self
-                        .kv_decode_outcome
-                        .as_ref()
-                        .and_then(decode::encoding_summary_label);
-
-                    panel = panel.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .px(Spacing::MD)
-                            .py(Spacing::XS)
-                            .border_b_1()
-                            .border_l_1()
-                            .border_color(theme.border)
-                            .child(self.kv_encoding_dropdown.clone())
-                            .when_some(summary, |d, summary| {
-                                d.child(Text::caption(summary).color(theme.muted_foreground))
-                            }),
-                    );
-                }
-
-                panel = panel.child(
-                    div()
-                        .flex_1()
-                        .overflow_y_scrollbar()
-                        .p(Spacing::MD)
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .text_size(FontSizes::SM)
-                        .text_color(theme.muted_foreground)
-                        .when(is_editable, |d| {
-                            d.cursor_pointer().on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, window, cx| {
-                                    this.start_string_edit(window, cx);
-                                }),
-                            )
-                        })
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.focus_mode = KeyValueFocusMode::ValuePanel;
-                                cx.emit(DocumentEvent::RequestFocus);
-                                this.open_context_menu(
-                                    KvMenuTarget::Value,
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .child(value_preview)
-                        .when(is_editable, |d| {
-                            d.child(div().pt(Spacing::SM).child(Text::caption(dbflux_i18n::t!(
-                                "document.key_value.render.click_to_edit"
-                            ))))
-                        })
-                        .when(could_edit_if_raw, |d| {
-                            d.child(div().pt(Spacing::SM).child(Text::caption(dbflux_i18n::t!(
-                                "document.key_value.render.decode.edit_locked"
-                            ))))
-                        }),
-                );
-            }
-
-            panel.into_any_element()
-        } else {
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_l_1()
-                .border_color(theme.border)
-                .child(if self.runner.is_primary_active() {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .child(
-                            Icon::new(AppIcon::Loader)
-                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                .color(theme.muted_foreground),
-                        )
-                        .child(Text::muted(dbflux_i18n::t!("document.data.grid.loading")))
-                        .into_any_element()
-                } else {
-                    Text::muted(dbflux_i18n::t!(
-                        "document.key_value.render.select_key_prompt"
-                    ))
-                    .into_any_element()
-                })
-                .into_any_element()
-        };
-
-        let refresh_label = if self.refresh_policy.is_auto() {
-            crate::labels::refresh_policy_label(self.refresh_policy)
-        } else {
-            dbflux_i18n::t!("document.data.grid.toolbar.refresh")
-        };
-
-        // -- Left panel --
-        let left_panel = div()
-            .w_1_3()
-            .min_w(px(240.0))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            // Toolbar
-            .child(
-                div()
-                    .h(Heights::TOOLBAR)
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .px(Spacing::SM)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .child(Icon::new(AppIcon::Search).small().muted())
-                    .child(
-                        div()
-                            .flex_1()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus_mode = KeyValueFocusMode::TextInput;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                Input::new(&self.filter_input)
-                                    .small()
-                                    .cleanable(true)
-                                    .w_full(),
-                            ),
-                    )
-                    .child(
-                        icon_button_base("kv-add", AppIcon::Plus, theme).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| {
-                                this.pending_open_new_key_modal = true;
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .id("kv-refresh-control")
-                            .h(Heights::BUTTON)
-                            .flex()
-                            .items_center()
-                            .gap_0()
-                            .rounded(Radii::SM)
-                            .bg(theme.background)
-                            .border_1()
-                            .border_color(theme.input)
-                            .child(
-                                div()
-                                    .id("kv-refresh-action")
-                                    .h_full()
-                                    .px(Spacing::SM)
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            if this.runner.is_primary_active() {
-                                                this.runner.cancel_primary(cx);
-                                                this.last_error = None;
-                                                cx.notify();
-                                            } else {
-                                                this.reload_keys(cx);
-                                            }
-                                        }),
-                                    )
-                                    .child(
-                                        Icon::new(if self.runner.is_primary_active() {
-                                            AppIcon::Loader
-                                        } else if self.refresh_policy.is_auto() {
-                                            AppIcon::Clock
-                                        } else {
-                                            AppIcon::RefreshCcw
-                                        })
-                                        .small()
-                                        .color(theme.foreground),
-                                    )
-                                    .child(Text::body(refresh_label)),
-                            )
-                            .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                            .child(
-                                div()
-                                    .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                                    .h_full()
-                                    .child(self.refresh_dropdown.clone()),
-                            ),
-                    ),
-            )
-            // Pagination bar
-            .child({
-                let can_prev = self.can_go_prev();
-                let can_next = self.can_go_next();
-                let current_page = self.current_page;
-                let key_count = self.keys.len();
-                let key_total = self.key_total;
-
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(if self.runner.is_primary_active() {
-                                Icon::new(AppIcon::Loader)
-                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                    .color(theme.muted_foreground)
-                                    .into_any_element()
-                            } else {
-                                Icon::new(AppIcon::Rows3)
-                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                    .muted()
-                                    .into_any_element()
-                            })
-                            .child(Text::caption(if self.runner.is_primary_active() {
-                                dbflux_i18n::t!("document.data.grid.loading")
-                            } else {
-                                keys_label(key_count, key_total)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("kv-prev-page")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .text_size(FontSizes::XS)
-                                    .when(can_prev, |d| {
-                                        d.cursor_pointer()
-                                            .hover(|d| d.bg(theme.secondary))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.go_prev_page(cx);
-                                            }))
-                                    })
-                                    .when(!can_prev, |d| d.opacity(0.5))
-                                    .child({
-                                        let icon_color = if can_prev {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        };
-                                        Icon::new(AppIcon::ChevronLeft)
-                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                            .color(icon_color)
-                                    })
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.key_value.render.prev"
-                                        ))
-                                        .color(
-                                            if can_prev {
-                                                theme.foreground
-                                            } else {
-                                                theme.muted_foreground
-                                            },
-                                        ),
-                                    ),
-                            )
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.key_value.render.page",
-                                page = current_page
-                            )))
-                            .child(
-                                div()
-                                    .id("kv-next-page")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .text_size(FontSizes::XS)
-                                    .when(can_next, |d| {
-                                        d.cursor_pointer()
-                                            .hover(|d| d.bg(theme.secondary))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.go_next_page(cx);
-                                            }))
-                                    })
-                                    .when(!can_next, |d| d.opacity(0.5))
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.key_value.render.next"
-                                        ))
-                                        .color(
-                                            if can_next {
-                                                theme.foreground
-                                            } else {
-                                                theme.muted_foreground
-                                            },
-                                        ),
-                                    )
-                                    .child({
-                                        let icon_color = if can_next {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        };
-                                        Icon::new(AppIcon::ChevronRight)
-                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                            .color(icon_color)
-                                    }),
-                            ),
-                    )
-            })
-            .when_some(error_message, |this, message| {
-                this.child(Text::caption(crate::labels::shared_error_prefix(&message)))
-            })
-            // Keys list
-            .child(div().flex_1().overflow_y_scrollbar().children(
-                self.keys.iter().enumerate().map(|(index, key)| {
-                    let selected = self.selected_index == Some(index);
-                    let is_renaming = self.renaming_index == Some(index);
-                    let row_bg = if selected {
-                        theme.list_active
-                    } else {
-                        theme.transparent
-                    };
-
-                    let (icon, icon_color) = key_type_icon(key.key_type);
-
-                    let mut row = div()
-                        .h(Heights::ROW)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::SM)
-                        .px(Spacing::SM)
-                        .bg(row_bg)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.list_active))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, _, cx| {
-                                this.focus_mode = KeyValueFocusMode::List;
-                                this.select_index(index, cx);
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.focus_mode = KeyValueFocusMode::List;
-                                this.select_index(index, cx);
-                                cx.emit(DocumentEvent::RequestFocus);
-                                this.open_context_menu(
-                                    KvMenuTarget::Key,
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        );
-
-                    row = row.child(Icon::new(icon).small().color(icon_color));
-
-                    if is_renaming {
-                        if let Some(input) = &self.rename_input {
-                            row =
-                                row.child(div().flex_1().child(Input::new(input).small().w_full()));
-                        }
-                    } else {
-                        row = row.child(
-                            div()
-                                .flex_1()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(Text::caption(key.key.clone())),
-                        );
-
-                        row = row.child(Text::caption(
-                            key.key_type.map(key_type_label).unwrap_or_else(|| {
-                                dbflux_i18n::t!("document.key_value.parsing.type.unknown")
-                            }),
-                        ));
-                    }
-
-                    row
-                }),
-            ));
-
-        // -- Compose --
         let this_entity = cx.entity().clone();
 
         div()
+            .id("kv-document")
             .size_full()
+            .relative()
+            .flex()
+            .flex_col()
+            .bg(theme.table)
             .track_focus(&self.focus_handle)
+            .key_context(ContextId::KeyValue.as_gpui_context())
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if !this.handle_document_command(action, window, cx) {
+                    cx.propagate();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    this.focus_mode = KeyValueFocusMode::List;
+                    this.focus_mode = super::KeyValueFocusMode::List;
                     cx.emit(DocumentEvent::RequestFocus);
                     cx.notify();
                 }),
             )
-            .flex()
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -1126,28 +214,697 @@ impl Render for super::KeyValueDocument {
                 .absolute()
                 .size_full(),
             )
-            .child(left_panel)
-            .child(right_panel)
-            .when(self.new_key_modal.read(cx).is_visible(), |d| {
-                d.child(self.new_key_modal.clone())
+            .child(toolbar)
+            .child(filter_row)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .child(key_list)
+                    .child(value_pane),
+            )
+            .child(console)
+            .when_some(bulk_menu_overlay, |root, overlay| root.child(overlay))
+            .when(self.new_key_modal.read(cx).is_visible(), |root| {
+                root.child(self.new_key_modal.clone())
             })
-            .when(self.add_member_modal.read(cx).is_visible(), |d| {
-                d.child(self.add_member_modal.clone())
+            .when(self.add_member_modal.read(cx).is_visible(), |root| {
+                root.child(self.add_member_modal.clone())
             })
-            .when(has_pending_delete, |d| {
-                d.child(render_delete_confirm_modal(
+            .when_some(bulk_modal, |root, modal| root.child(modal))
+            .when(has_pending_delete, |root| {
+                root.child(render_delete_confirm_modal(
                     &delete_title,
                     &delete_message,
                     cx,
                 ))
             })
-            .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(render_kv_context_menu(
+            .when_some(self.context_menu.as_ref(), |root, menu| {
+                root.child(render_kv_context_menu(
                     menu,
                     &self.context_menu_focus,
                     self.panel_origin,
                     cx,
                 ))
             })
+    }
+}
+
+impl KeyValueDocument {
+    /// Document-level shortcuts that are not in the shared keymap: `t` for
+    /// the expiry editor, `Ctrl+J` to load more keys and `Ctrl+\`` for the
+    /// console. Keys typed into a field are left alone.
+    /// Runs the commands of the key-value layer of the keymap. The list
+    /// commands apply only while the document itself, not a field inside it,
+    /// has focus. Returns whether the command was handled.
+    fn handle_document_command(
+        &mut self,
+        action: &RunCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(command) = Command::from_action_id(&action.command) else {
+            return false;
+        };
+
+        if command == Command::ToggleConsole {
+            self.toggle_console(window, cx);
+            return true;
+        }
+
+        if !self.focus_handle.is_focused(window) {
+            return false;
+        }
+
+        match command {
+            Command::LoadMore => {
+                self.load_more_keys(cx);
+                true
+            }
+            Command::EditExpiry if self.selected_value.is_some() => {
+                self.open_expiry_editor(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn render_document_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let bulk_menu = self
+            .bulk_actions_open
+            .then(|| self.render_bulk_actions_menu(cx));
+        let theme = cx.theme();
+        let state = self.app_state.read(cx);
+
+        let mut segments = Vec::new();
+
+        if let Some(profile) = state
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == self.profile_id)
+        {
+            let mut segment = BreadcrumbSegment::new(profile.name.clone());
+
+            if let Some(driver) = state.drivers().get(&profile.driver_id()) {
+                let metadata = driver.metadata();
+                segment = segment.icon(
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    Some(DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx)),
+                );
+            }
+
+            segments.push(segment);
+        }
+
+        segments.push(BreadcrumbSegment::new(database_label(&self.database)));
+
+        let mut breadcrumb = Breadcrumb::new(segments);
+        if let Some(total) = self.key_total {
+            breadcrumb = breadcrumb.meta(key_total_label(total));
+        }
+
+        let refresh_entity = cx.entity().downgrade();
+        let refresh = refresh_split_button(
+            "kv-refresh-control",
+            self.refresh_policy,
+            false,
+            false,
+            self.refresh_dropdown.clone(),
+            move |_, cx| {
+                update_document(&refresh_entity, cx, |this, cx| {
+                    if this.runner.is_primary_active() {
+                        this.runner.cancel_primary(cx);
+                        this.last_error = None;
+                        cx.notify();
+                    } else {
+                        this.reload_keys(cx);
+                    }
+                });
+            },
+        )
+        .variant(ButtonVariant::Primary);
+
+        let actions = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(KeyValueMetrics::TOOLBAR_GAP)
+            .ml_auto()
+            .when(self.supports_bulk_delete(cx), |toolbar| {
+                toolbar.child(
+                    div()
+                        .relative()
+                        .child(
+                            Button::new(
+                                "kv-bulk-actions",
+                                dbflux_i18n::t!("document.key_value.toolbar.bulk_actions"),
+                            )
+                            .icon(AppIcon::Layers)
+                            .selected(self.bulk_actions_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.bulk_actions_open = !this.bulk_actions_open;
+                                cx.notify();
+                            })),
+                        )
+                        .when_some(bulk_menu, |anchor, menu| anchor.child(menu)),
+                )
+            })
+            .child(
+                Button::new(
+                    "kv-new-key",
+                    dbflux_i18n::t!("document.key_value.toolbar.new_key"),
+                )
+                .icon(AppIcon::Plus)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.pending_open_new_key_modal = true;
+                    cx.notify();
+                })),
+            )
+            .child(refresh);
+
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .gap(KeyValueMetrics::TOOLBAR_GAP)
+            .min_h(KeyValueMetrics::TOOLBAR_HEIGHT)
+            .px(KeyValueMetrics::TOOLBAR_PADDING_X)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(div().flex_none().max_w_full().min_w_0().child(breadcrumb))
+            .child(actions)
+    }
+
+    fn render_filter_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let theme = cx.theme();
+        let entity = cx.entity().downgrade();
+
+        let pattern_field = div()
+            .flex_1()
+            .min_w(KeyValueMetrics::PATTERN_MIN_WIDTH)
+            .font_family(AppFonts::MONO)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus_mode = super::KeyValueFocusMode::TextInput;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .child(
+                Input::new(&self.filter_input)
+                    .id("kv-pattern")
+                    .w_full()
+                    .prefix(
+                        Icon::new(AppIcon::Search)
+                            .size(KeyValueMetrics::FOLDER_ICON)
+                            .color(theme.muted_foreground),
+                    )
+                    .when_some(
+                        dbflux_ui_base::keymap::shortcut_label(
+                            ContextId::Results,
+                            Command::FocusSearch,
+                        ),
+                        |input, label| input.suffix(Kbd::new(label)),
+                    ),
+            );
+
+        let type_control = self
+            .key_features
+            .contains(KeyValueFeatures::SCAN_TYPE_FILTER)
+            .then(|| {
+                let items = std::iter::once(SegmentedItem::new(
+                    "all",
+                    dbflux_i18n::t!("document.key_value.toolbar.type_all"),
+                ))
+                .chain(TYPE_FILTERS.into_iter().map(|key_type| {
+                    SegmentedItem::new(type_filter_id(Some(key_type)), key_type_label(key_type))
+                }))
+                .collect();
+
+                let entity = entity.clone();
+                SegmentedControl::new(items, type_filter_id(self.type_filter), move |id, _, cx| {
+                    let type_filter = type_filter_from_id(id.as_ref());
+                    update_document(&entity, cx, |this, cx| {
+                        this.set_type_filter(type_filter, cx)
+                    });
+                })
+                .group("key-type-filter")
+            });
+
+        let layout_control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new(
+                    layout_id(KeyListLayout::List),
+                    dbflux_i18n::t!("document.key_value.toolbar.layout_list"),
+                )
+                .icon(AppIcon::Rows3),
+                SegmentedItem::new(
+                    layout_id(KeyListLayout::Tree),
+                    dbflux_i18n::t!("document.key_value.toolbar.layout_tree"),
+                )
+                .icon(AppIcon::Layers),
+            ],
+            layout_id(self.list_layout),
+            move |id, _, cx| {
+                let layout = if id.as_ref() == layout_id(KeyListLayout::List) {
+                    KeyListLayout::List
+                } else {
+                    KeyListLayout::Tree
+                };
+                update_document(&entity, cx, |this, cx| this.set_list_layout(layout, cx));
+            },
+        )
+        .group("key-list-layout");
+
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .gap(KeyValueMetrics::TOOLBAR_GAP)
+            .min_h(KeyValueMetrics::TOOLBAR_HEIGHT)
+            .px(KeyValueMetrics::TOOLBAR_PADDING_X)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(pattern_field)
+            .when_some(type_control, |row, control| {
+                row.child(div().flex_none().child(control))
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(KeyValueMetrics::TOOLBAR_GAP)
+                    .child(
+                        vdivider(cx)
+                            .h(KeyValueMetrics::TOOLBAR_DIVIDER_HEIGHT)
+                            .mx(KeyValueMetrics::TOOLBAR_DIVIDER_MARGIN_X),
+                    )
+                    .child(layout_control),
+            )
+    }
+
+    /// The Bulk actions menu, hung from the bottom-right corner of its
+    /// button so it follows the button when the toolbar wraps to a second
+    /// line, and kept inside the window.
+    fn render_bulk_actions_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let entity = cx.entity().downgrade();
+
+        let items = vec![
+            MenuItem::new(dbflux_i18n::t!("document.key_value.bulk_delete.menu_item"))
+                .icon(AppIcon::Delete)
+                .danger(),
+        ];
+
+        let menu = render_menu_items(
+            "kv-bulk-actions-menu",
+            &items,
+            None,
+            move |_, cx| update_document(&entity, cx, |this, cx| this.open_bulk_delete(cx)),
+            |_, _| {},
+            cx,
+        );
+
+        // Above the dismiss overlay (priority 1), which covers the document.
+        div()
+            .absolute()
+            .top(relative(1.))
+            .right_0()
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopRight)
+                        .offset(point(px(0.0), Spacing::XS))
+                        .snap_to_window()
+                        .child(div().occlude().child(menu)),
+                )
+                .with_priority(2),
+            )
+            .into_any_element()
+    }
+
+    /// Covers the document while the Bulk actions menu is open, so a click
+    /// anywhere else closes it.
+    fn render_bulk_actions_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+        let dismiss_entity = cx.entity().downgrade();
+
+        deferred(div().absolute().size_full().child(render_menu_overlay(
+            "kv-bulk-actions-overlay",
+            move |_, cx| {
+                update_document(&dismiss_entity, cx, |this, cx| {
+                    this.bulk_actions_open = false;
+                    cx.notify();
+                });
+            },
+        )))
+        .with_priority(1)
+        .into_any_element()
+    }
+
+    fn render_bulk_delete_modal(
+        &self,
+        state: &BulkDeleteState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let strong = ChromeColors::strong(&theme);
+        let muted = theme.muted_foreground;
+        let entity = cx.entity().downgrade();
+
+        let close = {
+            let entity = entity.clone();
+            move |window: &mut Window, cx: &mut App| {
+                update_document(&entity, cx, |this, cx| this.close_bulk_delete(window, cx));
+            }
+        };
+
+        let match_count = state.matches.len() as u64;
+        let scanning = state.scan_state == BulkScanState::Scanning;
+        let typed = self.bulk_delete_typed_text(cx);
+        let can_delete = state.can_delete(&typed);
+
+        let title = if scanning {
+            dbflux_i18n::t!(
+                "document.key_value.bulk_delete.title_scanning",
+                count = group_thousands(match_count)
+            )
+        } else {
+            dbflux_i18n::t!(
+                "document.key_value.bulk_delete.title",
+                count = group_thousands(match_count)
+            )
+        };
+
+        let scope = match state.type_filter {
+            Some(key_type) => dbflux_i18n::t!(
+                "document.key_value.bulk_delete.scope_typed",
+                database = database_label(&self.database),
+                pattern = state.pattern.as_str(),
+                key_type = key_type_label(key_type)
+            ),
+            None => dbflux_i18n::t!(
+                "document.key_value.bulk_delete.scope",
+                database = database_label(&self.database),
+                pattern = state.pattern.as_str()
+            ),
+        };
+
+        let preview_rows = state
+            .matches
+            .iter()
+            .take(BULK_DELETE_PREVIEW_KEYS)
+            .enumerate()
+            .map(|(index, entry)| {
+                let ttl = state
+                    .preview_ttls
+                    .get(&entry.key)
+                    .copied()
+                    .flatten()
+                    .map(|seconds| format_ttl(Some(seconds.max(0) as u64)));
+
+                div()
+                    .id(("kv-bulk-match", index))
+                    .flex()
+                    .items_center()
+                    .gap(KeyValueMetrics::FOOTER_GAP)
+                    .h(KeyValueMetrics::BULK_ROW_HEIGHT)
+                    .px(Spacing::MD)
+                    .border_b_1()
+                    .border_color(theme.table_row_border)
+                    .font_family(AppFonts::MONO)
+                    .text_size(KeyValueMetrics::LIST_ROW_FONT)
+                    .child(type_badge_element(entry.key_type, cx))
+                    .child(div().text_color(strong).child(entry.key.clone()))
+                    .child(div().flex_1())
+                    .when_some(ttl, |row, ttl| {
+                        row.child(
+                            div()
+                                .text_size(KeyValueMetrics::LIST_META_FONT)
+                                .text_color(theme.danger)
+                                .child(ttl),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        let remaining = match_count.saturating_sub(BULK_DELETE_PREVIEW_KEYS as u64);
+
+        let matches_block = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XXS)
+            .child(Text::label(dbflux_i18n::t!(
+                "document.key_value.bulk_delete.matches_label"
+            )))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(Chamfer::new(ChamferCut::INPUT).border(theme.border))
+                    .children(preview_rows)
+                    .when(remaining > 0, |list| {
+                        list.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(KeyValueMetrics::FOOTER_GAP)
+                                .h(KeyValueMetrics::BULK_ROW_HEIGHT)
+                                .px(Spacing::MD)
+                                .font_family(AppFonts::MONO)
+                                .text_size(KeyValueMetrics::LIST_ROW_FONT)
+                                .text_color(muted)
+                                .child(div().w(KeyValueMetrics::TYPE_BADGE_WIDTH))
+                                .child(dbflux_i18n::t!(
+                                    "document.key_value.bulk_delete.more",
+                                    count = group_thousands(remaining)
+                                )),
+                        )
+                    })
+                    .when(match_count == 0 && !scanning, |list| {
+                        list.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .h(KeyValueMetrics::BULK_ROW_HEIGHT)
+                                .px(Spacing::MD)
+                                .text_color(muted)
+                                .child(dbflux_i18n::t!(
+                                    "document.key_value.bulk_delete.no_matches"
+                                )),
+                        )
+                    })
+                    .when(scanning, |list| {
+                        list.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::SM)
+                                .h(KeyValueMetrics::BULK_ROW_HEIGHT)
+                                .px(Spacing::MD)
+                                .text_color(muted)
+                                .child(
+                                    Icon::new(AppIcon::Loader)
+                                        .size(KeyValueMetrics::META_ICON)
+                                        .color(muted),
+                                )
+                                .child(dbflux_i18n::t!(
+                                    "document.key_value.bulk_delete.scanning",
+                                    count = group_thousands(match_count)
+                                ))
+                                .child(div().flex_1())
+                                .child(
+                                    Button::new(
+                                        "kv-bulk-stop-scan",
+                                        dbflux_i18n::t!("document.key_value.bulk_delete.stop"),
+                                    )
+                                    .ghost()
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.stop_bulk_delete_scan(cx);
+                                        },
+                                    )),
+                                ),
+                        )
+                    }),
+            );
+
+        let scan_note = match &state.scan_state {
+            BulkScanState::Cancelled => Some(dbflux_i18n::t!(
+                "document.key_value.bulk_delete.scan_stopped"
+            )),
+            BulkScanState::Failed(message) => Some(dbflux_i18n::t!(
+                "document.key_value.bulk_delete.scan_failed",
+                error = message.as_str()
+            )),
+            _ => None,
+        };
+
+        let confirm_block = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XXS)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .text_size(FontSizes::XS)
+                    .text_color(muted)
+                    .child(dbflux_i18n::t!(
+                        "document.key_value.bulk_delete.type_prefix"
+                    ))
+                    .child(
+                        div()
+                            .font_family(AppFonts::MONO)
+                            .text_color(strong)
+                            .child(state.pattern.clone()),
+                    )
+                    .child(dbflux_i18n::t!(
+                        "document.key_value.bulk_delete.type_suffix"
+                    )),
+            )
+            .when_some(state.confirm_input.clone(), |block, input| {
+                block.child(div().font_family(AppFonts::MONO).child(input))
+            });
+
+        let note = div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XXS)
+            .text_size(FontSizes::XS)
+            .text_color(muted)
+            .child(
+                Icon::new(AppIcon::FingerprintPattern)
+                    .size(KeyValueMetrics::META_ICON)
+                    .color(muted),
+            )
+            .child(dbflux_i18n::t!(
+                "document.key_value.bulk_delete.note",
+                count = BULK_DELETE_BATCH_SIZE
+            ));
+
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::MD)
+            .child(Text::body(scope))
+            .child(matches_block)
+            .when_some(scan_note, |body, note| {
+                body.child(Text::caption(note).warning())
+            })
+            .child(confirm_block)
+            .child(note);
+
+        let exporting = state.stage == BulkDeleteStage::Exporting;
+        let deleting = state.stage == BulkDeleteStage::Deleting;
+        let exported = state.exported_to.is_some();
+
+        let footer = div()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(Spacing::SM)
+            .child(
+                Button::new(
+                    "kv-bulk-export",
+                    if exported {
+                        dbflux_i18n::t!("document.key_value.bulk_delete.exported")
+                    } else {
+                        dbflux_i18n::t!("document.key_value.bulk_delete.export")
+                    },
+                )
+                .icon(if exporting {
+                    AppIcon::Loader
+                } else if exported {
+                    AppIcon::Check
+                } else {
+                    AppIcon::Download
+                })
+                .disabled(scanning || exporting || deleting || match_count == 0)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.export_bulk_delete_matches(cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "kv-bulk-cancel",
+                    dbflux_i18n::t!("document.key_value.bulk_delete.cancel"),
+                )
+                .disabled(deleting)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close_bulk_delete(window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "kv-bulk-confirm",
+                    dbflux_i18n::t!(
+                        "document.key_value.bulk_delete.confirm",
+                        count = group_thousands(match_count)
+                    ),
+                )
+                .danger()
+                .icon(if deleting {
+                    AppIcon::Loader
+                } else {
+                    AppIcon::Delete
+                })
+                .disabled(!can_delete)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_bulk_delete(cx);
+                })),
+            );
+
+        Modal::new(title)
+            .id("kv-bulk-delete-modal")
+            .danger()
+            .icon(AppIcon::Delete)
+            .width(KeyValueMetrics::BULK_MODAL_WIDTH)
+            .when_some(
+                dbflux_ui_base::keymap::shortcut_label(ContextId::Modal, Command::Cancel),
+                |modal, label| modal.header_extra(Kbd::new(label)),
+            )
+            .on_close(close)
+            .body(body)
+            .footer(footer)
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TYPE_FILTERS, key_total_label, type_filter_from_id, type_filter_id};
+    use dbflux_core::KeyType;
+
+    #[test]
+    fn type_filter_ids_round_trip() {
+        for key_type in TYPE_FILTERS {
+            assert_eq!(
+                type_filter_from_id(type_filter_id(Some(key_type))),
+                Some(key_type)
+            );
+        }
+
+        assert_eq!(type_filter_id(None), "all");
+        assert_eq!(type_filter_from_id("all"), None);
+    }
+
+    #[test]
+    fn bytes_keys_filter_as_strings() {
+        assert_eq!(type_filter_id(Some(KeyType::Bytes)), "string");
+    }
+
+    #[test]
+    fn key_total_labels_group_digits() {
+        assert_eq!(key_total_label(1_474), "1,474 keys");
+        assert_eq!(key_total_label(1), "1 key");
     }
 }

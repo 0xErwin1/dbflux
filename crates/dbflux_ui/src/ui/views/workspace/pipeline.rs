@@ -1,10 +1,10 @@
-use dbflux_components::primitives::{Text, surface_card};
+use dbflux_components::primitives::{SurfaceRole, Text, surface};
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
 
 use crate::ui::icons::AppIcon;
-use dbflux_components::tokens::{FontSizes, Spacing};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Spacing};
 
 use dbflux_core::{PipelineState, StateWatcher};
 
@@ -142,7 +142,7 @@ impl Render for PipelineProgress {
         let current_label = active_stage_label(&self.state);
         let is_waiting_sso = matches!(self.state, PipelineState::WaitingForLogin { .. });
 
-        surface_card(cx)
+        surface(SurfaceRole::Card, cx)
             .flex()
             .flex_col()
             .gap(Spacing::XS)
@@ -157,9 +157,9 @@ impl Render for PipelineProgress {
                         gpui::svg()
                             .path(AppIcon::Loader.path())
                             .size(px(14.0))
-                            .text_color(theme.primary),
+                            .text_color(ChromeColors::tint(theme)),
                     )
-                    .child(Text::label(format!("Connecting: {}", self.profile_name))),
+                    .child(Text::body(format!("Connecting: {}", self.profile_name))),
             )
             // Completed stages (checkmarks)
             .children(self.completed_stages.iter().map(|stage| {
@@ -197,7 +197,7 @@ impl Render for PipelineProgress {
                 el.child(
                     div()
                         .italic()
-                        .child(Text::caption("Waiting for login in browser...")),
+                        .child(Text::caption("Waiting for login in browser…")),
                 )
             })
     }
@@ -229,21 +229,19 @@ fn active_stage_label(state: &PipelineState) -> Option<String> {
     match state {
         PipelineState::Idle => None,
         PipelineState::Authenticating { provider_name } => {
-            Some(format!("Authenticating ({})...", provider_name))
+            Some(format!("Authenticating ({})…", provider_name))
         }
         PipelineState::WaitingForLogin { provider_name, .. } => {
-            Some(format!("Waiting for {} login...", provider_name))
+            Some(format!("Waiting for {} login…", provider_name))
         }
         PipelineState::ResolvingValues { total, resolved } => {
-            Some(format!("Resolving values ({}/{})...", resolved, total))
+            Some(format!("Resolving values ({}/{})…", resolved, total))
         }
-        PipelineState::OpeningAccess { method_label } => {
-            Some(format!("Opening {}...", method_label))
-        }
+        PipelineState::OpeningAccess { method_label } => Some(format!("Opening {}…", method_label)),
         PipelineState::Connecting { driver_name } => {
-            Some(format!("Connecting to {}...", driver_name))
+            Some(format!("Connecting to {}…", driver_name))
         }
-        PipelineState::FetchingSchema => Some("Fetching schema...".to_string()),
+        PipelineState::FetchingSchema => Some("Fetching schema…".to_string()),
         PipelineState::Connected | PipelineState::Failed { .. } | PipelineState::Cancelled => None,
     }
 }
@@ -266,7 +264,7 @@ mod tests {
         );
         assert_eq!(
             active_stage_label(&state).as_deref(),
-            Some("Waiting for Custom Auth login...")
+            Some("Waiting for Custom Auth login…")
         );
     }
 }

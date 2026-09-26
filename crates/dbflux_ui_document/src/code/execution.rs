@@ -28,7 +28,10 @@ fn resolve_source_context(
     fallback
 }
 
-fn evaluate_dangerous_with_effective_settings(
+/// Decides whether a dangerous query runs, asks first or is refused, from the
+/// connection's effective settings. Shared by the code editor and the
+/// key-value console so both apply the same rules.
+pub(crate) fn evaluate_dangerous_with_effective_settings(
     kind: dbflux_core::DangerousQueryKind,
     is_suppressed: bool,
     effective: &dbflux_core::EffectiveSettings,
@@ -162,32 +165,16 @@ impl CodeDocument {
         self.run_query_impl(false, window, cx);
     }
 
-    pub fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(query) = self.selected_query(window, cx) else {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.select_query"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        };
-
-        if !self.supports_connection_context() {
-            self.run_script(window, cx);
-            return;
-        }
-
-        self.run_query_text(query, false, window, cx);
-    }
-
     fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
+            self.execution.query_origin = None;
             self.run_query_text(query, in_new_tab, window, cx);
             return;
         }
 
         let query = self.editor.input_state.read(cx).value().to_string();
+        self.execution.query_origin = Some(0);
 
         // No selection means the whole buffer runs. When it holds more than one
         // statement and the driver can execute batches, confirm before running
@@ -267,6 +254,7 @@ impl CodeDocument {
 
         self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
+        cx.notify();
         self.run_query_text(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -277,7 +265,7 @@ impl CodeDocument {
         cx.notify();
     }
 
-    fn run_query_text(
+    pub(super) fn run_query_text(
         &mut self,
         query: String,
         in_new_tab: bool,
@@ -336,6 +324,7 @@ impl CodeDocument {
                             query,
                             kind,
                             in_new_tab,
+                            suppress: false,
                         },
                         window,
                         cx,
@@ -925,6 +914,7 @@ impl CodeDocument {
 
         self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
+        cx.notify();
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -1477,13 +1467,29 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let set_count = if result.has_additional_results() {
+            result.iter_result_sets().count()
+        } else {
+            1
+        };
+        let buffer = self.editor.input_state.read(cx).value().to_string();
+        let captions = super::statements::result_statement_captions(
+            self.effective_language(),
+            &buffer,
+            &query,
+            self.execution.query_origin,
+            set_count,
+        );
+
         // A multi-statement batch yields one result set per statement. Give
         // each its own tab so every statement's output is visible, rather than
         // surfacing only the primary set.
         if result.has_additional_results() {
-            self.create_result_tabs_for_batch(result, query, window, cx);
+            self.create_result_tabs_for_batch(result, query, captions, window, cx);
             return;
         }
+
+        let caption: Option<SharedString> = captions.into_iter().next().flatten().map(Into::into);
 
         let should_create_new_tab = self.result_tabs.run_in_new_tab
             || self.result_tabs.result_tabs.is_empty()
@@ -1492,13 +1498,14 @@ impl CodeDocument {
         self.result_tabs.run_in_new_tab = false;
 
         if should_create_new_tab {
-            self.create_result_tab(result, query, window, cx);
+            self.create_result_tab(result, query, caption, window, cx);
         } else if let Some(index) = self.result_tabs.active_result_index
             && let Some(tab) = self.result_tabs.result_tabs.get_mut(index)
         {
             let profile_id = self.connection_id;
             tab.grid.update(cx, |g, cx| {
-                g.set_query_result(result, query.clone(), profile_id, cx)
+                g.set_query_result(result, query.clone(), profile_id, cx);
+                g.set_result_caption(caption, cx);
             });
         }
     }
@@ -1512,6 +1519,7 @@ impl CodeDocument {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        captions: Vec<Option<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1519,10 +1527,12 @@ impl CodeDocument {
 
         let first_new_index = self.result_tabs.result_tabs.len();
 
-        for set in result.iter_result_sets() {
+        for (index, set) in result.iter_result_sets().enumerate() {
             let mut single = set.clone();
             single.additional_results.clear();
-            self.create_result_tab(Arc::new(single), query.clone(), window, cx);
+
+            let caption = captions.get(index).cloned().flatten().map(Into::into);
+            self.create_result_tab(Arc::new(single), query.clone(), caption, window, cx);
         }
 
         if first_new_index < self.result_tabs.result_tabs.len() {
@@ -1534,6 +1544,7 @@ impl CodeDocument {
         &mut self,
         result: Arc<QueryResult>,
         query: String,
+        caption: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1554,6 +1565,11 @@ impl CodeDocument {
                 window,
                 cx,
             )
+        });
+
+        grid.update(cx, |grid, cx| {
+            grid.set_side_panels_hosted(true);
+            grid.set_result_caption(caption, cx);
         });
 
         if let Some(panel) = self.source.source_time_range_panel.clone() {
@@ -1585,10 +1601,15 @@ impl CodeDocument {
                         generation_type: *generation_type,
                     });
                 }
-                DataGridEvent::OpenInspector { title, content } => {
+                DataGridEvent::OpenInspector {
+                    title,
+                    content,
+                    content_has_header,
+                } => {
                     cx.emit(DocumentEvent::OpenInspector {
                         title: title.clone(),
                         content: content.clone(),
+                        content_has_header: *content_has_header,
                     });
                 }
                 DataGridEvent::CloseInspector => {
@@ -2656,7 +2677,6 @@ mod tests {
     #[test]
     fn execution_toast_keys_resolve_in_both_locales() {
         let keys = [
-            "document.code.execution.toast.select_query",
             "document.code.execution.toast.enter_query",
             "document.code.execution.toast.no_active_connection",
             "document.code.execution.toast.connection_not_found",
@@ -2695,7 +2715,7 @@ mod tests {
             database = "logs"
         );
 
-        assert_eq!(en, "Connecting to database 'logs', please wait...");
+        assert_eq!(en, "Connecting to database 'logs', please wait…");
     }
 
     #[test]
@@ -2742,6 +2762,7 @@ mod rail_tests {
     fn init_test_runtime(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
         cx.update(gpui_component::init);
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host });
@@ -2898,7 +2919,13 @@ mod confirm_keyboard_tests {
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::modals::test_host::{click_backdrop, host_modal};
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-    use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Entity, Focusable as _, FrameObserver,
+        Modifiers, Pixels, TestAppContext, VisualTestContext,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     /// Which confirmation a test opens.
     #[derive(Clone, Copy)]
@@ -2919,6 +2946,7 @@ mod confirm_keyboard_tests {
         &mut VisualTestContext,
     ) {
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         let toasts = cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host: host.clone() });
@@ -2955,6 +2983,7 @@ mod confirm_keyboard_tests {
                             query,
                             kind: DangerousQueryKind::DeleteNoWhere,
                             in_new_tab: false,
+                            suppress: false,
                         },
                         window,
                         cx,
@@ -3046,5 +3075,142 @@ mod confirm_keyboard_tests {
 
         assert!(!is_open(window, &document));
         assert!(!ran_the_query(window, &toasts));
+    }
+
+    /// Keeps the latest frame drawn in the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    /// What a dismissal left behind: how often the document asked to be
+    /// redrawn, and the last frame the window drew.
+    struct Redraws {
+        notifications: Rc<Cell<usize>>,
+        frame: Arc<FrameCapture>,
+    }
+
+    /// Starts watching `document` for redraw requests and the window for drawn
+    /// frames, once the open confirmation is on screen.
+    fn watch_redraws(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> Redraws {
+        let notifications = Rc::new(Cell::new(0));
+        let frame = Arc::new(FrameCapture::default());
+
+        window.update(|window, cx| {
+            window.observe_frames(&frame);
+            window.refresh();
+
+            let counter = notifications.clone();
+            cx.observe(document, move |_, _| counter.set(counter.get() + 1))
+                .detach();
+        });
+        window.run_until_parked();
+        notifications.set(0);
+
+        Redraws {
+            notifications,
+            frame,
+        }
+    }
+
+    fn click_element(window: &mut VisualTestContext, redraws: &Redraws, id: &str) {
+        let bounds = redraws
+            .frame
+            .bounds_of(id)
+            .unwrap_or_else(|| panic!("`{id}` is drawn"));
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+    }
+
+    /// The document asked for a redraw and the next frame no longer draws the
+    /// confirmation, so the dialog does not linger on screen after it closed.
+    fn assert_repainted_without(redraws: &Redraws, confirm_button: &str) {
+        assert!(
+            redraws.notifications.get() > 0,
+            "closing the confirmation must notify the document that draws it"
+        );
+        assert!(
+            redraws.frame.bounds_of(confirm_button).is_none(),
+            "the frame drawn after closing must not contain the confirmation"
+        );
+    }
+
+    #[gpui::test]
+    fn escape_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, _toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+        assert!(redraws.frame.bounds_of("dangerous-confirm-btn").is_some());
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn cancel_button_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "dangerous-cancel-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn run_anyway_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "dangerous-confirm-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn escape_redraws_without_the_script_confirmation(cx: &mut TestAppContext) {
+        let (document, _toasts, window) = open_confirmation(cx, Confirmation::Script);
+        let redraws = watch_redraws(window, &document);
+        assert!(
+            redraws
+                .frame
+                .bounds_of("script-confirm-cancel-btn")
+                .is_some()
+        );
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert_repainted_without(&redraws, "script-confirm-cancel-btn");
+    }
+
+    #[gpui::test]
+    fn cancel_button_redraws_without_the_script_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::Script);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "script-confirm-cancel-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "script-confirm-cancel-btn");
     }
 }

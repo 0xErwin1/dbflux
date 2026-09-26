@@ -9,10 +9,11 @@
 use super::BucketsTableDocument;
 use dbflux_components::controls::{Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_core::keymap_types::ContextId;
 use dbflux_core::{BucketCreateOptions, BucketCreateOutcome, BucketEncryption, DbError};
-use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::prelude::*;
@@ -534,14 +535,16 @@ impl BucketsTableDocument {
                 ),
         );
 
-        ModalFrame::new("buckets-new-bucket-modal", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.buckets_table.new_bucket.title"))
+        Modal::new(dbflux_i18n::t!("document.buckets_table.new_bucket.title"))
+            .id("buckets-new-bucket-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .icon(AppIcon::Plus)
             .width(px(560.0))
             .max_height(px(620.0))
-            .center_vertically()
             .child(body.into_any_element())
-            .render(cx)
+            .into_any_element()
     }
 }
 

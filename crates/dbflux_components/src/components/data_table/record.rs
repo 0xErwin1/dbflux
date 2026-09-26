@@ -14,15 +14,16 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Entity, InteractiveElement, IntoElement, ListSizingBehavior,
-    MouseButton, MouseDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, uniform_list,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, uniform_list,
 };
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
 use crate::controls::{GpuiInput as Input, InputState};
-use crate::primitives::Text;
-use crate::tokens::{FontSizes, RowColors, Spacing};
+use crate::primitives::{Chamfer, ChamferRing, Text};
+use crate::tokens::{ChromeColors, FontSizes, GridMetrics, RowColors, Spacing, SyntaxColors};
+use crate::typography::AppFonts;
 
 use super::events::DataTableEvent;
 use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
@@ -73,7 +74,7 @@ pub(super) fn render_record(
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted(dbflux_i18n::t!(
+            .child(Text::caption(dbflux_i18n::t!(
                 "components.data_table.record.empty"
             )))
             .into_any_element();
@@ -170,7 +171,7 @@ fn render_record_header(visual_ix: usize, row_count: usize, cx: &App) -> AnyElem
                 .px(CELL_PADDING_X)
                 .border_r_1()
                 .border_color(theme.border)
-                .child(Text::label_sm(dbflux_i18n::t!(
+                .child(Text::body_sm(dbflux_i18n::t!(
                     "components.data_table.record.name_header"
                 ))),
         )
@@ -187,7 +188,7 @@ fn render_record_header(visual_ix: usize, row_count: usize, cx: &App) -> AnyElem
                 // The scrollbar floats over the right edge; keep the position
                 // readout clear of it.
                 .pr(SCROLLBAR_WIDTH)
-                .child(Text::label_sm(dbflux_i18n::t!(
+                .child(Text::body_sm(dbflux_i18n::t!(
                     "components.data_table.record.value_header"
                 )))
                 .child(
@@ -229,6 +230,7 @@ fn render_fields(
     };
     let is_pending_delete = record.state.is_pending_delete();
     let null_value = CellValue::null();
+    let null_color = SyntaxColors::for_current(cx).number;
 
     visible_range
         .map(|col_ix| {
@@ -298,7 +300,7 @@ fn render_fields(
                     div()
                         .flex_shrink_0()
                         .whitespace_nowrap()
-                        .child(Text::label_sm(name)),
+                        .child(Text::body_sm(name)),
                 )
                 .when(!type_label.is_empty(), |d| {
                     d.child(
@@ -335,16 +337,31 @@ fn render_fields(
                             .border_l_2()
                             .border_color(theme.warning)
                     })
-                    .when(is_active, |d| d.border_1().border_color(theme.ring))
+                    .when(is_active, |d| {
+                        d.relative().child(
+                            Chamfer::new(Pixels::ZERO)
+                                .ring(ChamferRing::focus(ChromeColors::tint(theme))),
+                        )
+                    })
                     .when(is_null || is_auto_generated, |d| d.italic())
                     .when(is_pending_delete, |d| d.line_through())
-                    .child(Text::body(display_text).font_size(FontSizes::SM).color(
-                        if is_pending_delete || is_null || is_auto_generated {
-                            theme.muted_foreground
-                        } else {
-                            theme.foreground
-                        },
-                    ))
+                    // Values read like the grid's cells: the data face, NULL
+                    // in the null colour.
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(AppFonts::MONO)
+                            .text_size(GridMetrics::FONT)
+                            .text_color(if is_pending_delete || is_auto_generated {
+                                theme.muted_foreground
+                            } else if is_null {
+                                null_color
+                            } else {
+                                theme.foreground
+                            })
+                            .child(display_text),
+                    )
                     .into_any_element()
             };
 

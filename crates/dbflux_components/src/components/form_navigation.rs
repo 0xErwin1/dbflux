@@ -1,7 +1,5 @@
 use crate::controls::{InputEvent, InputState};
-use crate::tokens::Radii;
 use dbflux_core::keymap_types::Command;
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -138,13 +136,4 @@ pub fn subscribe_form_input<T: FormNavigation>(
             _ => {}
         },
     )
-}
-
-pub fn focus_ring(focused: bool, ring_color: Hsla) -> Div {
-    div()
-        .rounded(Radii::SM)
-        .border_2()
-        .when(focused, |d| d.border_color(ring_color))
-        .when(!focused, |d| d.border_color(gpui::transparent_black()))
-        .p(px(2.0))
 }

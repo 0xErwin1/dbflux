@@ -1,5 +1,4 @@
 ---
-import BrandMark from './BrandMark.astro';
 import LanguagePicker from './LanguagePicker.astro';
 import ThemePicker from './ThemePicker.astro';
 import { REPO } from '../data/nav';
@@ -10,17 +9,26 @@ import type { Locale } from '../i18n';
 interface Props {
   locale?: Locale;
   showLanguagePicker?: boolean;
+  /** The oversized DBFLUX wordmark that closes the landing page. */
+  wordmark?: boolean;
 }
 
-const { locale = localeFromPathname(Astro.url.pathname), showLanguagePicker = true } = Astro.props;
+const {
+  locale = localeFromPathname(Astro.url.pathname),
+  showLanguagePicker = true,
+  wordmark = false,
+} = Astro.props;
+
+const home = siteUrl('', locale);
 
 const COLUMNS = [
   {
     title: t(locale, 'footer.product'),
     links: [
-      { href: `${siteUrl('', locale)}#features`, label: t(locale, 'footer.features') },
-      { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'footer.drivers') },
+      { href: docsUrl('drivers', '', locale), label: t(locale, 'footer.drivers') },
+      { href: siteUrl('compare/', locale), label: t(locale, 'footer.compare') },
       { href: `${REPO}/releases`, label: t(locale, 'footer.releases') },
+      { href: `${REPO}/blob/main/CHANGELOG.md`, label: t(locale, 'footer.changelog') },
     ],
   },
   {
@@ -29,6 +37,10 @@ const COLUMNS = [
       { href: docsUrl('usage', '', locale), label: t(locale, 'footer.usage') },
       { href: docsUrl('connections', '', locale), label: t(locale, 'footer.connecting') },
       { href: docsUrl('mcp_ai_integration', '', locale), label: t(locale, 'footer.mcp') },
+      {
+        href: docsUrl('driver_authoring', '', locale),
+        label: t(locale, 'footer.driver_authoring'),
+      },
     ],
   },
   {
@@ -36,41 +48,58 @@ const COLUMNS = [
     links: [
       { href: siteUrl('about/', locale), label: t(locale, 'footer.about') },
       { href: docsUrl('contributing', '', locale), label: t(locale, 'footer.contributing') },
-      { href: REPO, label: t(locale, 'footer.source') },
       { href: docsUrl('trademark', '', locale), label: t(locale, 'footer.trademark') },
       { href: docsUrl('privacy', '', locale), label: t(locale, 'footer.privacy') },
     ],
   },
 ] as const;
+
+/** The short row that replaces the columns on a phone. */
+const COMPACT = [
+  { href: docsUrl('', '', locale), label: t(locale, 'nav.docs') },
+  { href: siteUrl('compare/', locale), label: t(locale, 'footer.compare') },
+  { href: siteUrl('about/', locale), label: t(locale, 'footer.about') },
+  { href: REPO, label: t(locale, 'footer.source') },
+] as const;
 ---
 
 <footer class="foot">
-  <div class="foot__inner shell">
+  {
+    wordmark && (
+      <div class="foot__wordmark" aria-hidden="true">
+        <span class="x">DBFLUX</span>
+      </div>
+    )
+  }
+
+  <div class="foot__inner">
     <div class="foot__top">
       <div class="foot__brand">
-        <span class="foot__mark">
-          <BrandMark size={26} />
-          <span>DBFlux</span>
-        </span>
         <p>{t(locale, 'footer.tagline')}</p>
+        <a class="foot__download x c10" href={`${home}#install`}>{t(locale, 'nav.download')}</a>
       </div>
 
-      <div class="foot__cols">
-        {
-          COLUMNS.map((column) => (
-            <div class="foot__col">
-              <p class="foot__title">{column.title}</p>
-              {column.links.map((link) => (
-                <a href={link.href}>{link.label}</a>
-              ))}
-            </div>
-          ))
-        }
-      </div>
+      <span class="foot__spacer"></span>
+
+      {
+        COLUMNS.map((column) => (
+          <div class="foot__col">
+            <p class="foot__title x">{column.title}</p>
+            {column.links.map((link) => (
+              <a href={link.href}>{link.label}</a>
+            ))}
+          </div>
+        ))
+      }
     </div>
 
+    <nav class="foot__compact" aria-label={t(locale, 'footer.project')}>
+      {COMPACT.map((link) => <a href={link.href}>{link.label}</a>)}
+    </nav>
+
     <div class="foot__bottom">
-      <p class="foot__license">{t(locale, 'footer.license')}</p>
+      <p class="foot__license mono">{t(locale, 'footer.license')}</p>
+      <span class="foot__spacer"></span>
       <div
         class="foot__utilities"
         role="group"
@@ -87,158 +116,195 @@ const COLUMNS = [
 
 <style>
   .foot {
+    position: relative;
+    overflow: hidden;
     border-top: var(--bw) solid var(--border);
-    margin-top: var(--s-9);
+  }
+
+  .foot__wordmark {
+    position: relative;
+    height: clamp(120px, 23vw, 330px);
+    overflow: hidden;
+    max-width: var(--content-max);
+    margin-inline: auto;
+  }
+
+  .foot__wordmark span {
+    position: absolute;
+    left: 40px;
+    top: clamp(8px, 1.4vw, 20px);
+    font-weight: 900;
+    font-size: clamp(110px, 20.8vw, 300px);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--wordmark);
+    white-space: nowrap;
+    user-select: none;
   }
 
   .foot__inner {
     display: flex;
     flex-direction: column;
-    gap: var(--s-7);
-    padding-block: var(--s-7);
+    max-width: var(--content-max);
+    margin-inline: auto;
   }
 
-  .foot__top,
-  .foot__bottom {
+  .foot__top {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--s-8);
-  }
-
-  .foot__bottom {
-    align-items: center;
-    border-top: var(--bw) solid var(--border);
-    padding-top: var(--s-5);
+    gap: 40px;
+    padding: 40px var(--gutter) 0;
   }
 
   .foot__brand {
-    max-width: 320px;
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
-  }
-
-  .foot__mark {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    font-family: var(--font-mono);
-    font-size: var(--fs-body);
-    font-weight: 700;
-    color: var(--text-strong);
-  }
-
-  .foot__mark :global(svg) {
-    color: var(--accent);
+    gap: 14px;
+    width: 380px;
   }
 
   .foot__brand p {
     margin: 0;
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-    line-height: 1.65;
-  }
-
-  .foot__license {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    font-size: 15px;
+    line-height: 1.6;
     color: var(--text-muted);
   }
 
-  .foot__cols {
-    display: flex;
-    flex: 0 1 auto;
-    align-content: flex-start;
-    gap: var(--s-8);
-  }
-
-  .foot__utilities {
-    display: flex;
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: var(--s-2);
-  }
-
-  .foot__utilities :global(.lang) {
+  .foot__download {
     display: flex;
     align-items: center;
-    border-right: var(--bw) solid var(--border);
-    padding-right: var(--s-2);
+    align-self: flex-start;
+    height: 48px;
+    padding: 0 22px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
-  .foot__utilities :global(.lang__button) {
-    min-height: var(--tap-min);
-    padding-inline: var(--s-3);
+  .foot__download:hover {
+    color: var(--accent-on);
+    filter: brightness(1.08);
+  }
+
+  .foot__spacer {
+    flex-grow: 1;
   }
 
   .foot__col {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
+    gap: 12px;
+  }
+
+  .foot__col + .foot__col {
+    margin-left: 40px;
   }
 
   .foot__title {
     margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    letter-spacing: 0.16em;
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--text-muted);
   }
 
-  .foot__col a {
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+  .foot__col a,
+  .foot__compact a {
     color: var(--text);
     transition: color var(--t-instant) linear;
   }
 
-  .foot__col a:hover {
-    color: var(--accent);
-    text-decoration: none;
+  .foot__col a:hover,
+  .foot__compact a:hover {
+    color: var(--text-strong);
   }
 
-  @media (max-width: 900px) {
+  .foot__compact {
+    display: none;
+  }
+
+  .foot__bottom {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 40px var(--gutter) 0;
+    padding: 22px 0 32px;
+    border-top: var(--bw) solid var(--border);
+    font-size: 13px;
+  }
+
+  .foot__license {
+    margin: 0;
+    color: var(--text-muted);
+  }
+
+  .foot__utilities {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  @media (max-width: 1100px) {
     .foot__top {
-      flex-direction: column;
-    }
-
-    .foot__cols {
       flex-wrap: wrap;
-      gap: var(--s-6) var(--s-7);
+      row-gap: 32px;
     }
 
-    .foot__bottom {
-      flex-wrap: wrap;
+    .foot__brand {
+      width: 100%;
     }
 
-    .foot__utilities {
-      justify-content: flex-start;
+    .foot__top > .foot__spacer {
+      display: none;
+    }
+
+    .foot__col + .foot__col {
+      margin-left: 56px;
     }
   }
 
-  @media (max-width: 420px) {
+  @media (max-width: 640px) {
+    .foot__wordmark,
+    .foot__top {
+      display: none;
+    }
+
+    .foot__inner {
+      gap: 16px;
+      padding: 28px var(--gutter) 32px;
+      font-size: 14px;
+    }
+
+    .foot__compact {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 22px;
+    }
+
     .foot__bottom {
-      align-items: flex-start;
       flex-direction: column;
-      gap: var(--s-4);
+      align-items: flex-start;
+      gap: 16px;
+      margin: 0;
+      padding: 0;
+      border-top: 0;
+    }
+
+    .foot__bottom > .foot__spacer {
+      display: none;
+    }
+
+    .foot__license {
+      order: 2;
+      font-size: 12px;
     }
 
     .foot__utilities {
-      display: grid;
-      grid-template-columns: 1fr;
-      justify-items: start;
-    }
-
-    .foot__utilities :global(.lang) {
-      border-right: 0;
-      border-bottom: var(--bw) solid var(--border);
-      padding-right: 0;
-      padding-bottom: var(--s-2);
+      order: 1;
+      gap: 8px;
     }
   }
 </style>

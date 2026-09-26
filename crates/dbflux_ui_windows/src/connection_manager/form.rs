@@ -391,6 +391,7 @@ impl ConnectionManagerWindow {
         };
 
         profile.save_password = self.form.form_save_password;
+        profile.environment = self.form.environment;
         profile.proxy_profile_id = self.access.selected_proxy_id;
         profile.auth_profile_id = self.auth_profile.selected_auth_profile_id;
         profile.value_refs = self.collect_value_refs(cx);
@@ -1068,6 +1069,8 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection_manager::{EditState, FormFocus};
+    use dbflux_core::LogErr;
     use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
         ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, HookExecutionMode,
@@ -1978,7 +1981,9 @@ mod tests {
             Some(PRIMARY_PASSWORD_SAVE_ERROR.to_string())
         );
 
-        window.update(&mut cx, |_, window, _| window.remove_window());
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
     }
 
     #[::core::prelude::v1::test]
@@ -2014,7 +2019,105 @@ mod tests {
             "one safe failure is reported"
         );
 
-        window.update(&mut cx, |_, window, _| window.remove_window());
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
+    }
+
+    /// The Save button shows the keymap's Save shortcut, and pressing it
+    /// saves from the form, whether a field is being edited or not.
+    #[::core::prelude::v1::test]
+    fn the_save_shortcut_saves_the_connection() {
+        let mut cx = TestAppContext::single();
+        init_form_test_runtime(&mut cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+        let window = open_new_profile_window(app_state.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.edit_state = EditState::Navigating;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("the form focuses");
+        cx.run_until_parked();
+
+        #[cfg(target_os = "macos")]
+        cx.simulate_keystrokes(window.into(), "cmd-s");
+        #[cfg(not(target_os = "macos"))]
+        cx.simulate_keystrokes(window.into(), "ctrl-s");
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "the shortcut saves and closes the form window"
+        );
+        assert!(
+            cx.update(|cx| !app_state.read(cx).profiles().is_empty()),
+            "the profile is persisted"
+        );
+    }
+
+    /// Left and Right on "Enter as" switch between Fields and Connection URI
+    /// instead of leaving the row.
+    #[::core::prelude::v1::test]
+    fn arrows_switch_enter_as_between_fields_and_uri() {
+        let mut cx = TestAppContext::single();
+        init_form_test_runtime(&mut cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager.edit_state = EditState::Navigating;
+                manager.form_focus = FormFocus::UseUri;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("the form focuses");
+        cx.run_until_parked();
+
+        let uses_uri = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| {
+                    manager
+                        .form
+                        .checkbox_states
+                        .get("use_uri")
+                        .copied()
+                        .unwrap_or(false)
+                })
+                .expect("window is open")
+        };
+
+        cx.simulate_keystrokes(window.into(), "right");
+        assert!(uses_uri(&mut cx), "Right picks Connection URI");
+        assert_eq!(
+            window
+                .update(&mut cx, |manager, _, _| manager.form_focus)
+                .expect("window is open"),
+            FormFocus::UseUri,
+            "the cursor stays on the field"
+        );
+
+        cx.simulate_keystrokes(window.into(), "left");
+        assert!(!uses_uri(&mut cx), "Left picks Fields again");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
     }
 
     #[::core::prelude::v1::test]
@@ -2064,7 +2167,9 @@ mod tests {
         );
 
         if window.root(&mut cx).is_ok() {
-            window.update(&mut cx, |_, window, _| window.remove_window());
+            window
+                .update(&mut cx, |_, window, _| window.remove_window())
+                .expect("close the test window");
         }
     }
 

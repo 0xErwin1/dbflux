@@ -1,0 +1,146 @@
+---
+import Glyph from '../Glyph.astro';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing;
+
+/**
+ * The drivers compiled into a default build: the `default` feature list in
+ * `crates/dbflux/Cargo.toml`. MariaDB ships inside the MySQL driver. Engines
+ * without a logo of their own in the app use its generic glyph for them.
+ */
+const DRIVERS = [
+  { name: 'PostgreSQL', icon: 'brand/postgresql' },
+  { name: 'MySQL', icon: 'brand/mysql' },
+  { name: 'MariaDB', icon: 'brand/mariadb' },
+  { name: 'SQL Server', icon: 'database' },
+  { name: 'SQLite', icon: 'brand/sqlite' },
+  { name: 'ClickHouse', icon: 'brand/clickhouse' },
+  { name: 'TursoDB', icon: 'brand/turso' },
+  { name: 'MongoDB', icon: 'brand/mongodb' },
+  { name: 'Redis', icon: 'brand/redis' },
+  { name: 'DynamoDB', icon: 'braces' },
+  { name: 'CloudWatch', icon: 'logs' },
+  { name: 'InfluxDB', icon: 'brand/influxdb' },
+  { name: 'Redshift', icon: 'database' },
+  { name: 'S3', icon: 'boxes' },
+  { name: strings.and_more, icon: 'plug' },
+] as const;
+
+const BOLT = 'M7.5 0 1 8h4l-1 6 7-8.5H7L7.5 0Z';
+---
+
+<section id="drivers" class="marquee-band" aria-label={strings.drivers_label}>
+  <ul class="visually-hidden">
+    {DRIVERS.map((driver) => <li>{driver.name}</li>)}
+  </ul>
+  <div class="marquee-band__strip" aria-hidden="true">
+    <div class="marquee-band__track x">
+      {
+        [0, 1].map(() =>
+          DRIVERS.map((driver) => (
+            <span class="marquee-band__item">
+              <Glyph name={driver.icon} size={40} class="marquee-band__icon" />
+              {driver.name}
+              <svg class="marquee-band__bolt" width="20" height="24" viewBox="0 0 12 14">
+                <path d={BOLT} fill="currentColor" />
+              </svg>
+            </span>
+          )),
+        )
+      }
+    </div>
+  </div>
+</section>
+
+<style>
+  .marquee-band {
+    position: relative;
+    height: 150px;
+    margin-inline: calc(var(--gutter) * -1);
+    overflow: hidden;
+  }
+
+  .marquee-band__strip {
+    position: absolute;
+    top: 34px;
+    left: -40px;
+    right: -40px;
+    display: flex;
+    align-items: center;
+    height: 76px;
+    overflow: hidden;
+    background: var(--accent-fill);
+    transform: rotate(-2deg);
+  }
+
+  .marquee-band__track {
+    display: flex;
+    gap: 40px;
+    padding-left: 40px;
+    white-space: nowrap;
+    font-weight: 900;
+    font-size: 40px;
+    text-transform: uppercase;
+    color: var(--accent-on);
+    animation: marquee 32s linear infinite;
+  }
+
+  .marquee-band__item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .marquee-band__bolt {
+    margin-left: 24px;
+    color: var(--bolt);
+  }
+
+  /* The band runs edge to edge even when the content column stops at 1440px. */
+  @media (min-width: 1441px) {
+    .marquee-band {
+      margin-inline: calc((100vw - var(--content-max)) / -2 - var(--gutter));
+    }
+  }
+
+  @media (max-width: 640px) {
+    .marquee-band {
+      height: 96px;
+      margin-top: 28px;
+    }
+
+    .marquee-band__strip {
+      top: 22px;
+      left: -20px;
+      right: -20px;
+      height: 52px;
+    }
+
+    .marquee-band__track {
+      gap: 28px;
+      padding-left: 20px;
+      font-size: 24px;
+    }
+
+    .marquee-band__item {
+      gap: 10px;
+      padding-right: 16px;
+    }
+
+    .marquee-band__item :global(.marquee-band__icon) {
+      width: 24px;
+      height: 24px;
+    }
+
+    .marquee-band__bolt {
+      display: none;
+    }
+  }
+</style>

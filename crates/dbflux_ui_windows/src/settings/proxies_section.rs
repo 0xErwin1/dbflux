@@ -6,20 +6,16 @@ use super::proxies::ProxyFormNav;
 use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use crate::connection_manager::ExportTarget;
 use crate::labels::proxies_delete_body;
-use dbflux_components::controls::Button;
-use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputEvent, InputState};
+use crate::tokens::{FormMetrics, SettingsMetrics};
+use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::focus_frame;
-use dbflux_components::primitives::{Icon as FluxIcon, Label};
-use dbflux_components::tokens::{Heights, Radii};
-use dbflux_components::typography::{Body, MonoCaption, MonoMeta, PanelTitle};
+use dbflux_components::primitives::{Badge, BadgeTone, SegmentedControl, SegmentedItem};
 use dbflux_core::{ProxyKind, ProxyProfile};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::checkbox::Checkbox;
+use gpui_component::ActiveTheme;
 use gpui_component::dialog::{Dialog, DialogButtonProps};
-use gpui_component::{ActiveTheme, Icon, Sizable};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -233,326 +229,233 @@ impl ProxiesSection {
         }
     }
 
-    fn render_password_toggle(
-        show: bool,
-        toggle_id: &'static str,
-        theme: &gpui_component::theme::Theme,
-    ) -> Stateful<Div> {
-        let icon_name = if show { AppIcon::EyeOff } else { AppIcon::Eye };
-
-        div()
-            .id(toggle_id)
-            .w(px(32.0))
-            .h(px(32.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover({
-                let secondary = theme.secondary;
-                move |div| div.bg(secondary)
-            })
-            .child(
-                FluxIcon::new(icon_name)
-                    .size(Heights::ICON_SM)
-                    .color(theme.muted_foreground),
-            )
+    fn is_cursor_on(&self, field: ProxyFormField) -> bool {
+        self.content_focused
+            && self.proxy_focus == ProxyFocus::Form
+            && self.proxy_form_field == field
+            && !self.proxy_editing_field
     }
 
-    fn render_proxy_field(
+    /// Text field of the detail form, framed for the keyboard cursor.
+    #[allow(clippy::too_many_arguments)]
+    fn render_proxy_input(
         &self,
-        label: &str,
         input: &Entity<InputState>,
-        is_focused: bool,
-        primary: Hsla,
         field: ProxyFormField,
+        label: String,
+        width: Option<Pixels>,
+        mono: bool,
+        suffix: Option<AnyElement>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let is_secret = field == ProxyFormField::Password;
+    ) -> Div {
+        let element_id = format!("proxy-{}", proxy_field_id(field));
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Label::new(label.to_string()))
-            .child(
-                focus_frame(
-                    is_focused,
-                    Some(primary),
-                    layout::compact_input_shell(
-                        Input::new(input).small().when(is_secret, |input| {
-                            input.content_type(InputContentType::Password)
-                        }),
-                    ),
-                    cx,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, window, cx| {
-                        this.switching_input = true;
-                        this.proxy_focus = ProxyFocus::Form;
-                        this.proxy_form_field = field;
-                        this.proxy_focus_current_field(window, cx);
-                        cx.notify();
-                    }),
-                ),
-            )
+        let mut control = Input::new(input)
+            .id(SharedString::from(element_id))
+            .aria_label(label)
+            .secret(field == ProxyFormField::Password);
+
+        if let Some(suffix) = suffix {
+            control = control.suffix(suffix);
+        }
+
+        layout::field_frame(self.is_cursor_on(field), width, mono, control, cx).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.switching_input = true;
+                this.proxy_focus = ProxyFocus::Form;
+                this.proxy_form_field = field;
+                this.proxy_focus_current_field(window, cx);
+                cx.notify();
+            }),
+        )
     }
 
-    fn render_proxy_kind_selector(
-        &self,
-        is_form_focused: bool,
-        current_field: ProxyFormField,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let primary = theme.primary;
-        let border = theme.border;
-        let current_kind = self.proxy_kind;
-
+    fn render_proxy_kind_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
         let kinds = [
-            (
-                ProxyFormField::KindHttp,
-                ProxyKind::Http,
-                dbflux_i18n::t!("settings.proxies.kind.http"),
-            ),
-            (
-                ProxyFormField::KindHttps,
-                ProxyKind::Https,
-                dbflux_i18n::t!("settings.proxies.kind.https"),
-            ),
-            (
-                ProxyFormField::KindSocks5,
-                ProxyKind::Socks5,
-                dbflux_i18n::t!("settings.proxies.kind.socks5"),
-            ),
+            (ProxyFormField::KindHttp, ProxyKind::Http, "http"),
+            (ProxyFormField::KindHttps, ProxyKind::Https, "https"),
+            (ProxyFormField::KindSocks5, ProxyKind::Socks5, "socks5"),
         ];
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Label::new(dbflux_i18n::t!(
-                "settings.proxies.field.protocol"
-            )))
-            .child(div().flex().gap_4().children(kinds.into_iter().map(
-                |(form_field, kind, label)| {
-                    let is_focused = is_form_focused && current_field == form_field;
-                    let item_id = format!("proxy-kind-{}", label);
+        let items = vec![
+            SegmentedItem::new("http", dbflux_i18n::t!("settings.proxies.kind.http")),
+            SegmentedItem::new("https", dbflux_i18n::t!("settings.proxies.kind.https")),
+            SegmentedItem::new("socks5", dbflux_i18n::t!("settings.proxies.kind.socks5")),
+        ];
 
-                    div()
-                        .id(SharedString::from(item_id))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(if is_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.proxy_kind = kind;
-                            this.input_proxy_port.update(cx, |state, cx| {
-                                state.set_value(kind.default_port().to_string(), window, cx);
-                            });
-                            this.validate_proxy_form_field();
-                            cx.notify();
-                        }))
-                        .child(Self::render_radio_button(
-                            current_kind == kind,
-                            primary,
-                            border,
-                        ))
-                        .child(div().text_sm().child(label))
-                },
-            )))
+        let active = kinds
+            .iter()
+            .find(|(_, kind, _)| *kind == self.proxy_kind)
+            .map(|(_, _, id)| *id)
+            .unwrap_or("http");
+
+        let control = SegmentedControl::new(items, active, move |selected, window, cx| {
+            let Some((field, kind, _)) = kinds
+                .iter()
+                .find(|(_, _, id)| *id == selected.as_ref())
+                .copied()
+            else {
+                return;
+            };
+
+            entity.update(cx, |this, cx| {
+                this.proxy_focus = ProxyFocus::Form;
+                this.proxy_form_field = field;
+                this.proxy_kind = kind;
+                this.input_proxy_port.update(cx, |state, cx| {
+                    state.set_value(kind.default_port().to_string(), window, cx);
+                });
+                this.validate_proxy_form_field();
+                cx.notify();
+            });
+        });
+
+        let cursor_item = kinds
+            .iter()
+            .find(|(field, _, _)| self.is_cursor_on(*field))
+            .map(|(_, _, id)| *id);
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.proxies.field.protocol"),
+            div().flex().child(control),
+            None,
+        )
     }
 
-    fn render_proxy_auth_selector(
-        &self,
-        is_form_focused: bool,
-        current_field: ProxyFormField,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let primary = theme.primary;
-        let border = theme.border;
-        let current_auth = self.proxy_auth_selection;
+    fn render_proxy_auth_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let active = match self.proxy_auth_selection {
+            ProxyAuthSelection::None => "none",
+            ProxyAuthSelection::Basic => "basic",
+        };
 
-        let is_none_focused = is_form_focused && current_field == ProxyFormField::AuthNone;
-        let is_basic_focused = is_form_focused && current_field == ProxyFormField::AuthBasic;
+        let control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new("none", dbflux_i18n::t!("settings.proxies.auth.none")),
+                SegmentedItem::new("basic", dbflux_i18n::t!("settings.proxies.auth.basic"))
+                    .icon(AppIcon::Lock),
+            ],
+            active,
+            move |selected, _window, cx| {
+                let (selection, field) = if selected.as_ref() == "basic" {
+                    (ProxyAuthSelection::Basic, ProxyFormField::AuthBasic)
+                } else {
+                    (ProxyAuthSelection::None, ProxyFormField::AuthNone)
+                };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Label::new(dbflux_i18n::t!(
-                "settings.proxies.field.authentication"
-            )))
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .child(
-                        div()
-                            .id("proxy-auth-none")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_none_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.proxy_auth_selection = ProxyAuthSelection::None;
-                                this.validate_proxy_form_field();
-                                cx.notify();
-                            }))
-                            .child(Self::render_radio_button(
-                                current_auth == ProxyAuthSelection::None,
-                                primary,
-                                border,
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(dbflux_i18n::t!("settings.proxies.auth.none")),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("proxy-auth-basic")
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_basic_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.proxy_auth_selection = ProxyAuthSelection::Basic;
-                                this.validate_proxy_form_field();
-                                cx.notify();
-                            }))
-                            .child(Self::render_radio_button(
-                                current_auth == ProxyAuthSelection::Basic,
-                                primary,
-                                border,
-                            ))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(dbflux_i18n::t!("settings.proxies.auth.basic")),
-                            ),
-                    ),
-            )
+                entity.update(cx, |this, cx| {
+                    this.proxy_focus = ProxyFocus::Form;
+                    this.proxy_form_field = field;
+                    this.proxy_auth_selection = selection;
+                    this.validate_proxy_form_field();
+                    cx.notify();
+                });
+            },
+        );
+
+        let cursor_item = if self.is_cursor_on(ProxyFormField::AuthNone) {
+            Some("none")
+        } else if self.is_cursor_on(ProxyFormField::AuthBasic) {
+            Some("basic")
+        } else {
+            None
+        };
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.proxies.field.authentication"),
+            div().flex().child(control),
+            None,
+        )
     }
 
     fn render_proxy_auth_fields(
         &self,
         keyring_available: bool,
-        is_form_focused: bool,
-        current_field: ProxyFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let primary = theme.primary;
-
-        let is_save_secret_focused = is_form_focused && current_field == ProxyFormField::SaveSecret;
-        let is_password_focused = is_form_focused && current_field == ProxyFormField::Password;
-        let save_label = dbflux_i18n::t!("settings.proxies.action.save");
-
-        let save_checkbox = if keyring_available {
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .pb(px(2.0))
-                    .px_2()
-                    .py_1()
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(if is_save_secret_focused {
-                        primary
-                    } else {
-                        transparent_black()
-                    })
-                    .child(
-                        Checkbox::new("proxy-save-secret")
-                            .checked(self.proxy_save_secret)
-                            .aria_label(save_label.clone())
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.proxy_save_secret = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().text_sm().child(save_label)),
+        let (toggle_icon, toggle_label) = if self.show_proxy_password {
+            (
+                AppIcon::EyeOff,
+                dbflux_i18n::t!("settings.field.hide_secret"),
             )
         } else {
-            None
+            (AppIcon::Eye, dbflux_i18n::t!("settings.field.show_secret"))
         };
 
-        let password_toggle =
-            Self::render_password_toggle(self.show_proxy_password, "toggle-proxy-password", &theme)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.show_proxy_password = !this.show_proxy_password;
-                    cx.notify();
-                }));
+        let password_toggle = Button::new("toggle-proxy-password", toggle_label)
+            .ghost()
+            .inline()
+            .icon(toggle_icon)
+            .icon_only()
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.show_proxy_password = !this.show_proxy_password;
+                cx.notify();
+            }))
+            .into_any_element();
+
+        let save_checkbox = keyring_available.then(|| {
+            layout::cursor_ring(
+                self.is_cursor_on(ProxyFormField::SaveSecret),
+                Checkbox::new("proxy-save-secret")
+                    .checked(self.proxy_save_secret)
+                    .label(dbflux_i18n::t!(
+                        "settings.ssh_tunnels.field.keep_in_keyring"
+                    ))
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.proxy_focus = ProxyFocus::Form;
+                        this.proxy_form_field = ProxyFormField::SaveSecret;
+                        this.proxy_save_secret = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            )
+        });
+
+        let password = layout::inline_controls()
+            .gap(FormMetrics::ROW_GAP)
+            .child(self.render_proxy_input(
+                &self.input_proxy_password,
+                ProxyFormField::Password,
+                dbflux_i18n::t!("settings.proxies.field.password"),
+                Some(SettingsMetrics::SELECT_WIDTH),
+                false,
+                Some(password_toggle),
+                cx,
+            ))
+            .children(save_checkbox);
 
         div()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(self.render_proxy_field(
-                &dbflux_i18n::t!("settings.proxies.field.username"),
-                &self.input_proxy_username,
-                is_form_focused && current_field == ProxyFormField::Username,
-                primary,
-                ProxyFormField::Username,
-                cx,
+            .child(layout::form_row(
+                dbflux_i18n::t!("settings.proxies.field.username"),
+                self.render_proxy_input(
+                    &self.input_proxy_username,
+                    ProxyFormField::Username,
+                    dbflux_i18n::t!("settings.proxies.field.username"),
+                    Some(SettingsMetrics::TEXT_FIELD_WIDTH),
+                    true,
+                    None,
+                    cx,
+                ),
+                None,
             ))
-            .child(
-                div()
-                    .flex()
-                    .items_end()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_end()
-                            .gap_1()
-                            .child(div().flex_1().child(self.render_proxy_field(
-                                &dbflux_i18n::t!("settings.proxies.field.password"),
-                                &self.input_proxy_password,
-                                is_password_focused,
-                                primary,
-                                ProxyFormField::Password,
-                                cx,
-                            )))
-                            .child(password_toggle),
-                    )
-                    .when_some(save_checkbox, |div, checkbox| div.child(checkbox)),
-            )
+            .child(layout::form_row(
+                dbflux_i18n::t!("settings.proxies.field.password"),
+                password,
+                None,
+            ))
     }
 
     fn render_proxy_list(
@@ -561,261 +464,206 @@ impl ProxiesSection {
         editing_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let theme = cx.theme();
-        let is_list_focused = self.proxy_focus == ProxyFocus::ProfileList;
+        let is_list_focused = self.content_focused && self.proxy_focus == ProxyFocus::ProfileList;
         let is_new_button_focused = is_list_focused && self.proxy_selected_idx.is_none();
 
-        div()
-            .w(px(250.0))
-            .h_full()
-            .border_r_1()
-            .border_color(theme.border)
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .p_2()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .rounded(Radii::SM)
-                            .border_1()
-                            .border_color(if is_new_button_focused {
-                                theme.primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new("new-proxy", dbflux_i18n::t!("settings.proxies.new"))
-                                    .icon(Icon::new(AppIcon::Plus))
-                                    .small()
-                                    .w_full()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.request_proxy_action(
-                                            PendingProxyAction::ClearForm,
-                                            window,
-                                            cx,
-                                        );
-                                    })),
-                            ),
-                    )
-                    .child(
-                        Button::new(
-                            "import-proxy",
-                            dbflux_i18n::t!("settings.proxies.action.import"),
-                        )
-                        .icon(Icon::new(AppIcon::Download))
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_import(cx);
-                        })),
-                    ),
+        let toolbar = layout::master_list_toolbar(vec![
+            Button::new("new-proxy", dbflux_i18n::t!("settings.proxies.new"))
+                .primary()
+                .icon(AppIcon::Plus)
+                .focused(is_new_button_focused)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.request_proxy_action(PendingProxyAction::ClearForm, window, cx);
+                }))
+                .into_any_element(),
+            Button::new(
+                "import-proxy",
+                dbflux_i18n::t!("settings.proxies.action.import"),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when(proxies.is_empty(), |root: Div| {
-                        root.child(
-                            div().p_4().child(
-                                Body::new(dbflux_i18n::t!("settings.proxies.empty"))
-                                    .color(theme.muted_foreground),
-                            ),
-                        )
-                    })
-                    .children(proxies.iter().enumerate().map(|(idx, proxy)| {
-                        let proxy_id = proxy.id;
-                        let is_selected = editing_id == Some(proxy_id);
-                        let is_focused = is_list_focused && self.proxy_selected_idx == Some(idx);
-                        let subtitle =
-                            format!("{}://{}:{}", proxy.kind.scheme(), proxy.host, proxy.port);
+            .secondary()
+            .icon(AppIcon::Download)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.request_import(cx);
+            }))
+            .into_any_element(),
+        ]);
 
-                        div()
-                            .id(SharedString::from(format!("proxy-item-{}", proxy_id)))
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_focused && !is_selected {
-                                theme.primary
-                            } else {
-                                transparent_black()
-                            })
-                            .when(is_selected, |div| div.bg(theme.secondary))
-                            .hover({
-                                let secondary = theme.secondary;
-                                move |div| div.bg(secondary)
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.request_proxy_action(
-                                    PendingProxyAction::EditIndex(idx),
-                                    window,
-                                    cx,
-                                );
-                                this.proxy_focus = ProxyFocus::Form;
-                                this.proxy_form_field = ProxyFormField::Name;
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_shrink_0()
-                                            .items_center()
-                                            .gap_1()
-                                            .mt(px(2.0))
-                                            .child(
-                                                FluxIcon::new(AppIcon::Globe)
-                                                    .size(px(14.0))
-                                                    .color(theme.muted_foreground),
-                                            )
-                                            .when(!proxy.enabled, |root| {
-                                                root.child(MonoCaption::new(dbflux_i18n::t!(
-                                                    "settings.proxies.status.disabled_caption"
-                                                )))
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(Body::new(proxy.name.clone()))
-                                            .child(MonoMeta::new(subtitle)),
-                                    ),
-                            )
-                    })),
-            )
+        let rows: Vec<AnyElement> = proxies
+            .iter()
+            .enumerate()
+            .map(|(idx, proxy)| {
+                let proxy_id = proxy.id;
+                let is_selected = editing_id == Some(proxy_id);
+                let is_focused = is_list_focused && self.proxy_selected_idx == Some(idx);
+                let detail = format!("{}://{}:{}", proxy.kind.scheme(), proxy.host, proxy.port);
+
+                let trailing = (!proxy.enabled).then(|| {
+                    Badge::new(
+                        dbflux_i18n::t!("settings.proxies.status.disabled_caption"),
+                        BadgeTone::Neutral,
+                    )
+                    .into_any_element()
+                });
+
+                layout::master_list_row(
+                    SharedString::from(format!("proxy-item-{}", proxy_id)),
+                    layout::MasterRow {
+                        icon: Some(AppIcon::Globe),
+                        title: proxy.name.clone().into(),
+                        detail: Some(detail.into()),
+                        trailing,
+                    },
+                    is_selected,
+                    is_focused,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.request_proxy_action(PendingProxyAction::EditIndex(idx), window, cx);
+                    this.proxy_focus = ProxyFocus::Form;
+                    this.proxy_form_field = ProxyFormField::Name;
+                }))
+                .into_any_element()
+            })
+            .collect();
+
+        let body = if rows.is_empty() {
+            layout::master_list_empty(dbflux_i18n::t!("settings.proxies.empty")).into_any_element()
+        } else {
+            div().flex().flex_col().children(rows).into_any_element()
+        };
+
+        layout::master_list_panel("proxy-list", toolbar, body, cx)
     }
 
     fn render_proxy_form(
         &self,
-        editing_id: Option<Uuid>,
         keyring_available: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
-        let _muted_foreground = theme.muted_foreground;
 
-        let is_form_focused = self.proxy_focus == ProxyFocus::Form;
-        let field = self.proxy_form_field;
+        let host_port = layout::inline_controls()
+            .child(self.render_proxy_input(
+                &self.input_proxy_host,
+                ProxyFormField::Host,
+                dbflux_i18n::t!("settings.proxies.field.host"),
+                None,
+                true,
+                None,
+                cx,
+            ))
+            .child(self.render_proxy_input(
+                &self.input_proxy_port,
+                ProxyFormField::Port,
+                dbflux_i18n::t!("settings.proxies.field.port"),
+                Some(SettingsMetrics::PORT_FIELD_WIDTH),
+                true,
+                None,
+                cx,
+            ));
+
+        let enabled = layout::cursor_ring(
+            self.is_cursor_on(ProxyFormField::Enabled),
+            Checkbox::new("proxy-enabled")
+                .checked(self.proxy_enabled)
+                .label(dbflux_i18n::t!("settings.proxies.field.enabled"))
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.proxy_focus = ProxyFocus::Form;
+                    this.proxy_form_field = ProxyFormField::Enabled;
+                    this.proxy_enabled = *checked;
+                    cx.notify();
+                })),
+            cx,
+        );
 
         layout::sticky_form_shell(
-            PanelTitle::new(layout::editor_panel_title(
-                &dbflux_i18n::t!("settings.proxies.panel_title"),
-                editing_id.is_some(),
-            )),
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.proxies.group.proxy"),
+                Some(AppIcon::Globe.into()),
+                cx,
+            ),
             div()
                 .flex()
                 .flex_col()
-                .gap_4()
-                .child(self.render_proxy_field(
-                    &dbflux_i18n::t!("settings.proxies.field.name"),
-                    &self.input_proxy_name,
-                    is_form_focused && field == ProxyFormField::Name,
-                    primary,
-                    ProxyFormField::Name,
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.proxies.field.name"),
+                    self.render_proxy_input(
+                        &self.input_proxy_name,
+                        ProxyFormField::Name,
+                        dbflux_i18n::t!("settings.proxies.field.name"),
+                        Some(SettingsMetrics::TEXT_FIELD_WIDTH),
+                        false,
+                        None,
+                        cx,
+                    ),
+                    None,
+                ))
+                .child(self.render_proxy_kind_selector(cx))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.proxies.field.host_port"),
+                    host_port,
+                    None,
+                ))
+                .child(layout::form_row(
+                    dbflux_i18n::t!("settings.proxies.field.no_proxy"),
+                    self.render_proxy_input(
+                        &self.input_proxy_no_proxy,
+                        ProxyFormField::NoProxy,
+                        dbflux_i18n::t!("settings.proxies.field.no_proxy"),
+                        None,
+                        true,
+                        None,
+                        cx,
+                    ),
+                    Some(dbflux_i18n::t!("settings.proxies.hint.no_proxy_list").into()),
+                ))
+                .child(layout::check_row(enabled, None))
+                .child(dbflux_components::composites::section_header(
+                    dbflux_i18n::t!("settings.proxies.group.authentication"),
+                    Some(AppIcon::KeyRound.into()),
                     cx,
                 ))
-                .child(self.render_proxy_kind_selector(is_form_focused, field, cx))
-                .child(
-                    div()
-                        .flex()
-                        .gap_3()
-                        .child(div().flex_1().child(self.render_proxy_field(
-                            &dbflux_i18n::t!("settings.proxies.field.host"),
-                            &self.input_proxy_host,
-                            is_form_focused && field == ProxyFormField::Host,
-                            primary,
-                            ProxyFormField::Host,
-                            cx,
-                        )))
-                        .child(div().w(px(80.0)).child(self.render_proxy_field(
-                            &dbflux_i18n::t!("settings.proxies.field.port"),
-                            &self.input_proxy_port,
-                            is_form_focused && field == ProxyFormField::Port,
-                            primary,
-                            ProxyFormField::Port,
-                            cx,
-                        ))),
-                )
-                .child(self.render_proxy_auth_selector(is_form_focused, field, cx))
+                .child(self.render_proxy_auth_selector(cx))
                 .when(
                     self.proxy_auth_selection == ProxyAuthSelection::Basic,
-                    |div: Div| {
-                        div.child(self.render_proxy_auth_fields(
-                            keyring_available,
-                            is_form_focused,
-                            field,
-                            cx,
-                        ))
-                    },
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(self.render_proxy_field(
-                            &dbflux_i18n::t!("settings.proxies.field.no_proxy"),
-                            &self.input_proxy_no_proxy,
-                            is_form_focused && field == ProxyFormField::NoProxy,
-                            primary,
-                            ProxyFormField::NoProxy,
-                            cx,
-                        ))
-                        .child(
-                            Body::new(dbflux_i18n::t!("settings.proxies.hint.no_proxy_list"))
-                                .color(theme.muted_foreground),
-                        ),
-                )
-                .child({
-                    let is_enabled_focused = is_form_focused && field == ProxyFormField::Enabled;
-                    let enabled_label = dbflux_i18n::t!("settings.proxies.field.enabled");
-
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_enabled_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Checkbox::new("proxy-enabled")
-                                .checked(self.proxy_enabled)
-                                .aria_label(enabled_label.clone())
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.proxy_enabled = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Body::new(enabled_label))
-                }),
+                    |form| form.child(self.render_proxy_auth_fields(keyring_available, cx)),
+                ),
             None,
             &theme,
+        )
+    }
+
+    /// Export and Delete, on the left of the footer, for a saved proxy.
+    fn render_section_footer_leading_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let proxy_id = self.editing_proxy_id?;
+
+        Some(
+            layout::inline_controls()
+                .child(
+                    Button::new(
+                        "export-proxy",
+                        dbflux_i18n::t!("settings.proxies.action.export"),
+                    )
+                    .secondary()
+                    .icon(AppIcon::ExternalLink)
+                    .focused(self.is_cursor_on(ProxyFormField::ExportButton))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_export(cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        "delete-proxy",
+                        dbflux_i18n::t!("settings.proxies.action.delete"),
+                    )
+                    .danger()
+                    .icon(AppIcon::Delete)
+                    .focused(self.is_cursor_on(ProxyFormField::DeleteButton))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.request_delete_proxy(proxy_id, cx);
+                    })),
+                )
+                .into_any_element(),
         )
     }
 
@@ -824,81 +672,35 @@ impl ProxiesSection {
         editing_id: Option<Uuid>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let is_form_focused = self.proxy_focus == ProxyFocus::Form;
-        let field = self.proxy_form_field;
-        let primary = cx.theme().primary;
-
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .when(editing_id.is_some(), |root| {
-                let proxy_id = editing_id.expect("checked is_some");
-
-                root.child(layout::footer_action_frame(
-                    is_form_focused && field == ProxyFormField::ExportButton,
-                    primary,
-                    Button::new(
-                        "export-proxy",
-                        dbflux_i18n::t!("settings.proxies.action.export"),
-                    )
-                    .small()
-                    .ghost()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.request_export(cx);
-                    })),
-                ))
-                .child(layout::footer_action_frame(
-                    is_form_focused && field == ProxyFormField::DeleteButton,
-                    primary,
-                    Button::new(
-                        "delete-proxy",
-                        dbflux_i18n::t!("settings.proxies.action.delete"),
-                    )
-                    .small()
-                    .danger()
-                    .w_full()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.request_delete_proxy(proxy_id, cx);
-                    })),
-                ))
-            })
-            .child(layout::footer_action_frame(
-                is_form_focused && field == ProxyFormField::SaveButton,
-                primary,
-                Button::new(
-                    "save-proxy",
-                    if editing_id.is_some() {
-                        dbflux_i18n::t!("settings.proxies.action.update")
-                    } else {
-                        dbflux_i18n::t!("settings.proxies.action.create")
-                    },
-                )
-                .small()
-                .primary()
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.save_proxy(window, cx);
-                })),
-            ))
-            .into_any_element()
-    }
-
-    fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
-        div()
-            .size_4()
-            .rounded_full()
-            .border_1()
-            .border_color(if selected { primary } else { border })
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(div().size_2().rounded_full().bg(if selected {
-                primary
+        Button::new(
+            "save-proxy",
+            if editing_id.is_some() {
+                dbflux_i18n::t!("settings.proxies.action.update")
             } else {
-                transparent_black()
-            }))
+                dbflux_i18n::t!("settings.proxies.action.create")
+            },
+        )
+        .primary()
+        .icon(AppIcon::Check)
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
+        .focused(self.is_cursor_on(ProxyFormField::SaveButton))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.save_proxy(window, cx);
+        }))
+        .into_any_element()
+    }
+}
+
+/// Element-id suffix of a detail form field.
+fn proxy_field_id(field: ProxyFormField) -> &'static str {
+    match field {
+        ProxyFormField::Name => "name",
+        ProxyFormField::Host => "host",
+        ProxyFormField::Port => "port",
+        ProxyFormField::Username => "username",
+        ProxyFormField::Password => "password",
+        ProxyFormField::NoProxy => "no-proxy",
+        _ => "control",
     }
 }
 
@@ -1042,6 +844,18 @@ impl SettingsSection for ProxiesSection {
     ) -> Option<AnyElement> {
         Some(self.render_section_footer_actions(self.editing_proxy_id, cx))
     }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.render_section_footer_leading_actions(cx)
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_proxy(window, cx);
+    }
 }
 
 impl Render for ProxiesSection {
@@ -1082,13 +896,14 @@ impl Render for ProxiesSection {
             .unwrap_or_default();
 
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            cx.theme().border,
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.proxies.section_title"),
                 dbflux_i18n::t!("settings.proxies.section_description"),
                 cx,
             ),
             self.render_proxy_list(&proxies, editing_id, cx),
-            self.render_proxy_form(editing_id, keyring_available, cx),
+            self.render_proxy_form(keyring_available, cx),
         )
         .when(show_proxy_delete, |element| {
             let entity = cx.entity().clone();
@@ -1214,7 +1029,7 @@ mod tests {
         let english = dbflux_i18n::t!("settings.proxies.section_title", locale = "en");
         let spanish = dbflux_i18n::t!("settings.proxies.section_title", locale = "es");
 
-        assert_eq!(english, "Proxy Profiles");
+        assert_eq!(english, "Proxies");
         assert_eq!(spanish, "Perfiles de proxy");
         assert_ne!(english, spanish);
     }

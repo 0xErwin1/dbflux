@@ -1,0 +1,968 @@
+---
+import Glyph from '../Glyph.astro';
+import DriverMarquee from './DriverMarquee.astro';
+import { docsUrl } from '../../data/site';
+import { DEFAULT_LOCALE, dictionary, t } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing;
+
+type Token = readonly [string, ('kw' | 'str' | 'fn' | 'num')?];
+
+interface Demo {
+  readonly name: string;
+  readonly short: string;
+  readonly icon: string;
+  readonly language: string;
+  readonly meta: string;
+  readonly lines: readonly (readonly Token[])[];
+  readonly columns: readonly string[];
+  readonly widths: string;
+  readonly rows: readonly (readonly string[])[];
+  /** Hidden on a phone, where the board keeps three dialects. */
+  readonly wide?: boolean;
+}
+
+/**
+ * The same question, "which orders failed", asked in four query languages.
+ *
+ * The statements are valid in each driver's own dialect; the rows are
+ * illustrative. What the demo shows is that the editor, the run bar and the
+ * result grid do not change when the dialect does.
+ */
+const DEMOS: readonly Demo[] = [
+  {
+    name: 'PostgreSQL',
+    short: 'Postgres',
+    icon: 'brand/postgresql',
+    language: 'SQL',
+    meta: '5 rows · 12 ms',
+    lines: [
+      [['SELECT', 'kw'], [' id, customer, total, status']],
+      [['FROM', 'kw'], [' orders']],
+      [['WHERE', 'kw'], [' status = '], ["'failed'", 'str']],
+      [
+        ['ORDER BY', 'kw'],
+        [' created_at '],
+        ['DESC', 'kw'],
+        [' '],
+        ['LIMIT', 'kw'],
+        [' '],
+        ['5', 'num'],
+        [';'],
+      ],
+    ],
+    columns: ['id', 'customer', 'total', 'status'],
+    widths: '70px 1fr 100px 90px',
+    rows: [
+      ['48213', 'ana@northwind.io', '1,284.00', 'failed'],
+      ['48202', 'e.laurent@verre.fr', '412.60', 'failed'],
+      ['48177', 'n.patel@quarry.in', '96.10', 'failed'],
+      ['48150', 'jon@brightline.io', '49.00', 'failed'],
+      ['48121', 'h.kim@cobalt.kr', '775.40', 'failed'],
+    ],
+  },
+  {
+    name: 'MongoDB',
+    short: 'Mongo',
+    icon: 'brand/mongodb',
+    language: 'MongoDB query',
+    meta: '5 documents · 9 ms',
+    lines: [
+      [['db', 'fn'], ['.orders.'], ['find', 'fn'], ['(']],
+      [['  { status: '], ['"failed"', 'str'], [' },']],
+      [['  { customer: '], ['1', 'num'], [', total: '], ['1', 'num'], [' }']],
+      [
+        [').'],
+        ['sort', 'fn'],
+        ['({ created_at: '],
+        ['-1', 'num'],
+        [' }).'],
+        ['limit', 'fn'],
+        ['('],
+        ['5', 'num'],
+        [')'],
+      ],
+    ],
+    columns: ['_id', 'customer', 'total', 'status'],
+    widths: '110px 1fr 90px 80px',
+    rows: [
+      ['66f0c2a1', 'ana@northwind.io', '1284', 'failed'],
+      ['66f0b91e', 'e.laurent@verre.fr', '412.6', 'failed'],
+      ['66f0a3c4', 'n.patel@quarry.in', '96.1', 'failed'],
+      ['66f09d02', 'jon@brightline.io', '49', 'failed'],
+      ['66f08811', 'h.kim@cobalt.kr', '775.4', 'failed'],
+    ],
+  },
+  {
+    name: 'Redis',
+    short: 'Redis',
+    icon: 'brand/redis',
+    language: 'Redis commands',
+    meta: '5 keys · 2 ms',
+    lines: [
+      [['SCAN', 'kw'], [' '], ['0', 'num'], [' '], ['MATCH', 'kw'], [' order:*:failed']],
+      [['     '], ['COUNT', 'kw'], [' '], ['100', 'num']],
+    ],
+    columns: ['key', 'type', 'ttl', 'size'],
+    widths: '1fr 80px 70px 70px',
+    rows: [
+      ['order:48213:failed', 'hash', '86400', '6'],
+      ['order:48202:failed', 'hash', '86400', '6'],
+      ['order:48177:failed', 'hash', '85120', '5'],
+      ['order:48150:failed', 'hash', '84010', '6'],
+      ['order:48121:failed', 'hash', '80002', '6'],
+    ],
+  },
+  {
+    name: 'CloudWatch',
+    short: 'CloudWatch',
+    icon: 'logs',
+    language: 'Logs Insights QL',
+    meta: '5 events · 1.4 s',
+    lines: [
+      [['fields', 'kw'], [' @timestamp, @message']],
+      [['| '], ['filter', 'kw'], [' status = '], ['"failed"', 'str']],
+      [['| '], ['sort', 'kw'], [' @timestamp '], ['desc', 'kw']],
+      [['| '], ['limit', 'kw'], [' '], ['5', 'num']],
+    ],
+    columns: ['@timestamp', '@message'],
+    widths: '170px 1fr',
+    rows: [
+      ['14:02:11.204', 'payment declined order=48213'],
+      ['13:58:40.017', 'payment declined order=48202'],
+      ['13:41:09.882', 'card expired order=48177'],
+      ['13:20:55.310', 'payment declined order=48150'],
+      ['12:59:02.645', 'fraud check failed order=48121'],
+    ],
+    wide: true,
+  },
+];
+
+const BOLT = 'M7.5 0 1 8h4l-1 6 7-8.5H7L7.5 0Z';
+---
+
+<div class="top">
+  <section class="hero-copy rise">
+    <p class="eyebrow">{strings.eyebrow}</p>
+    <h1 class="display display--hero">
+      {strings.title_1}<br />{strings.title_2}<br /><em>{strings.title_3}</em>
+    </h1>
+    <p class="hero-copy__lede hero-copy__lede--full">{strings.lede}</p>
+    <p class="hero-copy__lede hero-copy__lede--short">{strings.lede_short}</p>
+    <div class="hero-copy__actions">
+      <a class="btn btn--primary c10" href="#install">
+        <Glyph name="download" size={18} />
+        {t(locale, 'nav.download')}
+      </a>
+      <a class="btn btn--secondary c10" href={docsUrl('', '', locale)}>
+        <Glyph name="file-text" size={18} />
+        {strings.read_docs}
+      </a>
+    </div>
+    <span class="hero-copy__platforms mono">
+      <Glyph name="download" size={14} />
+      Linux · macOS · Windows
+    </span>
+  </section>
+
+  <div class="hero-stage">
+    <div class="hero-stage__decor rise" aria-hidden="true"></div>
+    <div class="console c18 rise" data-console data-state="done">
+      <div class="console__bar">
+        <span class="console__brand x">DBFlux</span>
+        <span class="console__search c7">
+          <Glyph name="search" size={13} />
+          {strings.console.search}
+          <span class="console__grow"></span>
+          <span class="mono console__keys">Ctrl Shift P</span>
+        </span>
+        <span></span>
+      </div>
+
+      <div class="console__card c14">
+        <div class="console__card-inner">
+          <div class="console__tabs" role="tablist" aria-label={strings.console.dialect}>
+            <span class="console__label x">{strings.console.dialect}</span>
+            {
+              DEMOS.map((demo, index) => (
+                <button
+                  type="button"
+                  role="tab"
+                  class:list={['console__tab', { 'console__tab--wide': demo.wide }]}
+                  aria-selected={index === 0 ? 'true' : 'false'}
+                  data-dialect-tab={index}
+                >
+                  <Glyph name={demo.icon} size={15} />
+                  <span class="console__tab-full">{demo.name}</span>
+                  <span class="console__tab-short">{demo.short}</span>
+                </button>
+              ))
+            }
+          </div>
+
+          <div class="console__editor">
+            <div class="console__gutter mono" aria-hidden="true">1<br />2<br />3<br />4<br />5</div>
+            {
+              DEMOS.map((demo, index) => (
+                <div class="console__code mono" data-demo={index} hidden={index !== 0}>
+                  {demo.lines.map((line) => (
+                    <div>
+                      {line.map(([text, kind]) =>
+                        kind ? <span class={`tok-${kind}`}>{text}</span> : text,
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))
+            }
+          </div>
+
+          <div class="console__run">
+            <button type="button" class="console__run-button x c7" data-run>
+              <svg width="11" height="13" viewBox="0 0 12 14" aria-hidden="true">
+                <path d={BOLT} fill="currentColor"></path>
+              </svg>
+              {strings.console.run}
+              <span class="console__kbd mono">Ctrl ↵</span>
+            </button>
+            {
+              DEMOS.map((demo, index) => (
+                <span class="console__lang mono" data-demo={index} hidden={index !== 0}>
+                  {demo.language}
+                </span>
+              ))
+            }
+            <span class="console__grow"></span>
+            <span class="console__executing mono">{strings.console.executing}</span>
+            {
+              DEMOS.map((demo, index) => (
+                <span class="console__meta mono" data-demo={index} hidden={index !== 0}>
+                  {demo.meta}
+                </span>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+
+      <div class="console__card console__card--results c14">
+        <div class="console__card-inner">
+          <div class="console__results">
+            {
+              DEMOS.map((demo, index) => (
+                <div
+                  class="console__table mono"
+                  data-demo={index}
+                  hidden={index !== 0}
+                  style={`--cols: ${demo.widths}`}
+                >
+                  <div class="console__head">
+                    {demo.columns.map((column) => (
+                      <span>{column}</span>
+                    ))}
+                  </div>
+                  {demo.rows.map((row, rowIndex) => (
+                    <div
+                      class="console__row"
+                      data-row
+                      style={`animation-delay: ${rowIndex * 60}ms`}
+                    >
+                      {row.map((cell, cellIndex) => (
+                        <span
+                          class:list={{
+                            'console__cell--failed': cell === 'failed',
+                            'console__cell--key': cellIndex === 0 && cell !== 'failed',
+                          }}
+                        >
+                          {cell}
+                        </span>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ))
+            }
+            <div class="console__strike" aria-hidden="true"></div>
+          </div>
+          <div class="console__foot">
+            <span class="console__foot-label">
+              <Glyph name="table" size={14} />
+              <span class="x">{strings.console.result_grid}</span>
+            </span>
+            <span class="console__grow"></span>
+            <span>{strings.console.pick_hint}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="console__status">
+        <span class="console__chip console__chip--ok c7">
+          <span class="console__diamond"></span>
+          {strings.console.connected}
+        </span>
+        <span class="console__chip c7">{strings.console.audit_log}</span>
+        <span class="console__grow"></span>
+        <span class="console__chip c7">{strings.console.tasks}</span>
+      </div>
+    </div>
+  </div>
+
+  <DriverMarquee locale={locale} />
+</div>
+
+<style>
+  .top {
+    display: grid;
+    grid-template-columns: minmax(0, 620px) minmax(0, 636px);
+    grid-template-areas:
+      'copy stage'
+      'band band';
+    justify-content: space-between;
+    grid-template-rows: minmax(704px, auto) auto;
+    column-gap: 56px;
+    max-width: var(--content-max);
+    margin-inline: auto;
+    padding: 96px var(--gutter) 0;
+  }
+
+  .hero-copy {
+    grid-area: copy;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    padding-top: 8px;
+  }
+
+  .hero-copy__lede {
+    max-width: 540px;
+    margin: 0;
+    font-size: 19px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .hero-copy__lede--short {
+    display: none;
+  }
+
+  .hero-copy__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .hero-copy__platforms {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .hero-stage {
+    grid-area: stage;
+    align-self: start;
+    position: relative;
+    padding-bottom: 20px;
+  }
+
+  .hero-stage__decor {
+    position: absolute;
+    inset: 20px -20px 0 20px;
+    background: var(--accent-fill);
+    clip-path: polygon(
+      18px 0,
+      100% 0,
+      100% calc(100% - 18px),
+      calc(100% - 18px) 100%,
+      0 100%,
+      0 18px
+    );
+    animation-delay: 0.05s;
+  }
+
+  .console {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 592px;
+    padding: 0 8px 8px;
+    background: var(--bg-sunken);
+    box-shadow: 0 0 0 1px var(--border);
+    animation-delay: 0.15s;
+  }
+
+  .console__bar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    height: 38px;
+    padding: 0 4px;
+  }
+
+  .console__brand,
+  .console__label,
+  .console__foot-label .x {
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .console__search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 250px;
+    height: 24px;
+    padding: 0 10px;
+    background: var(--panel);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .console__keys {
+    font-size: 10px;
+  }
+
+  .console__grow {
+    flex-grow: 1;
+  }
+
+  .console__card {
+    display: flex;
+    flex-shrink: 0;
+    padding: 1px;
+    background: var(--console-edge);
+  }
+
+  .console__card--results {
+    flex-grow: 1;
+    min-height: 0;
+  }
+
+  .console__card-inner {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--panel);
+    clip-path: polygon(
+      13.4px 0,
+      100% 0,
+      100% calc(100% - 13.4px),
+      calc(100% - 13.4px) 100%,
+      0 100%,
+      0 13.4px
+    );
+  }
+
+  .console__tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 44px;
+    padding-left: 18px;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .console__label {
+    margin-right: 6px;
+  }
+
+  .console__tab {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+  }
+
+  .console__tab:hover {
+    background: var(--raised-hover);
+  }
+
+  .console__tab[aria-selected='true'] {
+    background: var(--raised);
+    color: var(--text-strong);
+    box-shadow: inset 0 -3px 0 var(--accent-fill);
+  }
+
+  .console__tab-short {
+    display: none;
+  }
+
+  .console__editor {
+    display: flex;
+    min-height: 150px;
+    background: var(--bg);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .console__gutter {
+    width: 40px;
+    flex-shrink: 0;
+    padding: 16px 12px 0 0;
+    text-align: right;
+    font-size: 12.5px;
+    line-height: 24px;
+    color: var(--text-faint);
+  }
+
+  .console__code {
+    margin: 0;
+    padding: 16px 0 14px 12px;
+    font-size: 13px;
+    line-height: 24px;
+    color: var(--text-strong);
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .console__code[hidden] {
+    display: none;
+  }
+
+  .tok-kw {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .tok-str {
+    color: var(--success);
+  }
+
+  .tok-fn {
+    color: var(--link);
+  }
+
+  .tok-num {
+    color: var(--violet);
+  }
+
+  .console__run {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 16px;
+  }
+
+  .console__run-button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 16px;
+    border: 0;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 800;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .console__run-button:hover {
+    filter: brightness(1.08);
+  }
+
+  .console__kbd {
+    padding: 1px 5px;
+    background: rgba(8, 8, 10, 0.16);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  .console__lang {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .console__executing {
+    display: none;
+    font-size: 12px;
+    color: var(--accent);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  .console__meta {
+    font-size: 12px;
+    color: var(--success);
+  }
+
+  .console[data-state='running'] .console__executing {
+    display: inline;
+  }
+
+  .console[data-state='running'] .console__meta,
+  .console[data-state='running'] .console__row {
+    visibility: hidden;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  .console__results {
+    position: relative;
+    flex-grow: 1;
+    min-height: 214px;
+    overflow: hidden;
+  }
+
+  .console__head,
+  .console__row {
+    display: grid;
+    grid-template-columns: var(--cols);
+    align-items: center;
+    height: 34px;
+  }
+
+  .console__head {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    border-bottom: var(--bw) solid var(--border-strong);
+  }
+
+  .console__row {
+    font-size: 12.5px;
+    border-bottom: var(--bw) solid var(--row-line);
+    animation: rowin 0.38s var(--ease-out) both;
+  }
+
+  .console__head + .console__row {
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+
+  .console__head span,
+  .console__row span {
+    padding: 0 12px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .console__cell--key {
+    color: var(--text-muted);
+  }
+
+  .console__cell--failed {
+    color: var(--danger);
+  }
+
+  .console__strike {
+    display: none;
+    position: absolute;
+    top: -20px;
+    left: 0;
+    width: 120px;
+    height: 280px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--accent) 0%, transparent),
+      color-mix(in srgb, var(--accent) 55%, transparent),
+      color-mix(in srgb, var(--accent) 0%, transparent)
+    );
+    animation: strike 0.7s var(--ease-std) both;
+  }
+
+  .console[data-state='running'] .console__strike {
+    display: block;
+  }
+
+  .console__foot {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 34px;
+    padding: 0 16px;
+    border-top: var(--bw) solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .console__foot-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .console__status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 24px;
+  }
+
+  .console__chip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 24px;
+    padding: 0 10px;
+    background: var(--panel);
+    font-size: 11.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  .console__chip--ok {
+    color: var(--success);
+    font-weight: 600;
+  }
+
+  .console__diamond {
+    width: 7px;
+    height: 7px;
+    background: var(--success);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+
+  .top > :global(.marquee-band) {
+    grid-area: band;
+  }
+
+  @media (max-width: 1180px) {
+    .top {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: none;
+      grid-template-areas:
+        'copy'
+        'stage'
+        'band';
+      row-gap: 56px;
+      padding-top: 64px;
+    }
+
+    .hero-stage {
+      max-width: 656px;
+      padding-right: 20px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .top {
+      grid-template-areas:
+        'copy'
+        'band'
+        'stage';
+      row-gap: 0;
+      padding-top: 36px;
+    }
+
+    .hero-copy {
+      gap: 20px;
+      padding-top: 0;
+    }
+
+    .hero-copy__lede {
+      font-size: 16px;
+    }
+
+    .hero-copy__lede--full,
+    .hero-copy__platforms {
+      display: none;
+    }
+
+    .hero-copy__lede--short {
+      display: block;
+    }
+
+    .hero-copy__actions {
+      flex-direction: column;
+    }
+
+    .hero-copy__actions .btn {
+      height: 52px;
+    }
+
+    .hero-stage {
+      padding: 12px 0 0;
+    }
+
+    .hero-stage__decor,
+    .console__bar,
+    .console__status,
+    .console__gutter,
+    .console__label,
+    .console__tab--wide,
+    .console__tab-full,
+    .console__lang,
+    .console__kbd,
+    .console__foot {
+      display: none;
+    }
+
+    .console__tab-short {
+      display: inline;
+    }
+
+    .console {
+      height: auto;
+      gap: 0;
+      padding: 0;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--border);
+      clip-path: polygon(
+        14px 0,
+        100% 0,
+        100% calc(100% - 14px),
+        calc(100% - 14px) 100%,
+        0 100%,
+        0 14px
+      );
+    }
+
+    .console__card {
+      padding: 0;
+      background: transparent;
+      clip-path: none;
+    }
+
+    .console__card-inner {
+      background: transparent;
+      clip-path: none;
+    }
+
+    .console__tabs {
+      height: 42px;
+      padding: 0 8px;
+    }
+
+    .console__tab {
+      height: 42px;
+      padding: 0 10px;
+      gap: 6px;
+      font-size: 12.5px;
+    }
+
+    .console__editor {
+      min-height: 0;
+      border-bottom: 0;
+    }
+
+    .console__code {
+      padding: 14px;
+      font-size: 12.5px;
+      line-height: 22px;
+    }
+
+    .console__run {
+      height: 48px;
+      padding: 0 12px;
+      border-top: var(--bw) solid var(--border);
+    }
+
+    .console__run-button {
+      padding: 0 14px;
+      gap: 8px;
+    }
+
+    .console__meta {
+      font-size: 11.5px;
+    }
+
+    .console__results {
+      min-height: 0;
+    }
+
+    .console__table {
+      --cols-mobile: 60px 1fr 70px;
+    }
+
+    .console__head,
+    .console__row {
+      grid-template-columns: var(--cols-mobile);
+      height: 32px;
+      font-size: 12px;
+    }
+
+    .console__head {
+      border-bottom: 0;
+      border-top: var(--bw) solid var(--border-strong);
+    }
+
+    .console__row {
+      border-bottom: 0;
+      border-top: var(--bw) solid var(--row-line);
+    }
+
+    .console__head + .console__row {
+      background: none;
+    }
+
+    .console__head span:nth-child(n + 4),
+    .console__row span:nth-child(n + 4),
+    .console__row:nth-of-type(n + 5) {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  const consoleElement = document.querySelector<HTMLElement>('[data-console]');
+
+  if (consoleElement) {
+    const tabs = Array.from(
+      consoleElement.querySelectorAll<HTMLButtonElement>('[data-dialect-tab]'),
+    );
+    const runButton = consoleElement.querySelector<HTMLButtonElement>('[data-run]');
+    let runTimer = 0;
+
+    const replayRows = () => {
+      consoleElement.querySelectorAll<HTMLElement>('[data-row]').forEach((row) => {
+        row.style.animationName = 'none';
+        void row.offsetWidth;
+        row.style.animationName = '';
+      });
+    };
+
+    const select = (index: number) => {
+      window.clearTimeout(runTimer);
+      consoleElement.dataset.state = 'done';
+      tabs.forEach((tab) => {
+        tab.setAttribute('aria-selected', String(tab.dataset.dialectTab === String(index)));
+      });
+      consoleElement.querySelectorAll<HTMLElement>('[data-demo]').forEach((element) => {
+        element.hidden = element.dataset.demo !== String(index);
+      });
+      replayRows();
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => select(Number(tab.dataset.dialectTab)));
+    });
+
+    runButton?.addEventListener('click', () => {
+      window.clearTimeout(runTimer);
+      consoleElement.dataset.state = 'running';
+      runTimer = window.setTimeout(() => {
+        consoleElement.dataset.state = 'done';
+        replayRows();
+      }, 650);
+    });
+  }
+</script>

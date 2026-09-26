@@ -1,27 +1,64 @@
-use gpui::{AnyElement, App, ElementId, IntoElement, SharedString, Window};
-use gpui_component::checkbox::Checkbox as GpuiCheckbox;
-use gpui_component::text::Text;
+use std::rc::Rc;
 
-/// Thin wrapper around `gpui_component::checkbox::Checkbox` that applies
-/// DBFlux design system defaults.
+use gpui::prelude::*;
+use gpui::{
+    App, ElementId, FocusHandle, MouseButton, Role, SharedString, Toggled, Window, div, relative,
+};
+use gpui_component::ActiveTheme;
+
+use crate::density;
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, ChamferFillKind, ChamferRing, Icon};
+use crate::tokens::{ChamferCut, ChromeColors, Fields};
+
+type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
+
+/// A checkbox drawn as a 16 px chamfered box.
+///
+/// Checked, the box is the byzantine fill with a white check mark; unchecked,
+/// it is an inset 1.5 px line. The label sits to the right in the body text
+/// size, whatever the surrounding text size is. The row is one
+/// focusable accessibility node with the checkbox role: Enter and Space
+/// toggle it, a pointer press toggles it without moving focus, and keyboard
+/// focus draws the tint ring around the box (outside the fill when checked,
+/// inside the line when unchecked).
+#[derive(IntoElement)]
 pub struct Checkbox {
-    inner: GpuiCheckbox,
+    id: ElementId,
+    checked: bool,
+    disabled: bool,
+    label: Option<SharedString>,
+    aria_label: Option<SharedString>,
+    on_click: Option<CheckboxHandler>,
 }
 
 impl Checkbox {
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
-            inner: GpuiCheckbox::new(id),
+            id: id.into(),
+            checked: false,
+            disabled: false,
+            label: None,
+            aria_label: None,
+            on_click: None,
         }
     }
 
     pub fn checked(mut self, checked: bool) -> Self {
-        self.inner = self.inner.checked(checked);
+        self.checked = checked;
         self
     }
 
-    pub fn label(mut self, label: impl Into<Text>) -> Self {
-        self.inner = self.inner.label(label);
+    /// Dims the checkbox and ignores activation.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Sets the visible label, which also names the checkbox for assistive
+    /// technology unless [`Self::aria_label`] overrides it.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
         self
     }
 
@@ -32,21 +69,120 @@ impl Checkbox {
     /// [`Self::label`]. A checkbox with neither has no name, so a screen reader
     /// announces it as a bare checkbox and UI automation can only find it by id.
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.inner = self.inner.accessibility_label(label);
+        self.aria_label = Some(label.into());
         self
     }
 
+    /// Called with the requested checked value when the checkbox is
+    /// activated. The owner stores the value and re-renders.
     pub fn on_click(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
-        self.inner = self.inner.on_click(handler);
+        self.on_click = Some(Rc::new(handler));
         self
+    }
+
+    fn focus_handle(&self, window: &mut Window, cx: &mut App) -> FocusHandle {
+        window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone()
     }
 }
 
-impl IntoElement for Checkbox {
-    type Element = AnyElement;
+impl RenderOnce for Checkbox {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focus_handle = self.focus_handle(window, cx);
+        let focused = !self.disabled && focus_handle.is_focused(window);
+        let theme = cx.theme();
 
-    fn into_element(self) -> Self::Element {
-        self.inner.into_any_element()
+        let checked = self.checked;
+        let opacity = if self.disabled {
+            Fields::DISABLED_OPACITY
+        } else {
+            1.0
+        };
+
+        let box_shape = if checked {
+            Chamfer::new(ChamferCut::KEYCAP).fill(theme.primary.opacity(opacity))
+        } else {
+            Chamfer::new(ChamferCut::KEYCAP)
+                .ring(ChamferRing::outline(theme.input.opacity(opacity)))
+        };
+
+        let fill_kind = if checked {
+            ChamferFillKind::Filled
+        } else {
+            ChamferFillKind::Surface
+        };
+
+        let indicator = div()
+            .relative()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .size(Fields::CHECKBOX_SIZE)
+            .child(box_shape)
+            .when(checked, |this| {
+                this.child(
+                    Icon::new(AppIcon::Check)
+                        .size(Fields::CHECK_MARK)
+                        .color(theme.primary_foreground.opacity(opacity)),
+                )
+            })
+            .when(focused, |this| {
+                this.child(
+                    Chamfer::new(ChamferCut::KEYCAP)
+                        .ring(ChamferRing::focus_for(ChromeColors::tint(theme), fill_kind)),
+                )
+            });
+
+        let accessible_name = self.aria_label.or_else(|| self.label.clone());
+        let label_color = if self.disabled {
+            theme.muted_foreground
+        } else {
+            theme.foreground
+        };
+        let label_size = density::font_base(cx);
+        let on_click = self.on_click.filter(|_| !self.disabled);
+
+        div()
+            .id(self.id)
+            .role(Role::CheckBox)
+            .aria_toggled(if checked {
+                Toggled::True
+            } else {
+                Toggled::False
+            })
+            .when_some(accessible_name, |this, name| this.aria_label(name))
+            .when(!self.disabled, |this| {
+                this.track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+            })
+            .flex()
+            .items_start()
+            .gap(Fields::CHECKBOX_GAP)
+            .line_height(relative(1.))
+            .when(!self.disabled, |this| this.cursor_pointer())
+            .when(self.disabled, |this| this.cursor_not_allowed())
+            .on_mouse_down(MouseButton::Left, |_, window, _| {
+                window.prevent_default();
+            })
+            .when_some(on_click, |this, on_click| {
+                this.on_click(move |_, window, cx| {
+                    on_click(&!checked, window, cx);
+                })
+            })
+            .child(indicator)
+            .when_some(self.label, |this, label| {
+                this.child(
+                    div()
+                        .min_h(Fields::CHECKBOX_SIZE)
+                        .flex()
+                        .items_center()
+                        .text_size(label_size)
+                        .text_color(label_color)
+                        .child(label),
+                )
+            })
     }
 }
 

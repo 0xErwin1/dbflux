@@ -492,6 +492,11 @@ impl DashboardManager {
         Ok(())
     }
 
+    /// Every loaded dashboard, whatever its profile.
+    pub fn all_dashboards(&self) -> &[Dashboard] {
+        &self.dashboards
+    }
+
     /// Look up a dashboard by its id.
     pub fn dashboard_by_id(&self, id: Uuid) -> Option<&Dashboard> {
         self.dashboards.iter().find(|d| d.id == id)

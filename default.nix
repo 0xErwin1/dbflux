@@ -166,6 +166,9 @@ let
         pname = appId;
         inherit version cargoArtifacts;
         cargoExtraArgs = "-p dbflux";
+        # Read at compile time by the update notice, which then shows the
+        # "update with your usual rebuild" hint instead of a download button.
+        DBFLUX_INSTALL_SOURCE = "nix";
         postInstall = postInstallScript;
         meta.mainProgram = appId;
       }
@@ -185,6 +188,7 @@ let
     inherit buildInputs nativeBuildInputs;
 
     ZSTD_SYS_USE_PKG_CONFIG = "1";
+    DBFLUX_INSTALL_SOURCE = "nix";
 
     cargoBuildFlags = [
       "-p"

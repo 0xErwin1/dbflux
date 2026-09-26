@@ -1,22 +1,17 @@
-//! `LoadingState<T>` — generic primitive for representing async fetch state.
-//!
-//! `LoadingBlock` renders the non-data phases (Idle, Loading, Failed).
-//! The `Loaded(T)` variant is the caller's responsibility to render;
-//! `LoadingBlock` deliberately has no knowledge of `T`.
+//! `LoadingState<T>` — generic primitive for representing async fetch state,
+//! and `Spinner`, the bolt-shaped loading indicator.
 
 use gpui::prelude::*;
-use gpui::{App, IntoElement, SharedString, Window, div};
+use gpui::{
+    App, Bounds, ContentMask, Hsla, IntoElement, PathBuilder, Pixels, SharedString, Window, canvas,
+    div, point, px, size,
+};
+
 use gpui_component::ActiveTheme;
 
-use crate::primitives::{BannerBlock, BannerVariant};
-use crate::tokens::{Anim, FontSizes, Heights, Radii, Spacing};
-use crate::typography::MonoCaption;
+use crate::tokens::{Anim, ChromeColors, Feedback};
 
-/// Generic async-fetch state.
-///
-/// Use `LoadingBlock` to render the Idle/Loading/Failed phases.
-/// The caller renders `Loaded(T)` directly — `LoadingBlock` is not
-/// involved at that point.
+/// Generic async-fetch state. The caller renders every phase.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoadingState<T> {
     /// Fetch not yet started.
@@ -59,158 +54,120 @@ impl<T> LoadingState<T> {
 // Spinner
 // ---------------------------------------------------------------------------
 
-/// Spinner frame count — three-dot rotation cycles through 3 frames.
-const SPINNER_FRAMES: usize = 3;
+/// Number of animation frames in one strike of the bolt.
+const SPINNER_FRAMES: usize = 8;
 
-/// A minimal rotating-dots spinner.
+/// Outline of the brand bolt in its 12 x 14 view box
+/// (`M7.5 0 1 8h4l-1 6 7-8.5H7L7.5 0Z`).
+const BOLT_POINTS: [(f32, f32); 6] = [
+    (7.5, 0.0),
+    (1.0, 8.0),
+    (5.0, 8.0),
+    (4.0, 14.0),
+    (11.0, 5.5),
+    (7.0, 5.5),
+];
+const BOLT_VIEW_WIDTH: f32 = 12.0;
+const BOLT_VIEW_HEIGHT: f32 = 14.0;
+
+/// Bolt-shaped loading indicator.
 ///
-/// Uses a `frame` field (0..SPINNER_FRAMES) driven by a timer at
-/// `Anim::PULSE_INTERVAL_MS` intervals. Callers that need animation must
-/// advance the frame via a stored `Task` on their entity and call `cx.notify()`.
-///
-/// The spinner renders as `⠋ ⠙ ⠹` (braille dots) cycling per frame.
+/// The bolt sits as a faint tint outline and fills with the tint from top to
+/// bottom, one step per frame, like a strike. Callers advance `frame` every
+/// [`Spinner::INTERVAL_MS`] ms with [`Spinner::next_frame`] and call
+/// `cx.notify()`. When the app asks for reduced motion the bolt is drawn
+/// fully charged and does not move.
 #[derive(IntoElement)]
 pub struct Spinner {
     frame: usize,
 }
 
 impl Spinner {
-    /// Create a spinner at the given animation frame (0..SPINNER_FRAMES).
+    /// Create a spinner at the given animation frame.
     pub fn new(frame: usize) -> Self {
         Self {
             frame: frame % SPINNER_FRAMES,
         }
     }
 
-    /// Advance frame mod SPINNER_FRAMES — call this every `Anim::PULSE_INTERVAL_MS` ms.
+    /// Advance frame mod the frame count — call this every `INTERVAL_MS` ms.
     pub fn next_frame(frame: usize) -> usize {
         (frame + 1) % SPINNER_FRAMES
     }
 
     pub const INTERVAL_MS: u64 = Anim::PULSE_INTERVAL_MS;
 
-    const GLYPHS: [&'static str; SPINNER_FRAMES] = ["⠋", "⠙", "⠹"];
+    /// Share of the bolt height that is charged at `frame`, from the top.
+    fn charged_fraction(frame: usize) -> f32 {
+        (frame % SPINNER_FRAMES + 1) as f32 / SPINNER_FRAMES as f32
+    }
 }
 
 impl RenderOnce for Spinner {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let glyph = Self::GLYPHS[self.frame];
+        let tint = ChromeColors::tint(cx.theme());
+        let track = tint.opacity(Feedback::SPINNER_TRACK_ALPHA);
+        let charged = if cx.reduce_motion() {
+            1.0
+        } else {
+            Self::charged_fraction(self.frame)
+        };
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .justify_center()
-            .w(Heights::ICON_SM)
-            .h(Heights::ICON_SM)
-            .rounded(Radii::FULL)
-            .text_size(FontSizes::SM)
-            .text_color(theme.muted_foreground)
-            .child(glyph)
+            .size(Feedback::SPINNER_BOX)
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| {
+                        paint_bolt(bounds, track, window);
+
+                        let charged_bounds = Bounds::new(
+                            bounds.origin,
+                            size(bounds.size.width, bounds.size.height * charged),
+                        );
+                        window.with_content_mask(
+                            Some(ContentMask {
+                                bounds: charged_bounds,
+                            }),
+                            |window| paint_bolt(bounds, tint, window),
+                        );
+                    },
+                )
+                .w(Feedback::SPINNER_BOLT_WIDTH)
+                .h(Feedback::SPINNER_BOLT_HEIGHT),
+            )
     }
 }
 
-// ---------------------------------------------------------------------------
-// LoadingBlock
-// ---------------------------------------------------------------------------
+/// Fills the bolt scaled from its view box into `bounds`.
+fn paint_bolt(bounds: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+    let scale_x = f32::from(bounds.size.width) / BOLT_VIEW_WIDTH;
+    let scale_y = f32::from(bounds.size.height) / BOLT_VIEW_HEIGHT;
+    let to_bounds = |(x, y): (f32, f32)| {
+        point(
+            bounds.origin.x + px(x * scale_x),
+            bounds.origin.y + px(y * scale_y),
+        )
+    };
 
-/// Renders the non-data phases of a `LoadingState<()>`.
-///
-/// - `Idle` → nothing (returns an empty div)
-/// - `Loading` → spinner + optional muted label
-/// - `Failed` → `BannerBlock::Danger` with the error message
-///
-/// `Loaded` is never rendered by this element; the caller short-circuits on
-/// `LoadingState::Loaded` and renders its own content.
-#[derive(IntoElement)]
-pub struct LoadingBlock {
-    phase: LoadingPhase,
-}
+    let mut builder = PathBuilder::fill();
+    let mut points = BOLT_POINTS.into_iter().map(to_bounds);
 
-enum LoadingPhase {
-    Idle,
-    Loading {
-        label: Option<SharedString>,
-        frame: usize,
-    },
-    Failed {
-        message: SharedString,
-    },
-}
-
-impl LoadingBlock {
-    /// Create a block that renders nothing (Idle state).
-    pub fn idle() -> Self {
-        Self {
-            phase: LoadingPhase::Idle,
-        }
+    if let Some(first) = points.next() {
+        builder.move_to(first);
     }
-
-    /// Create a loading block with an optional label.
-    ///
-    /// `frame` is the current spinner animation frame (advance at
-    /// `Spinner::INTERVAL_MS` ms intervals).
-    pub fn loading(label: impl Into<Option<SharedString>>, frame: usize) -> Self {
-        Self {
-            phase: LoadingPhase::Loading {
-                label: label.into(),
-                frame,
-            },
-        }
+    for next in points {
+        builder.line_to(next);
     }
+    builder.close();
 
-    /// Create a failure block with an error message.
-    pub fn failed(message: impl Into<SharedString>) -> Self {
-        Self {
-            phase: LoadingPhase::Failed {
-                message: message.into(),
-            },
-        }
-    }
-
-    /// Convenience: build a `LoadingBlock` directly from a `LoadingState<T>`.
-    ///
-    /// Returns `None` when the state is `Loaded` — the caller must render.
-    pub fn from_state<T>(
-        state: &LoadingState<T>,
-        label: impl Into<Option<SharedString>>,
-        frame: usize,
-    ) -> Option<Self> {
-        match state {
-            LoadingState::Idle => Some(Self::idle()),
-            LoadingState::Loading => Some(Self::loading(label, frame)),
-            LoadingState::Failed { message } => Some(Self::failed(message.clone())),
-            LoadingState::Loaded(_) => None,
-        }
-    }
-}
-
-impl RenderOnce for LoadingBlock {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-
-        let inner: gpui::AnyElement = match self.phase {
-            LoadingPhase::Idle => div().into_any_element(),
-
-            LoadingPhase::Loading { label, frame } => div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .py(Spacing::XS)
-                .px(Spacing::SM)
-                .child(Spinner::new(frame))
-                .when_some(label, |d, text| {
-                    d.child(MonoCaption::new(text).color(theme.muted_foreground))
-                })
-                .into_any_element(),
-
-            LoadingPhase::Failed { message } => div()
-                .p(Spacing::SM)
-                .child(BannerBlock::new(BannerVariant::Danger, message))
-                .into_any_element(),
-        };
-
-        div().child(inner)
+    match builder.build() {
+        Ok(path) => window.paint_path(path, color),
+        Err(error) => log::warn!("Failed to build spinner bolt path: {error}"),
     }
 }
 
@@ -247,37 +204,22 @@ mod tests {
 
     #[test]
     fn spinner_next_frame_wraps_around() {
-        use super::Spinner;
+        use super::{SPINNER_FRAMES, Spinner};
 
         assert_eq!(Spinner::next_frame(0), 1);
-        assert_eq!(Spinner::next_frame(1), 2);
-        assert_eq!(Spinner::next_frame(2), 0); // wraps
+        assert_eq!(Spinner::next_frame(SPINNER_FRAMES - 2), SPINNER_FRAMES - 1);
+        assert_eq!(Spinner::next_frame(SPINNER_FRAMES - 1), 0);
     }
 
     #[test]
-    fn loading_block_from_state_returns_none_for_loaded() {
-        use super::LoadingBlock;
-        use gpui::SharedString;
+    fn spinner_charges_the_bolt_from_top_to_full() {
+        use super::{SPINNER_FRAMES, Spinner};
 
-        let loaded: LoadingState<i32> = LoadingState::Loaded(1);
-        let block = LoadingBlock::from_state(&loaded, None::<SharedString>, 0);
-        assert!(block.is_none());
-    }
+        let fractions: Vec<f32> = (0..SPINNER_FRAMES).map(Spinner::charged_fraction).collect();
 
-    #[test]
-    fn loading_block_from_state_returns_some_for_non_loaded() {
-        use super::LoadingBlock;
-        use gpui::SharedString;
-
-        let idle: LoadingState<i32> = LoadingState::Idle;
-        assert!(LoadingBlock::from_state(&idle, None::<SharedString>, 0).is_some());
-
-        let loading: LoadingState<i32> = LoadingState::Loading;
-        assert!(LoadingBlock::from_state(&loading, None::<SharedString>, 0).is_some());
-
-        let failed: LoadingState<i32> = LoadingState::Failed {
-            message: "e".into(),
-        };
-        assert!(LoadingBlock::from_state(&failed, None::<SharedString>, 0).is_some());
+        assert!(fractions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(fractions[0] > 0.0);
+        assert_eq!(fractions[SPINNER_FRAMES - 1], 1.0);
+        assert_eq!(Spinner::new(SPINNER_FRAMES + 3).frame, 3);
     }
 }

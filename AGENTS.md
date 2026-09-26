@@ -104,7 +104,7 @@ cargo run -p dbflux --features ui-automation
 **Working loop.**
 
 1. Find the target with `get_ui_tree` or `find_elements`. Elements are addressed
-   by their GPUI element id (`.id("tab-scripts")` becomes `tab-scripts`).
+   by their GPUI element id (`.id("rail-scripts")` becomes `rail-scripts`).
 2. Act with `click_element`, `type_text`, `set_text` or `keyboard` (GPUI
    keystroke syntax, for example `ctrl-shift-p`).
 3. Wait for the result with `wait_for_element` or `wait_for_state` instead of
@@ -351,7 +351,7 @@ Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-f
 The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
 
 - `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency. May depend on `dbflux_i18n` for translated UI copy; `dbflux_i18n` has no `dbflux_*` dependencies.
-- `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
+- `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, platform detection, sql_preview_modal, sso_wizard.
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
@@ -657,8 +657,7 @@ MCP provides a preview-before-execute workflow for schema changes:
 ### Platform Detection
 
 `crates/dbflux_ui_base/src/platform.rs` handles X11/Wayland differences:
-- X11 treats `WindowKind::Floating` as transient dialogs (can cause rendering issues)
-- `floating_window_kind()` returns `None` on X11, `Some(Floating)` elsewhere
+- `floating_window_kind()` returns `WindowKind::Floating` on every platform. On Linux, gpui parents a floating window to the window holding keyboard focus when it opens (`xdg_toplevel.set_parent` on Wayland, `WM_TRANSIENT_FOR` on X11), so tiling compositors float it at its requested size. Do not use `WindowKind::Dialog` for secondary windows: it is modal and blocks input to the parent.
 - `apply_window_options()` sets min size so X11 WMs emit `WM_NORMAL_HINTS`
 
 A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/platform.rs` for internal compatibility.

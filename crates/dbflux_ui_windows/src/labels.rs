@@ -18,13 +18,52 @@ pub(crate) fn keybindings_inherits_from(parent: &str) -> String {
     dbflux_i18n::t!("settings.keybindings.inherits_from", parent = parent)
 }
 
-/// Formats the conflict banner title for a chord shared by multiple commands.
-pub(crate) fn keybindings_conflict_title(chord: &str, others: &str) -> String {
+/// Formats the conflict banner title: the recorded chord and the bindings
+/// that already hold it.
+pub(crate) fn keybindings_conflict_title(chord: &str, bindings: &str) -> String {
     dbflux_i18n::t!(
         "settings.keybindings.conflict.title",
         chord = chord,
-        others = others
+        bindings = bindings
     )
+}
+
+/// Formats one binding named in the conflict banner: its command and context.
+pub(crate) fn keybindings_conflict_holder(command: &str, context: &str) -> String {
+    dbflux_i18n::t!(
+        "settings.keybindings.conflict.holder",
+        command = command,
+        context = context
+    )
+}
+
+/// Formats the conflict banner body naming the command that would take the
+/// chord.
+pub(crate) fn keybindings_conflict_body(command: &str) -> String {
+    dbflux_i18n::t!("settings.keybindings.conflict.body", command = command)
+}
+
+/// Formats the "conflicts with <context>" badge of a binding row.
+pub(crate) fn keybindings_conflict_badge(context: &str) -> String {
+    dbflux_i18n::t!("settings.keybindings.conflict.badge", context = context)
+}
+
+/// Formats the footer's conflict count.
+pub(crate) fn keybindings_conflict_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.keybindings.footer.conflicts.one")
+    } else {
+        dbflux_i18n::t!("settings.keybindings.footer.conflicts.many", count = count)
+    }
+}
+
+/// Formats the footer's count of overridden bindings.
+pub(crate) fn keybindings_overridden_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("settings.keybindings.footer.overridden.one")
+    } else {
+        dbflux_i18n::t!("settings.keybindings.footer.overridden.many", count = count)
+    }
 }
 
 /// Formats the About section copyright line with the resolved author name.
@@ -178,6 +217,16 @@ pub(crate) fn mcp_effective_classes_line(classes: &str) -> String {
     )
 }
 
+/// Formats the line listing the classes a connection's MCP client may run
+/// only after a person approves each call.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_effective_approval_classes_line(classes: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.mcp_effective_approval_classes",
+        classes = classes
+    )
+}
+
 /// Formats the "Configure <driver name>" call-to-action label shown in the driver picker
 /// footer once a driver card is focused.
 pub(crate) fn driver_select_configure(name: &str) -> String {
@@ -272,6 +321,29 @@ pub(crate) fn mcp_role_policy_count(count: usize) -> String {
     } else {
         dbflux_i18n::t!("settings.mcp.field.policy_count.many", count = count)
     }
+}
+
+/// Badge of the Connection Manager's MCP tab: how many clients have a
+/// binding on this connection.
+pub(crate) fn connection_manager_mcp_client_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("connection_manager.tab_badge.mcp_clients.one")
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.tab_badge.mcp_clients.many",
+            count = count
+        )
+    }
+}
+
+/// Header of the allowed-tools group of an MCP policy: "Allowed tools · N of M".
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_allowed_tools_header(selected: usize, total: usize) -> String {
+    dbflux_i18n::t!(
+        "settings.mcp.field.allowed_tools_count",
+        selected = selected,
+        total = total
+    )
 }
 
 /// Formats the "N tools · M classes" caption shown next to an MCP policy row.
@@ -838,8 +910,13 @@ pub(crate) fn export_toast_success(kind: &str, path: &str) -> String {
 }
 
 /// Translates a command's display name for the Settings → Keybindings
-/// section, keyed by [`dbflux_app::keymap::Command::id`].
+/// section, keyed by [`dbflux_app::keymap::Command::id`]. The nine
+/// switch-to-tab commands carry their tab number so their rows differ.
 pub(crate) fn keybinding_command_name(cmd: &dbflux_app::keymap::Command) -> String {
+    if let dbflux_app::keymap::Command::SwitchToTab(index) = cmd {
+        return dbflux_i18n::t!("settings.keybindings.switch_to_tab_indexed", index = index);
+    }
+
     dbflux_i18n::t!(&format!("settings.keybindings.command.{}", cmd.id()))
 }
 
@@ -1150,7 +1227,7 @@ mod tests {
     fn auth_login_starting_embeds_profile_name() {
         let message = auth_login_starting("prod-mongo");
 
-        assert_eq!(message, "Starting auth-provider login for 'prod-mongo'...");
+        assert_eq!(message, "Starting auth-provider login for 'prod-mongo'…");
     }
 
     #[test]
@@ -1198,6 +1275,24 @@ mod tests {
         let message = mcp_effective_tools_line("read_query, list_tables");
 
         assert!(message.contains("read_query, list_tables"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_effective_approval_classes_line_embeds_classes() {
+        use super::mcp_effective_approval_classes_line;
+
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            let badge = dbflux_i18n::t!(
+                "connection_manager.mcp_effective_asks_badge",
+                locale = locale
+            );
+            assert_ne!(badge, "connection_manager.mcp_effective_asks_badge");
+        }
+
+        let message = mcp_effective_approval_classes_line("write, destructive");
+
+        assert!(message.contains("write, destructive"));
     }
 
     #[cfg(feature = "mcp")]
@@ -1683,6 +1778,18 @@ mod keybinding_translation_tests {
                 "English catalog value for {key} must match Command::display_name()"
             );
         }
+    }
+
+    #[test]
+    fn keybinding_command_name_numbers_every_switch_to_tab_command() {
+        assert_eq!(
+            keybinding_command_name(&Command::SwitchToTab(1)),
+            "Switch to tab 1"
+        );
+        assert_eq!(
+            keybinding_command_name(&Command::SwitchToTab(9)),
+            "Switch to tab 9"
+        );
     }
 
     #[test]

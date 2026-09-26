@@ -1,8 +1,7 @@
-use dbflux_components::controls::{GpuiInput as Input, InputState};
+use crate::tokens::{FormMetrics, SettingsMetrics};
+use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon as PrimitiveIcon, Label};
-use dbflux_components::tokens::{Heights, Radii};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel, MonoMeta, PanelTitle};
+use dbflux_components::primitives::{Badge, BadgeTone, SegmentedControl, SegmentedItem, Text};
 use dbflux_core::{RpcServiceKind, ServiceConfig};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
@@ -10,10 +9,6 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Icon;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::checkbox::Checkbox;
 use std::collections::HashMap;
 
 use super::layout;
@@ -30,14 +25,6 @@ fn services_section_description() -> String {
 
 fn empty_services_message() -> String {
     dbflux_i18n::t!("settings.rpc_services.empty")
-}
-
-fn service_editor_title(is_editing: bool) -> String {
-    if is_editing {
-        dbflux_i18n::t!("settings.rpc_services.edit_title")
-    } else {
-        dbflux_i18n::t!("settings.rpc_services.new_title")
-    }
 }
 
 fn new_service_button_label() -> String {
@@ -810,13 +797,14 @@ impl ServicesSection {
         let editing_idx = self.editing_svc_idx;
 
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            cx.theme().border,
+            dbflux_components::composites::page_header(
                 services_section_title(),
                 services_section_description(),
                 cx,
             ),
             self.render_service_list(&services, editing_idx, cx),
-            self.render_service_form(editing_idx, cx),
+            self.render_service_form(cx),
         )
     }
 
@@ -826,7 +814,6 @@ impl ServicesSection {
         editing_idx: Option<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let theme = cx.theme();
         let is_list_focused = self.content_focused && self.svc_focus == ServiceFocus::List;
         let is_new_button_focused = is_list_focused && self.svc_selected_idx.is_none();
 
@@ -834,37 +821,81 @@ impl ServicesSection {
             self.svc_list_scroll_handle.scroll_to_item(scroll_idx);
         }
 
+        let toolbar = layout::master_list_toolbar(vec![
+            Button::new("new-service", new_service_button_label())
+                .primary()
+                .icon(AppIcon::Plus)
+                .focused(is_new_button_focused)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.svc_selected_idx = None;
+                    this.clear_svc_form(window, cx);
+                }))
+                .into_any_element(),
+        ]);
+
+        let rows: Vec<AnyElement> = services
+            .iter()
+            .enumerate()
+            .map(|(idx, service)| {
+                let is_selected = editing_idx == Some(idx);
+                let is_focused = is_list_focused && self.svc_selected_idx == Some(idx);
+
+                let command = service
+                    .command
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| {
+                        dbflux_i18n::t!("settings.rpc_services.field.default_command")
+                    });
+                let kind = match service.kind {
+                    RpcServiceKind::Driver => dbflux_i18n::t!("settings.rpc_services.kind.driver"),
+                    RpcServiceKind::AuthProvider => {
+                        dbflux_i18n::t!("settings.rpc_services.kind.auth_provider")
+                    }
+                };
+
+                let trailing = (!service.enabled).then(|| {
+                    Badge::new(
+                        dbflux_i18n::t!("settings.rpc_services.field.disabled"),
+                        BadgeTone::Neutral,
+                    )
+                    .into_any_element()
+                });
+
+                layout::master_list_row(
+                    SharedString::from(format!("svc-item-{}", idx)),
+                    layout::MasterRow {
+                        icon: Some(AppIcon::Plug),
+                        title: service.socket_id.clone().into(),
+                        detail: Some(format!("{kind} · {command}").into()),
+                        trailing,
+                    },
+                    is_selected,
+                    is_focused,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.svc_selected_idx = Some(idx);
+                    this.edit_service(idx, window, cx);
+                }))
+                .into_any_element()
+            })
+            .collect();
+
+        let empty = rows.is_empty();
+        let theme = cx.theme();
+
         div()
-            .w(px(250.0))
+            .w(SettingsMetrics::LIST_WIDTH)
             .h_full()
             .min_h_0()
+            .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
             .flex_col()
-            .child(
-                div().p_2().border_b_1().border_color(theme.border).child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_new_button_focused {
-                            theme.primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            Button::new("new-service")
-                                .icon(Icon::new(AppIcon::Plus))
-                                .label(new_service_button_label())
-                                .small()
-                                .w_full()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.svc_selected_idx = None;
-                                    this.clear_svc_form(window, cx);
-                                })),
-                        ),
-                ),
-            )
+            .child(toolbar)
             .child(
                 div()
                     .id("services-list-scroll")
@@ -872,637 +903,392 @@ impl ServicesSection {
                     .min_h_0()
                     .overflow_scroll()
                     .track_scroll(&self.svc_list_scroll_handle)
-                    .p_2()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .when(services.is_empty(), |container| {
-                        container.child(div().p_4().child(
-                            Body::new(empty_services_message()).color(theme.muted_foreground),
-                        ))
+                    .when(empty, |list| {
+                        list.child(layout::master_list_empty(empty_services_message()))
                     })
-                    .children(services.iter().enumerate().map(|(idx, service)| {
-                        let is_selected = editing_idx == Some(idx);
-                        let is_focused = is_list_focused && self.svc_selected_idx == Some(idx);
-                        let is_disabled = !service.enabled;
-
-                        let subtitle = service
-                            .command
-                            .as_deref()
-                            .filter(|value| !value.is_empty())
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| {
-                                dbflux_i18n::t!("settings.rpc_services.field.default_command")
-                            });
-
-                        div()
-                            .id(SharedString::from(format!("svc-item-{}", idx)))
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_focused && !is_selected {
-                                theme.primary
-                            } else {
-                                transparent_black()
-                            })
-                            .when(is_selected, |div| div.bg(theme.secondary))
-                            .hover(|div| div.bg(theme.secondary))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.svc_selected_idx = Some(idx);
-                                this.edit_service(idx, window, cx);
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(
-                                        div().mt(px(2.0)).child(
-                                            PrimitiveIcon::new(AppIcon::Plug)
-                                                .size(Heights::ICON_SM)
-                                                .muted(),
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(if is_disabled {
-                                                        MonoLabel::new(service.socket_id.clone())
-                                                            .color(theme.muted_foreground)
-                                                            .into_any_element()
-                                                    } else {
-                                                        MonoLabel::new(service.socket_id.clone())
-                                                            .into_any_element()
-                                                    })
-                                                    .when(is_disabled, |container| {
-                                                        container.child(
-                                                            div()
-                                                                .px_1()
-                                                                .rounded(px(3.0))
-                                                                .bg(theme.secondary)
-                                                                .child(MonoCaption::new(
-                                                                    dbflux_i18n::t!(
-                                                                        "settings.rpc_services.field.disabled"
-                                                                    ),
-                                                                )),
-                                                        )
-                                                    }),
-                                            )
-                                            .child(MonoMeta::new(subtitle)),
-                                    ),
-                            )
-                    })),
+                    .children(rows),
             )
     }
 
-    fn render_service_form(
-        &self,
-        editing_idx: Option<usize>,
+    /// Whether the keyboard cursor is on `row` (and on `column` of it).
+    fn svc_cursor_on(&self, row: ServiceFormRow, column: usize) -> bool {
+        self.content_focused
+            && self.svc_focus == ServiceFocus::Form
+            && !self.svc_editing_field
+            && self.svc_form_rows().get(self.svc_form_cursor).copied() == Some(row)
+            && self.svc_env_col == column
+    }
+
+    /// Moves the keyboard cursor to `row`/`column` and focuses its input.
+    fn svc_select(
+        &mut self,
+        row: ServiceFormRow,
+        column: usize,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) {
+        self.svc_focus = ServiceFocus::Form;
+
+        if let Some(position) = self
+            .svc_form_rows()
+            .iter()
+            .position(|candidate| *candidate == row)
+        {
+            self.svc_form_cursor = position;
+            self.svc_env_col = column;
+        }
+
+        self.svc_focus_current_field(window, cx);
+        cx.notify();
+    }
+
+    fn render_service_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let primary = theme.primary;
-        let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
-        let cursor = self.svc_form_cursor;
-        let rows = self.svc_form_rows();
-
-        let title = service_editor_title(editing_idx.is_some());
-
-        let is_row_focused = |row: ServiceFormRow| -> bool {
-            is_form_focused && rows.get(cursor).copied() == Some(row)
-        };
 
         layout::sticky_form_shell(
-            PanelTitle::new(title),
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.rpc_services.group.service"),
+                Some(AppIcon::Plug.into()),
+                cx,
+            ),
             div()
                 .flex()
                 .flex_col()
-                .gap_4()
                 .child(self.render_svc_input_field(
                     dbflux_i18n::t!("settings.rpc_services.field.socket_id"),
                     &self.input_socket_id,
-                    is_row_focused(ServiceFormRow::SocketId),
-                    primary,
                     ServiceFormRow::SocketId,
+                    Some(SettingsMetrics::TEXT_FIELD_WIDTH),
+                    None,
                     cx,
                 ))
                 .child(self.render_svc_input_field(
                     dbflux_i18n::t!("settings.rpc_services.field.command"),
                     &self.input_svc_command,
-                    is_row_focused(ServiceFormRow::Command),
-                    primary,
                     ServiceFormRow::Command,
+                    None,
+                    None,
                     cx,
                 ))
                 .child(self.render_svc_input_field(
                     dbflux_i18n::t!("settings.rpc_services.field.startup_timeout"),
                     &self.input_svc_timeout,
-                    is_row_focused(ServiceFormRow::Timeout),
-                    primary,
                     ServiceFormRow::Timeout,
+                    Some(SettingsMetrics::NUMBER_FIELD_WIDTH),
+                    Some(dbflux_i18n::t!("settings.general.unit.milliseconds")),
                     cx,
                 ))
-                .child(self.render_svc_kind_selector(is_form_focused, cursor, &rows, primary, cx))
-                .child(self.render_svc_enabled_checkbox(
-                    is_row_focused(ServiceFormRow::Enabled),
-                    primary,
-                    cx,
-                ))
-                .child(self.render_svc_args_section(is_form_focused, cursor, &rows, primary, cx))
-                .child(self.render_svc_env_section(is_form_focused, cursor, &rows, primary, cx)),
+                .child(self.render_svc_kind_selector(cx))
+                .child(self.render_svc_enabled_checkbox(cx))
+                .child(self.render_svc_args_section(cx))
+                .child(self.render_svc_env_section(cx)),
             None,
             &theme,
         )
     }
 
-    pub(super) fn render_service_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let is_form_focused = self.content_focused && self.svc_focus == ServiceFocus::Form;
-        let cursor = self.svc_form_cursor;
-        let rows = self.svc_form_rows();
-        let is_row_focused = |row: ServiceFormRow| -> bool {
-            is_form_focused && rows.get(cursor).copied() == Some(row)
-        };
+    /// Delete, on the left of the footer, for a saved service.
+    pub(super) fn render_service_footer_leading_actions(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.editing_svc_idx?;
 
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .when(self.editing_svc_idx.is_some(), |container| {
-                container.child(layout::footer_action_frame(
-                    is_row_focused(ServiceFormRow::DeleteButton),
-                    theme.primary,
-                    Button::new("delete-service")
-                        .label(dbflux_i18n::t!("settings.rpc_services.action.delete"))
-                        .small()
-                        .danger()
-                        .w_full()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(idx) = this.editing_svc_idx {
-                                this.request_delete_service(idx, cx);
-                            }
-                        })),
-                ))
-            })
-            .child(layout::footer_action_frame(
-                is_row_focused(ServiceFormRow::SaveButton),
-                theme.primary,
-                Button::new("save-service")
-                    .label(if self.editing_svc_idx.is_some() {
-                        dbflux_i18n::t!("settings.rpc_services.action.update")
-                    } else {
-                        dbflux_i18n::t!("settings.rpc_services.action.create")
-                    })
-                    .small()
-                    .primary()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.save_service(window, cx);
-                    })),
-            ))
-            .into_any_element()
+        Some(
+            Button::new(
+                "delete-service",
+                dbflux_i18n::t!("settings.rpc_services.action.delete"),
+            )
+            .danger()
+            .icon(AppIcon::Delete)
+            .focused(self.svc_cursor_on(ServiceFormRow::DeleteButton, 0))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(idx) = this.editing_svc_idx {
+                    this.request_delete_service(idx, cx);
+                }
+            }))
+            .into_any_element(),
+        )
+    }
+
+    pub(super) fn render_service_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new(
+            "save-service",
+            if self.editing_svc_idx.is_some() {
+                dbflux_i18n::t!("settings.rpc_services.action.update")
+            } else {
+                dbflux_i18n::t!("settings.rpc_services.action.create")
+            },
+        )
+        .primary()
+        .icon(AppIcon::Check)
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
+        .focused(self.svc_cursor_on(ServiceFormRow::SaveButton, 0))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.save_service(window, cx);
+        }))
+        .into_any_element()
     }
 
     fn render_svc_input_field(
         &self,
         label: String,
         input: &Entity<InputState>,
-        is_focused: bool,
-        primary: Hsla,
         row: ServiceFormRow,
+        width: Option<Pixels>,
+        unit: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Label::new(label))
-            .child(
-                div()
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        transparent_black()
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.svc_focus = ServiceFocus::Form;
-                            let rows = this.svc_form_rows();
-                            if let Some(pos) = rows.iter().position(|candidate| *candidate == row) {
-                                this.svc_form_cursor = pos;
-                                this.svc_env_col = 0;
-                            }
-                            this.svc_focus_current_field(window, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(Input::new(input).small()),
-            )
+        let control = Input::new(input)
+            .aria_label(label.clone())
+            .when_some(unit, |control, unit| {
+                control.suffix(Text::code(unit).muted_foreground())
+            });
+
+        layout::form_row(
+            label,
+            layout::field_frame(self.svc_cursor_on(row, 0), width, true, control, cx)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.svc_select(row, 0, window, cx);
+                    }),
+                ),
+            None,
+        )
     }
 
-    fn render_svc_enabled_checkbox(
-        &self,
-        is_focused: bool,
-        primary: Hsla,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let enable_label = dbflux_i18n::t!("settings.rpc_services.field.enable");
-
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                primary
-            } else {
-                transparent_black()
-            })
-            .child(
+    fn render_svc_enabled_checkbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        layout::check_row(
+            layout::cursor_ring(
+                self.svc_cursor_on(ServiceFormRow::Enabled, 0),
                 Checkbox::new("svc-enabled")
                     .checked(self.svc_enabled)
-                    .aria_label(enable_label.clone())
+                    .label(dbflux_i18n::t!("settings.rpc_services.field.enable"))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.svc_enabled = *checked;
                         cx.notify();
                     })),
-            )
-            .child(Body::new(enable_label))
-    }
-
-    fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
-        div()
-            .size_4()
-            .rounded_full()
-            .border_1()
-            .border_color(if selected { primary } else { border })
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(div().size_2().rounded_full().bg(if selected {
-                primary
-            } else {
-                transparent_black()
-            }))
-    }
-
-    fn render_svc_kind_selector(
-        &self,
-        is_form_focused: bool,
-        cursor: usize,
-        rows: &[ServiceFormRow],
-        primary: Hsla,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
-        let border = theme.border;
-        let is_row_focused =
-            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Kind);
-
-        let kinds = [
-            (
-                RpcServiceKind::Driver,
-                0usize,
-                "driver",
-                dbflux_i18n::t!("settings.rpc_services.kind.driver"),
+                cx,
             ),
-            (
-                RpcServiceKind::AuthProvider,
-                1usize,
-                "auth_provider",
-                dbflux_i18n::t!("settings.rpc_services.kind.auth_provider"),
-            ),
-        ];
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Label::new(dbflux_i18n::t!(
-                "settings.rpc_services.field.service_type"
-            )))
-            .child(div().flex().gap_4().children(kinds.into_iter().map(
-                |(kind, column, id, label)| {
-                    let is_focused = is_row_focused && self.svc_env_col == column;
-
-                    div()
-                        .id(SharedString::from(format!("service-kind-{}", id)))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .border_1()
-                        .border_color(if is_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.svc_focus = ServiceFocus::Form;
-                            if let Some(position) = this
-                                .svc_form_rows()
-                                .iter()
-                                .position(|candidate| *candidate == ServiceFormRow::Kind)
-                            {
-                                this.svc_form_cursor = position;
-                            }
-                            this.svc_env_col = column;
-                            this.svc_kind = kind;
-                            this.svc_editing_field = false;
-                            cx.notify();
-                        }))
-                        .child(Self::render_radio_button(
-                            self.svc_kind == kind,
-                            primary,
-                            border,
-                        ))
-                        .child(div().text_sm().child(label))
-                },
-            )))
+            None,
+        )
     }
 
-    fn render_svc_args_section(
-        &self,
-        is_form_focused: bool,
-        cursor: usize,
-        rows: &[ServiceFormRow],
-        primary: Hsla,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render_svc_kind_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let active = match self.svc_kind {
+            RpcServiceKind::Driver => "driver",
+            RpcServiceKind::AuthProvider => "auth_provider",
+        };
 
-        let is_add_focused =
-            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::AddArg);
+        let control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new(
+                    "driver",
+                    dbflux_i18n::t!("settings.rpc_services.kind.driver"),
+                )
+                .icon(AppIcon::Database),
+                SegmentedItem::new(
+                    "auth_provider",
+                    dbflux_i18n::t!("settings.rpc_services.kind.auth_provider"),
+                )
+                .icon(AppIcon::KeyRound),
+            ],
+            active,
+            move |selected, _window, cx| {
+                let (kind, column) = if selected.as_ref() == "auth_provider" {
+                    (RpcServiceKind::AuthProvider, 1)
+                } else {
+                    (RpcServiceKind::Driver, 0)
+                };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Label::new(dbflux_i18n::t!(
-                "settings.rpc_services.field.arguments"
-            )))
-            .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
-                let is_row_at_cursor =
-                    is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Arg(idx));
-                let input_focused = is_row_at_cursor && self.svc_env_col == 0;
-                let remove_focused = is_row_at_cursor && self.svc_env_col == 1;
+                entity.update(cx, |this, cx| {
+                    this.svc_focus = ServiceFocus::Form;
+                    if let Some(position) = this
+                        .svc_form_rows()
+                        .iter()
+                        .position(|candidate| *candidate == ServiceFormRow::Kind)
+                    {
+                        this.svc_form_cursor = position;
+                    }
+                    this.svc_env_col = column;
+                    this.svc_kind = kind;
+                    this.svc_editing_field = false;
+                    cx.notify();
+                });
+            },
+        );
 
-                div()
-                    .flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .rounded(Radii::SM)
-                            .border_1()
-                            .border_color(if input_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.svc_focus = ServiceFocus::Form;
-                                    let rows = this.svc_form_rows();
-                                    if let Some(pos) = rows.iter().position(|candidate| {
-                                        *candidate == ServiceFormRow::Arg(idx)
-                                    }) {
-                                        this.svc_form_cursor = pos;
-                                        this.svc_env_col = 0;
-                                    }
-                                    this.svc_focus_current_field(window, cx);
-                                    cx.notify();
-                                }),
-                            )
-                            .child(Input::new(input).small()),
-                    )
-                    .child(
-                        div()
-                            .rounded(Radii::SM)
-                            .border_1()
-                            .border_color(if remove_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .child(
-                                Button::new(SharedString::from(format!("rm-arg-{}", idx)))
-                                    .label("x")
-                                    .small()
-                                    .ghost()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.remove_arg_row(idx, window, cx);
-                                    })),
-                            ),
-                    )
-            }))
-            .child(
-                div().flex().justify_center().child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_add_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            div()
-                                .id("add-arg")
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.primary)
-                                .hover(|div| div.opacity(0.8))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.add_arg_row(window, cx);
-                                    }),
-                                )
-                                .child(
-                                    PrimitiveIcon::new(AppIcon::Plus)
-                                        .size(Heights::ICON_SM)
-                                        .color(theme.primary_foreground),
-                                ),
-                        ),
-                ),
-            )
+        let cursor_item = if self.svc_cursor_on(ServiceFormRow::Kind, 0) {
+            Some("driver")
+        } else if self.svc_cursor_on(ServiceFormRow::Kind, 1) {
+            Some("auth_provider")
+        } else {
+            None
+        };
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.rpc_services.field.service_type"),
+            div().flex().child(control),
+            None,
+        )
     }
 
-    fn render_svc_env_section(
+    fn remove_button(
         &self,
-        is_form_focused: bool,
-        cursor: usize,
-        rows: &[ServiceFormRow],
-        primary: Hsla,
-        cx: &mut Context<Self>,
+        id: SharedString,
+        focused: bool,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        Button::new(id, dbflux_i18n::t!("settings.rpc_services.action.remove"))
+            .inline()
+            .ghost()
+            .icon(AppIcon::X)
+            .icon_only()
+            .focused(focused)
+            .on_click(on_click)
+    }
 
-        let is_add_focused =
-            is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::AddEnv);
+    fn add_button(
+        &self,
+        id: &'static str,
+        label: String,
+        focused: bool,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        Button::new(id, label)
+            .secondary()
+            .icon(AppIcon::Plus)
+            .focused(focused)
+            .on_click(on_click)
+    }
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Label::new(dbflux_i18n::t!(
-                "settings.rpc_services.field.env_vars"
-            )))
-            .children(
-                self.svc_env_key_inputs
-                    .iter()
-                    .zip(self.svc_env_value_inputs.iter())
-                    .enumerate()
-                    .map(|(idx, (key_input, value_input))| {
-                        let is_row_at_cursor = is_form_focused
-                            && rows.get(cursor).copied() == Some(ServiceFormRow::EnvKey(idx));
-                        let key_focused = is_row_at_cursor && self.svc_env_col == 0;
-                        let value_focused = is_row_at_cursor && self.svc_env_col == 1;
-                        let remove_focused = is_row_at_cursor && self.svc_env_col == 2;
+    fn render_svc_args_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let arg_rows = self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
+            let row = ServiceFormRow::Arg(idx);
 
-                        div()
-                            .flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(if key_focused {
-                                        primary
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.svc_focus = ServiceFocus::Form;
-                                            let rows = this.svc_form_rows();
-                                            if let Some(pos) = rows.iter().position(|candidate| {
-                                                *candidate == ServiceFormRow::EnvKey(idx)
-                                            }) {
-                                                this.svc_form_cursor = pos;
-                                                this.svc_env_col = 0;
-                                            }
-                                            this.svc_focus_current_field(window, cx);
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(Input::new(key_input).small()),
-                            )
-                            .child(MonoCaption::new("="))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(if value_focused {
-                                        primary
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.svc_focus = ServiceFocus::Form;
-                                            let rows = this.svc_form_rows();
-                                            if let Some(pos) = rows.iter().position(|candidate| {
-                                                *candidate == ServiceFormRow::EnvKey(idx)
-                                            }) {
-                                                this.svc_form_cursor = pos;
-                                                this.svc_env_col = 1;
-                                            }
-                                            this.svc_focus_current_field(window, cx);
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(Input::new(value_input).small()),
-                            )
-                            .child(
-                                div()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(if remove_focused {
-                                        primary
-                                    } else {
-                                        transparent_black()
-                                    })
-                                    .child(
-                                        Button::new(SharedString::from(format!("rm-env-{}", idx)))
-                                            .label("x")
-                                            .small()
-                                            .ghost()
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.remove_env_row(idx, window, cx);
-                                            })),
-                                    ),
-                            )
+            layout::inline_controls()
+                .child(
+                    layout::field_frame(
+                        self.svc_cursor_on(row, 0),
+                        None,
+                        true,
+                        Input::new(input)
+                            .aria_label(dbflux_i18n::t!("settings.rpc_services.field.arguments")),
+                        cx,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.svc_select(row, 0, window, cx);
+                        }),
+                    ),
+                )
+                .child(self.remove_button(
+                    SharedString::from(format!("rm-arg-{}", idx)),
+                    self.svc_cursor_on(row, 1),
+                    cx.listener(move |this, _, window, cx| {
+                        this.remove_arg_row(idx, window, cx);
                     }),
-            )
-            .child(
-                div().flex().justify_center().child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_add_focused {
-                            primary
-                        } else {
-                            transparent_black()
-                        })
-                        .child(
-                            div()
-                                .id("add-env")
-                                .w(Heights::ICON_LG)
-                                .h(Heights::ICON_LG)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .bg(theme.primary)
-                                .hover(|div| div.opacity(0.8))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.add_env_row(window, cx);
-                                    }),
-                                )
-                                .child(
-                                    PrimitiveIcon::new(AppIcon::Plus)
-                                        .size(Heights::ICON_SM)
-                                        .color(theme.primary_foreground),
-                                ),
+                ))
+        });
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.rpc_services.field.arguments"),
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::INLINE_GAP)
+                .children(arg_rows)
+                .child(div().flex().child(self.add_button(
+                    "add-arg",
+                    dbflux_i18n::t!("settings.rpc_services.action.add_argument"),
+                    self.svc_cursor_on(ServiceFormRow::AddArg, 0),
+                    cx.listener(|this, _, window, cx| {
+                        this.add_arg_row(window, cx);
+                    }),
+                ))),
+            None,
+        )
+    }
+
+    fn render_svc_env_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let env_rows = self
+            .svc_env_key_inputs
+            .iter()
+            .zip(self.svc_env_value_inputs.iter())
+            .enumerate()
+            .map(|(idx, (key_input, value_input))| {
+                let row = ServiceFormRow::EnvKey(idx);
+
+                layout::inline_controls()
+                    .child(
+                        layout::field_frame(
+                            self.svc_cursor_on(row, 0),
+                            None,
+                            true,
+                            Input::new(key_input)
+                                .aria_label(dbflux_i18n::t!("settings.rpc_services.field.env_key")),
+                            cx,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.svc_select(row, 0, window, cx);
+                            }),
                         ),
-                ),
-            )
+                    )
+                    .child(Text::code("=").muted_foreground())
+                    .child(
+                        layout::field_frame(
+                            self.svc_cursor_on(row, 1),
+                            None,
+                            true,
+                            Input::new(value_input).aria_label(dbflux_i18n::t!(
+                                "settings.rpc_services.field.env_value"
+                            )),
+                            cx,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.svc_select(row, 1, window, cx);
+                            }),
+                        ),
+                    )
+                    .child(self.remove_button(
+                        SharedString::from(format!("rm-env-{}", idx)),
+                        self.svc_cursor_on(row, 2),
+                        cx.listener(move |this, _, window, cx| {
+                            this.remove_env_row(idx, window, cx);
+                        }),
+                    ))
+            });
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.rpc_services.field.env_vars"),
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::INLINE_GAP)
+                .children(env_rows)
+                .child(div().flex().child(self.add_button(
+                    "add-env",
+                    dbflux_i18n::t!("settings.rpc_services.action.add_variable"),
+                    self.svc_cursor_on(ServiceFormRow::AddEnv, 0),
+                    cx.listener(|this, _, window, cx| {
+                        this.add_env_row(window, cx);
+                    }),
+                ))),
+            None,
+        )
     }
 }
 
@@ -1647,7 +1433,7 @@ mod tests {
         let english = dbflux_i18n::t!("settings.rpc_services.section_title", locale = "en");
         let spanish = dbflux_i18n::t!("settings.rpc_services.section_title", locale = "es");
 
-        assert_eq!(english, "RPC Services");
+        assert_eq!(english, "RPC services");
         assert_eq!(spanish, "Servicios RPC");
         assert_ne!(english, spanish);
     }

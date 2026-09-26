@@ -38,9 +38,20 @@ impl Workspace {
     /// document implements a refresh; otherwise reloads the active
     /// connection's schema.
     ///
-    /// The sidebar and background-tasks panel keep the connection-schema
-    /// refresh, so the sidebar's refresh key is unchanged.
+    /// In the sidebar the key runs the selected row's Refresh menu action
+    /// (the object, database or connection it names); rows without one, and
+    /// the background-tasks panel, keep the connection-schema refresh.
     fn refresh_document_or_schema(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_target == FocusTarget::Sidebar {
+            let handled = self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.run_selected_menu_shortcut(Command::RefreshSchema, cx)
+            });
+
+            if handled {
+                return;
+            }
+        }
+
         if self.focus_target == FocusTarget::Document {
             let handled = self.tab_manager.update(cx, |manager, cx| {
                 manager.dispatch_active(Command::RefreshSchema, window, cx)

@@ -9,9 +9,10 @@
 //!
 //! | Accessor           | `Default`  | `Compact`  |
 //! |--------------------|------------|------------|
+//! | `font_label`       | 11 px      | 10 px      |
 //! | `font_xs`          | 12 px      | 11 px      |
 //! | `font_sm`          | 13 px      | 12 px      |
-//! | `font_base`        | 14 px      | 13 px      |
+//! | `font_base`        | 13 px      | 12 px      |
 //! | `font_lg`          | 15 px      | 14 px      |
 //! | `font_xl`          | 18 px      | 16 px      |
 //! | `font_title`       | 20 px      | 18 px      |
@@ -57,6 +58,14 @@ pub fn active_style(cx: &App) -> AppStyle {
 // Font-size accessors
 // ---------------------------------------------------------------------------
 
+/// Section label font: 11 px (Default) / 10 px (Compact).
+pub fn font_label(cx: &App) -> Pixels {
+    match active_style(cx) {
+        AppStyle::Default => px(11.0),
+        AppStyle::Compact => px(10.0),
+    }
+}
+
 /// Extra-small font: 12 px (Default) / 11 px (Compact).
 pub fn font_xs(cx: &App) -> Pixels {
     match active_style(cx) {
@@ -73,11 +82,11 @@ pub fn font_sm(cx: &App) -> Pixels {
     }
 }
 
-/// Base font: 14 px (Default) / 13 px (Compact).
+/// Base font: 13 px (Default) / 12 px (Compact).
 pub fn font_base(cx: &App) -> Pixels {
     match active_style(cx) {
-        AppStyle::Default => px(14.0),
-        AppStyle::Compact => px(13.0),
+        AppStyle::Default => px(13.0),
+        AppStyle::Compact => px(12.0),
     }
 }
 
@@ -148,9 +157,10 @@ mod tests {
         cx.update(|cx| {
             init(cx, AppStyle::Default);
 
+            assert_eq!(font_label(cx), px(11.0));
             assert_eq!(font_xs(cx), px(12.0));
             assert_eq!(font_sm(cx), px(13.0));
-            assert_eq!(font_base(cx), px(14.0));
+            assert_eq!(font_base(cx), px(13.0));
             assert_eq!(font_lg(cx), px(15.0));
             assert_eq!(font_xl(cx), px(18.0));
             assert_eq!(font_title(cx), px(20.0));
@@ -166,9 +176,10 @@ mod tests {
         cx.update(|cx| {
             init(cx, AppStyle::Compact);
 
+            assert_eq!(font_label(cx), px(10.0));
             assert_eq!(font_xs(cx), px(11.0));
             assert_eq!(font_sm(cx), px(12.0));
-            assert_eq!(font_base(cx), px(13.0));
+            assert_eq!(font_base(cx), px(12.0));
             assert_eq!(font_lg(cx), px(14.0));
             assert_eq!(font_xl(cx), px(16.0));
             assert_eq!(font_title(cx), px(18.0));

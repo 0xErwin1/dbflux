@@ -18,11 +18,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use dbflux_components::composites::{render_wizard_progress_bar, wizard_progress_fraction};
+use dbflux_components::composites::wizard_progress_fraction;
 use dbflux_components::controls::{Button, Checkbox};
-use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::Spacing;
+use dbflux_components::icons::{AppIcon, DriverIconTone};
+use dbflux_components::primitives::{
+    Badge, BadgeTone, Chamfer, Icon, Spinner, Status, StatusIndicator, Text, environment_label,
+};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, MigrateRunMetrics, ModalMetrics, Spacing,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{
     CancelToken, Connection, OrderResult, TableRef, TaskId, TaskKind, TaskStatus, TaskTarget,
 };
@@ -148,6 +153,7 @@ pub struct ConfirmRunInputs {
     pub target_connection: Arc<dyn Connection>,
     pub source_database: String,
     pub target_database: String,
+    pub source_profile_id: Uuid,
     pub target_profile_id: Uuid,
     pub source_container_label: String,
     pub target_container_label: String,
@@ -182,6 +188,56 @@ struct RunProgress {
     estimated_total: Option<u64>,
 }
 
+/// The run's progress plus the rows each finished table moved, so the live
+/// table list keeps a finished table's count after the run moves on.
+#[derive(Clone, Default)]
+struct RunLedger {
+    current: RunProgress,
+    /// Rows moved by every table before `current.table_index`, by position in
+    /// the load order.
+    finished_rows: Vec<u64>,
+}
+
+impl RunLedger {
+    /// Records a progress report from the engine. When the reported table is
+    /// past the current one, the current table is finished with its last row
+    /// count, and any table the engine skipped over is finished with none.
+    fn record(&mut self, table_index: usize, rows_done: u64, estimated_total: Option<u64>) {
+        while self.finished_rows.len() < table_index {
+            let finished = self.finished_rows.len();
+
+            let rows = if finished == self.current.table_index {
+                self.current.rows_done
+            } else {
+                0
+            };
+
+            self.finished_rows.push(rows);
+        }
+
+        self.current = RunProgress {
+            table_index,
+            rows_done,
+            estimated_total,
+        };
+    }
+
+    /// Share of the whole run done, counting each table as an equal part and
+    /// the current table by its rows when the engine knows its total.
+    fn overall_fraction(&self, total_tables: usize) -> f32 {
+        if total_tables == 0 {
+            return 0.0;
+        }
+
+        let current_fraction =
+            wizard_progress_fraction(self.current.rows_done, self.current.estimated_total)
+                .unwrap_or(0.0);
+        let finished = self.current.table_index.min(total_tables) as f32;
+
+        ((finished + current_fraction) / total_tables as f32).clamp(0.0, 1.0)
+    }
+}
+
 /// Confirm + Run phase entity: renders the plan summary, the optional reorder
 /// interrupt, and the live run (progress + cancel), and owns the migration run
 /// itself. Mounted by the wizard once `Options` is complete.
@@ -193,6 +249,7 @@ pub struct ConfirmRunPhase {
     target_connection: Arc<dyn Connection>,
     source_database: String,
     target_database: String,
+    source_profile_id: Uuid,
     target_profile_id: Uuid,
     segment_size: u32,
     disable_referential_integrity: bool,
@@ -209,7 +266,7 @@ pub struct ConfirmRunPhase {
     destructive_ack: bool,
 
     run_state: RunState,
-    progress: Arc<Mutex<RunProgress>>,
+    progress: Arc<Mutex<RunLedger>>,
     /// Wall-clock start of the live run, for the elapsed-time readout; cleared
     /// until a run begins.
     run_started_at: Option<Instant>,
@@ -243,6 +300,7 @@ impl ConfirmRunPhase {
             target_connection: inputs.target_connection,
             source_database: inputs.source_database,
             target_database: inputs.target_database,
+            source_profile_id: inputs.source_profile_id,
             target_profile_id: inputs.target_profile_id,
             segment_size: inputs.segment_size,
             disable_referential_integrity: inputs.disable_referential_integrity,
@@ -254,7 +312,7 @@ impl ConfirmRunPhase {
             confirmed_destructive: false,
             destructive_ack: false,
             run_state: RunState::Idle,
-            progress: Arc::new(Mutex::new(RunProgress::default())),
+            progress: Arc::new(Mutex::new(RunLedger::default())),
             run_started_at: None,
             run_elapsed: None,
             cancel_token: None,
@@ -269,6 +327,11 @@ impl ConfirmRunPhase {
 
     pub fn run_state(&self) -> RunState {
         self.run_state
+    }
+
+    /// Whether the run switches referential integrity off on the target.
+    pub fn disables_referential_integrity(&self) -> bool {
+        self.disable_referential_integrity
     }
 
     fn move_reorder_row(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
@@ -291,6 +354,15 @@ impl ConfirmRunPhase {
     fn on_start_migration(&mut self, cx: &mut Context<Self>) {
         // Never start a second concurrent run from the same phase.
         if self.run_state == RunState::Running {
+            return;
+        }
+
+        // Only one migration runs at a time, even across wizard tabs.
+        if another_migration_running(&self.app_state, cx) {
+            Toast::warning(dbflux_i18n::t!(
+                "document.migrate_wizard.already_running_in_tasks"
+            ))
+            .push(cx);
             return;
         }
 
@@ -320,7 +392,7 @@ impl ConfirmRunPhase {
         self.result_warnings.clear();
         self.run_started_at = Some(Instant::now());
         self.run_elapsed = None;
-        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = RunProgress::default();
+        *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = RunLedger::default();
 
         let description = migrate_wizard_task_label(plans.len());
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
@@ -377,9 +449,10 @@ impl ConfirmRunPhase {
                             return false;
                         }
 
-                        let progress = *ticker_progress
+                        let progress = ticker_progress
                             .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .current;
                         if let Some(total) = progress.estimated_total
                             && total > 0
                         {
@@ -445,11 +518,7 @@ impl ConfirmRunPhase {
                         &cancel_token,
                         move |index, rows_done, estimated_total| {
                             if let Ok(mut guard) = progress.lock() {
-                                *guard = RunProgress {
-                                    table_index: index,
-                                    rows_done,
-                                    estimated_total,
-                                };
+                                guard.record(index, rows_done, estimated_total);
                             }
                         },
                     )
@@ -528,6 +597,16 @@ struct RunResolution {
     toast_success: bool,
     summary: String,
     warnings: Vec<String>,
+}
+
+/// Whether a migration task is running anywhere in the app, whichever wizard
+/// tab started it.
+fn another_migration_running(app_state: &Entity<AppStateEntity>, cx: &App) -> bool {
+    app_state
+        .read(cx)
+        .running_tasks()
+        .iter()
+        .any(|task| task.kind == TaskKind::Migrate)
 }
 
 fn resolve_run_outcome(
@@ -624,8 +703,9 @@ impl Render for ConfirmRunPhase {
             .key_context("MigrateConfirmRun")
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
+            .gap(MigrateRunMetrics::SECTION_GAP)
+            .px(MigrateRunMetrics::CONTENT_PADDING_X)
+            .py(MigrateRunMetrics::CONTENT_PADDING_Y)
             .size_full()
             .child(body)
     }
@@ -637,7 +717,7 @@ impl ConfirmRunPhase {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.migrate_wizard.confirm.review_plan"
             )))
             .child(Text::caption(format!(
@@ -739,7 +819,6 @@ impl ConfirmRunPhase {
                         "migrate-confirm-start",
                         dbflux_i18n::t!("document.migrate_wizard.confirm.start_migration"),
                     )
-                    .small()
                     .primary()
                     .disabled(!start_enabled)
                     .on_click(cx.listener(|this, _event, _window, cx| this.on_start_migration(cx))),
@@ -771,7 +850,7 @@ impl ConfirmRunPhase {
                         SharedString::from(format!("migrate-reorder-up-{index}")),
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.up"),
                     )
-                    .small()
+                    .inline()
                     .ghost()
                     .disabled(index == 0)
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -783,7 +862,7 @@ impl ConfirmRunPhase {
                         SharedString::from(format!("migrate-reorder-down-{index}")),
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.down"),
                     )
-                    .small()
+                    .inline()
                     .ghost()
                     .disabled(is_last)
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -810,7 +889,6 @@ impl ConfirmRunPhase {
                         "migrate-reorder-accept",
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.accept"),
                     )
-                    .small()
                     .primary()
                     .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
                 ),
@@ -834,117 +912,298 @@ impl ConfirmRunPhase {
         }
     }
 
+    /// One end of the migration (P1Migrate): the driver logo and the mono
+    /// `connection / database` label.
+    fn render_endpoint(&self, profile_id: Uuid, label: &str, cx: &App) -> Div {
+        let theme = cx.theme();
+        let state = self.app_state.read(cx);
+
+        let (icon, color) = state
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .and_then(|profile| state.drivers().get(&profile.driver_id()))
+            .map(|driver| {
+                let metadata = driver.metadata();
+                (
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx),
+                )
+            })
+            .unwrap_or((AppIcon::Database, theme.muted_foreground));
+
+        div()
+            .flex()
+            .items_center()
+            .gap(MigrateRunMetrics::HEADER_GAP)
+            .child(
+                Icon::new(icon)
+                    .size(MigrateRunMetrics::DRIVER_ICON)
+                    .color(color),
+            )
+            .child(
+                div()
+                    .font_family(AppFonts::MONO)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(label.to_string()),
+            )
+    }
+
     fn render_running(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let color_done = theme.success;
-        let color_current = theme.primary;
-        let color_foreground = theme.foreground;
-        let color_pending = theme.muted_foreground;
-
-        let progress = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let ledger = self
+            .progress
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let progress = ledger.current;
 
         let names = self.ordered_table_names();
         let total_tables = names.len();
         let current_index = progress.table_index.min(total_tables.saturating_sub(1));
+        let overall = ledger.overall_fraction(total_tables);
 
-        let rows_label =
-            crate::labels::migrate_running_rows_label(progress.rows_done, progress.estimated_total);
-        let fraction = wizard_progress_fraction(progress.rows_done, progress.estimated_total);
+        let target_environment = self
+            .app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == self.target_profile_id)
+            .and_then(|profile| profile.environment());
 
-        let elapsed = self
-            .run_started_at
-            .map(|started| started.elapsed())
-            .unwrap_or_default();
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(MigrateRunMetrics::HEADER_GAP)
+            .child(self.render_endpoint(self.source_profile_id, &self.summary.source_container, cx))
+            .child(
+                Icon::new(AppIcon::ArrowLeftRight)
+                    .size(MigrateRunMetrics::ARROW_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(self.render_endpoint(self.target_profile_id, &self.summary.target_container, cx))
+            .child(div().flex_1())
+            .when_some(target_environment, |header, environment| {
+                header.child(Badge::new(
+                    environment_label(environment),
+                    BadgeTone::for_environment(environment),
+                ))
+            });
 
-        let current_table = names.get(current_index).cloned().unwrap_or_default();
-        let position_label =
-            crate::labels::migrate_running_position_label(current_index, total_tables);
+        let caption = [
+            crate::labels::migrate_running_position_label(current_index, total_tables),
+            crate::labels::migrate_running_rows_label(progress.rows_done, progress.estimated_total),
+            format_elapsed(
+                self.run_started_at
+                    .map(|started| started.elapsed())
+                    .unwrap_or_default(),
+            ),
+        ]
+        .join(" \u{00B7} ");
 
-        let steps_rows_label = rows_label.clone();
-        let steps = names.iter().enumerate().map(move |(index, name)| {
-            let (marker, label_color) = if index < current_index {
+        let summary = div()
+            .flex()
+            .flex_col()
+            .gap(MigrateRunMetrics::SUMMARY_GAP)
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(MigrateRunMetrics::HEADER_GAP)
+                    .child(
+                        div()
+                            .font_family(AppFonts::DISPLAY)
+                            .font_weight(FontWeight::BLACK)
+                            .text_size(MigrateRunMetrics::PERCENT_FONT)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(percent_label(overall)),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.muted_foreground)
+                            .child(caption),
+                    ),
+            )
+            .child(progress_track(
+                overall,
+                theme.primary,
+                MigrateRunMetrics::OVERALL_BAR_HEIGHT,
+                None,
+                cx,
+            ));
+
+        let rows = names.iter().enumerate().map(|(index, name)| {
+            let (status, fraction, rows_label) = if index < current_index {
+                let rows = ledger.finished_rows.get(index).copied().unwrap_or_default();
                 (
-                    Icon::new(AppIcon::CircleCheck)
-                        .size(px(14.0))
-                        .color(color_done)
-                        .into_any_element(),
-                    color_foreground,
+                    TableRunStatus::Done,
+                    1.0,
+                    format!("{} / {}", group_digits(rows), group_digits(rows)),
                 )
             } else if index == current_index {
+                let fraction =
+                    wizard_progress_fraction(progress.rows_done, progress.estimated_total)
+                        .unwrap_or(0.0);
+                let total = progress
+                    .estimated_total
+                    .map(group_digits)
+                    .unwrap_or_else(|| "\u{2014}".to_string());
                 (
-                    Icon::new(AppIcon::Loader)
-                        .size(px(14.0))
-                        .color(color_current)
-                        .into_any_element(),
-                    color_foreground,
+                    TableRunStatus::Running,
+                    fraction,
+                    format!("{} / {}", group_digits(progress.rows_done), total),
                 )
             } else {
-                (
-                    div()
-                        .size(px(8.0)) // guardrail-allow: decorative pending status-dot diameter
-                        .rounded_full()
-                        .bg(color_pending)
-                        .into_any_element(),
-                    color_pending,
-                )
+                (TableRunStatus::Pending, 0.0, "\u{2014}".to_string())
             };
 
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .py(px(2.0))
-                .child(
-                    div()
-                        .w(px(16.0)) // guardrail-allow: fixed marker gutter for label alignment
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(marker),
-                )
-                .child(Text::body(name.clone()).color(label_color))
-                .when(index == current_index, |el| {
-                    el.child(Text::caption(steps_rows_label.clone()).muted_foreground())
-                })
-                .into_any_element()
+            self.render_table_row(name, status, fraction, rows_label, cx)
         });
+
+        let header_row = table_grid(div())
+            .h(MigrateRunMetrics::TABLE_HEADER_HEIGHT)
+            .border_b_1()
+            .border_color(theme.input)
+            .text_size(ModalMetrics::TABLE_HEADER_FONT)
+            .text_color(theme.muted_foreground)
+            .child(div().w(MigrateRunMetrics::STATUS_COLUMN))
+            .child(div().flex_1().child(dbflux_i18n::t!(
+                "document.migrate_wizard.running.table_header"
+            )))
+            .child(
+                div()
+                    .w(MigrateRunMetrics::PROGRESS_COLUMN)
+                    .child(dbflux_i18n::t!(
+                        "document.migrate_wizard.running.progress_header"
+                    )),
+            )
+            .child(
+                div()
+                    .w(MigrateRunMetrics::ROWS_COLUMN)
+                    .child(dbflux_i18n::t!(
+                        "document.migrate_wizard.running.rows_header"
+                    )),
+            );
+
+        let table = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_shrink(1.0)
+            .min_h_0()
+            .overflow_hidden()
+            .child(
+                Chamfer::new(ChamferCut::INPUT)
+                    .fill(theme.background)
+                    .border(theme.border),
+            )
+            .child(header_row)
+            .child(
+                div()
+                    .id("migrate-run-steps")
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .children(rows),
+            );
 
         div()
             .flex()
             .flex_col()
-            .gap(Spacing::MD)
+            .gap(MigrateRunMetrics::SECTION_GAP)
             .size_full()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(Text::label(dbflux_i18n::t!(
-                        "document.migrate_wizard.running.title"
-                    )))
-                    .child(Text::caption(format_elapsed(elapsed)).muted_foreground()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(Spacing::SM)
-                    .child(Text::caption(format!("{position_label}: {current_table}")))
-                    .child(Text::caption(rows_label.clone()).muted_foreground()),
-            )
-            .when_some(fraction, |el, fraction| {
-                el.child(render_wizard_progress_bar(fraction, cx))
+            .child(header)
+            .child(summary)
+            .child(table)
+            .into_any_element()
+    }
+
+    fn render_table_row(
+        &self,
+        name: &str,
+        status: TableRunStatus,
+        fraction: f32,
+        rows_label: String,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let spinner_frame = self
+            .run_started_at
+            .map(|started| {
+                (started.elapsed().as_millis() / u128::from(Spinner::INTERVAL_MS)) as usize
             })
+            .unwrap_or_default();
+
+        let marker = match status {
+            TableRunStatus::Done => Icon::new(AppIcon::CircleCheck)
+                .size(MigrateRunMetrics::STATUS_ICON)
+                .color(theme.success)
+                .into_any_element(),
+            TableRunStatus::Running => Spinner::new(spinner_frame).into_any_element(),
+            TableRunStatus::Pending => StatusIndicator::new(Status::Idle).into_any_element(),
+        };
+
+        let bar_color = match status {
+            TableRunStatus::Done => theme.success,
+            TableRunStatus::Running | TableRunStatus::Pending => theme.primary,
+        };
+
+        let name_color = match status {
+            TableRunStatus::Running => ChromeColors::strong(theme),
+            TableRunStatus::Done | TableRunStatus::Pending => theme.foreground,
+        };
+
+        table_grid(div())
+            .h(MigrateRunMetrics::TABLE_ROW_HEIGHT)
+            .flex_shrink_0()
+            .border_b_1()
+            .border_color(theme.table_row_border)
+            .font_family(AppFonts::MONO)
+            .text_size(ModalMetrics::CODE_FONT)
             .child(
                 div()
-                    .id("migrate-run-steps")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .overflow_y_scroll()
+                    .w(MigrateRunMetrics::STATUS_COLUMN)
                     .flex()
-                    .flex_col()
-                    .children(steps),
+                    .items_center()
+                    .child(marker),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(name_color)
+                    .child(name.to_string()),
+            )
+            .child(
+                div()
+                    .w(MigrateRunMetrics::PROGRESS_COLUMN)
+                    .flex()
+                    .items_center()
+                    .gap(MigrateRunMetrics::BAR_GAP)
+                    .child(progress_track(
+                        fraction,
+                        bar_color,
+                        MigrateRunMetrics::TABLE_BAR_HEIGHT,
+                        Some(MigrateRunMetrics::TABLE_BAR_WIDTH),
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .text_size(MigrateRunMetrics::PERCENT_CAPTION_FONT)
+                            .text_color(theme.muted_foreground)
+                            .child(percent_label(fraction)),
+                    ),
+            )
+            .child(
+                div()
+                    .w(MigrateRunMetrics::ROWS_COLUMN)
+                    .truncate()
+                    .text_color(theme.muted_foreground)
+                    .child(rows_label),
             )
             .into_any_element()
     }
@@ -980,6 +1239,62 @@ impl ConfirmRunPhase {
     }
 }
 
+/// Where one table of a live run stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableRunStatus {
+    Done,
+    Running,
+    Pending,
+}
+
+/// A row of the run table: status, table, progress and rows columns.
+fn table_grid(row: Div) -> Div {
+    row.flex()
+        .items_center()
+        .px(MigrateRunMetrics::TABLE_PADDING_X)
+}
+
+/// A flat progress track on the raised fill, filled to `fraction` in `fill`.
+fn progress_track(
+    fraction: f32,
+    fill: Hsla,
+    height: Pixels,
+    width: Option<Pixels>,
+    cx: &App,
+) -> Div {
+    let track = div().h(height).bg(cx.theme().secondary).child(
+        div()
+            .h_full()
+            .w(relative(fraction.clamp(0.0, 1.0)))
+            .bg(fill),
+    );
+
+    match width {
+        Some(width) => track.w(width).flex_shrink_0(),
+        None => track.w_full(),
+    }
+}
+
+/// `fraction` as a whole percentage (`64%`).
+fn percent_label(fraction: f32) -> String {
+    format!("{}%", (fraction.clamp(0.0, 1.0) * 100.0).round() as u32)
+}
+
+/// `value` with thousands separated by commas (`219,277`).
+fn group_digits(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
+}
+
 /// Formats an elapsed run duration as `M:SS` for the live timer and the
 /// completed-run readout.
 fn format_elapsed(elapsed: Duration) -> String {
@@ -992,8 +1307,8 @@ fn format_elapsed(elapsed: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        OrderDecision, PlanSummary, RunTaskAction, build_plan_summary, decide_order,
-        mapping_mode_label, resolve_run_outcome,
+        OrderDecision, PlanSummary, RunLedger, RunTaskAction, build_plan_summary, decide_order,
+        group_digits, mapping_mode_label, percent_label, resolve_run_outcome,
     };
     use crate::migrate_wizard::column_mapping::TableMigrationConfig;
     use dbflux_core::{OrderResult, TableRef, TransferColumn};
@@ -1020,6 +1335,39 @@ mod tests {
         config
     }
 
+    #[test]
+    fn ledger_keeps_the_rows_of_each_finished_table() {
+        let mut ledger = RunLedger::default();
+
+        ledger.record(0, 500, Some(1_000));
+        ledger.record(0, 1_000, Some(1_000));
+        ledger.record(1, 10, Some(40));
+
+        assert_eq!(ledger.finished_rows, vec![1_000]);
+        assert_eq!(ledger.current.rows_done, 10);
+
+        ledger.record(3, 0, None);
+
+        assert_eq!(ledger.finished_rows, vec![1_000, 10, 0]);
+    }
+
+    #[test]
+    fn overall_fraction_counts_finished_tables_and_the_current_share() {
+        let mut ledger = RunLedger::default();
+        ledger.record(2, 50, Some(100));
+
+        assert!((ledger.overall_fraction(5) - 0.5).abs() < f32::EPSILON);
+        assert_eq!(ledger.overall_fraction(0), 0.0);
+    }
+
+    #[test]
+    fn counts_and_percentages_are_formatted_for_the_run_table() {
+        assert_eq!(group_digits(219_277), "219,277");
+        assert_eq!(group_digits(1_204), "1,204");
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(percent_label(0.64), "64%");
+        assert_eq!(percent_label(1.5), "100%");
+    }
     #[test]
     fn decide_order_ready_when_topological_order_is_acyclic() {
         let order = vec![TableRef::new("parent"), TableRef::new("child")];

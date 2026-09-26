@@ -20,16 +20,16 @@ function runInlineScript(script: string, context: Record<string, unknown>): void
   new vm.Script(script, { filename: 'inline-theme-script.js' }).runInNewContext(context);
 }
 
-test('normalizes missing and malformed preferences to system', () => {
+test('normalizes missing, malformed and retired preferences to system', () => {
   assert.equal(normalizeThemePreference(null), 'system');
   assert.equal(normalizeThemePreference(undefined), 'system');
   assert.equal(normalizeThemePreference('sepia'), 'system');
+  assert.equal(normalizeThemePreference('mirage'), 'system');
 });
 
-test('preserves explicit light, dark, mirage, and system preferences', () => {
+test('preserves explicit light, dark, and system preferences', () => {
   assert.equal(normalizeThemePreference('light'), 'light');
   assert.equal(normalizeThemePreference('dark'), 'dark');
-  assert.equal(normalizeThemePreference('mirage'), 'mirage');
   assert.equal(normalizeThemePreference('system'), 'system');
 });
 
@@ -38,8 +38,6 @@ test('resolves system preference from the operating system and honors explicit o
   assert.equal(resolveTheme('system', false), 'light');
   assert.equal(resolveTheme('dark', false), 'dark');
   assert.equal(resolveTheme('light', true), 'light');
-  assert.equal(resolveTheme('mirage', false), 'mirage');
-  assert.equal(resolveTheme('mirage', true), 'mirage');
 });
 
 test('the head theme bootstrap is executable and resolves the stored preference', () => {
@@ -48,38 +46,22 @@ test('the head theme bootstrap is executable and resolves the stored preference'
 
   runInlineScript(script, {
     document: { documentElement },
-    localStorage: { getItem: () => 'mirage' },
-    matchMedia: () => ({ matches: false }),
+    localStorage: { getItem: () => 'light' },
+    matchMedia: () => ({ matches: true }),
   });
 
-  assert.deepEqual(documentElement.dataset, { themePreference: 'mirage', theme: 'mirage' });
+  assert.deepEqual(documentElement.dataset, { themePreference: 'light', theme: 'light' });
 });
 
-test('the hero image script is executable and assigns a selected source before revealing it', () => {
-  class ImageElement {
-    hidden = true;
-    src = '';
-  }
-
-  const hero = new ImageElement();
-  const listeners = new Map<string, () => void>();
-  const documentElement = { dataset: { theme: 'mirage' } };
-  const script = inlineScript('../components/Landing.astro', '<img data-hero-shot');
+test('the head theme bootstrap falls back to the system theme for a retired preference', () => {
+  const documentElement = { dataset: {} as Record<string, string> };
+  const script = inlineScript('../layouts/Base.astro', '<head>');
 
   runInlineScript(script, {
-    HTMLImageElement: ImageElement,
-    document: {
-      documentElement,
-      querySelector: () => hero,
-    },
-    window: {
-      addEventListener: (name: string, listener: () => void) => listeners.set(name, listener),
-    },
+    document: { documentElement },
+    localStorage: { getItem: () => 'mirage' },
+    matchMedia: () => ({ matches: true }),
   });
 
-  assert.equal(hero.src, '/img/app-hero-mirage.png');
-  assert.equal(hero.hidden, false);
-  documentElement.dataset.theme = 'dark';
-  listeners.get('dbflux-theme-change')?.();
-  assert.equal(hero.src, '/img/app-hero-dark.png');
+  assert.deepEqual(documentElement.dataset, { themePreference: 'system', theme: 'dark' });
 });

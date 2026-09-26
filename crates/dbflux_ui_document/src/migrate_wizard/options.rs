@@ -161,7 +161,7 @@ impl OptionsPhase {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "document.migrate_wizard.options.segment_size_label"
             )))
             .child(

@@ -4,10 +4,10 @@
 //! - `request_execution`: Request approval for a pending operation
 //! - `list_pending_executions`: List all pending executions
 //! - `get_pending_execution`: Get details of a specific pending execution
-//! - `approve_execution`: Approve and execute a pending operation
-//! - `reject_execution`: Reject a pending operation
+//! - `approve_execution` / `reject_execution`: always denied over MCP by
+//!   authorization; a person resolves pending executions in DBFlux
 
-use dbflux_approval::store::ExecutionPlan;
+use dbflux_approval::store::{ExecutionPlan, PendingExecution, PendingStatus};
 use dbflux_policy::ExecutionClassification;
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
@@ -61,7 +61,9 @@ pub struct RejectExecutionParams {
 
 #[tool_router(router = approval_router, vis = "pub")]
 impl DbFluxServer {
-    #[tool(description = "Request approval for a potentially destructive operation")]
+    #[tool(
+        description = "Queue an operation for approval by a person in DBFlux and return its pending_id. Tell the user to approve it in DBFlux (Workspace > Pending Approvals), wait (MCP clients cannot approve), check it with get_pending_execution, and once approved call the target tool itself with exactly the same params to run it once"
+    )]
     async fn request_execution(
         &self,
         Parameters(params): Parameters<RequestExecutionParams>,
@@ -114,7 +116,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "List pending executions awaiting approval")]
+    #[tool(
+        description = "List executions still waiting for a person to approve or reject them in DBFlux. An execution disappears from this list once it is approved, rejected or expired"
+    )]
     async fn list_pending_executions(
         &self,
         Parameters(params): Parameters<ListPendingExecutionsParams>,
@@ -156,7 +160,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Get details of a specific pending execution")]
+    #[tool(
+        description = "Check a pending execution by pending_id. While it is returned with status 'pending', it is still waiting for a person to approve it in DBFlux. Status 'rejected' means a person rejected it; 'reason' carries what they wrote, if anything: do not repeat the call unchanged. Once it is no longer found it was approved or expired: repeat the identical original call (same tool, same arguments); an approved call then runs once, otherwise a new request is queued"
+    )]
     async fn get_pending_execution(
         &self,
         Parameters(params): Parameters<GetPendingExecutionParams>,
@@ -173,19 +179,19 @@ impl DbFluxServer {
                 None,
                 ExecutionClassification::Read,
                 move || async move {
-                    let pending = {
+                    let execution = {
                         let runtime = state.runtime.read().await;
-                        let approval_service = runtime.approval_service();
-                        approval_service
-                            .list_pending()
+                        runtime
+                            .approval_service()
+                            .get_execution(pending_id)
                             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?
-                            .into_iter()
-                            .find(|p| p.id == pending_id)
                     };
 
-                    match pending {
-                        Some(pending) => {
-                            Ok(CallToolResult::success(vec![to_json_content(&pending)?]))
+                    match execution.and_then(|execution| {
+                        pending_execution_status_response(&execution, now_epoch_ms())
+                    }) {
+                        Some(response) => {
+                            Ok(CallToolResult::success(vec![to_json_content(&response)?]))
                         }
                         None => Err(ErrorData::invalid_params(
                             format!("Pending execution not found: {}", pending_id),
@@ -197,7 +203,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Approve a pending operation (returns replay instructions)")]
+    #[tool(
+        description = "Always denied over MCP: pending executions are approved by a person in DBFlux (Pending Approvals), never by an MCP client"
+    )]
     async fn approve_execution(
         &self,
         Parameters(params): Parameters<ApproveExecutionParams>,
@@ -269,7 +277,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Reject a pending execution")]
+    #[tool(
+        description = "Always denied over MCP: pending executions are rejected by a person in DBFlux (Pending Approvals), never by an MCP client"
+    )]
     async fn reject_execution(
         &self,
         Parameters(params): Parameters<RejectExecutionParams>,
@@ -360,13 +370,48 @@ impl DbFluxServer {
     }
 }
 
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// What `get_pending_execution` returns for `execution`: the entry itself
+/// while it waits for a decision, a rejection payload carrying the person's
+/// reason once rejected, and `None` when it was approved, used or expired.
+fn pending_execution_status_response(
+    execution: &PendingExecution,
+    now_ms: i64,
+) -> Option<serde_json::Value> {
+    match execution.status {
+        PendingStatus::Pending if execution.expires_at.is_none_or(|expires| expires > now_ms) => {
+            serde_json::to_value(execution).ok()
+        }
+        PendingStatus::Rejected => Some(serde_json::json!({
+            "pending_id": execution.id.to_string(),
+            "status": "rejected",
+            "tool_id": execution.plan.tool_id,
+            "connection_id": execution.plan.connection_id,
+            "reason": execution.rejection_reason,
+            "message": "A person rejected this execution in DBFlux. It will not run. \
+                        Repeating the identical call queues a new request.",
+        })),
+        _ => None,
+    }
+}
+
 fn effective_rejection_reason(reason: Option<&str>) -> &str {
     reason.unwrap_or(DEFAULT_REJECTION_REASON)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_REJECTION_REASON, DbFluxServer, effective_rejection_reason};
+    use super::{
+        DEFAULT_REJECTION_REASON, DbFluxServer, effective_rejection_reason,
+        pending_execution_status_response,
+    };
+    use dbflux_approval::store::{ExecutionPlan, PendingExecution, PendingStatus};
     use dbflux_policy::ExecutionClassification;
 
     #[test]
@@ -418,6 +463,56 @@ mod tests {
         assert_eq!(effective_rejection_reason(None), DEFAULT_REJECTION_REASON);
     }
 
+    fn execution(status: PendingStatus, rejection_reason: Option<&str>) -> PendingExecution {
+        PendingExecution {
+            id: uuid::Uuid::new_v4(),
+            status,
+            plan: ExecutionPlan {
+                connection_id: "conn-a".to_string(),
+                actor_id: "agent-a".to_string(),
+                tool_id: "delete_records".to_string(),
+                classification: ExecutionClassification::Destructive,
+                payload: serde_json::json!({ "table": "items" }),
+            },
+            created_at: 1_000,
+            expires_at: Some(10_000),
+            rejection_reason: rejection_reason.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn status_response_returns_the_rejection_reason_to_the_agent() {
+        let rejected = execution(PendingStatus::Rejected, Some("wrong table"));
+
+        let response = pending_execution_status_response(&rejected, 2_000)
+            .expect("a rejected execution is reported");
+
+        assert_eq!(response["status"], serde_json::json!("rejected"));
+        assert_eq!(response["reason"], serde_json::json!("wrong table"));
+        assert_eq!(
+            response["pending_id"],
+            serde_json::json!(rejected.id.to_string())
+        );
+    }
+
+    #[test]
+    fn status_response_keeps_pending_and_hides_resolved_or_expired_entries() {
+        let pending = execution(PendingStatus::Pending, None);
+        let response = pending_execution_status_response(&pending, 2_000)
+            .expect("a pending execution is reported");
+        assert_eq!(response["status"], serde_json::json!("pending"));
+
+        assert!(pending_execution_status_response(&pending, 20_000).is_none());
+        assert!(
+            pending_execution_status_response(&execution(PendingStatus::Approved, None), 2_000)
+                .is_none()
+        );
+        assert!(
+            pending_execution_status_response(&execution(PendingStatus::Consumed, None), 2_000)
+                .is_none()
+        );
+    }
+
     #[test]
     fn test_drop_index_classification_admin_destructive() {
         assert_eq!(
@@ -453,6 +548,7 @@ mod tests {
                 id: "admin-only".to_string(),
                 allowed_tools: vec!["drop_index".to_string()],
                 allowed_classes: vec![ExecutionClassification::Admin],
+                approval_classes: Vec::new(),
             }],
         );
 

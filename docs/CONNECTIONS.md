@@ -6,9 +6,37 @@ or AWS SSM; authenticating with provider-driven Auth Profiles (AWS SSO); and
 pulling individual field values from a secret manager or parameter store instead
 of typing them in.
 
-For the day-to-day flow (creating a connection, browsing the schema, running
-queries) see the [Usage Guide](USAGE.md). This document picks up at the
-Connection Manager's **Access** tab and the value-source selectors.
+For a first walk-through (creating a connection, browsing the schema, running
+queries) see [Getting Started](GETTING_STARTED.md). This document starts with
+opening the Connection Manager and choosing a driver, then covers the
+**Access** tab and the value-source selectors.
+
+---
+
+## Opening the Connection Manager
+
+Open the Connection Manager to create or edit connections:
+
+- Press `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS).
+- From the sidebar, press `c`.
+- Or use the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` on macOS) and run
+  **Open connection manager**.
+
+## Choosing a driver
+
+The Connection Manager presents a driver picker. Available drivers depend on the
+features the binary was built with; the standard build includes SQLite,
+PostgreSQL, MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft SQL Server, and
+AWS-backed integrations. Externally registered RPC drivers also appear here when
+configured (see `docs/RPC_SERVICES_CONFIG.md`).
+
+Use `/` to filter the driver list, `j`/`k` (or arrow keys) to move, and `Enter`
+to select.
+
+Each driver provides its own connection form. The form is dynamic: it shows only
+the fields that driver actually needs. File-backed drivers such as SQLite use a
+file-path form. Most relational drivers also accept a single connection string;
+see [Form mode vs. direct URI](#form-mode-vs-direct-uri).
 
 ---
 
@@ -44,6 +72,25 @@ PreDisconnect, and PostDisconnect phases around this pipeline. See
 
 ---
 
+## When a connection fails
+
+If a connection attempt fails, the error appears in a toast and the connection
+row keeps a red error icon. Hover the icon to read the error. Choose **Retry**
+from the row's context menu, or press `Enter` on the row, to connect again. The mark
+clears when a new attempt starts, when the connection succeeds, or when you edit
+the connection.
+
+## Disconnecting while a query runs
+
+Disconnecting a connection that still has a query running asks first: **Cancel
+query** stops the query and keeps the connection open, **Keep waiting** leaves
+both alone, and **Disconnect anyway** cancels the query and disconnects. `Enter`
+picks **Cancel query** and `Escape` picks **Keep waiting**. Closing the DBFlux
+window while a query runs on any connection asks the same question, naming the
+connections, with **Quit anyway** in place of **Disconnect anyway**.
+
+---
+
 ## SSH tunnels
 
 You can use an SSH tunnel in two ways:
@@ -75,7 +122,7 @@ you choose **Private Key** and leave the key path blank.
 Passphrases and passwords are stored in the **OS keyring**, never in the
 database. The **Save** checkbox only appears when a keyring is available; if it
 isn't, secrets aren't persisted and you'll re-enter them each session. See
-[Data & Privacy → Secrets](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+[Data & Privacy → Secrets](../PRIVACY.md#secrets-and-the-os-keyring).
 
 ---
 
@@ -239,7 +286,7 @@ switches between them.
 
 ## Related
 
-- [Usage Guide](USAGE.md) — the basic connect/query/results flow.
+- [Getting Started](GETTING_STARTED.md) — the basic connect/query/results flow.
 - [Settings & Hooks](SETTINGS.md) — managing SSH/proxy/auth profiles and hooks.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — where credentials and data are stored.
+- [Data & Privacy](../PRIVACY.md#your-data-on-this-machine) — where credentials and data are stored.
 - [RPC Services](RPC_SERVICES_CONFIG.md) — external drivers and auth providers.

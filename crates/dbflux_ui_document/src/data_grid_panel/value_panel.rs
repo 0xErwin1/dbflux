@@ -359,7 +359,7 @@ impl ValuePanelContent {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child(Text::label_sm(self.target.column_name.clone())),
+                    .child(Text::body_sm(self.target.column_name.clone())),
             )
             .child(
                 div()
@@ -447,7 +447,6 @@ impl ValuePanelContent {
                                 "value-panel-format",
                                 dbflux_i18n::t!("components.json_editor.format"),
                             )
-                            .small()
                             .variant(ButtonVariant::Ghost)
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -460,7 +459,6 @@ impl ValuePanelContent {
                                 "value-panel-compact",
                                 dbflux_i18n::t!("components.json_editor.compact"),
                             )
-                            .small()
                             .variant(ButtonVariant::Ghost)
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
@@ -480,7 +478,6 @@ impl ValuePanelContent {
                             "value-panel-revert",
                             dbflux_i18n::t!("components.value_panel.revert"),
                         )
-                        .small()
                         .variant(ButtonVariant::Ghost)
                         .disabled(!is_modified)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -492,7 +489,6 @@ impl ValuePanelContent {
                             "value-panel-save",
                             dbflux_i18n::t!("components.json_editor.save"),
                         )
-                        .small()
                         .variant(if is_modified {
                             ButtonVariant::Primary
                         } else {

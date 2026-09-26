@@ -77,8 +77,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 1. **受信客户端**：请求方身份必须已注册且处于启用状态。
 2. **连接的 MCP 开关**：目标连接必须已启用 MCP。
 3. **策略分配**：执行者必须在该连接上拥有一个带范围的分配。
-4. **工具 + 执行类别白名单**：工具 ID 与其执行类别都必须被所分配的策略允许。
-5. **审批流程**：写入/破坏性流程可以要求在执行前经人工审批。
+4. **工具 + 按类别的决定**：工具 ID 必须被某个已分配的策略列出，并由该策略把调用的执行类别决定为 Allow、Ask 或 Deny（见第 5 节）。
+5. **审批流程**：Ask 决定会把调用排入待审批执行队列。由人在 DBFlux 中批准或驳回；已批准的调用会在智能体以相同参数再次调用时执行一次。
 6. **审计追踪**：每一个决策都会追加到统一 SQLite 数据库的 `aud_audit_events` 表中，可查询、可导出。完整的事件结构参见 `docs/AUDIT.md`。
 
 这六层都会在每一个 `tools/call` 请求中，于服务器进程内依次执行；任何一层都无法从客户端绕过。
@@ -119,11 +119,11 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 脚本 | `update_script` | write | 覆盖已有的已保存脚本 |
 | 脚本 | `delete_script` | admin | 永久删除脚本 |
 | 脚本 | `execute_script` | computed | 对某个连接执行已保存的脚本。执行类别由脚本内容推导 |
-| 审批 | `request_execution` | admin | 提交一项变更，执行前需人工审批 |
+| 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
 | 审批 | `list_pending_executions` | read | 查看所有等待审批的执行 |
-| 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情 |
-| 审批 | `approve_execution` | admin | 批准一项待处理的变更（仅 admin） |
-| 审批 | `reject_execution` | admin | 驳回并丢弃一项待处理的变更（仅 admin） |
+| 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
+| 审批 | `approve_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中批准 |
+| 审批 | `reject_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中驳回 |
 | 审计 | `query_audit_logs` | read | 搜索并筛选审计追踪 |
 | 审计 | `get_audit_entry` | read | 按 ID 获取单条审计日志 |
 | 审计 | `export_audit_logs` | read | 以 CSV 或 JSON 下载审计日志条目 |
@@ -135,7 +135,13 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 ## 5. 执行类别
 
-策略在两个层面把关工具：工具 ID 本身，以及执行分类。只有当两者都与策略的白名单匹配时，请求才会被放行。
+策略在两个层面把关工具：工具 ID 本身，以及执行分类。策略列出它覆盖的工具，并为每个执行类别给出一个决定：
+
+| 决定 | 该类别的调用会怎样 |
+|---|---|
+| Allow | 立即执行 |
+| Ask | 等待人工处理：调用被排入待审批执行队列，批准后才会执行 |
+| Deny | 被拒绝 |
 
 | 执行类别 | 覆盖范围 |
 |---|---|
@@ -144,8 +150,28 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | `write` | 插入、更新，或运行会修改数据的脚本 |
 | `destructive` | DELETE、DROP、TRUNCATE 及其他不可撤销的操作 |
 | `admin_safe` | 安全的 DDL 操作，例如追加式 Schema 变更与创建索引 |
-| `admin` | 有风险的 DDL 操作、审批、审计导出与特权动作 |
+| `admin` | 有风险的 DDL 操作、审计导出与特权动作 |
 | `admin_destructive` | 不可逆的管理操作，例如删除或清空 Schema 对象 |
+
+`metadata` 与 `read` 只做读取。其余五个类别会修改数据或 Schema，下文称为变更类别。
+
+### 策略如何组合
+
+一个执行者在某个连接上可以拥有多个策略，既可直接分配，也可通过角色获得。只有列出所请求工具的策略参与判断，其中最宽松的决定生效：Allow 优先于 Ask，Ask 优先于 Deny。策略用于授予权限；Deny 表示没有授权，而不是否决。因此，某个策略对某一类别要求审批，并不会拦住另一个已分配策略已允许执行该类别的执行者。若要让某一类别等待审批，请确保分配给该执行者的其他策略都不允许它。
+
+### 审批流程
+
+1. 智能体调用的工具，其类别被策略决定为 Ask。服务器把该调用排入待审批执行队列，记录一条 outcome 为 `pending` 的 `mcp_authorize` 审计事件，并返回一个 JSON-RPC 错误，其数据为 `{"code": "approval_required", "status": "pending", "pending_id": "..."}`。
+2. 由人在 DBFlux 中批准或驳回该调用（**Workspace → 待审批项**）。服务器与应用通过 `dbflux.db` 共享该队列，因此由 `dbflux mcp` 排队的调用会出现在应用中。
+3. 智能体以相同参数再次调用同一工具。服务器找到与执行者、连接、工具及参数都匹配的批准记录，消耗它并执行该调用。该调用的 `mcp_authorize` 事件 outcome 为 `success`，并在 `details_json.pending_execution_id` 中注明所用的批准记录。
+
+一次批准只执行一次调用。再次重复调用会排入新的请求，修改任何参数也是如此。被驳回的调用永远不会执行。批准在调用排队 24 小时后失效。
+
+驳回之后，`get_pending_execution` 返回 `status: "rejected"` 以及 `reason` 字段，其中是审批人驳回时输入的文本（去除首尾空白，最多 500 个字符）；未填写时为 `null`。同一原因也会记录在 `mcp_reject_execution` 审计事件中。
+
+`request_execution` 显式地把调用排队，效果与在 Ask 下直接调用该工具相同。`request_execution`、`list_pending_executions` 与 `get_pending_execution` 只创建或读取队列条目，因此在 Ask 下它们直接执行，自身不会被排队。
+
+MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_execution` 与 `reject_execution` 通过 MCP 调用时都会被拒绝，错误代码为 `self_approval_forbidden`，且每次尝试都会被审计。只有人在 DBFlux 界面中处理待审批执行。
 
 ## 6. 内置策略与角色
 
@@ -153,11 +179,19 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 ### 内置策略
 
-| ID | 允许的执行类别 | 范围 |
-|---|---|---|
-| `builtin/read-only` | metadata, read | 所有发现与 Schema 工具；只读查询与预览工具；脚本列出/获取；审计读取工具 |
-| `builtin/write` | metadata, read, write | 所有只读工具，加上具备写入能力的脚本，以及请求/审批提交流程 |
-| `builtin/admin` | metadata, read, write, destructive, admin_safe, admin, admin_destructive | 本分支暴露的全部标准工具 |
+读取默认允许；内置策略授予的每个变更类别都需要审批。
+
+| ID | Allow | Ask | 范围 |
+|---|---|---|---|
+| `builtin/read-only` | metadata, read | — | 所有发现与 Schema 工具；只读查询与预览工具；脚本列出/获取；审计读取工具 |
+| `builtin/write` | metadata, read | write | 所有只读工具，加上具备写入能力的脚本，以及请求/审批提交流程 |
+| `builtin/admin` | metadata, read | write, destructive, admin_safe, admin, admin_destructive | 除 `approve_execution` 与 `reject_execution` 之外的全部标准工具 |
+
+内置策略未列出的类别均被拒绝。
+
+### 在 Ask 出现之前创建的策略
+
+在引入 Ask 决定之前，策略只能允许某个类别，因此允许一个变更类别从来不是“无需审批即可执行”的明确选择。引入 Ask 的存储迁移（`034_cfg_tool_policy_approval_classes`）会据此重写已有的自定义策略：已允许的变更类别改为 Ask，已允许的 `metadata` 或 `read` 类别保持 Allow，未被允许的类别保持 Deny。若要让智能体重新无需审批地执行变更调用，请在该策略上选择 **全部允许，无需审批**。
 
 ### 内置角色
 
@@ -181,14 +215,18 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 
 3. **设置 → MCP → 策略标签页**
    - 内置策略显示在顶部，且不能被修改。
-   - 可以通过勾选工具与执行类别的复选框来创建自定义策略。
+   - 选择工具，并为每个执行类别选择 Allow、Ask 或 Deny，即可创建自定义策略。使用键盘时，在类别行上按 `enter` 会切换到下一个决定。
+   - **全部允许，无需审批** 会把所有变更类别设为 Allow。此后智能体可以不经询问执行任何变更调用，包括 `DROP DATABASE`。
 
 4. **连接管理器 → MCP 标签页**
    - 为目标连接启用 MCP。
    - 从已填充的下拉框中，为该连接选择执行者（受信客户端）、角色和/或策略。
 
 5. **Workspace → 待审批项**
-   - 审阅并批准/驳回触发了审批流程的写入/破坏性请求。
+   - 审阅并批准或驳回被策略送去审批的调用。这是处理待审批执行的唯一位置。
+   - 等待中的调用也会出现在标题栏铃铛下的通知中心里，有调用等待时铃铛显示强调色徽标。点击其所在行的**查看**会在此标签页中打开该调用；弹出面板本身从不批准或驳回。
+   - `j` / `k` 在待处理的调用之间移动，`a` 批准所选调用，`r` 驳回它。已批准的调用会在智能体以相同参数再次调用时执行。每个决定都会写入审计日志。
+   - 底部的原因输入框会在驳回时发回给智能体。输入框获得焦点时，`r` 与 `a` 输入文字而不是做出决定。每次决定后输入框会被清空。
 
 6. **Workspace → 审计**
    - 按执行者/工具/决策/时间范围筛选，并导出 CSV/JSON。
@@ -265,6 +303,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        correlation_id: None,
     },
     now_epoch_ms(),
 )?;
@@ -273,6 +312,8 @@ if !outcome.allowed {
     // deny_code 与 deny_reason 说明了原因
 }
 ```
+
+`authorize_request` 没有审批队列：Ask 决定会以不允许的结果返回，且 `deny_code == Some("approval_required")`。MCP 服务器改为调用 `McpRuntime::authorize_with_approval_mut`，它会传入调用参数，使 Ask 决定被排队，或消耗一条匹配的批准记录并放行该调用。
 
 ## 10. 集成清单
 
@@ -284,7 +325,7 @@ if !outcome.allowed {
 - [ ] 目标连接已启用 MCP
 - [ ] 执行者在该连接上拥有策略分配
 - [ ] 策略覆盖了智能体将要使用的工具
-- [ ] 已了解任何写入/破坏性工具所涉及的审批工作流
+- [ ] 需要审批的类别已设为 Ask，并且在智能体工作期间有人关注待审批项
 
 ## 11. 测试卫生
 
@@ -317,13 +358,14 @@ if !outcome.allowed {
 
 - 确认执行者在该连接范围内拥有分配。
 - 确认工具 ID 在所属策略允许的工具之内。
-- 确认执行类别在策略允许的执行类别之内。
+- 确认策略把该执行类别决定为 Allow 或 Ask，而不是 Deny。
 - 如果使用 `builtin/read-only`，写入类工具（如 `create_script` 等）在设计上就被排除在外。
 
-### 审批一直处于待处理
+### 调用返回 `approval_required`
 
-- 检查 DBFlux 工作区中的待审批队列，并明确地批准或驳回。
-- `approve_execution` 需要 `admin` 执行类别 —— 请确认审批者的策略包含它。
+- 策略把该调用的类别决定为 Ask。请在 **Workspace → 待审批项** 中批准 `pending_id` 所指的待审批执行，然后以相同参数重复该调用。
+- 以不同参数重复调用会排入新的请求，而不会使用该批准。
+- 智能体不能批准自己的调用：`approve_execution` 与 `reject_execution` 通过 MCP 调用时始终被拒绝（`self_approval_forbidden`）。
 
 ### 审计导出缺少事件
 

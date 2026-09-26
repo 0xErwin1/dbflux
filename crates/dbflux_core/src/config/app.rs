@@ -148,6 +148,9 @@ pub struct PolicyRoleConfig {
     pub policy_ids: Vec<String>,
 }
 
+/// A tool policy as persisted in configuration. A class listed in
+/// `allowed_classes` is Allow, a class listed in `approval_classes` requires
+/// approval (Ask), and a class in neither is Deny.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicyConfig {
     pub id: String,
@@ -155,6 +158,8 @@ pub struct ToolPolicyConfig {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_classes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -465,9 +470,11 @@ pub enum RefreshPolicySetting {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThemeSetting {
+    /// Follow the operating system's light or dark appearance.
+    System,
     #[default]
+    #[serde(alias = "mirage")]
     Dark,
-    Mirage,
     Light,
 }
 
@@ -1382,5 +1389,22 @@ mod tests {
             settings.workspace_inspector_width_px, None,
             "missing field must deserialize to None"
         );
+    }
+
+    #[test]
+    fn theme_setting_serde_round_trips_and_reads_legacy_mirage_as_dark() {
+        for (setting, encoded) in [
+            (super::ThemeSetting::System, "\"system\""),
+            (super::ThemeSetting::Dark, "\"dark\""),
+            (super::ThemeSetting::Light, "\"light\""),
+        ] {
+            assert_eq!(serde_json::to_string(&setting).expect("serialize"), encoded);
+
+            let decoded: super::ThemeSetting = serde_json::from_str(encoded).expect("deserialize");
+            assert_eq!(decoded, setting);
+        }
+
+        let legacy: super::ThemeSetting = serde_json::from_str("\"mirage\"").expect("deserialize");
+        assert_eq!(legacy, super::ThemeSetting::Dark);
     }
 }

@@ -1,0 +1,438 @@
+# Referencia de teclado
+
+DBFlux usa un keymap por capas, sensible al contexto. La capa activa depende de
+qué panel tiene el foco. Los atajos escritos con el modificador **primary** usan
+`Cmd` en macOS y `Ctrl` en el resto de plataformas; los atajos escritos con
+`Ctrl` literal se mantienen como `Ctrl` en todas las plataformas (para evitar
+conflictos con los atajos del sistema en macOS).
+
+Cada atajo de abajo se puede cambiar en **Settings → Keybindings**: sus teclas
+(una combinación o una secuencia como `g g`) y el contexto en el que se aplica.
+Las teclas escritas con un espacio, como `y y`, se pulsan una tras otra; tras la
+primera, DBFlux espera hasta un segundo la siguiente. Mientras hay un diálogo
+abierto, los paneles detrás no reaccionan a sus teclas.
+
+El foco se muestra solo después de usar el teclado: el anillo de acento aparece
+en el control con foco tras pulsar una tecla, se mantiene mientras se mueve el
+puntero y se oculta con el siguiente clic. Un botón, casilla o fila de lista con
+foco toma `Enter` y `Space` para sí.
+
+## Global (disponible sin importar el foco)
+
+| Teclas                                    | Acción                                 |
+| ----------------------------------------- | -------------------------------------- |
+| `Ctrl+Shift+P` / `Cmd+Shift+P`            | Alternar command palette               |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`            | Abrir el Connection Manager            |
+| `Ctrl+n` / `Cmd+n`                        | Nueva pestaña de query                 |
+| `Ctrl+w` / `Cmd+w`                        | Cerrar pestaña actual                  |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`             | Pestaña siguiente / anterior           |
+| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Cambiar a la pestaña N                 |
+| `Ctrl+o` / `Cmd+o`                        | Abrir archivo de script                |
+| `Ctrl+Enter` / `Cmd+Enter`                | Ejecutar query                         |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`    | Ejecutar query en nueva pestaña        |
+| `Escape`                                  | Cancelar / cerrar modal                |
+| `Tab` / `Shift+Tab`                       | Ciclar el foco adelante / atrás        |
+| `Ctrl+Shift+1`                            | Enfocar sidebar                        |
+| `Ctrl+Shift+2`                            | Enfocar editor                         |
+| `Ctrl+Shift+3`                            | Enfocar resultados                     |
+| `Ctrl+Shift+4`                            | Enfocar tareas en segundo plano        |
+| `Ctrl+Shift+A` / `Cmd+Shift+A`            | Abrir el visor de auditoría            |
+| `Ctrl+b` / `Cmd+b`                        | Alternar sidebar                       |
+| `Ctrl+m`                                  | Abrir el menú contextual de la pestaña |
+
+## Sidebar
+
+| Teclas                                        | Acción                                                 |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `q` / `e`                                     | Cambiar de pestaña del sidebar (Connections / Scripts) |
+| `/`                                           | Enfocar búsqueda                                       |
+| `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior                       |
+| `h` / `l`                                     | Colapsar / expandir nodo                               |
+| `Space`                                       | Expandir / colapsar                                    |
+| `g` / `Shift+g` (o `Home` / `End`)            | Primer / último elemento                               |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                                  |
+| `Enter`                                       | Abrir / ejecutar elemento                              |
+| `r`                                           | Refrescar schema                                       |
+| `c`                                           | Abrir el Connection Manager                            |
+| `d`                                           | Desconectar                                            |
+| `m`                                           | Abrir el menú del elemento                             |
+| `Shift+j` / `Shift+k`                         | Extender la selección abajo / arriba                   |
+| `Space` (con Shift)                           | Alternar selección                                     |
+| `Ctrl+j` / `Ctrl+k`                           | Mover el elemento seleccionado abajo / arriba          |
+| `Shift+r`                                     | Renombrar                                              |
+| `x`                                           | Eliminar                                               |
+| `Shift+n`                                     | Crear carpeta                                          |
+| `Ctrl+l`                                      | Enfocar el panel de la derecha                         |
+
+## Editor
+
+| Teclas                         | Acción                                   |
+| ------------------------------ | ---------------------------------------- |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Enfocar panel izquierda / abajo / arriba |
+| `Alt+h`                        | Alternar desplegable de historial        |
+| `Ctrl+p` / `Cmd+p`             | Abrir queries guardadas                  |
+| `Ctrl+s` / `Cmd+s`             | Guardar query                            |
+| `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
+| `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
+| `Enter`                        | Enfocar / ejecutar                       |
+
+(Las letras sin modificador se dejan intencionadamente para el input de texto,
+así la escritura funciona con normalidad.)
+
+## Modo Vim (opcional)
+
+Los editores de código pueden usar edición modal con un conjunto reducido de
+comandos de Vim. Viene desactivado. Actívalo en **Settings → General → Editor →
+Modo Vim en los editores de código** y guarda: los editores abiertos cambian al
+instante. Se aplica a todos los editores de código (SQL y los demás lenguajes de
+query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
+formularios y la paleta de comandos siguen escribiendo como siempre.
+
+Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
+debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `REEMPLAZAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
+propio modo al cambiar de tab o al mover el focus y volver. La franja también
+muestra la secuencia de teclas incompleta, como `2`, `2d3` o `4g`. Se borra al
+completarse o interrumpirse el comando, al salir el foco del editor y con
+`Escape` o `Tab`. No muestra el historial de comandos ni aparece en la barra
+de estado del espacio de trabajo.
+
+| Modo | Teclas | Acción |
+|------|--------|--------|
+| Normal | `h` / `l` | Mover un carácter a la izquierda / derecha dentro de la línea |
+| Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
+| Normal | `Enter` | Mover una línea abajo |
+| Normal | `/` | Abrir el campo nativo de búsqueda de texto |
+| Normal | `n` / `N` | Repetir la última búsqueda hacia adelante / atrás (admite contador previo) |
+| Normal | `m{a-z}` | Fijar o sobrescribir una marca local minúscula en el cursor |
+| Normal | `'{a-z}` / `` `{a-z} `` | Ir al primer carácter no blanco de la línea marcada / a la posición exacta marcada (limitada a un cursor Normal) |
+| Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
+| Normal | `i` | Insertar antes del cursor |
+| Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
+| Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
+| Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
+| Normal | `x` | Borrar el carácter bajo el cursor |
+| Normal | `r{car}` / `Nr{car}` | Reemplazar el carácter bajo el cursor, o los N siguientes de la línea, por `{car}`; el cursor queda en el primer carácter reemplazado |
+| Normal | `R` | Entrar en modo Reemplazar |
+| Normal | `dd` / `yy` / `cc` | Borrar / copiar / cambiar líneas lógicas completas (`yy` usa el portapapeles del sistema) |
+| Normal | `c` + `h` / `l` / `j` / `k`, `w` / `W` / `e` / `E` / `b` / `B`, `gg` / `G` | Cambiar caracteres con movimientos horizontales o de palabra, o líneas completas con movimientos verticales o absolutos |
+| Normal | `d` / `y` + `h` / `l` / `j` / `k` | Borrar / copiar caracteres con movimientos horizontales o líneas con movimientos verticales (`y` usa el portapapeles del sistema) |
+| Normal | `d` / `y` + `w` / `W` / `e` / `E` / `b` / `B` | Borrar / copiar el rango de caracteres del movimiento (`y` usa el portapapeles del sistema) |
+| Normal | `d` / `y` + `gg` / `G` | Borrar / copiar líneas lógicas completas hasta un destino absoluto (`y` usa el portapapeles del sistema) |
+| Normal | `u` | Deshacer |
+| Normal | `v` / `V` / `Ctrl+v` | Seleccionar caracteres / líneas completas / un rectángulo de filas mostradas en modo Visual |
+| Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
+| Visual / Visual Línea | `v` / `V` | Salir del modo Visual activo / alternar entre selección de caracteres y líneas |
+| Visual / Visual Línea / Visual Bloque | `c` | Cambiar los caracteres seleccionados inclusive, las líneas lógicas o las columnas del bloque y entrar en modo Insertar |
+| Visual / Visual Línea / Visual Bloque | `d` / `x` / `y` | Borrar la selección (`d` / `x`) o copiarla al portapapeles del sistema (`y`) |
+| Visual / Visual Línea / Visual Bloque | `Escape` | Borrar la selección y volver al modo Normal |
+| Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+| Reemplazar | Caracteres escritos | Sobrescribir el carácter bajo el cursor; al final de una línea se agregan |
+| Reemplazar | `Backspace` | Restaurar el carácter que sobrescribió esta sesión de Reemplazar; si no hay ninguno, moverse a la izquierda |
+| Reemplazar | `Escape` | Volver al modo Normal |
+
+Puedes anteponer un contador a un movimiento, a `x` / `u` o a `dd` / `yy` (por
+ejemplo, `3w`, `2x`, `2u`, `3dd`, `2yy`). También se acepta entre las letras
+repetidas (`d2d`); ambos contadores se multiplican (`2d3d` afecta seis
+líneas). Los contadores de operador y movimiento también se multiplican:
+`2d3w` abarca seis movimientos `w` y `2d3j`, seis líneas. `h` / `l` abarcan
+caracteres; `j` / `k`, líneas lógicas completas. `x` con contador borra
+hasta el final de la línea sin unir líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve
+al inicio de la línea; después de un dígito distinto de cero forma parte del
+contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al
+siguiente comando. En modo Visual, los movimientos con contador extienden la
+selección del editor. `gg` y `G` sitúan el cursor en el primer carácter no blanco
+de la línea lógica de destino; `G` es una sola tecla mayúscula. Una `g` pendiente
+se descarta al interrumpir la secuencia o perder el foco. En modo Normal, `d` / `y` / `c` con `gg` / `G` actúa por líneas desde la fila actual hasta el destino, limitado al archivo: `gg` sin contador apunta a la fila 1 y `G` sin contador a la última. Un contador antes del operador o del movimiento indica una fila absoluta desde 1; juntos se multiplican (`2d3G` apunta a la fila 6). Por eso `1dG` apunta a la fila 1, a diferencia de `dG`. El borrado se deshace en un solo paso; en editores de solo lectura no hace nada, mientras que copiar sigue usando el portapapeles del sistema.
+
+`Ctrl+Enter` usa la selección sin espacios al inicio ni al final si contiene
+texto no blanco; si no, usa todo el editor. En Visual Bloque, une con saltos de
+línea los fragmentos no vacíos en orden, como al seleccionar con Alt y
+arrastrar el mouse. Si el bloque solo contiene espacios en blanco, usa todo el
+editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
+las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
+alinearse con las columnas en pantalla.
+
+En modo Normal, `/` abre una barra de búsqueda bajo el editor: una `/` de acento
+junto al campo de búsqueda. Escribe una
+cadena literal, que distingue mayúsculas y minúsculas, y pulsa `Enter` para
+buscar hacia adelante desde el cursor, volviendo al inicio al llegar al final.
+`Escape` cancela sin mover el cursor ni sustituir la última búsqueda. `n`
+repite hacia adelante y `N` hacia atrás; un contador previo repite la búsqueda
+ese número de veces. Funciona también en editores de solo lectura; cada pestaña
+conserva su última búsqueda. Mientras el campo está abierto, `Tab` / `Shift+Tab`
+no hacen nada y mantienen el foco en él. No admite expresiones regulares ni
+resaltado de búsqueda al estilo Vim. No se ha validado el IME de escritorio ni
+la interfaz renderizada.
+
+**Marcas locales.** Las marcas pertenecen al documento de código actual, no a
+otras pestañas ni a otras sesiones. También se pueden fijar en editores de solo
+lectura. Las ediciones nativas del texto, incluida la entrada en modo Insertar y
+las confirmaciones del IME, desplazan las marcas con el texto durante deshacer y
+rehacer. Insertar en una marca la mueve después del texto insertado; borrar o
+sustituir el texto marcado la lleva al inicio del rango modificado. Por eso,
+deshacer no tiene por qué recuperar la posición exacta dentro del texto borrado.
+Reemplazar todo el contenido del editor, desactivar el modo Vim o cerrar el
+documento borra sus marcas. No se ha validado el IME de escritorio ni la
+interfaz renderizada.
+
+Todo lo demás en modo Normal:
+
+| Entrada | Comportamiento en modo Normal |
+|---------|-------------------------------|
+| Otras letras no admitidas, puntuación, `Space` | Nada |
+| `Tab` / `Shift+Tab` | Nada: no indenta y el focus se queda en el editor |
+| `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
+| Pegar (`Cmd+v` o el menú contextual) | Nada |
+| Composición y confirmación del método de entrada (IME) | Se descartan |
+| `Backspace` / `Delete` | Nada |
+| `Escape` | Su significado habitual: cancelar una query en curso o salir del editor |
+| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer |
+
+En modo Normal el cursor está sobre un carácter, nunca después del final de una
+línea. Al salir del modo Insertar retrocede un carácter, como en Vim. En una
+línea vacía `x` no hace nada, así que nunca une líneas.
+
+En modo Insertar el editor se comporta igual que con el modo Vim desactivado,
+incluido pegar con `Ctrl+v`, salvo por `Escape`. Con un menú de autocompletado o de acciones de código
+abierto, `Escape` cierra el menú y se queda en modo Insertar; si no, vuelve al
+modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
+o una sugerencia en línea visible, el primer `Escape` los descarta y el
+siguiente vuelve al modo Normal.
+
+En modo Visual, `d` / `x` borra selecciones de caracteres, líneas o bloques; los bloques borran los rangos separados de cada fila en un solo paso de deshacer. `y` copia la selección al portapapeles del sistema. Si la selección está vacía, estos comandos vuelven al modo Normal sin editar ni cambiar el portapapeles. En editores de solo lectura, `d` / `x` conserva la selección sin editar ni cambiar el portapapeles; `y` sigue funcionando. `dd` y `cc` solo existen en modo Normal. Visual Bloque `c` borra las columnas del bloque en cada fila que alcanza su columna izquierda, omite las filas más cortas y entra en modo Insertar en la primera de esas filas. Al salir de Insertar con `Escape`, el texto escrito allí se inserta en la misma columna de las demás filas. No se copia nada si el texto contiene un salto de línea, si no se escribió nada o si el foco sale antes del editor. Las columnas del bloque cuentan escalares Unicode, como en la selección de bloque. El borrado, el texto escrito y las copias forman un solo paso de deshacer.
+
+**Cambiar y deshacer.** En modo Normal, `c` admite `h` / `l` por caracteres, `j` / `k` por líneas, `w` / `W` / `e` / `E` / `b` / `B` por palabras y `gg` / `G` por líneas, además de `cc`. `cw` cambia hasta el siguiente límite de `w`. Los contadores anterior e interior se multiplican (`2c3w` abarca seis movimientos `w`); los destinos absolutos son filas desde 1 limitadas al archivo (`2c3G` apunta a la fila 6), mientras que `cG` sin contador apunta a la última. Los cambios por líneas conservan el separador anterior a la fila siguiente; `cc` con contador incluye los terminadores LF o CRLF existentes de las líneas afectadas. El cambio borra mediante edición nativa y entra en modo Insertar para escribir el reemplazo. En sesiones normales, borrado y reemplazo forman un solo paso de deshacer que restaura el primer cursor. En editores de solo lectura no cambia el texto ni entra en modo Insertar.
+
+Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edición nativa y entra en modo Insertar para reemplazarla. En una sesión ordinaria, un solo paso de deshacer restaura el texto original y el ancla colapsada; los bytes de la selección usada para ejecutar una query no cambian. En editores de solo lectura, `c` conserva la selección sin entrar en modo Insertar. Con una selección vacía de caracteres o líneas, `c` entra en modo Insertar sin borrar texto. El cambio por líneas contempla una última línea lógica vacía tras LF o CRLF.
+
+**Reemplazar.** `r{car}` reemplaza el carácter bajo el cursor y deja el cursor sobre él. Con contador, `3rx` reemplaza los tres caracteres siguientes de la línea por `x`; si quedan menos antes del final de la línea, no cambia nada. Nunca reemplaza un salto de línea y en una línea vacía no hace nada. `r` seguido de `Enter` reemplaza los caracteres por un solo salto de línea que conserva la indentación de la línea; `r` seguido de `Tab` escribe tabulaciones. `Escape`, `Backspace`, `Delete`, las flechas o salir del editor cancelan `r` sin editar; un atajo con `Ctrl`, `Alt` o `Cmd` lo cancela y luego se ejecuta como siempre. `r` acepta un carácter compuesto con un método de entrada (IME). El reemplazo es un solo paso de deshacer.
+
+`R` entra en modo Reemplazar. Cada carácter escrito sobrescribe el carácter bajo el cursor; al final de una línea se agrega en lugar de reemplazar el salto de línea. `Backspace` restaura en orden inverso los caracteres sobrescritos en esta sesión de Reemplazar y, si no queda ninguno, solo mueve el cursor a la izquierda. `Enter` inserta un salto de línea y `Tab` indenta, como en modo Insertar. `Escape` vuelve al modo Normal y retrocede el cursor un carácter. Toda la sesión de Reemplazar es un solo paso de deshacer. Se ignora un contador antes de `R`.
+
+Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
+
+**Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
+
+**Editores de solo lectura** (definiciones de rutinas): aceptan los
+movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`
+no hacen nada. Borrar tampoco modifica el portapapeles.
+
+**Limitaciones.**
+
+- Solo existen los comandos de la primera tabla. `dd` y `yy` abarcan líneas lógicas
+  completas, con sus terminadores si existen. En el fin del archivo, el contador
+  se detiene en la última línea; borrar la última línea quita también el separador
+  anterior, pero copiarla no agrega un salto de línea inexistente. En una línea
+  final vacía creada por LF o CRLF, `y` por líneas copia ese separador existente;
+  un archivo vacío no tiene ninguno. `d` / `y`
+  admiten `w` / `W` / `e` / `E` / `b` / `B`: `w` / `W` y `b` / `B` excluyen
+  el carácter de destino; `e` / `E` lo incluyen. Los movimientos horizontales
+  `h` / `l` con operador abarcan caracteres; los verticales `j` / `k`, líneas.
+  No se admiten otras marcas, objetos de texto, registros,
+  macros, repetición con `.`, comandos `:` ni una tecla de rehacer. No es Vim
+  completo.
+- Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
+  que una letra escrita con un acento combinante separado requiere dos pulsaciones.
+- El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace
+  DBFlux, como cargar un archivo o una query del historial, se siguen aplicando.
+
+## Resultados
+
+| Teclas                                        | Acción                                     |
+| --------------------------------------------- | ------------------------------------------ |
+| `Ctrl+h` / `Ctrl+k` / `Ctrl+l`                | Enfocar panel izquierda / arriba / derecha |
+| `Ctrl+j`                                      | Enfocar la toolbar                         |
+| `j` / `k` (o `Down` / `Up`)                   | Fila siguiente / anterior                  |
+| `h` / `l` (o `Left` / `Right`)                | Columna izquierda / derecha                |
+| `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
+| `]` / `[`                                     | Página siguiente / anterior de resultados  |
+| `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
+| `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
+| `f`                                           | Enfocar la toolbar                         |
+| `/`                                           | Enfocar búsqueda/filtro                    |
+| `x`                                           | Eliminar fila                              |
+| `r`                                           | Renombrar / editar                         |
+| `o`                                           | Añadir fila                                |
+| `y`                                           | Copiar fila                                |
+| `i`                                           | Alternar la vista de registro (una fila)   |
+| `v`                                           | Alternar el panel de valor de la celda     |
+| `Ctrl+Space`                                  | Alternar el inspector de la fila           |
+| `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
+| `z`                                           | Alternar colapso del panel                 |
+| `m` (o `Shift+F10`)                           | Abrir menú contextual                      |
+
+## Diagrama de esquema
+
+| Teclas                                      | Acción                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `+` (o `=`) / `-`                           | Acercar / alejar                                            |
+| `h` / `j` / `k` / `l` (o flechas)           | Desplazar la vista                                          |
+| `Shift` + `h` / `j` / `k` / `l` (o flechas) | Seleccionar la siguiente tabla en esa dirección y centrarla |
+| `Alt` + `h` / `j` / `k` / `l` (o flechas)   | Mover la tabla seleccionada                                 |
+| `r` / `s` / `c`                             | Diseño De izquierda a derecha / Copo de nieve / Compacto    |
+| `m`                                         | Abrir menú contextual                                       |
+| `Escape`                                    | Quitar la selección                                         |
+
+## Tareas en segundo plano
+
+El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado no ocupa espacio: se abre con la entrada de tareas en segundo plano de la barra de estado, o con `Ctrl+Shift+4`, que además le pasa el foco. `Tab` y `Shift+Tab` lo saltan mientras está colapsado.
+
+| Teclas                                        | Acción                                   |
+| --------------------------------------------- | ---------------------------------------- |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k`                | Enfocar panel izquierda / abajo / arriba |
+| `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior         |
+| `g` / `Shift+g` (o `Home` / `End`)            | Primero / último                         |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                    |
+| `z`                                           | Alternar colapso del panel               |
+
+## Centro de notificaciones
+
+La campana del extremo derecho de la barra de título abre el centro de
+notificaciones, un popover que flota sobre el espacio de trabajo. Lista las
+aprobaciones de MCP que esperan una decisión, los errores de acciones que
+ejecutaste, una actualización de DBFlux disponible y los trabajos de
+exportación, importación, migración y análisis de volcados que terminaron. El
+badge de la campana cuenta los elementos sin leer y toma el color del más
+urgente: rojo para un error, el color de acento para una aprobación y neutro
+para actualizaciones y trabajos terminados. Sin nada sin leer, la campana no
+tiene badge.
+
+Abrir el popover no marca nada como leído. Hacer clic en una fila abre su
+destino y la marca como leída: una aprobación abre la pestaña de aprobaciones
+de MCP en esa solicitud, un error abre Audit filtrado por su correlation id, la
+actualización abre sus notas de versión y un trabajo terminado abre el panel de
+tareas en segundo plano. **Marcar todo como leído** lee todo y **Borrar leídas**
+quita los elementos leídos. La lista dura lo que dura la sesión. Las
+actualizaciones aparecen aquí en lugar de en la barra de estado.
+
+| Teclas   | Acción                                                 |
+| -------- | ------------------------------------------------------ |
+| `Escape` | Cerrar el popover (un clic fuera de él hace lo mismo) |
+
+## Command palette
+
+| Teclas | Acción |
+|--------|--------|
+| `Down` / `Up` (o `Ctrl+j` / `Ctrl+k`) | Seleccionar siguiente / anterior |
+| `Enter` | Ejecutar |
+| `Escape` | Cancelar |
+
+Las letras quedan para el campo de búsqueda, así que escribir filtra la lista.
+
+## Tabla de datos
+
+Estas teclas se aplican mientras una grilla de resultados o una tabla tiene el
+foco y no se está editando ninguna celda.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` / `h` / `l` (o las flechas) | Mover el cursor |
+| `Shift` + flechas | Extender la selección |
+| `Home` / `End` | Primera / última celda de la fila |
+| `Ctrl+Home` / `Ctrl+End` | Primera / última fila |
+| `Shift+Home` / `Shift+End`, `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Extender la selección hasta el borde de la fila o de la tabla |
+| `Ctrl+a` / `Cmd+a` | Seleccionar todo |
+| `Escape` | Quitar la selección |
+| `Ctrl+c` / `Cmd+c`, `y y` | Copiar la selección |
+| `Shift+y Shift+y` | Copiar la fila |
+| `Enter` / `F2` | Editar la celda |
+| `Ctrl+Enter` / `Cmd+Enter`, `Ctrl+s` / `Cmd+s` | Guardar los cambios pendientes |
+| `d d` / `Delete` | Borrar la fila |
+| `a a` / `Shift+a Shift+a` | Agregar / duplicar una fila |
+| `Ctrl+n` | Poner la celda en NULL |
+| `u` / `Ctrl+z` / `Cmd+z` | Deshacer |
+| `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
+| `e` | Expandir o contraer una columna anidada (grillas de documentos) |
+| `Backspace` | Salir de un valor anidado (grillas de documentos) |
+
+## Árbol de documentos
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Nodo siguiente / anterior |
+| `h` / `l` (o `Left` / `Right`) | Contraer / expandir, o ir al padre / primer hijo |
+| `g` / `Shift+g` (o `Home` / `End`) | Primer / último nodo |
+| `Ctrl+u` / `Ctrl+d` (o `PageUp` / `PageDown`) | Página arriba / abajo |
+| `Space` | Expandir / contraer |
+| `Enter` / `F2` | Editar el valor |
+| `e` | Vista previa del documento |
+| `d d` / `Delete` | Borrar el documento |
+| `t` | Cambiar la vista de datos |
+| `r` | Alternar la vista JSON sin formato |
+| `/` / `Ctrl+f` | Buscar; `n` / `Shift+n` coincidencia siguiente / anterior, `Escape` cierra |
+
+## Explorador clave-valor
+
+| Teclas | Acción |
+|--------|--------|
+| `` Ctrl+` `` | Mostrar u ocultar la consola de comandos, también desde su campo |
+| `Ctrl+j` | Cargar más claves |
+| `t` | Editar la expiración de la clave seleccionada |
+
+`Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
+un campo de texto.
+
+## Campos de texto
+
+| Teclas | Acción |
+|--------|--------|
+| `Ctrl+j` / `Ctrl+k` | Línea siguiente / anterior, o sugerencia siguiente / anterior |
+| `Ctrl+Space` | Mostrar sugerencias |
+| `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |
+| `Ctrl+Shift+z` | Rehacer (Linux y Windows; macOS usa `Cmd+Shift+z`) |
+
+## Diálogos
+
+| Teclas | Acción |
+|--------|--------|
+| `Escape` | Cerrar, o en diálogos con formulario salir primero del campo en edición |
+| `Enter` | Confirmar, cuando el botón principal está habilitado |
+| `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
+| `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+
+## Formularios y la ventana de Settings
+
+Estas teclas recorren los formularios de los diálogos y la ventana de Settings
+cuando no se está editando ningún campo de texto.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Campo siguiente / anterior |
+| `Left` / `Right` | Moverse dentro de una fila; cambiar la opción de un campo segmentado |
+| `h` / `l` | Volver a la lista / entrar al formulario |
+| `g` / `Shift+g` | Primer / último campo |
+| `Tab` / `Shift+Tab` | Campo siguiente / anterior |
+| `Space` | Alternar |
+| `Enter` | Activar o editar el campo |
+| `Escape` | Salir del campo o del formulario |
+| `/` | Enfocar la búsqueda |
+| `Ctrl+w` / `Ctrl+q` | Cerrar la ventana de Settings |
+| `Ctrl+s` | Guardar la sección |
+| `Ctrl+h` / `Ctrl+l` | Moverse entre la navegación y la sección |
+
+En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
+parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**
+y del método de autenticación SSH. En el visor de auditoría, `Left` / `Right`
+sobre los intervalos de tiempo cambian el intervalo.
+
+## Menú contextual
+
+| Teclas                      | Acción                          |
+| --------------------------- | ------------------------------- |
+| `j` / `k` (o `Down` / `Up`) | Mover abajo / arriba            |
+| `Enter` / `l` (o `Right`)   | Seleccionar / entrar en submenú |
+| `Escape` / `h` (o `Left`)   | Volver / cerrar                 |
+
+## Modal de historial
+
+| Teclas                                | Acción                           |
+| ------------------------------------- | -------------------------------- |
+| `Ctrl+j` / `Ctrl+k` (o `Down` / `Up`) | Seleccionar siguiente / anterior |
+| `Enter`                               | Abrir entrada                    |
+| `Ctrl+f`                              | Alternar favorito                |
+| `Ctrl+r`                              | Renombrar                        |
+| `Ctrl+d`                              | Eliminar                         |
+| `/`                                   | Enfocar búsqueda                 |
+| `Ctrl+s` / `Cmd+s`                    | Guardar query                    |

@@ -1,4 +1,7 @@
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem};
+use dbflux_components::tokens::{BuilderMetrics, ChromeColors, Fields};
 use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, div};
+use gpui_component::ActiveTheme;
 
 use crate::labels::{bool_op_label, comparator_label};
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, FilterTarget, QueryBuilderPanel};
@@ -107,7 +110,7 @@ pub fn render_filters_for_target(
                             dbflux_i18n::t!("document.query_builder.filters.add_filter"),
                         )
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.add_predicate_for(
@@ -126,7 +129,7 @@ pub fn render_filters_for_target(
                             dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
                         )
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.add_group_for(target, vec![], cx);
@@ -216,8 +219,6 @@ fn render_filter_group(
     use gpui::SharedString;
     use gpui::prelude::*;
 
-    let op_label = bool_op_label(op);
-
     let prefix = match target {
         FilterTarget::Where => "qb-grp",
         FilterTarget::Having => "qb-hav-grp",
@@ -230,32 +231,57 @@ fn render_filter_group(
     let path_for_remove = path.clone();
     let source_alias_for_pred = source_alias.to_string();
 
-    let mut group_div = div().flex().flex_col().gap_1().pl_2().child(
-        div()
-            .flex()
-            .flex_row()
-            .gap_1()
-            .items_center()
-            .child(
-                Button::new(
-                    path_id(&format!("{}-op", prefix), &path_for_toggle),
-                    op_label,
-                )
-                .ghost()
-                .small()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
+    let theme = cx.theme().clone();
+    let tint = ChromeColors::tint(&theme);
+
+    let op_key = path.iter().fold(format!("{prefix}-op"), |key, index| {
+        format!("{key}-{index}")
+    });
+    let op_id =
+        move |key: &str, op: dbflux_core::BoolOp| SharedString::from(format!("{key}-{op:?}"));
+    let weak = cx.weak_entity();
+    let current_id = op_id(&op_key, op);
+    let op_switch = SegmentedControl::new(
+        [dbflux_core::BoolOp::And, dbflux_core::BoolOp::Or]
+            .into_iter()
+            .map(|op| SegmentedItem::new(op_id(&op_key, op), bool_op_label(op)))
+            .collect(),
+        current_id.clone(),
+        move |id, _, cx| {
+            if *id == current_id {
+                return;
+            }
+
+            if let Some(builder) = weak.upgrade() {
+                builder.update(cx, |this, cx| {
                     this.toggle_group_op_for(target, path_for_toggle.clone(), cx);
-                })),
+                });
+            }
+        },
+    );
+
+    let link = |id: ElementId, label: String, enabled: bool| {
+        div()
+            .id(id)
+            .text_size(BuilderMetrics::LINK_FONT)
+            .text_color(tint)
+            .when(!enabled, |link| link.opacity(Fields::DISABLED_OPACITY))
+            .when(enabled, |link| link.cursor_pointer())
+            .child(label)
+    };
+
+    let add_links = div()
+        .flex()
+        .items_center()
+        .gap(BuilderMetrics::CHIP_GAP)
+        .child(
+            link(
+                path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
+                dbflux_i18n::t!("document.query_builder.filters.add_filter_link"),
+                !at_depth_cap,
             )
-            .child(
-                Button::new(
-                    path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
-                    dbflux_i18n::t!("document.query_builder.filters.add_filter"),
-                )
-                .ghost()
-                .small()
-                .disabled(at_depth_cap)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
+            .when(!at_depth_cap, |link| {
+                link.on_click(cx.listener(move |this, _event, _window, cx| {
                     this.add_predicate_for(
                         target,
                         path_for_add_pred.clone(),
@@ -263,31 +289,47 @@ fn render_filter_group(
                         "",
                         cx,
                     );
-                })),
-            )
-            .child(
-                Button::new(
-                    path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
-                    dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
-                )
-                .ghost()
-                .small()
-                .disabled(at_depth_cap)
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.add_group_for(target, path_for_add_group.clone(), cx);
-                })),
-            )
-            .when(!path.is_empty(), |this| {
-                this.child(
-                    Button::new(path_id(&format!("{}-rm", prefix), &path_for_remove), "✕")
-                        .ghost()
-                        .small()
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.remove_filter_node_for(target, path_for_remove.clone(), cx);
-                        })),
-                )
+                }))
             }),
-    );
+        )
+        .child(div().text_color(theme.muted_foreground).child("·"))
+        .child(
+            link(
+                path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
+                dbflux_i18n::t!("document.query_builder.filters.add_group_link"),
+                !at_depth_cap,
+            )
+            .when(!at_depth_cap, |link| {
+                link.on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.add_group_for(target, path_for_add_group.clone(), cx);
+                }))
+            }),
+        );
+
+    let mut group_div = div()
+        .flex()
+        .flex_col()
+        .gap(BuilderMetrics::ROW_GAP)
+        .when(!path.is_empty(), |group| {
+            group.pl(BuilderMetrics::CARD_PADDING)
+        })
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(BuilderMetrics::ROW_GAP)
+                .items_center()
+                .child(op_switch)
+                .child(div().flex_1())
+                .when(!path.is_empty(), |this| {
+                    this.child(remove_button(
+                        path_id(&format!("{}-rm", prefix), &path_for_remove),
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.remove_filter_node_for(target, path_for_remove.clone(), cx);
+                        }),
+                    ))
+                }),
+        );
 
     for (i, child) in children.into_iter().enumerate() {
         let mut child_path = path.clone();
@@ -305,7 +347,7 @@ fn render_filter_group(
         group_div = group_div.child(child_element);
     }
 
-    group_div
+    group_div.child(add_links)
 }
 
 fn render_filter_predicate(
@@ -333,13 +375,20 @@ fn render_filter_predicate(
         dbflux_core::Comparator::IsNull | dbflux_core::Comparator::IsNotNull
     );
 
-    let mut row = div().flex().flex_row().gap_1().items_center();
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .gap(BuilderMetrics::ROW_GAP)
+        .items_center();
 
     if let Some(col_state) = column_input_state {
         row = row.child(
-            crate::completion_support::single_line_completion_editor(&col_state)
-                .flex_1()
-                .w_full(),
+            div()
+                .w(BuilderMetrics::FILTER_COLUMN_WIDTH)
+                .flex_shrink_0()
+                .child(
+                    crate::completion_support::single_line_completion_editor(&col_state).w_full(),
+                ),
         );
     } else {
         let fallback = format!("{}.{}", pred.source_alias, pred.column);
@@ -369,35 +418,42 @@ fn render_filter_predicate(
         }
     }
 
-    row.child(
-        Button::new(path_id(rm_prefix, &path_for_rm), "✕")
-            .ghost()
-            .small()
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.remove_filter_node_for(target, path_for_rm.clone(), cx);
-            })),
-    )
+    row.child(remove_button(
+        path_id(rm_prefix, &path_for_rm),
+        cx.listener(move |this, _event, _window, cx| {
+            this.remove_filter_node_for(target, path_for_rm.clone(), cx);
+        }),
+    ))
+}
+
+/// The remove control of a filter row or group: a muted circled X.
+fn remove_button(
+    id: ElementId,
+    on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> impl IntoElement {
+    use dbflux_components::controls::Button;
+    use dbflux_components::icons::AppIcon;
+
+    Button::new(id, dbflux_i18n::t!("document.query_builder.filters.remove"))
+        .ghost()
+        .inline()
+        .icon(AppIcon::CircleX)
+        .icon_only()
+        .tab_stop(false)
+        .on_click(on_click)
 }
 
 /// Wraps a dropdown trigger in a bordered, themed chip so the selected
 /// label and the chevron read as a single discrete control.
 fn comparator_chip(
     dropdown: Entity<Dropdown>,
-    cx: &mut Context<QueryBuilderPanel>,
+    _cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::tokens::{Heights, Radii};
     use gpui::prelude::*;
-    use gpui_component::ActiveTheme;
 
-    let theme = cx.theme();
     div()
-        .w(gpui::px(76.0))
-        .h(Heights::BUTTON)
+        .w(BuilderMetrics::FILTER_COMPARATOR_WIDTH)
         .flex_shrink_0()
-        .rounded(Radii::SM)
-        .border_1()
-        .border_color(theme.input)
-        .bg(theme.background)
         .child(dropdown)
 }
 

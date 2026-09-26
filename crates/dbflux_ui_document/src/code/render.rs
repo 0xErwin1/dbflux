@@ -1,17 +1,29 @@
 use super::*;
-use crate::chrome::{ToolbarButton, ToolbarButtonVariant, compact_top_bar};
-use dbflux_components::composites::split_toolbar_action;
-use dbflux_components::controls::Button;
+use dbflux_components::composites::{EmptyState, SplitButton, result_tab, result_tab_bar};
+use dbflux_components::controls::Checkbox;
+use dbflux_components::controls::{Button, ButtonVariant};
 use dbflux_components::helpers::text_color_for_active;
-use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::modals::modal::{Modal, ModalVariant};
+use dbflux_components::modals::{modal_code, modal_lead};
 use dbflux_components::primitives::{
-    Badge, BadgeVariant, BannerBlock, BannerVariant, Icon, Text, focus_frame,
+    Badge, BadgeTone, BannerBlock, BannerVariant, Icon, Kbd, Text,
 };
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
+};
+use dbflux_components::typography::AppFonts;
+use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand, last_keystroke};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
 
-fn code_pane_is_focused(focus_mode: SqlQueryFocus, pane: SqlQueryFocus) -> bool {
-    focus_mode == pane
+/// Vertical line between two groups of the toolbar.
+fn toolbar_divider(theme: &gpui_component::theme::Theme) -> impl IntoElement {
+    div()
+        .w(px(1.0))
+        .h(TableViewMetrics::DIVIDER_HEIGHT)
+        .mx(EditorMetrics::TOOLBAR_DIVIDER_MARGIN_X)
+        .bg(theme.border)
 }
 
 impl CodeDocument {
@@ -56,9 +68,6 @@ impl CodeDocument {
             )
         };
 
-        let accent = theme.accent;
-        let fg = theme.foreground;
-
         let execution_time = self
             .execution
             .active_execution_index
@@ -68,29 +77,42 @@ impl CodeDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
-        // Keep this base shortcut in sync with the RunQuery binding (Cmd+Enter
-        // on macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
+        // Keep this shortcut in sync with the RunQuery binding (Cmd+Enter on
+        // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
         #[cfg(target_os = "macos")]
-        let shortcut_hint_base = "Cmd+Enter";
+        let run_shortcut = "Cmd \u{21B5}";
         #[cfg(not(target_os = "macos"))]
-        let shortcut_hint_base = "Ctrl+Enter";
+        let run_shortcut = "Ctrl \u{21B5}";
 
-        let shortcut_hint =
-            crate::labels::code_toolbar_shortcut_hint_label(shortcut_hint_base, is_db_language);
+        let show_run_group = !is_read_only && is_db_language && !is_executing;
 
-        compact_top_bar(&theme, std::iter::empty::<AnyElement>())
+        let run_summary = super::statements::run_summary_label(
+            self.statement_count().filter(|_| is_db_language),
+            execution_time.map(|duration| duration.as_secs_f64()),
+        );
+
+        div()
             .id("sql-toolbar")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(EditorMetrics::TOOLBAR_GAP)
+            .h(EditorMetrics::BAR_HEIGHT)
+            .px(EditorMetrics::BAR_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("run-query-btn")
+                    Button::new("run-query-btn", run_label)
                         .icon(run_icon)
-                        .label(run_label)
                         .variant(if is_executing {
-                            ToolbarButtonVariant::Danger
+                            ButtonVariant::Danger
                         } else {
-                            ToolbarButtonVariant::Primary
+                            ButtonVariant::Primary
                         })
                         .disabled(!run_enabled)
+                        .when(!is_executing, |button| button.kbd(run_shortcut))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if this.state == DocumentState::Executing {
                                 this.cancel_query(cx);
@@ -100,72 +122,85 @@ impl CodeDocument {
                         })),
                 )
             })
-            .when(!is_read_only && is_db_language && !is_executing, |el| {
+            .when(show_run_group, |el| {
                 el.child(
-                    ToolbarButton::new("run-in-new-tab-btn")
-                        .icon(AppIcon::SquarePlay)
-                        .label(dbflux_i18n::t!("document.code.toolbar.new_tab"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_query_in_new_tab(window, cx);
-                        })),
-                )
-                .child(
-                    ToolbarButton::new("run-selection-btn")
-                        .icon(AppIcon::ScrollText)
-                        .label(dbflux_i18n::t!("document.code.toolbar.selection"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_selected_query(window, cx);
-                        })),
+                    Button::new(
+                        "run-in-new-tab-btn",
+                        dbflux_i18n::t!("document.code.toolbar.new_tab"),
+                    )
+                    .icon(AppIcon::SquarePlay)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_query_in_new_tab(window, cx);
+                    })),
                 )
             })
-            .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
             .when(is_read_only, |el| {
                 el.child(
                     Text::caption(dbflux_i18n::t!("document.code.toolbar.read_only"))
                         .muted_foreground(),
                 )
             })
-            .child(self.render_secondary_actions(is_read_only, cx))
+            .when(!is_read_only, |el| {
+                el.child(toolbar_divider(&theme))
+                    .child(self.render_secondary_actions(is_read_only, cx))
+            })
             .when(!is_read_only && is_db_language, |el| {
-                el.child(split_toolbar_action(
-                    div()
-                        .id("sql-refresh-action")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(|d| d.bg(accent.opacity(0.08)))
+                el.child(toolbar_divider(&theme)).child(SplitButton::new(
+                    "sql-refresh-split",
+                    Button::new("sql-refresh-action", refresh_label)
+                        .icon(refresh_icon)
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.runner.is_primary_active() {
                                 this.cancel_query(cx);
                             } else {
                                 this.run_query(window, cx);
                             }
-                        }))
-                        .child(Icon::new(refresh_icon).small().color(fg))
-                        .child(Text::caption(refresh_label)),
-                    div()
-                        .id("sql-refresh-control")
-                        .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                        .h_full()
-                        .child(self.refresh.refresh_dropdown.clone()),
-                    cx,
+                        })),
+                    self.refresh.refresh_dropdown.clone(),
                 ))
             })
             .child(div().flex_1())
-            .when_some(execution_time, |el, duration| {
-                el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
+            .when_some(run_summary, |el, summary| {
+                el.child(
+                    div()
+                        .id("toolbar-run-summary")
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .font_family(AppFonts::MONO)
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            Icon::new(AppIcon::History)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.muted_foreground),
+                        )
+                        .child(summary),
+                )
             })
-            .when(self.session.show_saved_label, |el| {
-                el.child(Text::caption(dbflux_i18n::t!(
-                    "document.code.toolbar.saved"
-                )))
+            // A query buffer shows its file state in the context bar.
+            .when(self.session.show_saved_label && !is_db_language, |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(EditorMetrics::LAST_RUN_GAP)
+                        .font_family(AppFonts::MONO)
+                        .text_size(EditorMetrics::LAST_RUN_FONT)
+                        .text_color(theme.success)
+                        .child(
+                            Icon::new(AppIcon::Check)
+                                .size(EditorMetrics::LAST_RUN_ICON)
+                                .color(theme.success),
+                        )
+                        .child(dbflux_i18n::t!("document.code.toolbar.saved")),
+                )
             })
     }
 
-    /// Renders the secondary action buttons: Save, Format, History, Explain, Chart.
+    /// Renders the icon group: Save, Format, History, Explain, Chart.
     ///
     /// All mutating or execution buttons are hidden when `is_read_only` is true.
     fn render_secondary_actions(
@@ -173,197 +208,282 @@ impl CodeDocument {
         is_read_only: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let history_open = self.history.history_panel.read(cx).is_visible();
         let is_db_language = self.supports_connection_context();
 
         div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
+            .gap(EditorMetrics::TOOLBAR_GAP)
             // Save button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-save-btn")
-                        .icon(AppIcon::Save)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.save"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if this.is_file_backed() {
-                                this.save_file(window, cx);
-                            } else {
-                                this.save_file_as(window, cx);
-                            }
-                        })),
+                    Button::new(
+                        "toolbar-save-btn",
+                        dbflux_i18n::t!("document.code.toolbar.save"),
+                    )
+                    .icon(AppIcon::Save)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.is_file_backed() {
+                            this.save_file(window, cx);
+                        } else {
+                            this.save_file_as(window, cx);
+                        }
+                    })),
                 )
             })
             // Format button — hidden for read-only documents (no formatter available)
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-format-btn")
-                        .icon(AppIcon::Zap)
-                        .tooltip(dbflux_i18n::t!(
-                            "document.code.toolbar.formatter_unavailable"
-                        ))
-                        .disabled(true),
+                    Button::new(
+                        "toolbar-format-btn",
+                        dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
+                    )
+                    .icon(AppIcon::Zap)
+                    .icon_only()
+                    .disabled(true),
                 )
             })
             // History button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-history-btn")
-                        .icon(AppIcon::History)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.query_history"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let is_open = this.history.history_modal.read(cx).is_visible();
-                            if is_open {
-                                this.history
-                                    .history_modal
-                                    .update(cx, |modal, cx| modal.close(cx));
-                            } else {
-                                this.history
-                                    .history_modal
-                                    .update(cx, |modal, cx| modal.open(window, cx));
-                            }
-                        })),
+                    Button::new(
+                        "toolbar-history-btn",
+                        dbflux_i18n::t!("document.code.toolbar.query_history"),
+                    )
+                    .icon(AppIcon::History)
+                    .icon_only()
+                    .selected(history_open)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let is_open = this.history.history_panel.read(cx).is_visible();
+                        if is_open {
+                            this.history
+                                .history_panel
+                                .update(cx, |panel, cx| panel.close(cx));
+                        } else {
+                            this.history
+                                .history_panel
+                                .update(cx, |panel, cx| panel.open(window, cx));
+                        }
+                    })),
                 )
             })
             // Explain button — hidden for read-only documents
             .when(!is_read_only && is_db_language, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-explain-btn")
-                        .icon(AppIcon::Info)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.explain_query"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.run_explain(window, cx);
-                        })),
+                    Button::new(
+                        "toolbar-explain-btn",
+                        dbflux_i18n::t!("document.code.toolbar.explain_query"),
+                    )
+                    .icon(AppIcon::Info)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.run_explain(window, cx);
+                    })),
                 )
             })
             // Chart button — hidden for read-only documents
             .when(!is_read_only, |el| {
                 el.child(
-                    ToolbarButton::new("toolbar-chart-btn")
-                        .icon(AppIcon::ChartSpline)
-                        .tooltip(dbflux_i18n::t!("document.code.toolbar.open_in_chart"))
-                        .on_click(cx.listener(|this, _, _window, cx| {
-                            this.emit_chart_this_query(cx);
-                        })),
+                    Button::new(
+                        "toolbar-chart-btn",
+                        dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
+                    )
+                    .icon(AppIcon::ChartColumnBig)
+                    .icon_only()
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        this.emit_chart_this_query(cx);
+                    })),
                 )
             })
     }
 
     fn render_editor(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Editor);
         let bg = cx.theme().background;
-        let accent = cx.theme().accent;
 
-        focus_frame(
-            is_focused,
-            Some(accent.opacity(0.3)),
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .bg(bg)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if this.vim.search_open
-                            && this
-                                .vim_search_input
-                                .read(cx)
-                                .focus_handle(cx)
-                                .is_focused(window)
-                        {
-                            return;
-                        }
-                        this.enter_editor_mode(cx);
-                        this.editor
-                            .input_state
-                            .update(cx, |state, cx| state.focus(window, cx));
-                        cx.emit(DocumentEvent::RequestFocus);
-                    }),
-                )
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::Escape, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.cancel_vim_search(window, cx)
-                            || this.handle_vim_escape_action(window, cx)
-                        {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::IndentInline, _window, cx| {
-                        if this.vim_swallows_indent_action(cx) {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(cx.listener(
-                    |this, _: &gpui_component::input::OutdentInline, _window, cx| {
-                        if this.vim_swallows_indent_action(cx) {
-                            cx.stop_propagation();
-                        }
-                    },
-                ))
-                .capture_action(
-                    cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
-                            cx.stop_propagation();
-                        }
-                    }),
-                )
-                .capture_action(
-                    cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                        this.clear_vim_count_and_notify(cx);
-                        if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
-                            cx.stop_propagation();
-                        }
-                    }),
-                )
-                .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    if this.handle_vim_key_down(event, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                    if event.keystroke.key != "escape"
-                        || event.keystroke.modifiers.alt
-                        || event.keystroke.modifiers.control
-                        || event.keystroke.modifiers.shift
-                        || event.keystroke.modifiers.platform
-                        || event.keystroke.modifiers.function
+        // Focus inside the editor shows through its caret; the pane draws no
+        // ring of its own.
+        let mut key_context = KeyContext::default();
+        key_context.add(CODE_EDITOR_KEY_CONTEXT);
+        for (key, value) in self.key_context_entries() {
+            key_context.set(key, value);
+        }
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .bg(bg)
+            .key_context(key_context)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if this.vim.search_open
+                        && this
+                            .vim_search_input
+                            .read(cx)
+                            .focus_handle(cx)
+                            .is_focused(window)
                     {
                         return;
                     }
-                    this.schedule_editor_refocus(window, cx);
-                }))
-                .child(
-                    div().flex_1().min_h_0().overflow_hidden().child(
-                        gpui_component::input::Editor::new(&self.editor.input_state)
-                            .appearance(false)
-                            .readonly(self.editor_input_locked())
-                            .w_full()
-                            .h_full(),
-                    ),
-                )
-                .when(self.vim.search_open, |el| {
-                    el.child(
-                        div()
-                            .id("vim-search-prompt")
-                            .flex()
-                            .items_center()
-                            .child("/")
-                            .child(Input::new(&self.vim_search_input).id("vim-search-input")),
-                    )
-                })
-                .when_some(self.vim_mode(), |el, mode| {
-                    el.child(self.render_vim_mode_indicator(mode, cx))
+                    this.enter_editor_mode(cx);
+                    this.editor
+                        .input_state
+                        .update(cx, |state, cx| state.focus(window, cx));
+                    cx.emit(DocumentEvent::RequestFocus);
                 }),
-            cx,
-        )
-        .size_full()
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.cancel_vim_search(window, cx)
+                        || this.handle_vim_escape_action(window, cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(cx.listener(
+                |this, _: &gpui_component::input::IndentInline, _window, cx| {
+                    if this.vim_swallows_indent_action(cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_component::input::OutdentInline, _window, cx| {
+                    if this.vim_swallows_indent_action(cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                    this.clear_vim_count_and_notify(cx);
+                    if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            // A keymap binding runs before the key listeners below. Vim takes
+            // its own keys ahead of a default binding, as it did when the
+            // workspace resolved keys after them; a binding the user made
+            // wins over Vim. Any other command drops a half-typed count or
+            // operator, and Cancel keeps the editor focused, as the Escape
+            // key listener does when no binding takes the key.
+            .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if !action.from_user_binding
+                    && let Some(keystroke) = last_keystroke(cx)
+                    && this.handle_vim_key_down(
+                        &gpui::KeyDownEvent {
+                            keystroke,
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    )
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+
+                this.clear_vim_count_and_notify(cx);
+                if Command::from_action_id(&action.command) == Some(Command::Cancel) {
+                    this.schedule_editor_refocus(window, cx);
+                }
+            }))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.handle_vim_key_down(event, window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key != "escape"
+                    || event.keystroke.modifiers.alt
+                    || event.keystroke.modifiers.control
+                    || event.keystroke.modifiers.shift
+                    || event.keystroke.modifiers.platform
+                    || event.keystroke.modifiers.function
+                {
+                    return;
+                }
+                this.schedule_editor_refocus(window, cx);
+            }))
+            .child(
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    gpui_component::input::Editor::new(&self.editor.input_state)
+                        .appearance(false)
+                        .readonly(self.editor_input_locked())
+                        .text_size(EditorMetrics::CODE_FONT)
+                        .line_height(EditorMetrics::CODE_LINE_HEIGHT)
+                        .w_full()
+                        .h_full(),
+                ),
+            )
+            .when(self.vim.search_open, |el| {
+                el.child(self.render_vim_search_prompt(cx))
+            })
+            .when_some(self.vim_mode(), |el, mode| {
+                el.child(self.render_vim_mode_indicator(mode, cx))
+            })
+    }
+
+    /// The `/` prompt: a bar the height of the mode indicator above it, the
+    /// tinted slash, the frameless search field in the code face, and the
+    /// Enter and Escape hints the field answers.
+    fn render_vim_search_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+
+        div()
+            .id("vim-search-prompt")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(Spacing::SM)
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .font_family(AppFonts::MONO)
+            .child(Text::code("/").color(tint))
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.vim_search_input)
+                        .id("vim-search-input")
+                        .aria_label(dbflux_i18n::t!("document.code.vim.search.label"))
+                        .appearance(false)
+                        .small(),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Kbd::new("Enter"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.code.vim.search.run"
+                    )))
+                    .child(Kbd::new("Esc"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.code.vim.search.cancel"
+                    ))),
+            )
     }
 
     fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
@@ -391,9 +511,7 @@ impl CodeDocument {
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_focused = code_pane_is_focused(self.focus_mode, SqlQueryFocus::Results);
         let bg = cx.theme().background;
-        let accent = cx.theme().accent;
         let is_executing = self.state == DocumentState::Executing;
 
         let error = self
@@ -408,38 +526,33 @@ impl CodeDocument {
         let has_panel = active_panel.is_some();
         let has_tabs = !has_live_output && !self.result_tabs.result_tabs.is_empty();
 
-        focus_frame(
-            is_focused,
-            Some(accent.opacity(0.3)),
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .min_h_0()
-                .bg(bg)
-                .when(has_tabs, |el| el.child(self.render_results_header(cx)))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
-                        .when(has_live_output, |el| el.child(self.render_live_output(cx)))
-                        .when(!has_live_output, |el| {
-                            el.when_some(active_panel, |el, panel| el.child(panel))
-                        })
-                        .when(
-                            !has_live_output && !has_panel && !has_error && is_executing,
-                            |el| el.child(self.render_loading_results(cx)),
-                        )
-                        .when(
-                            !has_live_output && !has_panel && !has_error && !is_executing,
-                            |el| el.child(self.render_empty_results(cx)),
-                        ),
-                ),
-            cx,
-        )
-        .size_full()
+        // The results show focus through their own grid cursor and tabs.
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .bg(bg)
+            .when(has_tabs, |el| el.child(self.render_results_header(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .when_some(error, |el, err| el.child(self.render_error_state(&err, cx)))
+                    .when(has_live_output, |el| el.child(self.render_live_output(cx)))
+                    .when(!has_live_output, |el| {
+                        el.when_some(active_panel, |el, panel| el.child(panel))
+                    })
+                    .when(
+                        !has_live_output && !has_panel && !has_error && is_executing,
+                        |el| el.child(self.render_loading_results(cx)),
+                    )
+                    .when(
+                        !has_live_output && !has_panel && !has_error && !is_executing,
+                        |el| el.child(self.render_empty_results(cx)),
+                    ),
+            )
     }
 
     fn render_live_output(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -476,10 +589,10 @@ impl CodeDocument {
                     .py(Spacing::SM)
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(Text::label(status))
+                    .child(Text::body(status))
                     .child(Text::caption(line_count_label))
                     .when(live_output.has_stderr(), |el| {
-                        el.child(Badge::new("stderr", BadgeVariant::Warning))
+                        el.child(Badge::new("stderr", BadgeTone::Warning))
                     }),
             )
             .child(
@@ -496,77 +609,72 @@ impl CodeDocument {
             })
     }
 
+    /// Result tabs strip (AppByzEditor): one tab per result with its row
+    /// count and a close button, then the maximize and hide controls.
     fn render_results_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let active_index = self.result_tabs.active_result_index;
+        let muted = cx.theme().muted_foreground;
 
-        div()
+        let tabs: Vec<AnyElement> = self
+            .result_tabs
+            .result_tabs
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
+                let is_active = active_index == Some(i);
+                let tab_id = tab.id;
+                let row_count = tab.grid.read(cx).result().row_count();
+
+                result_tab(
+                    ElementId::Name(format!("result-tab-{}", tab.id).into()),
+                    tab.title.clone(),
+                    Some(crate::labels::row_count_label(row_count).into()),
+                    is_active,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.activate_result_tab(i, cx);
+                }))
+                .child(
+                    div()
+                        .id(ElementId::Name(
+                            format!("close-result-tab-{}", tab.id).into(),
+                        ))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_result_tab(tab_id, cx);
+                        }))
+                        .child(
+                            Icon::new(AppIcon::CircleX)
+                                .size(Fields::CHEVRON)
+                                .color(muted),
+                        ),
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        result_tab_bar(cx)
             .id("results-header")
-            .flex()
-            .items_center()
-            .h(Heights::TAB)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .h_full()
+                    .overflow_x_hidden()
+                    .flex_1()
+                    .children(tabs),
+            )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .overflow_x_hidden()
-                    .flex_1()
-                    .children(
-                        self.result_tabs
-                            .result_tabs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, tab)| {
-                                let is_active = active_index == Some(i);
-                                let tab_id = tab.id;
-
-                                div()
-                                    .id(ElementId::Name(format!("result-tab-{}", tab.id).into()))
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .when(is_active, |el| el.bg(theme.secondary))
-                                    .when(!is_active, |el| {
-                                        el.hover(|d| d.bg(theme.secondary.opacity(0.5)))
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.activate_result_tab(i, cx);
-                                    }))
-                                    .child(
-                                        Text::caption(tab.title.clone())
-                                            .color(text_color_for_active(is_active, theme)),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(ElementId::Name(
-                                                format!("close-result-tab-{}", tab.id).into(),
-                                            ))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .size_4()
-                                            .rounded(Radii::SM)
-                                            .cursor_pointer()
-                                            .hover(|d| d.bg(theme.danger.opacity(0.2)))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.close_result_tab(tab_id, cx);
-                                            }))
-                                            .child(Icon::new(AppIcon::X).size(px(12.0)).muted()), // guardrail-allow: 12px icon size, no ICON_XS token
-                                    )
-                            }),
-                    ),
+                    .h_full()
+                    .child(self.render_results_controls(cx)),
             )
-            .child(div().flex_1())
-            .child(self.render_results_controls(cx))
     }
 
     fn render_results_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -677,25 +785,19 @@ impl CodeDocument {
     }
 
     fn render_empty_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::muted(dbflux_i18n::t!("document.code.result.empty")))
+        EmptyState::new(
+            AppIcon::Table,
+            dbflux_i18n::t!("document.code.result.empty"),
+        )
     }
 
     /// Placeholder shown for a routine document when no connection is active for
     /// its profile.  The definition will be fetched automatically on connect.
     fn render_awaiting_connection(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(Text::muted(dbflux_i18n::t!(
-                "document.code.result.awaiting_connection"
-            )))
+        EmptyState::new(
+            AppIcon::Plug,
+            dbflux_i18n::t!("document.code.result.awaiting_connection"),
+        )
     }
 
     fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -743,39 +845,36 @@ impl CodeDocument {
             )
             .into_any_element();
 
-        ModalShell::new(
-            dbflux_i18n::t!("document.code.script_confirm.title"),
-            body,
-            footer,
-        )
-        .width(px(460.0))
-        .focus_handle(self.script_confirm_focus.handle())
-        .on_close(move |window, cx| {
-            entity_close.update(cx, |doc, cx| {
-                doc.cancel_script_query(window, cx);
-            });
-        })
-        .on_confirm(move |window, cx| {
-            entity_confirm.update(cx, |doc, cx| {
-                doc.confirm_script_query(window, cx);
-            });
-        })
+        Modal::new(dbflux_i18n::t!("document.code.script_confirm.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Play)
+            .width(px(460.0))
+            .focus_handle(self.script_confirm_focus.handle())
+            .on_close(move |window, cx| {
+                entity_close.update(cx, |doc, cx| {
+                    doc.cancel_script_query(window, cx);
+                });
+            })
+            .on_confirm(move |window, cx| {
+                entity_confirm.update(cx, |doc, cx| {
+                    doc.confirm_script_query(window, cx);
+                });
+            })
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        // Capture entity clones for each callback before building the footer.
         let entity_run = cx.entity().clone();
         let entity_cancel = cx.entity().clone();
-        let entity_suppress = cx.entity().clone();
+        let entity_toggle = cx.entity().clone();
         let entity_close = cx.entity().clone();
         let entity_confirm = cx.entity().clone();
 
-        let (title, message) = self
-            .pending
-            .dangerous_query
-            .as_ref()
+        let pending = self.pending.dangerous_query.as_ref();
+        let suppress = pending.is_some_and(|pending| pending.suppress);
+        let query = pending.map(|pending| pending.query.clone());
+
+        let (title, message) = pending
             .map(|p| {
                 (
                     crate::labels::dangerous_query_title(p.kind),
@@ -789,30 +888,38 @@ impl CodeDocument {
                 )
             });
 
-        let body = Text::caption(message).into_any_element();
-
-        let dont_ask_chip = div()
-            .id("dont-ask-again-btn")
+        let body = div()
             .flex()
-            .items_center()
-            .gap_1()
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .rounded(Radii::SM)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(move |_, window, cx| {
-                entity_suppress.update(cx, |doc, cx| {
-                    doc.confirm_dangerous_query(true, window, cx);
-                });
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(modal_lead(message, cx))
+            .when_some(query, |body, query| {
+                body.child(modal_code(query.trim().to_string(), cx))
             })
-            .child(Text::caption(dbflux_i18n::t!(
-                "document.code.dangerous_query.dont_ask_again"
-            )));
+            .child(
+                Checkbox::new("dangerous-dont-ask-again")
+                    .checked(suppress)
+                    .label(dbflux_i18n::t!(
+                        "document.code.dangerous_query.dont_ask_again"
+                    ))
+                    .on_click(move |checked: &bool, _, cx| {
+                        let checked = *checked;
+                        entity_toggle.update(cx, |doc, cx| {
+                            if let Some(pending) = doc.pending.dangerous_query.as_mut() {
+                                pending.suppress = checked;
+                                cx.notify();
+                            }
+                        });
+                    }),
+            );
 
         let cancel_btn = Button::new(
             "dangerous-cancel-btn",
             dbflux_i18n::t!("document.code.dangerous_query.cancel"),
+        )
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(ContextId::ConfirmModal, Command::Cancel),
+            Button::kbd,
         )
         .on_click(move |_, window, cx| {
             entity_cancel.update(cx, |doc, cx| {
@@ -825,30 +932,30 @@ impl CodeDocument {
             dbflux_i18n::t!("document.code.dangerous_query.run_anyway"),
         )
         .danger()
+        .icon(AppIcon::Play)
+        .when_some(
+            dbflux_ui_base::keymap::shortcut_label(ContextId::ConfirmModal, Command::Execute),
+            Button::kbd,
+        )
         .on_click(move |_, window, cx| {
             entity_run.update(cx, |doc, cx| {
-                doc.confirm_dangerous_query(false, window, cx);
+                doc.confirm_dangerous_query(suppress, window, cx);
             });
         });
 
-        // Footer: "Don't ask again" left-aligned, Cancel + Run Anyway right-aligned.
-        // The flex_1 spacer pushes the buttons to the right within the single footer AnyElement.
         let footer = div()
             .flex()
             .items_center()
-            .child(dont_ask_chip)
-            .child(div().flex_1())
-            .child(
-                div()
-                    .flex()
-                    .gap(Spacing::SM)
-                    .child(cancel_btn)
-                    .child(run_anyway_btn),
-            )
+            .gap(ModalMetrics::FOOTER_GAP)
+            .child(cancel_btn)
+            .child(run_anyway_btn)
             .into_any_element();
 
-        ModalShell::new(title, body, footer)
-            .width(px(460.0))
+        Modal::new(title)
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::TriangleAlert)
+            .width(ModalMetrics::WIDTH)
             .variant(ModalVariant::Danger)
             .focus_handle(self.dangerous_query_focus.handle())
             .on_close(move |window, cx| {
@@ -858,7 +965,7 @@ impl CodeDocument {
             })
             .on_confirm(move |window, cx| {
                 entity_confirm.update(cx, |doc, cx| {
-                    doc.confirm_dangerous_query(false, window, cx);
+                    doc.confirm_dangerous_query(suppress, window, cx);
                 });
             })
     }
@@ -866,6 +973,8 @@ impl CodeDocument {
 
 impl Render for CodeDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_statement_gutter_style(cx);
+
         self.process_pending_result(window, cx);
 
         self.process_pending_set_query(window, cx);
@@ -958,6 +1067,7 @@ impl Render for CodeDocument {
         }
 
         let context_bar = self.render_context_bar(cx).into_any_element();
+        let production_banner = self.render_production_banner(cx);
         let toolbar = self.render_toolbar(cx).into_any_element();
 
         let editor_view = if self.routine_definition_pending {
@@ -981,6 +1091,7 @@ impl Render for CodeDocument {
             .bg(bg)
             .track_focus(&self.focus_handle)
             .child(context_bar)
+            .when_some(production_banner, |el, banner| el.child(banner))
             .child(toolbar)
             .child(
                 div()
@@ -999,7 +1110,7 @@ impl Render for CodeDocument {
                                 .child(
                                     resizable_panel()
                                         .size(px(200.0))
-                                        .size_range(px(100.0)..px(1000.0))
+                                        .size_range(EditorMetrics::RESULTS_MIN_HEIGHT..px(1000.0))
                                         .child(results_view),
                                 )
                                 .into_any_element()
@@ -1013,7 +1124,6 @@ impl Render for CodeDocument {
             .when(has_collapsed_results, |el| {
                 el.child(self.render_collapsed_results_bar(cx))
             })
-            .child(self.history.history_modal.clone())
             .when(self.pending.dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
             })
@@ -1028,30 +1138,25 @@ impl Render for CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::code_pane_is_focused;
-    use crate::code::SqlQueryFocus;
-
+    /// The editor and results panes draw no focus ring around themselves:
+    /// focus inside a document shows through its own caret, grid cursor and
+    /// controls.
     #[test]
-    fn editor_focus_shell_tracks_editor_mode_only() {
-        assert!(code_pane_is_focused(
-            SqlQueryFocus::Editor,
-            SqlQueryFocus::Editor,
-        ));
-        assert!(!code_pane_is_focused(
-            SqlQueryFocus::Results,
-            SqlQueryFocus::Editor,
-        ));
-    }
+    fn code_panes_draw_no_ring_around_the_document() {
+        let source = include_str!("render.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("render.rs has production code before its tests");
 
-    #[test]
-    fn results_focus_shell_tracks_results_mode_only() {
-        assert!(code_pane_is_focused(
-            SqlQueryFocus::Results,
-            SqlQueryFocus::Results,
-        ));
-        assert!(!code_pane_is_focused(
-            SqlQueryFocus::ContextBar,
-            SqlQueryFocus::Results,
-        ));
+        for pane in ["fn render_editor(", "fn render_results("] {
+            let start = production.find(pane).expect("pane renderer");
+            let body = &production[start..start + 600];
+
+            assert!(
+                !body.contains("focus_ring("),
+                "{pane} wraps itself in a focus ring"
+            );
+        }
     }
 }

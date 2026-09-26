@@ -30,11 +30,13 @@ fn contrast_ratio(foreground: Hsla, background: Hsla) -> f32 {
 fn assert_readable_secondary_text(theme: &Theme, setting: ThemeSetting) {
     let surfaces = [
         ("background", theme.background),
-        ("panel", theme.tab),
-        ("raised", theme.popover),
+        ("panel", theme.popover),
+        ("tab_active", theme.tab_active),
+        ("raised", theme.secondary),
     ];
 
     let foregrounds = [
+        ("foreground", theme.foreground),
         ("muted_foreground", theme.muted_foreground),
         ("tab_foreground", theme.tab_foreground),
         ("table_head_foreground", theme.table_head_foreground),
@@ -60,11 +62,7 @@ fn assert_readable_secondary_text(theme: &Theme, setting: ThemeSetting) {
 fn secondary_text_meets_aa_contrast_on_every_palette(cx: &mut TestAppContext) {
     cx.update(theme::init);
 
-    for setting in [
-        ThemeSetting::Dark,
-        ThemeSetting::Mirage,
-        ThemeSetting::Light,
-    ] {
+    for setting in [ThemeSetting::Dark, ThemeSetting::Light] {
         cx.update(|cx| {
             theme::apply_theme(setting, AppStyle::Default, Option::<&mut Window>::None, cx)
         });

@@ -231,10 +231,14 @@ mod tests {
         let enabled = BucketDetailsState::Loaded(BucketDetails {
             region: "us-east-1".to_string(),
             versioning: VersioningStatus::Enabled,
+            encryption: None,
+            public_access: None,
         });
         let disabled = BucketDetailsState::Loaded(BucketDetails {
             region: "us-east-1".to_string(),
             versioning: VersioningStatus::Disabled,
+            encryption: None,
+            public_access: None,
         });
 
         assert!(versioning_tracks_history(&enabled));

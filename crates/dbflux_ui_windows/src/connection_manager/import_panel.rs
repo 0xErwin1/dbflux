@@ -7,11 +7,11 @@ use dbflux_app::portability::{
 };
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
+use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::{
-    BannerBlock, BannerVariant, IconButton, SegmentedControl, SegmentedItem, Text, surface_raised,
+    BannerBlock, BannerVariant, SegmentedControl, SegmentedItem, SurfaceRole, Text, surface,
 };
-use dbflux_components::tokens::{FontSizes, Heights, Spacing};
+use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{AuthProfile, ConnectionProfile, LogErr, ProxyProfile, SshTunnelProfile};
 use dbflux_portability::external::{
@@ -1053,22 +1053,21 @@ impl Render for ImportConnectionsPanel {
             .child(body_content)
             .into_any_element();
 
-        let shell = ModalShell::new(
-            dbflux_i18n::t!("connection_manager.import.modal_title"),
-            body,
-            self.render_footer(cx),
-        )
-        .width(px(640.0))
-        .focus_handle(self.focus.handle())
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |window, cx| {
-                entity
-                    .update(cx, |this, cx| this.advance(window, cx))
-                    .log_err();
-            }
-        })
-        .confirm_enabled(self.can_advance(cx));
+        let shell = Modal::new(dbflux_i18n::t!("connection_manager.import.modal_title"))
+            .body(body)
+            .footer(self.render_footer(cx))
+            .icon(AppIcon::Download)
+            .width(px(640.0))
+            .focus_handle(self.focus.handle())
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.advance(window, cx))
+                        .log_err();
+                }
+            })
+            .confirm_enabled(self.can_advance(cx));
 
         // A running load or import cannot be cancelled, so the shell draws no
         // close button and ignores Escape and backdrop clicks until it ends.
@@ -1150,11 +1149,16 @@ impl ImportConnectionsPanel {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
-        let browse = IconButton::new("import-input-browse", AppIcon::Folder.into())
-            .icon_size(Heights::ICON_SM)
-            .on_click(move |_event, _window, cx| {
-                entity.update(cx, |this, cx| this.browse_input_path(cx));
-            });
+        let browse = Button::new(
+            "import-input-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_input_path(cx));
+        });
 
         let bundle_file_label = dbflux_i18n::t!("connection_manager.import.field.bundle_file");
 
@@ -1180,7 +1184,7 @@ impl ImportConnectionsPanel {
 
         if self.native_picker_unavailable {
             file_block = file_block.child(
-                Text::muted(dbflux_i18n::t!(
+                Text::caption(dbflux_i18n::t!(
                     "connection_manager.import.hint.no_native_picker"
                 ))
                 .font_size(FontSizes::XS),
@@ -1211,15 +1215,19 @@ impl ImportConnectionsPanel {
                 AppIcon::Eye
             };
 
-            let toggle = IconButton::new("import-passphrase-eye", eye_icon.into()).on_click({
-                let entity = cx.entity().clone();
-                move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.show_passphrase = !this.show_passphrase;
-                        cx.notify();
-                    });
-                }
-            });
+            let toggle = Button::new("import-passphrase-eye", "")
+                .ghost()
+                .icon(eye_icon)
+                .icon_only()
+                .on_click({
+                    let entity = cx.entity().clone();
+                    move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.show_passphrase = !this.show_passphrase;
+                            cx.notify();
+                        });
+                    }
+                });
 
             let passphrase_label = dbflux_i18n::t!("connection_manager.import.field.passphrase");
 
@@ -1263,12 +1271,16 @@ impl ImportConnectionsPanel {
         });
 
         let entity = cx.entity().clone();
-        let primary_browse =
-            IconButton::new("import-external-primary-browse", AppIcon::Folder.into())
-                .icon_size(Heights::ICON_SM)
-                .on_click(move |_event, _window, cx| {
-                    entity.update(cx, |this, cx| this.browse_external_file(false, cx));
-                });
+        let primary_browse = Button::new(
+            "import-external-primary-browse",
+            dbflux_i18n::t!("connection_manager.action.browse"),
+        )
+        .ghost()
+        .icon(AppIcon::Folder)
+        .icon_only()
+        .on_click(move |_event, _window, cx| {
+            entity.update(cx, |this, cx| this.browse_external_file(false, cx));
+        });
 
         let mut col = div()
             .flex()
@@ -1301,12 +1313,16 @@ impl ImportConnectionsPanel {
             });
 
             let entity = cx.entity().clone();
-            let secondary_browse =
-                IconButton::new("import-external-secondary-browse", AppIcon::Folder.into())
-                    .icon_size(Heights::ICON_SM)
-                    .on_click(move |_event, _window, cx| {
-                        entity.update(cx, |this, cx| this.browse_external_file(true, cx));
-                    });
+            let secondary_browse = Button::new(
+                "import-external-secondary-browse",
+                dbflux_i18n::t!("connection_manager.action.browse"),
+            )
+            .ghost()
+            .icon(AppIcon::Folder)
+            .icon_only()
+            .on_click(move |_event, _window, cx| {
+                entity.update(cx, |this, cx| this.browse_external_file(true, cx));
+            });
 
             col = col
                 .child(
@@ -1330,7 +1346,7 @@ impl ImportConnectionsPanel {
                         .child(secondary_browse),
                 )
                 .child(
-                    Text::muted(dbflux_i18n::t!(
+                    Text::caption(dbflux_i18n::t!(
                         "connection_manager.import.external.hint.secondary_optional"
                     ))
                     .font_size(FontSizes::XS),
@@ -1339,7 +1355,7 @@ impl ImportConnectionsPanel {
 
         if self.native_picker_unavailable {
             col = col.child(
-                Text::muted(dbflux_i18n::t!(
+                Text::caption(dbflux_i18n::t!(
                     "connection_manager.import.hint.no_native_picker"
                 ))
                 .font_size(FontSizes::XS),
@@ -1414,7 +1430,7 @@ impl ImportConnectionsPanel {
             dbflux_i18n::t!("connection_manager.import.external.secret.none")
         };
 
-        surface_raised(cx)
+        surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -1452,10 +1468,10 @@ impl ImportConnectionsPanel {
                                     .text_color(theme.foreground)
                                     .child(candidate_label),
                             )
-                            .child(Text::muted(host_summary).font_size(FontSizes::XS)),
+                            .child(Text::caption(host_summary).font_size(FontSizes::XS)),
                     ),
             )
-            .child(Text::muted(secret_status).font_size(FontSizes::XS))
+            .child(Text::caption(secret_status).font_size(FontSizes::XS))
             .into_any_element()
     }
 
@@ -1465,7 +1481,7 @@ impl ImportConnectionsPanel {
             return div().into_any_element();
         };
 
-        let mut counts = surface_raised(cx)
+        let mut counts = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -1604,7 +1620,7 @@ impl ImportConnectionsPanel {
             });
         });
 
-        surface_raised(cx)
+        surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -1655,7 +1671,7 @@ impl ImportConnectionsPanel {
         let theme = cx.theme().clone();
         let key = (resolution.owner_local_id.clone(), resolution.field.clone());
 
-        let mut row = surface_raised(cx)
+        let mut row = surface(SurfaceRole::Raised, cx)
             .w_full()
             .px(Spacing::SM)
             .py(Spacing::XS)
@@ -1682,7 +1698,7 @@ impl ImportConnectionsPanel {
                             .child(secret_label.clone()),
                     )
                     .child(
-                        Text::muted(dbflux_i18n::t!(
+                        Text::caption(dbflux_i18n::t!(
                             "connection_manager.import.hint.leave_empty_skip"
                         ))
                         .font_size(FontSizes::XS),
@@ -1755,7 +1771,7 @@ impl ImportConnectionsPanel {
         cx: &Context<Self>,
     ) -> AnyElement {
         if candidates.is_empty() {
-            return Text::muted(dbflux_i18n::t!(
+            return Text::caption(dbflux_i18n::t!(
                 "connection_manager.import.required.no_matching_auth_profile"
             ))
             .font_size(FontSizes::XS)
@@ -1803,7 +1819,7 @@ impl ImportConnectionsPanel {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::muted(dbflux_i18n::t!(
+                Text::caption(dbflux_i18n::t!(
                     "connection_manager.import.hint.select_profile_or_skip"
                 ))
                 .font_size(FontSizes::XS),
@@ -2292,6 +2308,7 @@ mod keyboard_tests {
         Events,
     ) {
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         let app_state = cx.new(|_| {
             AppStateEntity::new_with_storage_runtime(
                 StorageRuntime::in_memory().expect("in-memory storage"),

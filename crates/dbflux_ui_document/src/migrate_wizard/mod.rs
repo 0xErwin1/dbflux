@@ -1,6 +1,7 @@
 //! Migrate wizard: a five-phase flow (Source & Target → Tables Mapping →
-//! Options → Confirm → Run) rendered inside a large, vertically centered
-//! modal with a left phase rail. Each phase is a self-contained child
+//! Options → Confirm → Run) opened as a document tab, laid out as a page
+//! with a left phase rail, the phase content on the right and the actions in
+//! a footer. Each phase is a self-contained child
 //! entity; this module owns the [`WizardPhase`] state machine that mounts
 //! them, resolves the source/target connections and metadata between phases
 //! (via the shared `prepare_fetch_*` seam), pre-computes the FK load order on
@@ -16,19 +17,18 @@ mod column_mapping;
 pub mod confirm_run;
 pub mod mapping;
 pub mod options;
+mod pane;
 pub mod phases;
 pub mod source_target;
 pub mod tree_model;
 
 use std::sync::Arc;
 
-use dbflux_components::composites::{
-    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_rail,
-};
+use dbflux_components::composites::{RailItem, render_wizard_rail};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::Spacing;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{ChromeColors, ModalMetrics};
 use dbflux_core::{
     ColumnInfo, Connection, DbError, DriverCapabilities, LogErr, SchemaCacheKey,
     SchemaForeignKeyInfo, TableInfo, TableRef, TransferColumn, topological_order,
@@ -36,12 +36,14 @@ use dbflux_core::{
 use dbflux_transfer::TableTransferStatus;
 use dbflux_transfer::migration::{MigratedTable, MigrationOptions, MigrationTablePlan};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
-use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
+
+use crate::handle::DocumentEvent;
+use crate::types::{DocumentId, DocumentState};
 
 pub use column_mapping::TableMigrationConfig;
 use confirm_run::{ConfirmRunEvent, ConfirmRunInputs, ConfirmRunPhase, decide_order};
@@ -395,15 +397,15 @@ fn prev_phase(phase: WizardPhase) -> Option<WizardPhase> {
     }
 }
 
-/// The migration wizard modal: owns the current [`WizardPhase`] plus the four
-/// child phase entities it mounts as the user advances. Downstream phases are
+/// The migration wizard document: owns the current [`WizardPhase`] plus the
+/// four child phase entities it mounts as the user advances. Downstream phases are
 /// invalidated (dropped) whenever an upstream phase reports a change, so a
 /// re-advance rebuilds them against fresh inputs; navigating back and forward
 /// without changes reuses the already-built entities.
 pub struct MigrateWizard {
+    id: DocumentId,
     app_state: Entity<AppStateEntity>,
     focus_handle: FocusHandle,
-    visible: bool,
 
     source_profile_id: Option<Uuid>,
     source_database: Option<String>,
@@ -459,12 +461,14 @@ pub struct MigrateWizard {
     _confirm_run_sub: Option<Subscription>,
 }
 
+impl EventEmitter<DocumentEvent> for MigrateWizard {}
+
 impl MigrateWizard {
     pub fn new(app_state: Entity<AppStateEntity>, cx: &mut Context<Self>) -> Self {
         Self {
+            id: DocumentId::new(),
             app_state,
             focus_handle: cx.focus_handle(),
-            visible: false,
             source_profile_id: None,
             source_database: None,
             source_tables: Vec::new(),
@@ -491,8 +495,47 @@ impl MigrateWizard {
         }
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.visible
+    pub fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    pub fn title(&self) -> String {
+        dbflux_i18n::t!("document.migrate_wizard.title")
+    }
+
+    pub fn state(&self, cx: &App) -> DocumentState {
+        if self.is_running(cx) {
+            DocumentState::Executing
+        } else if self.advancing {
+            DocumentState::Loading
+        } else {
+            DocumentState::Clean
+        }
+    }
+
+    /// Whether this wizard was opened for exactly this sidebar selection —
+    /// the identity its tab is deduplicated by.
+    pub fn matches_source(
+        &self,
+        profile_id: Uuid,
+        database: Option<&str>,
+        tables: &[TableRef],
+    ) -> bool {
+        self.source_profile_id == Some(profile_id)
+            && self.source_database.as_deref() == database
+            && self.source_tables == tables
+    }
+
+    /// Gives keyboard focus to the active phase's tree or grid, falling back
+    /// to the wizard itself while no phase is mounted.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.active_phase_focus_handle(cx) {
+            Some(handle) => {
+                handle.focus(window, cx);
+                self.focused_phase = Some(self.phase);
+            }
+            None => self.focus_handle.focus(window, cx),
+        }
     }
 
     pub fn open(
@@ -508,14 +551,12 @@ impl MigrateWizard {
         // progress) and could start a second concurrent migration, so instead
         // surface the in-progress run and ignore the new request.
         if self.is_running(cx) {
-            self.visible = true;
             self.phase = WizardPhase::Run;
             self.focus_handle.focus(window, cx);
             cx.notify();
             return;
         }
 
-        self.visible = true;
         self.source_profile_id = Some(source_profile_id);
         self.source_database = source_database.clone();
         self.source_tables = source_tables.clone();
@@ -562,21 +603,21 @@ impl MigrateWizard {
         cx.notify();
     }
 
+    /// Closes the wizard's tab.
+    ///
+    /// Suspends the Source & Target picker first: the phase entity is dropped
+    /// together with its `ObjectTreeEvent` subscription, so a wizard on its
+    /// way out can never react to shared settles, and reopening builds a
+    /// fresh phase. The shared coordinator is never told to cancel — its
+    /// requests may belong to other consumers. A live run keeps everything:
+    /// the run finalizes its task on its own, so closing the tab leaves it
+    /// running in the Tasks panel.
     pub fn close(&mut self, cx: &mut Context<Self>) {
-        self.visible = false;
-        // Suspend the Source & Target picker through the production close
-        // path: drop the phase entity together with its `ObjectTreeEvent`
-        // subscription, so a hidden wizard can never react to shared settles
-        // or leak subscriptions across reopenings. Reopening builds a fresh
-        // phase (fresh projection, fresh subscription). The shared
-        // coordinator is never told to cancel — its requests may belong to
-        // other consumers. A live run keeps everything as before: the run's
-        // owner must stay alive, and back-navigation to `Source & Target`
-        // after the run needs the phase.
         if !self.is_running(cx) {
             self.source_target = None;
             self._source_target_sub = None;
         }
+        cx.emit(DocumentEvent::RequestClose);
         cx.notify();
     }
 
@@ -683,6 +724,7 @@ impl MigrateWizard {
         match event {
             ConfirmRunEvent::RunStarted => {
                 self.phase = WizardPhase::Run;
+                cx.emit(DocumentEvent::MetaChanged);
                 cx.notify();
             }
             ConfirmRunEvent::CloseRequested => self.close(cx),
@@ -752,7 +794,7 @@ impl MigrateWizard {
 
     /// Footer Close button (shown once the run is `Done`): routes through the
     /// confirm/run phase's existing `CloseRequested` event so the single close
-    /// path in the wizard's subscription stays the only way the modal dismisses.
+    /// path in the wizard's subscription stays the only way the tab closes.
     fn request_close(&mut self, cx: &mut Context<Self>) {
         match self.confirm_run.clone() {
             Some(phase) => {
@@ -1175,6 +1217,7 @@ impl MigrateWizard {
                             target_connection,
                             source_database,
                             target_database,
+                            source_profile_id,
                             target_profile_id,
                             source_container_label,
                             target_container_label,
@@ -1314,26 +1357,63 @@ impl MigrateWizard {
 
 impl Render for MigrateWizard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.visible {
-            return div().into_any_element();
-        }
-
         self.focus_active_phase_on_entry(window, cx);
 
-        let close_entity = cx.entity().downgrade();
-        let close = move |_window: &mut Window, cx: &mut App| {
-            close_entity.update(cx, |this, cx| this.close(cx)).ok();
-        };
+        div()
+            .id("migrate-wizard")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .bg(cx.theme().background)
+            .child(self.render_header(cx))
+            .child(self.render_body(cx))
+    }
+}
 
-        let frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("document.migrate_wizard.title"))
-            .icon(AppIcon::ArrowUpDown)
-            .width(WIZARD_MODAL_WIDTH)
-            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
-            .center_vertically()
-            .child(self.render_body(cx));
+/// Geometry of the migrate wizard's own head and foot bars (P1Migrate).
+struct MigrateChromeMetrics;
 
-        frame.render(cx).into_any_element()
+impl MigrateChromeMetrics {
+    const HEADER_HEIGHT: Pixels = px(38.0);
+    const HEADER_PADDING_X: Pixels = px(14.0);
+    const HEADER_GAP: Pixels = px(10.0);
+    const HEADER_ICON: Pixels = px(15.0);
+    const TITLE_FONT: Pixels = px(13.0);
+    const FOOTER_HEIGHT: Pixels = px(56.0);
+    const FOOTER_NOTE_FONT: Pixels = px(12.5);
+}
+
+impl MigrateWizard {
+    /// The wizard's head bar: a 38 px strip on the ground with the tinted
+    /// icon and the title. The tab carries the close button.
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(MigrateChromeMetrics::HEADER_GAP)
+            .h(MigrateChromeMetrics::HEADER_HEIGHT)
+            .px(MigrateChromeMetrics::HEADER_PADDING_X)
+            .bg(theme.background)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Icon::new(AppIcon::ArrowUpDown)
+                    .size(MigrateChromeMetrics::HEADER_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                div()
+                    .text_size(MigrateChromeMetrics::TITLE_FONT)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(dbflux_i18n::t!("document.migrate_wizard.title")),
+            )
+            .into_any_element()
     }
 }
 
@@ -1347,11 +1427,11 @@ impl MigrateWizard {
                 .ok();
         };
 
-        // `flex_1` (not `size_full`): the modal container is a fixed-height
-        // flex column whose first child is the header, so the body must grow
-        // into the *remaining* height. `size_full` (100% height) would instead
-        // push the body to the full container height below the header, and the
-        // container's `overflow_hidden` would then clip the footer off-screen.
+        // `flex_1` (not `size_full`): the page is a flex column whose first
+        // child is the header, so the body must grow into the *remaining*
+        // height. `size_full` (100% height) would instead push the body to the
+        // full page height below the header, and the page's `overflow_hidden`
+        // would then clip the footer off-screen.
         div()
             .flex()
             .flex_col()
@@ -1406,14 +1486,13 @@ impl MigrateWizard {
 
     fn render_footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let border = theme.border;
 
-        let run_state = self
-            .confirm_run
-            .as_ref()
-            .map(|phase| phase.read(cx).run_state());
+        let run_phase = self.confirm_run.as_ref().map(|phase| phase.read(cx));
+        let run_state = run_phase.map(|phase| phase.run_state());
         let running = run_state == Some(RunState::Running);
         let done = run_state == Some(RunState::Done);
+        let integrity_off =
+            running && run_phase.is_some_and(|phase| phase.disables_referential_integrity());
 
         let shows_back = prev_phase(self.phase).is_some() && !running && !done;
         let shows_continue = next_phase(self.phase).is_some();
@@ -1424,74 +1503,72 @@ impl MigrateWizard {
             dbflux_i18n::t!("document.migrate_wizard.footer.continue")
         };
 
-        let actions = div()
+        let note = match &self.error {
+            Some(error) => Some(Text::caption(error.clone()).danger().into_any_element()),
+            None if integrity_off => Some(
+                div()
+                    .text_size(MigrateChromeMetrics::FOOTER_NOTE_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(dbflux_i18n::t!(
+                        "document.migrate_wizard.footer.referential_integrity_off"
+                    ))
+                    .into_any_element(),
+            ),
+            None => None,
+        };
+
+        div()
             .flex()
-            .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::SM)
-            .when(shows_back, |parent| {
-                parent.child(
+            .gap(ModalMetrics::FOOTER_GAP)
+            .h(MigrateChromeMetrics::FOOTER_HEIGHT)
+            .px(ModalMetrics::PADDING)
+            .bg(theme.background)
+            .border_t_1()
+            .border_color(theme.border)
+            .child(div().flex_1().min_w(px(0.0)).children(note))
+            .when(shows_back, |footer| {
+                footer.child(
                     Button::new(
                         "migrate-wizard-back",
                         dbflux_i18n::t!("document.migrate_wizard.footer.back"),
                     )
-                    .small()
-                    .ghost()
+                    .icon(AppIcon::ChevronLeft)
                     .disabled(self.advancing)
                     .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                 )
             })
-            .when(shows_continue, |parent| {
-                parent.child(
+            .when(shows_continue, |footer| {
+                footer.child(
                     Button::new("migrate-wizard-continue", continue_label)
-                        .small()
                         .primary()
+                        .icon(AppIcon::ChevronRight)
                         .disabled(!continue_enabled)
                         .on_click(cx.listener(|this, _event, window, cx| this.advance(window, cx))),
                 )
             })
-            .when(running, |parent| {
-                parent.child(
+            .when(running, |footer| {
+                footer.child(
                     Button::new(
                         "migrate-wizard-cancel",
-                        dbflux_i18n::t!("document.migrate_wizard.footer.cancel"),
+                        dbflux_i18n::t!("document.migrate_wizard.footer.cancel_migration"),
                     )
-                    .small()
-                    .ghost()
+                    .danger()
+                    .icon(AppIcon::CircleX)
                     .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
                 )
             })
-            .when(done, |parent| {
-                parent.child(
+            .when(done, |footer| {
+                footer.child(
                     Button::new(
                         "migrate-wizard-close",
                         dbflux_i18n::t!("document.migrate_wizard.footer.close"),
                     )
-                    .small()
                     .primary()
                     .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
                 )
-            });
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .px(Spacing::MD)
-            .py(Spacing::SM)
-            .border_t_1()
-            .border_color(border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .when_some(self.error.clone(), |parent, error| {
-                        parent.child(Text::caption(error).danger())
-                    }),
-            )
-            .child(actions)
+            })
             .into_any_element()
     }
 }

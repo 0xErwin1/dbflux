@@ -1,0 +1,903 @@
+---
+import Glyph from '../Glyph.astro';
+import BrandMark from '../BrandMark.astro';
+import GainMockup from './GainMockup.astro';
+import {
+  COMPARE_CLIENTS,
+  COMPARE_REVIEWED,
+  DBEAVER_EDITIONS_AS_OF,
+  GAP_ICON,
+  TONE_ICON,
+  VS_PAGES,
+} from '../../data/compare';
+import type { ClientId, CompareCell, CompareRow, VsGain } from '../../data/compare';
+import { docsUrl, siteUrl } from '../../data/site';
+import { CURRENT, productVersion } from '../../data/versions';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+/**
+ * One client's comparison page: an edition or licence table, what DBFlux
+ * adds, what it does not replace yet, and how to move over. Everything that
+ * differs between clients comes from `VS_PAGES` and the client's strings.
+ */
+interface Props {
+  client: ClientId;
+  locale?: Locale;
+}
+
+const { client, locale = DEFAULT_LOCALE } = Astro.props;
+const dict = dictionary(locale);
+const strings = dict.compare_page.vs;
+const own = dict.compare_page.vs_client[client];
+const shared = dict.landing.compare;
+const version = productVersion(CURRENT.id);
+const page = VS_PAGES[client];
+const name = COMPARE_CLIENTS.find((entry) => entry.id === client)?.name ?? client;
+
+const cellText = ([, value]: CompareCell) => ('key' in value ? shared.cell[value.key] : value.text);
+
+const rowLabel = (label: CompareRow['label']) =>
+  'key' in label ? shared.row[label.key] : label.text;
+
+const TOC = [
+  { href: '#edition', icon: 'table', label: own.edition_title },
+  { href: '#gain', icon: 'zap', label: strings.toc.gain },
+  { href: '#gaps', icon: 'flag', label: strings.toc.gaps },
+  { href: '#moving', icon: 'arrow-left-right', label: strings.toc.moving },
+];
+
+const usage = docsUrl('usage', '', locale);
+
+const GAIN_LINKS: Readonly<Record<VsGain, { icon: string; href: string }>> = {
+  builder: { icon: 'square-function', href: `${usage}#visual-query-builder` },
+  redis: { icon: 'brand/redis', href: `${usage}#key-value-view` },
+  aws: { icon: 'logs', href: docsUrl('drivers', '', locale) },
+  governance: { icon: 'bot', href: docsUrl('mcp_ai_integration', '', locale) },
+};
+
+const GAINS = page.gains.map((kind) => ({ kind, ...GAIN_LINKS[kind], ...strings.gain[kind] }));
+
+const STEPS = [
+  {
+    icon: 'download',
+    title: strings.step.install.title,
+    body: strings.step.install.body.replace('{name}', name),
+  },
+  { icon: 'arrow-left-right', ...own.step },
+  { icon: 'file', ...strings.step.query },
+];
+
+/** Each row's vendor pages for this client, the sources for its cells. */
+const SOURCES = page.rows.flatMap(({ row }) =>
+  row.sources
+    .filter((source) => source.client === client)
+    .map((source) => ({
+      label: source.detail ? `${rowLabel(row.label)} (${source.detail})` : rowLabel(row.label),
+      href: source.href,
+    })),
+);
+
+const OTHERS = COMPARE_CLIENTS.filter((entry) => entry.id !== client);
+---
+
+<div class="vs">
+  <section class="vs__intro shell rise">
+    <div class="vs__copy">
+      <nav class="vs__crumbs" aria-label={strings.crumb}>
+        <a href={siteUrl('compare/', locale)}>{strings.crumb}</a>
+        <Glyph name="chevron-right" size={13} />
+        <span aria-current="page">{name}</span>
+      </nav>
+      <h1 class="display vs__h1">{own.h1}</h1>
+      <p class="vs__lede">{own.lede}</p>
+      <div class="vs__actions">
+        <a class="vs__button vs__button--primary x c10" href={`${siteUrl('', locale)}#install`}>
+          <Glyph name="download" size={17} />
+          {strings.download}
+        </a>
+        <a class="vs__button vs__button--secondary c10" href="#moving">
+          <Glyph name="arrow-left-right" size={17} />
+          {own.bring}
+        </a>
+      </div>
+    </div>
+
+    <nav class="vs__toc card c14" aria-label={strings.on_page}>
+      <span class="vs__toc-title x">{strings.on_page}</span>
+      {
+        TOC.map((entry) => (
+          <a href={entry.href}>
+            <Glyph name={entry.icon} size={15} />
+            {entry.label}
+          </a>
+        ))
+      }
+      <span class="vs__toc-meta">
+        {
+          own.meta
+            .replace('{version}', version)
+            .replace('{editions}', DBEAVER_EDITIONS_AS_OF)
+            .replace('{date}', COMPARE_REVIEWED)
+        }
+      </span>
+    </nav>
+  </section>
+
+  <section id="edition" class="vs__block shell reveal">
+    <p class="eyebrow">{own.edition_title}</p>
+    <p class="vs__body">{own.edition_body}</p>
+    <div class="vs__frame card c18">
+      <div class="vs__scroll">
+        <table class:list={['vs__table', { 'vs__table--wide': page.columns.length > 2 }]}>
+          <caption class="visually-hidden">{own.edition_title}</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="vs__feature x">{strings.col_feature}</th>
+              <th scope="col" class="vs__col vs__col--dbflux">
+                <span class="vs__col-inner">
+                  <BrandMark size={18} />
+                  DBFlux {version}
+                </span>
+              </th>
+              {
+                page.columns.map((column) => (
+                  <th scope="col" class="vs__col">
+                    <span class="vs__col-inner">{strings.column[column]}</span>
+                  </th>
+                ))
+              }
+            </tr>
+          </thead>
+          <tbody class="reveal-group">
+            {
+              page.rows.map(({ row, cells }) => (
+                <tr>
+                  <th scope="row" class="vs__name">
+                    <span class="vs__name-inner">
+                      <Glyph name={row.icon} size={17} class="vs__name-icon" />
+                      {rowLabel(row.label)}
+                    </span>
+                  </th>
+                  {[row.dbflux, ...cells].map((cell, index) => (
+                    <td
+                      class:list={['vs__cell', { 'vs__cell--dbflux': index === 0 }]}
+                      data-verdict={cell[0]}
+                    >
+                      <span class="vs__cell-inner">
+                        <Glyph name={TONE_ICON[cell[0]]} size={16} class="verdict-icon" />
+                        <span>{cellText(cell)}</span>
+                      </span>
+                    </td>
+                  ))}
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="vs__sources">
+      {strings.sources}{' '}
+      <a href={page.editionsSource} rel="noopener">{own.editions_page}</a>
+      {
+        SOURCES.map((source) => (
+          <>
+            {', '}
+            <a href={source.href} rel="noopener">
+              {source.label}
+            </a>
+          </>
+        ))
+      }
+      {'. '}
+      {strings.dynamodb_note}
+    </p>
+  </section>
+
+  <section id="gain" class="vs__block shell">
+    <p class="eyebrow reveal">{strings.gain_title}</p>
+    <div class="vs__gains reveal-group">
+      {
+        GAINS.map((gain) => (
+          <article class="vs__gain card c14 lift">
+            <GainMockup kind={gain.kind} locale={locale} />
+            <h2 class="vs__gain-title">
+              <Glyph name={gain.icon} size={20} class="vs__gain-icon" />
+              {gain.title}
+            </h2>
+            <p class="vs__gain-body">{gain.body}</p>
+            <a class="go go--plain vs__gain-link" href={gain.href}>
+              {gain.link}
+              <Glyph name="chevron-right" size={14} class="go__chev" />
+            </a>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <section id="gaps" class="vs__block shell">
+    <p class="eyebrow reveal">{strings.gaps_title}</p>
+    <p class="vs__body reveal">{own.gaps_body}</p>
+    <ul class="vs__gaps reveal-group">
+      {
+        page.gaps.map((gap) => (
+          <li class="vs__gap card c10">
+            <Glyph name={GAP_ICON[gap]} size={20} class="vs__gap-icon" />
+            <span class="vs__gap-text">
+              <span class="vs__gap-name">{strings.gap[gap].name}</span>
+              <span class="vs__gap-detail">{strings.gap[gap].detail}</span>
+            </span>
+            <span class="vs__badge" data-verdict="none">
+              <Glyph name={TONE_ICON.none} size={13} class="verdict-icon" />
+              {strings.not_yet}
+            </span>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section id="moving" class="vs__moving shell">
+    <div class="vs__steps">
+      <p class="eyebrow reveal">{strings.moving_title}</p>
+      <ol class="vs__step-list reveal-group">
+        {
+          STEPS.map((step, index) => (
+            <li class="vs__step">
+              <span class="vs__step-icon c10">
+                <Glyph name={step.icon} size={22} />
+              </span>
+              <span class="vs__step-text">
+                <span class="vs__step-title">
+                  <span class="vs__step-n mono">0{index + 1}</span>
+                  {step.title}
+                </span>
+                <span class="vs__step-body">{step.body}</span>
+              </span>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <div class="vs__where card c14 reveal">
+      <p class="vs__where-title">
+        <Glyph name="arrow-left-right" size={16} />
+        {strings.where_title}
+      </p>
+      <dl>
+        {
+          page.terms.map((term) => (
+            <div class="vs__term">
+              <dt>{term.from}</dt>
+              <Glyph name="chevron-right" size={14} class="vs__term-arrow" />
+              <dd>{strings.term[term.to]}</dd>
+            </div>
+          ))
+        }
+      </dl>
+    </div>
+  </section>
+
+  <section class="vs__others shell">
+    <p class="eyebrow reveal">{strings.others_title}</p>
+    <div class="vs__other-list reveal-group">
+      {
+        OTHERS.map((other) => (
+          <a class="vs__other card c14 lift" href={siteUrl(VS_PAGES[other.id].path, locale)}>
+            <span class="vs__other-title x">vs {other.name}</span>
+            <span class="vs__other-text">{shared.gain[other.id]}</span>
+            <span class="go go--plain vs__other-go">
+              {dict.compare_page.read_comparison}
+              <Glyph name="chevron-right" size={14} class="go__chev" />
+            </span>
+          </a>
+        ))
+      }
+      <a class="vs__other vs__other--all card c14 lift" href={siteUrl('compare/', locale)}>
+        <span class="vs__other-title x">{shared.full}</span>
+        <span class="vs__other-text">{dict.compare_page.meta_body}</span>
+        <span class="go go--plain vs__other-go">
+          {dict.compare_page.read_comparison}
+          <Glyph name="chevron-right" size={14} class="go__chev" />
+        </span>
+      </a>
+    </div>
+  </section>
+</div>
+
+<style>
+  .vs {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .vs > section {
+    width: 100%;
+  }
+
+  .vs__intro {
+    display: flex;
+    gap: 72px;
+    padding-top: 72px;
+  }
+
+  .vs__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    max-width: 760px;
+  }
+
+  .vs__crumbs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .vs__h1 {
+    font-size: clamp(2.25rem, 1.68rem + 2.86vw, 4.25rem);
+    line-height: 0.92;
+  }
+
+  .vs__lede {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.65;
+  }
+
+  .vs__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .vs__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    height: 52px;
+    transition: filter var(--t-instant) linear;
+  }
+
+  .vs__button:hover {
+    filter: brightness(1.08);
+  }
+
+  .vs__button--primary {
+    padding: 0 24px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .vs__button--primary:hover {
+    color: var(--accent-on);
+  }
+
+  .vs__button--secondary {
+    padding: 0 22px;
+    background: var(--raised);
+    color: var(--text-strong);
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .vs__button--secondary:hover {
+    color: var(--text-strong);
+  }
+
+  .vs__toc {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-self: flex-start;
+    flex-shrink: 0;
+    width: 300px;
+    margin-left: auto;
+    padding: 22px;
+    font-size: 13.5px;
+  }
+
+  .vs__toc a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+  }
+
+  .vs__toc a:hover {
+    color: var(--text-strong);
+  }
+
+  .vs__toc-title {
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .vs__toc-meta {
+    padding-top: 10px;
+    border-top: var(--bw) solid var(--border);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .vs__block {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-top: 80px;
+    scroll-margin-top: calc(var(--nav-h) + 16px);
+  }
+
+  .vs__body {
+    max-width: 820px;
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .vs__frame {
+    overflow: hidden;
+  }
+
+  .vs__scroll {
+    overflow-x: auto;
+  }
+
+  .vs__table {
+    width: 100%;
+    min-width: 760px;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .vs__table--wide {
+    min-width: 1080px;
+  }
+
+  .vs__table--wide .vs__col {
+    width: 220px;
+  }
+
+  .vs__table th,
+  .vs__table td {
+    padding: 0;
+    text-align: left;
+    font-weight: inherit;
+  }
+
+  .vs__table thead th {
+    height: 54px;
+    border-bottom: var(--bw) solid var(--border-strong);
+  }
+
+  .vs__feature {
+    padding-left: 22px !important;
+    font-weight: 800 !important;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .vs__col {
+    width: 280px;
+    color: var(--text-strong);
+    font-weight: 700 !important;
+  }
+
+  .vs__col-inner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-left: 16px;
+  }
+
+  .vs__col--dbflux {
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    box-shadow: inset 0 -3px 0 var(--accent-fill);
+  }
+
+  .vs__table tbody tr {
+    border-bottom: var(--bw) solid var(--row-line);
+  }
+
+  .vs__table tbody tr:last-child {
+    border-bottom-color: transparent;
+  }
+
+  .vs__name {
+    height: 50px;
+    color: var(--text-strong);
+  }
+
+  .vs__name-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-left: 22px;
+  }
+
+  .vs__name :global(.vs__name-icon) {
+    color: var(--text-muted);
+  }
+
+  .vs__cell-inner {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding-left: 16px;
+    font-size: 13.5px;
+  }
+
+  .vs__cell--dbflux {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+
+  .vs__sources {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+
+  .vs__gains {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .vs__gain {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 24px;
+  }
+
+  .vs__gain-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .vs__gain :global(.vs__gain-icon) {
+    color: var(--accent);
+  }
+
+  .vs__gain-body {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+
+  .vs__gain-link {
+    font-size: 13.5px;
+  }
+
+  .vs__gaps {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .vs__gap {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+  }
+
+  .vs__gap :global(.vs__gap-icon) {
+    color: var(--text-muted);
+  }
+
+  .vs__gap-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex-grow: 1;
+    min-width: 0;
+  }
+
+  .vs__gap-name {
+    color: var(--text-strong);
+    font-weight: 600;
+  }
+
+  .vs__gap-detail {
+    font-size: 13.5px;
+    color: var(--text-muted);
+  }
+
+  .vs__badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .vs__moving {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 440px;
+    gap: 40px;
+    padding-top: 80px;
+    padding-bottom: 88px;
+    scroll-margin-top: var(--nav-h);
+  }
+
+  .vs__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .vs__step-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .vs__step {
+    display: flex;
+    gap: 20px;
+    padding: 22px 0;
+    border-top: var(--bw) solid var(--border);
+  }
+
+  .vs__step-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 52px;
+    height: 52px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+  }
+
+  .vs__step-text {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .vs__step-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-strong);
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .vs__step-n {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .vs__step-body {
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .vs__where {
+    align-self: start;
+    margin-top: 40px;
+  }
+
+  .vs__where-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 50px;
+    margin: 0;
+    padding: 0 20px;
+    border-bottom: var(--bw) solid var(--border-strong);
+    color: var(--text-strong);
+    font-weight: 700;
+  }
+
+  .vs__where dl {
+    margin: 0;
+  }
+
+  .vs__term {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 6px 20px;
+    border-bottom: var(--bw) solid var(--row-line);
+    font-size: 14px;
+  }
+
+  .vs__term:last-child {
+    border-bottom-color: transparent;
+  }
+
+  .vs__term dt {
+    color: var(--text-muted);
+  }
+
+  .vs__term dd {
+    margin: 0;
+    color: var(--text-strong);
+  }
+
+  .vs__term :global(.vs__term-arrow) {
+    color: var(--text-muted);
+  }
+
+  .vs__others {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-bottom: 88px;
+  }
+
+  .vs__other-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+  }
+
+  .vs__other {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 22px;
+    color: var(--text);
+  }
+
+  .vs__other:hover {
+    color: var(--text);
+  }
+
+  .vs__other-title {
+    color: var(--text-strong);
+    font-weight: 900;
+    font-size: 18px;
+    line-height: 1.05;
+    text-transform: uppercase;
+  }
+
+  .vs__other-text {
+    flex-grow: 1;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .vs__other-go {
+    font-size: 13.5px;
+  }
+
+  .vs__other--all {
+    background: var(--raised);
+  }
+
+  @media (max-width: 1180px) {
+    .vs__intro {
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    .vs__toc {
+      margin-left: 0;
+    }
+
+    .vs__gains {
+      grid-template-columns: minmax(0, 1fr);
+      max-width: 640px;
+    }
+
+    .vs__moving {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .vs__where {
+      margin-top: 0;
+      max-width: 560px;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .vs__gaps {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .vs__intro {
+      padding-top: 40px;
+    }
+
+    .vs__lede {
+      font-size: 16px;
+    }
+
+    .vs__actions {
+      flex-direction: column;
+    }
+
+    .vs__button {
+      justify-content: center;
+    }
+
+    .vs__toc {
+      width: 100%;
+    }
+
+    .vs__block {
+      padding-top: 56px;
+    }
+
+    .vs__table {
+      min-width: 620px;
+    }
+
+    .vs__table--wide {
+      min-width: 800px;
+    }
+
+    .vs__table--wide .vs__col {
+      width: 160px;
+    }
+
+    .vs__col {
+      width: 160px;
+    }
+
+    .vs__gap {
+      flex-wrap: wrap;
+      gap: 12px 14px;
+    }
+
+    .vs__badge {
+      margin-left: 34px;
+    }
+
+    .vs__moving {
+      padding-top: 56px;
+      padding-bottom: 56px;
+    }
+
+    .vs__others {
+      padding-bottom: 56px;
+    }
+
+    .vs__step {
+      gap: 14px;
+    }
+
+    .vs__step-icon {
+      width: 44px;
+      height: 44px;
+    }
+  }
+</style>

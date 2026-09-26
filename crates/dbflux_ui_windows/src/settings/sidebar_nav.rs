@@ -4,113 +4,139 @@ use dbflux_components::icons::AppIcon;
 use gpui::SharedString;
 use std::collections::HashSet;
 
+/// One navigation entry: tree id, label and icon.
+type NavEntry = (&'static str, String, AppIcon);
+
+/// One navigation group: tree id, label and its entries.
+type NavGroup = (&'static str, String, Vec<NavEntry>);
+
 impl SettingsCoordinator {
-    #[allow(clippy::result_large_err)]
-    pub(super) fn build_sidebar_tree() -> TreeNav {
-        // Groups match the Figma design: NETWORK / CONNECTION / GENERAL
-        let nodes = vec![
-            TreeNavNode::group(
+    /// Navigation tree of the settings window, keeping only the entries whose
+    /// label, or whose group's label, contains `query` (case-insensitive), and
+    /// the groups that still hold an entry. An empty query keeps every entry.
+    pub(super) fn build_sidebar_tree(query: &str) -> TreeNav {
+        let query = query.trim().to_lowercase();
+
+        let groups: Vec<NavGroup> = vec![
+            (
                 "general-group",
                 dbflux_i18n::t!("settings.nav.general_group"),
-                Some(AppIcon::Settings),
                 vec![
-                    TreeNavNode::leaf(
+                    (
                         "general",
                         dbflux_i18n::t!("settings.nav.general"),
-                        Some(AppIcon::Settings),
+                        AppIcon::Settings,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "keybindings",
                         dbflux_i18n::t!("settings.nav.keybindings"),
-                        Some(AppIcon::Keyboard),
+                        AppIcon::Keyboard,
                     ),
-                    TreeNavNode::leaf(
+                    (
+                        "updates",
+                        dbflux_i18n::t!("settings.nav.updates"),
+                        AppIcon::Bell,
+                    ),
+                    (
                         "audit",
                         dbflux_i18n::t!("settings.nav.audit"),
-                        Some(AppIcon::History),
+                        AppIcon::FingerprintPattern,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "about",
                         dbflux_i18n::t!("settings.nav.about"),
-                        Some(AppIcon::Info),
+                        AppIcon::Info,
                     ),
                 ],
             ),
-            TreeNavNode::group(
+            (
                 "network",
                 dbflux_i18n::t!("settings.nav.network"),
-                Some(AppIcon::Server),
                 vec![
-                    TreeNavNode::leaf(
+                    (
                         "ssh-tunnels",
                         dbflux_i18n::t!("settings.nav.ssh_tunnels"),
-                        Some(AppIcon::FingerprintPattern),
+                        AppIcon::Lock,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "proxies",
                         dbflux_i18n::t!("settings.nav.proxies"),
-                        Some(AppIcon::Server),
+                        AppIcon::Globe,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "auth-profiles",
                         dbflux_i18n::t!("settings.nav.auth_profiles"),
-                        Some(AppIcon::KeyRound),
+                        AppIcon::KeyRound,
                     ),
                 ],
             ),
-            TreeNavNode::group(
+            (
                 "connection",
                 dbflux_i18n::t!("settings.nav.connection"),
-                Some(AppIcon::Link2),
                 vec![
-                    TreeNavNode::leaf(
+                    (
                         "hooks",
                         dbflux_i18n::t!("settings.nav.hooks"),
-                        Some(AppIcon::SquareTerminal),
+                        AppIcon::SquareTerminal,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "drivers",
                         dbflux_i18n::t!("settings.nav.drivers"),
-                        Some(AppIcon::Database),
+                        AppIcon::Database,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "services",
                         dbflux_i18n::t!("settings.nav.services"),
-                        Some(AppIcon::Plug),
+                        AppIcon::Plug,
                     ),
                 ],
             ),
             #[cfg(feature = "mcp")]
-            TreeNavNode::group(
+            (
                 "mcp-governance",
                 dbflux_i18n::t!("settings.nav.mcp_governance"),
-                Some(AppIcon::Bot),
                 vec![
-                    TreeNavNode::leaf(
+                    (
                         "mcp-clients",
                         dbflux_i18n::t!("settings.nav.mcp_clients"),
-                        Some(AppIcon::Plug),
+                        AppIcon::Bot,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "mcp-roles",
                         dbflux_i18n::t!("settings.nav.mcp_roles"),
-                        Some(AppIcon::KeyRound),
+                        AppIcon::Layers,
                     ),
-                    TreeNavNode::leaf(
+                    (
                         "mcp-policies",
                         dbflux_i18n::t!("settings.nav.mcp_policies"),
-                        Some(AppIcon::ScrollText),
+                        AppIcon::Scale,
                     ),
                 ],
             ),
         ];
 
         let mut expanded = HashSet::new();
-        #[cfg(feature = "mcp")]
-        expanded.insert(SharedString::from("mcp-governance"));
-        expanded.insert(SharedString::from("network"));
-        expanded.insert(SharedString::from("connection"));
-        expanded.insert(SharedString::from("general-group"));
+
+        let nodes = groups
+            .into_iter()
+            .filter_map(|(group_id, group_label, leaves)| {
+                let group_matches = group_label.to_lowercase().contains(&query);
+
+                let leaves: Vec<TreeNavNode> = leaves
+                    .into_iter()
+                    .filter(|(_, label, _)| group_matches || label.to_lowercase().contains(&query))
+                    .map(|(id, label, icon)| TreeNavNode::leaf(id, label, Some(icon)))
+                    .collect();
+
+                if leaves.is_empty() {
+                    return None;
+                }
+
+                expanded.insert(SharedString::from(group_id));
+
+                Some(TreeNavNode::group(group_id, group_label, None, leaves))
+            })
+            .collect();
 
         TreeNav::new(nodes, expanded)
     }
@@ -126,6 +152,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             "mcp-policies" => Some(SettingsSectionId::McpPolicies),
             "keybindings" => Some(SettingsSectionId::Keybindings),
+            "updates" => Some(SettingsSectionId::Updates),
             "proxies" => Some(SettingsSectionId::Proxies),
             "ssh-tunnels" => Some(SettingsSectionId::SshTunnels),
             "auth-profiles" => Some(SettingsSectionId::AuthProfiles),
@@ -148,6 +175,7 @@ impl SettingsCoordinator {
             #[cfg(feature = "mcp")]
             SettingsSectionId::McpPolicies => "mcp-policies",
             SettingsSectionId::Keybindings => "keybindings",
+            SettingsSectionId::Updates => "updates",
             SettingsSectionId::Proxies => "proxies",
             SettingsSectionId::SshTunnels => "ssh-tunnels",
             SettingsSectionId::AuthProfiles => "auth-profiles",
@@ -212,6 +240,7 @@ mod tests {
             SettingsSectionId::General,
             SettingsSectionId::Audit,
             SettingsSectionId::Keybindings,
+            SettingsSectionId::Updates,
             SettingsSectionId::Proxies,
             SettingsSectionId::SshTunnels,
             SettingsSectionId::AuthProfiles,
@@ -238,7 +267,7 @@ mod tests {
 
     #[test]
     fn services_tree_label_uses_neutral_rpc_wording() {
-        let tree = SettingsCoordinator::build_sidebar_tree();
+        let tree = SettingsCoordinator::build_sidebar_tree("");
         let services_row = tree
             .rows()
             .iter()
@@ -251,10 +280,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn search_keeps_matching_entries_and_their_groups_only() {
+        let tree = SettingsCoordinator::build_sidebar_tree("hook");
+        let ids: Vec<&str> = tree.rows().iter().map(|row| row.id.as_ref()).collect();
+
+        assert_eq!(ids, vec!["connection", "hooks"]);
+    }
+
+    #[test]
+    fn search_is_case_insensitive_and_empty_query_keeps_everything() {
+        let everything = SettingsCoordinator::build_sidebar_tree("");
+        let upper = SettingsCoordinator::build_sidebar_tree("PROX");
+
+        assert!(everything.rows().len() > upper.rows().len());
+        assert!(upper.rows().iter().any(|row| row.id.as_ref() == "proxies"));
+    }
+
+    #[test]
+    fn search_matching_a_group_keeps_all_of_its_entries() {
+        let tree = SettingsCoordinator::build_sidebar_tree("network");
+        let ids: Vec<&str> = tree.rows().iter().map(|row| row.id.as_ref()).collect();
+
+        assert_eq!(
+            ids,
+            vec!["network", "ssh-tunnels", "proxies", "auth-profiles"]
+        );
+    }
+
+    #[test]
+    fn search_without_matches_yields_no_rows() {
+        let tree = SettingsCoordinator::build_sidebar_tree("zzzz-no-such-setting");
+
+        assert!(tree.rows().is_empty());
+    }
+
     const NAV_CATALOG_KEYS: &[&str] = &[
         "settings.nav.general_group",
         "settings.nav.general",
         "settings.nav.keybindings",
+        "settings.nav.updates",
         "settings.nav.audit",
         "settings.nav.about",
         "settings.nav.network",

@@ -6,9 +6,39 @@ un túnel SSH, un proxy o AWS SSM; autenticarse con Auth Profiles gestionados po
 un provider (AWS SSO); y obtener valores de campos individuales desde un secret
 manager o parameter store en lugar de escribirlos directamente.
 
-Para el flujo del día a día (crear una conexión, explorar el schema, ejecutar
-queries) consulta la [Guía de uso](USAGE.md). Este documento continúa desde la
-pestaña **Access** del Connection Manager y los selectores de fuente de valores.
+Para un primer recorrido (crear una conexión, explorar el schema, ejecutar
+queries) consulta [Primeros pasos](GETTING_STARTED.md). Este documento empieza
+por abrir el Connection Manager y elegir un driver, y luego cubre la pestaña
+**Access** y los selectores de fuente de valores.
+
+---
+
+## Abrir el Connection Manager
+
+Abre el Connection Manager para crear o editar conexiones:
+
+- Pulsa `Ctrl+Shift+N` (`Cmd+Shift+N` en macOS).
+- Desde el sidebar, pulsa `c`.
+- O usa el command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` en macOS) y ejecuta
+  **Open connection manager**.
+
+## Elegir un driver
+
+El Connection Manager muestra un selector de drivers. Los drivers disponibles
+dependen de los features con los que se compiló el binario; el build estándar
+incluye SQLite, PostgreSQL, MySQL/MariaDB, MongoDB, Redis, DynamoDB, Microsoft
+SQL Server, e integraciones respaldadas por AWS. Los drivers RPC registrados
+externamente también aparecen aquí cuando están configurados (ver
+`docs/RPC_SERVICES_CONFIG.md`).
+
+Usa `/` para filtrar la lista de drivers, `j`/`k` (o las flechas) para moverte,
+y `Enter` para seleccionar.
+
+Cada driver ofrece su propio formulario de conexión. El formulario es dinámico:
+solo muestra los campos que ese driver realmente necesita. Los drivers
+respaldados por archivo, como SQLite, usan un formulario de ruta de archivo. La
+mayoría de los drivers relacionales también aceptan una única cadena de
+conexión; ver [Modo formulario vs. URI directa](#modo-formulario-vs-uri-directa).
 
 ---
 
@@ -46,6 +76,27 @@ pipeline. Ver [Settings & Hooks](SETTINGS.md#connection-hooks).
 
 ---
 
+## Cuando una conexión falla
+
+Si un intento de conexión falla, el error aparece en un toast y la fila de la
+conexión conserva un ícono de error rojo. Pasa el puntero sobre el ícono para
+leer el error. Elige **Reintentar** en el menú contextual de la fila, o presiona `Enter`
+sobre la fila, para volver a conectar. La marca se borra cuando empieza un nuevo
+intento, cuando la conexión tiene éxito o cuando editas la conexión.
+
+## Desconectar con una consulta en ejecución
+
+Desconectar una conexión que todavía tiene una consulta en ejecución pregunta
+primero: **Cancelar consulta** detiene la consulta y mantiene la conexión
+abierta, **Seguir esperando** no toca ninguna de las dos, y **Desconectar de
+todos modos** cancela la consulta y desconecta. `Enter` elige **Cancelar
+consulta** y `Escape` elige **Seguir esperando**. Cerrar la ventana de DBFlux
+mientras hay una consulta en ejecución en cualquier conexión hace la misma
+pregunta, nombrando las conexiones, con **Salir de todos modos** en lugar de
+**Desconectar de todos modos**.
+
+---
+
 ## Túneles SSH
 
 Puedes usar un túnel SSH de dos formas:
@@ -79,7 +130,7 @@ Las passphrases y contraseñas se guardan en el **keyring del sistema
 operativo**, nunca en la base de datos. La casilla **Save** solo aparece cuando
 hay un keyring disponible; si no lo hay, los secretos no se persisten y tendrás
 que reintroducirlos cada sesión. Ver [Datos y privacidad →
-Secretos](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+Secretos](PRIVACY.md#secretos-y-el-keyring-del-sistema-operativo).
 
 ---
 
@@ -252,8 +303,8 @@ interruptor **Use URI** en la pestaña Main alterna entre ambos.
 
 ## Relacionado
 
-- [Guía de uso](USAGE.md) — el flujo básico de conectar/consultar/resultados.
+- [Primeros pasos](GETTING_STARTED.md) — el flujo básico de conectar/consultar/resultados.
 - [Settings & Hooks](SETTINGS.md) — gestión de perfiles SSH/proxy/auth y hooks.
-- [Datos y privacidad](DATA_AND_PRIVACY.md) — dónde se almacenan las
+- [Datos y privacidad](PRIVACY.md#tus-datos-en-este-equipo) — dónde se almacenan las
   credenciales y los datos.
 - [RPC Services](RPC_SERVICES_CONFIG.md) — drivers externos y auth providers.

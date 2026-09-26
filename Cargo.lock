@@ -2771,6 +2771,8 @@ dependencies = [
  "dbflux_storage",
  "indexmap 2.14.2",
  "log",
+ "reqwest 0.12.28",
+ "semver",
  "serde_json",
  "tokio",
  "uuid",

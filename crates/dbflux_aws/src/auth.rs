@@ -645,6 +645,7 @@ fn build_aws_sso_form() -> AuthFormDef {
             label: "Main".to_string(),
             sections: vec![FormSection {
                 title: "AWS SSO".to_string(),
+                icon: None,
                 fields: vec![
                     required_text_field("profile_name", "AWS Profile Name", "dev"),
                     FormFieldDef {
@@ -732,6 +733,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
             sections: vec![
                 FormSection {
                     title: "AWS Shared Credentials".to_string(),
+                    icon: None,
                     fields: vec![
                         required_text_field("profile_name", "AWS Profile Name", "default"),
                         required_text_field("region", "Region", "us-east-1"),
@@ -754,6 +756,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                 },
                 FormSection {
                     title: "Credentials (write-only)".to_string(),
+                    icon: None,
                     fields: vec![
                         FormFieldDef {
                             id: "aws_secret_access_key".to_string(),
@@ -803,6 +806,7 @@ fn build_aws_sso_session_form() -> AuthFormDef {
             label: "Main".to_string(),
             sections: vec![FormSection {
                 title: "AWS SSO Session".to_string(),
+                icon: None,
                 fields: vec![
                     required_text_field(
                         "sso_start_url",

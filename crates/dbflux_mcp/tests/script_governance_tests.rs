@@ -19,6 +19,7 @@ fn run_script_allowed_engine() -> PolicyEngine {
             id: "policy-admin".to_string(),
             allowed_tools: vec!["run_script".to_string()],
             allowed_classes: vec![ExecutionClassification::Admin],
+            approval_classes: Vec::new(),
         }],
     )
 }

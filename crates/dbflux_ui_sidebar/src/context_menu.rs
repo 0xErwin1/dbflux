@@ -74,6 +74,7 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::InstanceOverviewLeaf => true,
 
         SchemaNodeKind::Loading
+        | SchemaNodeKind::EmptyDatabasesFolder
         | SchemaNodeKind::Schema
         | SchemaNodeKind::TablesFolder
         | SchemaNodeKind::ViewsFolder
@@ -112,7 +113,29 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::Placeholder
         | SchemaNodeKind::DependentsFolder
         | SchemaNodeKind::DependentItem
-        | SchemaNodeKind::Bucket => false,
+        | SchemaNodeKind::Bucket
+        | SchemaNodeKind::BucketsFolder => false,
+    }
+}
+
+/// The mono caption at the top of a schema object's menu: its qualified
+/// name (`public.orders`), like the column and row the cell menu names.
+pub(crate) fn menu_caption(item_id: &str) -> Option<String> {
+    let qualified = |container: &str, name: &str| {
+        if container.is_empty() {
+            name.to_string()
+        } else {
+            format!("{container}.{name}")
+        }
+    };
+
+    match parse_node_id(item_id)? {
+        SchemaNodeId::Table { schema, name, .. }
+        | SchemaNodeId::View { schema, name, .. }
+        | SchemaNodeId::CustomType { schema, name, .. } => Some(qualified(&schema, &name)),
+        SchemaNodeId::Collection { database, name, .. } => Some(qualified(&database, &name)),
+        SchemaNodeId::Database { name, .. } => Some(name),
+        _ => None,
     }
 }
 
@@ -247,10 +270,14 @@ impl Sidebar {
             return;
         }
 
-        let items = self.build_context_menu_items(node_kind, item_id, cx);
+        let mut items = self.build_context_menu_items(node_kind, item_id, cx);
 
         if items.is_empty() {
             return;
+        }
+
+        if let Some(caption) = menu_caption(item_id) {
+            items.insert(0, ContextMenuItem::header(caption));
         }
 
         self.context_menu = Some(ContextMenuState {
@@ -261,6 +288,46 @@ impl Sidebar {
             position,
         });
         cx.notify();
+    }
+
+    /// Runs the action the selected row's menu pairs with `command`'s key
+    /// ([`ContextMenuAction::shortcut_command`]), so a key shown beside a
+    /// menu action does what that action does. Returns `false` when the row
+    /// has no such action.
+    pub fn run_selected_menu_shortcut(
+        &mut self,
+        command: dbflux_app::keymap::Command,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(entry) = self.active_tree_state().read(cx).selected_entry().cloned() else {
+            return false;
+        };
+
+        let item_id = entry.item().id.to_string();
+        let node_kind = parse_node_kind(&item_id);
+
+        if !node_has_context_menu(node_kind, self.get_capabilities_for_item(&item_id, cx)) {
+            return false;
+        }
+
+        let items = self.build_context_menu_items(node_kind, &item_id, cx);
+
+        let Some(selected_index) = items.iter().position(|item| {
+            item.is_selectable() && item.action.shortcut_command() == Some(command)
+        }) else {
+            return false;
+        };
+
+        self.context_menu = Some(ContextMenuState {
+            item_id,
+            selected_index,
+            items,
+            parent_stack: Vec::new(),
+            position: Point::default(),
+        });
+        self.context_menu_execute(cx);
+
+        true
     }
 
     /// Whether the table's connection supports the data-transfer Export/
@@ -386,58 +453,52 @@ impl Sidebar {
             SchemaNodeKind::Table | SchemaNodeKind::View => {
                 let mut items = Vec::new();
 
-                Self::append_menu_section(
-                    &mut items,
-                    [ContextMenuItem::item(
-                        dbflux_i18n::t!("sidebar.menu.open"),
-                        ContextMenuAction::Open,
-                    )],
-                );
+                // P1Sidebar groups the table menu as: open and inspect,
+                // then generate and transfer, then drop.
+                let mut open_section = vec![ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.open"),
+                    ContextMenuAction::Open,
+                )];
 
                 if self.collection_supports_child_picker(item_id, cx) {
-                    Self::append_menu_section(
-                        &mut items,
-                        [ContextMenuItem::item(
-                            dbflux_i18n::t!("sidebar.menu.browse_event_streams"),
-                            ContextMenuAction::OpenChildPicker,
-                        )],
-                    );
+                    open_section.push(ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.browse_event_streams"),
+                        ContextMenuAction::OpenChildPicker,
+                    ));
                 }
 
-                Self::append_menu_section(
-                    &mut items,
-                    [
-                        ContextMenuItem::item(
-                            dbflux_i18n::t!("sidebar.menu.view_schema"),
-                            ContextMenuAction::ViewSchema,
-                        ),
-                        ContextMenuItem::item(
-                            dbflux_i18n::t!("sidebar.menu.refresh"),
-                            ContextMenuAction::RefreshObject,
-                        ),
-                    ],
-                );
+                open_section.push(ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.view_schema"),
+                    ContextMenuAction::ViewSchema,
+                ));
+                open_section.push(ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.refresh"),
+                    ContextMenuAction::RefreshObject,
+                ));
 
                 // Add "View Relationships" only for Table nodes (Views don't have FK metadata)
                 if node_kind == SchemaNodeKind::Table
                     && self.is_relational_with_fk_support(item_id, cx)
                 {
-                    items.push(ContextMenuItem::item(
+                    open_section.push(ContextMenuItem::item(
                         dbflux_i18n::t!("sidebar.menu.view_relationships"),
                         ContextMenuAction::ViewRelationships,
                     ));
                 }
 
+                Self::append_menu_section(&mut items, open_section);
+
+                let mut transfer_section = Vec::new();
+
                 // Get code generators from driver (if connected)
                 let generators = self.get_code_generators_for_item(item_id, node_kind, cx);
                 if !generators.is_empty() {
-                    Self::append_menu_section(
-                        &mut items,
-                        [ContextMenuItem::item(
+                    transfer_section.push(
+                        ContextMenuItem::item(
                             dbflux_i18n::t!("sidebar.menu.generate_sql"),
                             ContextMenuAction::Submenu(generators),
                         )
-                        .with_icon(AppIcon::Code)],
+                        .with_icon(AppIcon::Code),
                     );
                 }
 
@@ -450,13 +511,10 @@ impl Sidebar {
                     let count = self.export_table_selection_count(item_id);
                     let label = crate::labels::export_tables_label(count);
 
-                    Self::append_menu_section(
-                        &mut items,
-                        [ContextMenuItem::item(
-                            label,
-                            ContextMenuAction::ExportTables,
-                        )],
-                    );
+                    transfer_section.push(ContextMenuItem::item(
+                        label,
+                        ContextMenuAction::ExportTables,
+                    ));
                 }
 
                 // Migrate (Table -> Table, cross-connection) is gated the
@@ -468,14 +526,13 @@ impl Sidebar {
                     let count = self.migrate_table_selection_count(item_id);
                     let label = crate::labels::migrate_tables_label(count);
 
-                    Self::append_menu_section(
-                        &mut items,
-                        [ContextMenuItem::item(
-                            label,
-                            ContextMenuAction::MigrateTables,
-                        )],
-                    );
+                    transfer_section.push(ContextMenuItem::item(
+                        label,
+                        ContextMenuAction::MigrateTables,
+                    ));
                 }
+
+                Self::append_menu_section(&mut items, transfer_section);
 
                 // Drop items gated on DDL capabilities
                 if let Some(ddl) = self.get_ddl_capabilities(item_id, cx) {
@@ -1151,7 +1208,7 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+                        dbflux_i18n::t!("sidebar.menu.delete"),
                         ContextMenuAction::DeleteDashboard,
                     )],
                 );
@@ -1187,7 +1244,7 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+                        dbflux_i18n::t!("sidebar.menu.delete"),
                         ContextMenuAction::DeleteSavedChart,
                     )],
                 );
@@ -2185,7 +2242,7 @@ mod menu_i18n_tests {
         "sidebar.menu.new_dashboard",
         "sidebar.menu.import_dashboard",
         "sidebar.menu.rename_ellipsis",
-        "sidebar.menu.delete_ellipsis",
+        "sidebar.menu.delete",
         "sidebar.menu.copy_metric_id",
         "sidebar.menu.copy_inspector_id",
     ];
@@ -2211,8 +2268,8 @@ mod menu_i18n_tests {
         let english = dbflux_i18n::t!("sidebar.menu.new_dashboard", locale = "en");
         let spanish = dbflux_i18n::t!("sidebar.menu.new_dashboard", locale = "es");
 
-        assert_eq!(english, "New Dashboard...");
-        assert_eq!(spanish, "Nuevo dashboard...");
+        assert_eq!(english, "New dashboard…");
+        assert_eq!(spanish, "Nuevo dashboard…");
         assert_ne!(english, spanish);
     }
 }
@@ -2237,11 +2294,12 @@ mod menu_availability_tests {
     use uuid::Uuid;
 
     /// Every `SchemaNodeKind`, in declaration order.
-    const ALL_KINDS: [SchemaNodeKind; 62] = [
+    const ALL_KINDS: [SchemaNodeKind; 63] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
         SchemaNodeKind::Database,
+        SchemaNodeKind::EmptyDatabasesFolder,
         SchemaNodeKind::Loading,
         SchemaNodeKind::Schema,
         SchemaNodeKind::TablesFolder,
@@ -2333,9 +2391,10 @@ mod menu_availability_tests {
     fn every_node_kind_declares_whether_it_has_a_menu() {
         let mut all_kinds = ALL_KINDS.to_vec();
         all_kinds.push(SchemaNodeKind::Bucket);
+        all_kinds.push(SchemaNodeKind::BucketsFolder);
 
         let discriminants: Vec<usize> = all_kinds.iter().map(|kind| *kind as usize).collect();
-        let expected: Vec<usize> = (0..=SchemaNodeKind::Bucket as usize).collect();
+        let expected: Vec<usize> = (0..=SchemaNodeKind::BucketsFolder as usize).collect();
         assert_eq!(
             discriminants, expected,
             "ALL_KINDS must list every SchemaNodeKind variant in declaration order"
@@ -2848,9 +2907,8 @@ mod menu_availability_tests {
         assert!(matches!(first_entry.action, ContextMenuAction::Connect));
 
         sidebar.update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
-        assert_eq!(
-            state.read_with(cx, |state, _| state.connect_failure(profile_id).is_some()),
-            false,
+        assert!(
+            !state.read_with(cx, |state, _| state.connect_failure(profile_id).is_some()),
             "starting a retry must clear the failure"
         );
 
@@ -2865,6 +2923,53 @@ mod menu_availability_tests {
             cx.debug_bounds(format!("connect-error-{profile_id}").leak())
                 .is_none(),
             "a connected profile must not show the error indicator"
+        );
+    }
+}
+
+#[cfg(test)]
+mod menu_caption_tests {
+    use super::menu_caption;
+    use dbflux_core::SchemaNodeId;
+    use uuid::Uuid;
+
+    #[test]
+    fn schema_object_menus_are_captioned_with_their_qualified_name() {
+        let profile_id = Uuid::new_v4();
+
+        let table = SchemaNodeId::Table {
+            profile_id,
+            database: None,
+            schema: "public".to_string(),
+            name: "orders".to_string(),
+        };
+        let collection = SchemaNodeId::Collection {
+            profile_id,
+            database: "shop".to_string(),
+            name: "orders".to_string(),
+        };
+        let unqualified = SchemaNodeId::Table {
+            profile_id,
+            database: None,
+            schema: String::new(),
+            name: "orders".to_string(),
+        };
+
+        assert_eq!(
+            menu_caption(&table.to_string()).as_deref(),
+            Some("public.orders")
+        );
+        assert_eq!(
+            menu_caption(&collection.to_string()).as_deref(),
+            Some("shop.orders")
+        );
+        assert_eq!(
+            menu_caption(&unqualified.to_string()).as_deref(),
+            Some("orders")
+        );
+        assert_eq!(
+            menu_caption(&SchemaNodeId::Profile { profile_id }.to_string()),
+            None
         );
     }
 }

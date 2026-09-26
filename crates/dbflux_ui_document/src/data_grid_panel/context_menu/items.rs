@@ -17,7 +17,7 @@ pub(super) fn build_context_menu_items(
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
                     action: Some(ContextMenuAction::Copy),
-                    icon: Some(AppIcon::Layers),
+                    icon: Some(AppIcon::Copy),
                     is_separator: false,
                     is_danger: false,
                 },
@@ -58,7 +58,7 @@ pub(super) fn build_context_menu_items(
                         )
                         .into(),
                         action: Some(ContextMenuAction::DuplicateRow),
-                        icon: Some(AppIcon::Layers),
+                        icon: Some(AppIcon::Copy),
                         is_separator: false,
                         is_danger: false,
                     },
@@ -80,7 +80,7 @@ pub(super) fn build_context_menu_items(
     let mut items = vec![ContextMenuItem {
         label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
         action: Some(ContextMenuAction::Copy),
-        icon: Some(AppIcon::Layers),
+        icon: Some(AppIcon::Copy),
         is_separator: false,
         is_danger: false,
     }];
@@ -92,7 +92,7 @@ pub(super) fn build_context_menu_items(
         items.push(ContextMenuItem {
             label: dbflux_i18n::t!("document.data.context_menu.item.view_value").into(),
             action: Some(ContextMenuAction::ViewValue),
-            icon: Some(AppIcon::Maximize2),
+            icon: Some(AppIcon::Eye),
             is_separator: false,
             is_danger: false,
         });
@@ -104,7 +104,7 @@ pub(super) fn build_context_menu_items(
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.paste").into(),
                     action: Some(ContextMenuAction::Paste),
-                    icon: Some(AppIcon::Download),
+                    icon: Some(AppIcon::Clipboard),
                     is_separator: false,
                     is_danger: false,
                 },
@@ -139,7 +139,7 @@ pub(super) fn build_context_menu_items(
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.set_null").into(),
                     action: Some(ContextMenuAction::SetNull),
-                    icon: Some(AppIcon::X),
+                    icon: Some(AppIcon::CircleX),
                     is_separator: false,
                     is_danger: false,
                 },
@@ -176,7 +176,7 @@ pub(super) fn build_context_menu_items(
                 ContextMenuItem {
                     label: dbflux_i18n::t!("document.data.context_menu.item.duplicate_row").into(),
                     action: Some(ContextMenuAction::DuplicateRow),
-                    icon: Some(AppIcon::Layers),
+                    icon: Some(AppIcon::Copy),
                     is_separator: false,
                     is_danger: false,
                 },

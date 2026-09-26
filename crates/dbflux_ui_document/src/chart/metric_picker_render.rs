@@ -18,12 +18,14 @@
 use super::metric_picker::{DimensionsState, MetricPickerState};
 use super::shell::{ChartShell, ChartShellEvent};
 use dbflux_app::MetricCatalogCache;
+use dbflux_app::keymap::Command;
 use dbflux_components::controls::{Button, Input, InputEvent, InputState};
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::primitives::{Text, hdivider};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::DimensionFilter;
+use dbflux_ui_base::keymap::RunCommand;
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Entity, KeyDownEvent, SharedString, Window, div, px};
+use gpui::{AnyElement, Context, Entity, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
@@ -91,14 +93,15 @@ impl<'a> MetricPickerView<'a> {
             // Track focus so on_key_down receives keyboard events when the rail
             // is active. Clicking inside the picker focuses this handle.
             .track_focus(&focus_handle)
-            // Cmd/Ctrl+Enter from anywhere in the picker triggers Apply.
-            .on_key_down(cx.listener(|shell, event: &KeyDownEvent, _window, cx| {
-                let ks = &event.keystroke;
-                let is_apply = ks.key == "return"
-                    && !ks.modifiers.shift
-                    && !ks.modifiers.alt
-                    && (ks.modifiers.platform || ks.modifiers.control);
-                if is_apply && let Some(picker) = &mut shell.metric_picker {
+            // The keymap's Run Query keys (Cmd/Ctrl+Enter by default) apply
+            // the picker from anywhere inside it.
+            .on_action(cx.listener(|shell, action: &RunCommand, _window, cx| {
+                if Command::from_action_id(&action.command) != Some(Command::RunQuery) {
+                    cx.propagate();
+                    return;
+                }
+
+                if let Some(picker) = &mut shell.metric_picker {
                     // Flush any pending Custom… inputs so the user does not
                     // need to press Enter inside the input before Apply.
                     // If validation fails the inline error is shown and Apply
@@ -114,11 +117,11 @@ impl<'a> MetricPickerView<'a> {
             // Header: pinned namespace + metric name.
             .child(header)
             // Divider.
-            .child(div().h(px(1.0)).bg(theme.border))
+            .child(hdivider(cx))
             // Dimensions section.
             .child(dimensions_section)
             // Divider.
-            .child(div().h(px(1.0)).bg(theme.border))
+            .child(hdivider(cx))
             // Config footer.
             .child(config_footer)
             // Inline custom-value row, only rendered when at least one of the
@@ -214,7 +217,7 @@ fn render_custom_inputs_row(
             "document.chart.metric_picker.period.placeholder"
         )));
         if let Some(err) = state.period_custom_error.as_ref() {
-            row = row.child(Text::muted(
+            row = row.child(Text::caption(
                 crate::labels::metric_picker_period_error_label(err),
             ));
         }
@@ -227,7 +230,7 @@ fn render_custom_inputs_row(
             "document.chart.metric_picker.statistic.placeholder"
         )));
         if let Some(err) = state.statistic_custom_error.as_ref() {
-            row = row.child(Text::muted(
+            row = row.child(Text::caption(
                 crate::labels::metric_picker_statistic_error_label(err),
             ));
         }
@@ -297,124 +300,122 @@ fn render_dimensions_section(
                 )),
         );
 
-    let body: AnyElement =
-        match &state.dimensions_state {
-            DimensionsState::NotFetched | DimensionsState::Loading => div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .py(Spacing::SM)
-                .child(Text::muted(dbflux_i18n::t!(
-                    "document.chart.metric_picker.dimensions.loading"
-                )))
-                .into_any_element(),
+    let body: AnyElement = match &state.dimensions_state {
+        DimensionsState::NotFetched | DimensionsState::Loading => div()
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .py(Spacing::SM)
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.chart.metric_picker.dimensions.loading"
+            )))
+            .into_any_element(),
 
-            DimensionsState::Error(msg) => {
-                let msg = msg.clone();
+        DimensionsState::Error(msg) => {
+            let msg = msg.clone();
+            div()
+                .flex()
+                .flex_col()
+                .p(Spacing::SM)
+                .gap(Spacing::XS)
+                .child(Text::caption(
+                    crate::labels::metric_picker_dimensions_error_label(&msg),
+                ))
+                .child(
+                    Button::new(
+                        "metric-picker-dim-retry",
+                        dbflux_i18n::t!("document.chart.metric_picker.dimensions.retry"),
+                    )
+                    .on_click(cx.listener(|shell, _, _, cx| {
+                        if let Some(picker) = &mut shell.metric_picker {
+                            picker.dimensions_state = DimensionsState::NotFetched;
+                            picker.dimensions_task = None;
+                            // Re-arm the fetch trigger so the next render
+                            // re-issues ensure_dimensions_loaded.
+                            picker.pending_dimensions_fetch = true;
+                        }
+                        cx.notify();
+                    })),
+                )
+                .into_any_element()
+        }
+
+        DimensionsState::Loaded(combos) => {
+            let current_filter = &state.dimension_filter;
+
+            // AggregateAll row — always shown at the top.
+            let is_agg_selected = matches!(current_filter, DimensionFilter::AggregateAll);
+            let agg_row: AnyElement = dim_radio_row(
+                0,
+                SharedString::from(dbflux_i18n::t!(
+                    "document.chart.metric_picker.dimensions.aggregate_all"
+                )),
+                is_agg_selected,
+                &theme,
+                cx,
+                |shell, _, _, cx| {
+                    if let Some(picker) = &mut shell.metric_picker {
+                        picker.dimension_filter = DimensionFilter::AggregateAll;
+                    }
+                    cx.notify();
+                },
+            )
+            .into_any_element();
+
+            let dim_rows: Vec<AnyElement> = combos
+                .iter()
+                .enumerate()
+                .map(|(i, combo)| {
+                    let label = SharedString::from(
+                        combo
+                            .iter()
+                            .map(|(k, v)| format!("{k}={v}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
+                    let is_filter_selected = match current_filter {
+                        DimensionFilter::FilterTo(d) => d == combo,
+                        _ => false,
+                    };
+                    let combo_for_click = combo.clone();
+                    dim_radio_row(
+                        i + 1,
+                        label,
+                        is_filter_selected,
+                        &theme,
+                        cx,
+                        move |shell, _, _, cx| {
+                            if let Some(picker) = &mut shell.metric_picker {
+                                picker.dimension_filter =
+                                    DimensionFilter::FilterTo(combo_for_click.clone());
+                            }
+                            cx.notify();
+                        },
+                    )
+                    .into_any_element()
+                })
+                .collect();
+
+            if combos.is_empty() {
                 div()
                     .flex()
                     .flex_col()
-                    .p(Spacing::SM)
-                    .gap(Spacing::XS)
-                    .child(Text::muted(
-                        crate::labels::metric_picker_dimensions_error_label(&msg),
-                    ))
-                    .child(
-                        Button::new(
-                            "metric-picker-dim-retry",
-                            dbflux_i18n::t!("document.chart.metric_picker.dimensions.retry"),
-                        )
-                        .small()
-                        .on_click(cx.listener(|shell, _, _, cx| {
-                            if let Some(picker) = &mut shell.metric_picker {
-                                picker.dimensions_state = DimensionsState::NotFetched;
-                                picker.dimensions_task = None;
-                                // Re-arm the fetch trigger so the next render
-                                // re-issues ensure_dimensions_loaded.
-                                picker.pending_dimensions_fetch = true;
-                            }
-                            cx.notify();
-                        })),
-                    )
+                    .child(agg_row)
+                    .child(div().px(Spacing::SM).py(Spacing::XS).child(Text::caption(
+                        dbflux_i18n::t!("document.chart.metric_picker.dimensions.empty"),
+                    )))
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(agg_row)
+                    .children(dim_rows)
                     .into_any_element()
             }
-
-            DimensionsState::Loaded(combos) => {
-                let current_filter = &state.dimension_filter;
-
-                // AggregateAll row — always shown at the top.
-                let is_agg_selected = matches!(current_filter, DimensionFilter::AggregateAll);
-                let agg_row: AnyElement = dim_radio_row(
-                    0,
-                    SharedString::from(dbflux_i18n::t!(
-                        "document.chart.metric_picker.dimensions.aggregate_all"
-                    )),
-                    is_agg_selected,
-                    &theme,
-                    cx,
-                    |shell, _, _, cx| {
-                        if let Some(picker) = &mut shell.metric_picker {
-                            picker.dimension_filter = DimensionFilter::AggregateAll;
-                        }
-                        cx.notify();
-                    },
-                )
-                .into_any_element();
-
-                let dim_rows: Vec<AnyElement> = combos
-                    .iter()
-                    .enumerate()
-                    .map(|(i, combo)| {
-                        let label = SharedString::from(
-                            combo
-                                .iter()
-                                .map(|(k, v)| format!("{k}={v}"))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                        );
-                        let is_filter_selected = match current_filter {
-                            DimensionFilter::FilterTo(d) => d == combo,
-                            _ => false,
-                        };
-                        let combo_for_click = combo.clone();
-                        dim_radio_row(
-                            i + 1,
-                            label,
-                            is_filter_selected,
-                            &theme,
-                            cx,
-                            move |shell, _, _, cx| {
-                                if let Some(picker) = &mut shell.metric_picker {
-                                    picker.dimension_filter =
-                                        DimensionFilter::FilterTo(combo_for_click.clone());
-                                }
-                                cx.notify();
-                            },
-                        )
-                        .into_any_element()
-                    })
-                    .collect();
-
-                if combos.is_empty() {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(agg_row)
-                        .child(div().px(Spacing::SM).py(Spacing::XS).child(Text::dim(
-                            dbflux_i18n::t!("document.chart.metric_picker.dimensions.empty"),
-                        )))
-                        .into_any_element()
-                } else {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(agg_row)
-                        .children(dim_rows)
-                        .into_any_element()
-                }
-            }
-        };
+        }
+    };
 
     div()
         .flex()
@@ -451,7 +452,6 @@ fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>)
                 dbflux_i18n::t!("document.chart.metric_picker.apply"),
             )
             .primary()
-            .small()
             .on_click(cx.listener(|shell, _, _, cx| {
                 if let Some(picker) = &mut shell.metric_picker {
                     // Flush any pending Custom… inputs so the click path
@@ -493,7 +493,7 @@ where
         theme.popover
     };
     let dot_color = if is_selected {
-        theme.primary
+        ChromeColors::tint(theme)
     } else {
         theme.border
     };

@@ -184,7 +184,14 @@ a un ID guardado y, por tanto, no se deduplica hasta que se guarda.
 
 ## Crear un chart en la UI
 
-Hay tres puntos de entrada.
+Hay cuatro puntos de entrada.
+
+### Botón de gráfico en el editor de queries
+
+Cualquier query que produzca resultados tabulares se puede graficar. En la
+toolbar del editor de queries, haz clic en el botón de gráfico (tooltip: "Open
+current query in a chart document") para abrir la query actual en un documento
+de gráfico.
 
 ### Chart this query
 
@@ -204,17 +211,22 @@ en su primer render.
 
 ### Open chart...
 
-El comando "Open chart..." lista los saved charts (construidos por
+El comando "Open chart…" lista los saved charts (construidos por
 `build_saved_chart_palette_items`) para el perfil activo, y abre el chart
 seleccionado a través de `open_saved_chart` como se describió arriba.
+
+Los gráficos se pueden guardar por perfil de conexión. Para reabrir un gráfico
+guardado, ejecuta **Open chart…** desde el command palette (`OpenSavedChart`),
+que lista los gráficos guardados del perfil actual en un overlay de búsqueda
+difusa.
 
 ### Colecciones de series temporales
 
 Abrir una colección en una conexión cuya categoría es
 `DatabaseCategory::TimeSeries` (un measurement de InfluxDB, por ejemplo) le da a
-su data grid las vistas Data, Chart y JSON que tienen los resultados de query.
-La primera página se abre como chart cuando `detect_chart_columns` devuelve
-`Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
+su data grid las vistas Data, Chart y JSON que tienen los resultados de query,
+más **Both**, que dibuja el chart sobre la cuadrícula. La primera página se abre
+en Both cuando `detect_chart_columns` devuelve `Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
 Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
 ese valor, así que un tag como `host` le da a cada host su propia línea. Lo

@@ -1,0 +1,522 @@
+---
+import Glyph from '../Glyph.astro';
+import BrandMark from '../BrandMark.astro';
+import {
+  COMPARE_CLIENTS,
+  COMPARE_MOBILE_ROWS,
+  COMPARE_REVIEWED,
+  COMPARE_ROWS,
+  TONE_ICON,
+} from '../../data/compare';
+import type { CompareCell, CompareRow, CompareTone } from '../../data/compare';
+import { CURRENT, productVersion } from '../../data/versions';
+import { siteUrl } from '../../data/site';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing.compare;
+const version = productVersion(CURRENT.id);
+const fullComparison = siteUrl('compare/', locale);
+
+const cellText = ([, value]: CompareCell) =>
+  'key' in value ? strings.cell[value.key] : value.text;
+
+const rowLabel = (label: CompareRow['label']) =>
+  'key' in label ? strings.row[label.key] : label.text;
+
+const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', 'unknown'];
+---
+
+<section id="compare" class="cmp shell" data-cmp>
+  <div class="cmp__head reveal">
+    <div class="cmp__title">
+      <p class="eyebrow">{strings.eyebrow}</p>
+      <h2 class="display display--section">{strings.title}</h2>
+    </div>
+    <p class="cmp__body">{strings.body}</p>
+  </div>
+
+  <div class="cmp__tabs reveal-group" role="radiogroup" aria-label={strings.eyebrow}>
+    {
+      COMPARE_CLIENTS.map((client, index) => (
+        <button
+          type="button"
+          role="radio"
+          class="cmp__tab c10"
+          aria-checked={index === 0 ? 'true' : 'false'}
+          data-cmp-pick={index}
+        >
+          <span class="cmp__tab-name">vs {client.name}</span>
+          <span class="cmp__tab-edition mono">{strings.edition[client.edition]}</span>
+        </button>
+      ))
+    }
+  </div>
+
+  {
+    COMPARE_CLIENTS.map((client, index) => (
+      <div class="cmp__grid reveal-group" data-cmp-item={index} hidden={index !== 0}>
+        <div
+          class="cmp__table card c18 reveal-group"
+          role="table"
+          aria-label={`DBFlux vs ${client.name}`}
+        >
+          <div class="cmp__row cmp__row--head" role="row">
+            <span class="cmp__feature x" role="columnheader">
+              {strings.feature}
+            </span>
+            <span class="cmp__client cmp__client--dbflux" role="columnheader">
+              <BrandMark size={20} />
+              DBFlux <span class="mono cmp__edition">{version}</span>
+            </span>
+            <span class="cmp__client" role="columnheader">
+              {client.name} <span class="mono cmp__edition">{strings.edition[client.edition]}</span>
+            </span>
+          </div>
+          {COMPARE_ROWS.map((row) => (
+            <div class="cmp__row" role="row">
+              <span class="cmp__name" role="rowheader">
+                <Glyph name={row.icon} size={17} class="cmp__name-icon" />
+                {rowLabel(row.label)}
+              </span>
+              <span class="cmp__cell cmp__cell--dbflux" role="cell" data-verdict={row.dbflux[0]}>
+                <Glyph name={TONE_ICON[row.dbflux[0]]} size={16} class="verdict-icon" />
+                <span>{cellText(row.dbflux)}</span>
+              </span>
+              <span class="cmp__cell" role="cell" data-verdict={row.clients[client.id][0]}>
+                <Glyph name={TONE_ICON[row.clients[client.id][0]]} size={16} class="verdict-icon" />
+                <span>{cellText(row.clients[client.id])}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div class="cmp__side">
+          <div class="cmp__card card c14">
+            <span class="cmp__card-label cmp__card-label--gain">
+              <Glyph name="zap" size={16} />
+              <span class="x">{strings.why}</span>
+            </span>
+            <p class="cmp__gain">{strings.gain[client.id]}</p>
+          </div>
+          <div class="cmp__card card c14">
+            <span class="cmp__card-label">
+              <Glyph name="flag" size={16} />
+              <span class="x">{strings.leads.replace('{name}', client.name)}</span>
+            </span>
+            <p>{strings.keep[client.id]}</p>
+          </div>
+          <div class="cmp__meta">
+            <div class="cmp__legend">
+              {LEGEND.map((tone) => (
+                <span data-verdict={tone}>
+                  <Glyph name={TONE_ICON[tone]} size={14} class="verdict-icon" />
+                  {strings.legend[tone]}
+                </span>
+              ))}
+            </div>
+            <a class="go cmp__full" href={fullComparison}>
+              {strings.full}
+              <Glyph name="chevron-right" size={14} class="go__chev" />
+            </a>
+            <span class="cmp__reviewed mono">
+              {strings.reviewed.replace('{date}', COMPARE_REVIEWED)}
+            </span>
+          </div>
+        </div>
+      </div>
+    ))
+  }
+
+  <div
+    class="cmp__phone card c14 reveal-group"
+    role="table"
+    aria-label="DBFlux vs DBeaver Community"
+  >
+    <div class="cmp__phone-row cmp__phone-row--head" role="row">
+      <span role="columnheader">vs DBeaver CE</span>
+      <span role="columnheader">DBFlux</span>
+      <span role="columnheader">DBeaver</span>
+    </div>
+    {
+      COMPARE_MOBILE_ROWS.map((row) => (
+        <div class="cmp__phone-row" role="row">
+          <span role="rowheader" class="cmp__phone-name">
+            <Glyph name={row.icon} size={15} class="cmp__name-icon" />
+            {rowLabel(row.label)}
+          </span>
+          <span role="cell" data-verdict={row.dbflux}>
+            <Glyph name={TONE_ICON[row.dbflux]} size={17} class="verdict-icon" />
+            <span class="visually-hidden">{strings.legend[row.dbflux]}</span>
+          </span>
+          <span role="cell" data-verdict={row.dbeaver}>
+            <Glyph name={TONE_ICON[row.dbeaver]} size={17} class="verdict-icon" />
+            <span class="visually-hidden">{strings.legend[row.dbeaver]}</span>
+          </span>
+        </div>
+      ))
+    }
+  </div>
+
+  <a class="go go--plain cmp__phone-full reveal" href={fullComparison}>
+    {strings.full}
+    <Glyph name="chevron-right" size={14} class="go__chev" />
+  </a>
+</section>
+
+<script>
+  const section = document.querySelector<HTMLElement>('[data-cmp]');
+
+  if (section) {
+    const picks = Array.from(section.querySelectorAll<HTMLButtonElement>('[data-cmp-pick]'));
+
+    picks.forEach((pick) => {
+      pick.addEventListener('click', () => {
+        picks.forEach((other) => other.setAttribute('aria-checked', String(other === pick)));
+        section.querySelectorAll<HTMLElement>('[data-cmp-item]').forEach((element) => {
+          element.hidden = element.dataset.cmpItem !== pick.dataset.cmpPick;
+        });
+      });
+    });
+  }
+</script>
+
+<style>
+  .cmp {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    padding-top: 96px;
+    padding-bottom: 72px;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  .cmp__head {
+    display: flex;
+    align-items: flex-end;
+    gap: 64px;
+  }
+
+  .cmp__title {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    width: 700px;
+    flex-shrink: 0;
+  }
+
+  .cmp__body {
+    max-width: 460px;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .cmp__tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .cmp__tab {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 170px;
+    padding: 12px 20px;
+    border: 0;
+    background: var(--raised);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+  }
+
+  .cmp__tab:hover {
+    background: var(--raised-hover);
+  }
+
+  .cmp__tab[aria-checked='true'] {
+    background: var(--text-strong);
+    color: var(--bg);
+  }
+
+  .cmp__tab-name {
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .cmp__tab-edition {
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
+  .cmp__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 820px) minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+  }
+
+  .cmp__table {
+    overflow: hidden;
+  }
+
+  .cmp__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 250px 250px;
+    align-items: center;
+    height: 46px;
+    padding: 0 24px;
+    border-bottom: var(--bw) solid var(--row-line);
+  }
+
+  .cmp__row--head {
+    height: 56px;
+    border-bottom-color: var(--border-strong);
+  }
+
+  .cmp__feature {
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cmp__client {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 100%;
+    padding-left: 16px;
+    color: var(--text-strong);
+    font-weight: 700;
+  }
+
+  .cmp__client--dbflux {
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    box-shadow: inset 0 -3px 0 var(--accent-fill);
+  }
+
+  .cmp__edition {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .cmp__name {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    color: var(--text-strong);
+    font-size: 14.5px;
+  }
+
+  .cmp__name :global(.cmp__name-icon),
+  .cmp__phone-name :global(.cmp__name-icon) {
+    color: var(--text-muted);
+  }
+
+  .cmp__cell {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 100%;
+    padding-left: 16px;
+    font-size: 13.5px;
+  }
+
+  .cmp__cell--dbflux {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+
+  .cmp__side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .cmp__card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 26px;
+  }
+
+  .cmp__card p {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .cmp__card .cmp__gain {
+    color: var(--text-strong);
+  }
+
+  .cmp__card-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+  }
+
+  .cmp__card-label--gain {
+    color: var(--success);
+  }
+
+  .cmp__card-label .x {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .cmp__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 8px 4px;
+  }
+
+  .cmp__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 12.5px;
+  }
+
+  .cmp__legend [data-verdict] {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+  }
+
+  .cmp__full {
+    align-self: flex-start;
+    margin-top: 10px;
+  }
+
+  .cmp__reviewed {
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
+  .cmp__phone-full {
+    display: none;
+    align-self: flex-start;
+  }
+
+  .cmp__phone {
+    display: none;
+    overflow: hidden;
+  }
+
+  .cmp__phone-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 96px 96px;
+    align-items: center;
+    height: 44px;
+    padding: 0 14px;
+    border-bottom: var(--bw) solid var(--row-line);
+    font-size: 13px;
+  }
+
+  .cmp__phone-row > [role='cell'],
+  .cmp__phone-row--head > :not(:first-child) {
+    display: flex;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .cmp__phone-row--head {
+    border-bottom-color: var(--border-strong);
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .cmp__phone-row--head > :first-child {
+    color: var(--text-muted);
+  }
+
+  .cmp__phone-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-strong);
+  }
+
+  @media (max-width: 1180px) {
+    .cmp__head {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .cmp__title {
+      width: auto;
+    }
+
+    .cmp__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 760px) {
+    .cmp__row {
+      grid-template-columns: minmax(0, 1fr) 150px 150px;
+      padding: 0 14px;
+    }
+
+    .cmp__cell span {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .cmp {
+      gap: 14px;
+      padding-top: 56px;
+      padding-bottom: 0;
+    }
+
+    .cmp__head,
+    .cmp__title {
+      gap: 14px;
+    }
+
+    .cmp__title .display {
+      font-size: 34px;
+    }
+
+    .cmp__body,
+    .cmp__tabs,
+    .cmp__grid {
+      display: none !important;
+    }
+
+    .cmp__phone {
+      display: block;
+    }
+
+    .cmp__phone-full {
+      display: inline-flex;
+    }
+  }
+</style>

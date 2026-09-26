@@ -6,6 +6,7 @@ impl SchemaNodeKind {
             self,
             Self::Profile
                 | Self::DatabasesFolder
+                | Self::EmptyDatabasesFolder
                 | Self::Database
                 | Self::Table
                 | Self::View
@@ -47,6 +48,7 @@ impl SchemaNodeKind {
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
                 | Self::Bucket
+                | Self::BucketsFolder
         )
     }
 
@@ -55,6 +57,7 @@ impl SchemaNodeKind {
             self,
             Self::ConnectionFolder
                 | Self::DatabasesFolder
+                | Self::EmptyDatabasesFolder
                 | Self::Schema
                 | Self::TablesFolder
                 | Self::ViewsFolder
@@ -80,6 +83,7 @@ impl SchemaNodeKind {
                 | Self::SavedChartsFolder
                 | Self::InstanceMetricsFolder
                 | Self::InstanceInspectorsFolder
+                | Self::BucketsFolder
         )
     }
 
@@ -101,6 +105,7 @@ impl SchemaNodeKind {
                 | Self::InstanceInspectorLeaf
                 | Self::InstanceOverviewLeaf
                 | Self::Bucket
+                | Self::BucketsFolder
         )
     }
 }

@@ -3,13 +3,13 @@ use super::routing::{NodeBounds, RoutePoint, route_foreign_key};
 ///
 /// Imports are kept minimal (no `super::*`) to avoid triggering GPUI proc-macro
 /// expansion across the full parent module during test compilation.
-use super::{LoadedSchemaData, SchemaVizDocument, pixel_aligned_diagram_pan};
+use super::{LoadedSchemaData, SchemaVizDocument, fit_diagram, pixel_aligned_diagram_pan};
 use dbflux_core::{ColumnInfo, ForeignKeyInfo, SchemaForeignKeyInfo, TableInfo};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
     layout::{LayoutFormat, compute_layout},
 };
-use gpui::{Pixels, Point, px};
+use gpui::{Pixels, Point, Size, px};
 
 fn route_midpoint(route: &super::routing::OrthogonalRoute) -> RoutePoint {
     let mut total = 0.0_f32;
@@ -232,7 +232,7 @@ fn test_show_types_toggle_recomputes_layout() {
 fn test_layout_label_left_right() {
     assert_eq!(
         SchemaVizDocument::layout_label(LayoutFormat::LeftRight),
-        "Left-Right"
+        "Left to right"
     );
 }
 
@@ -2011,5 +2011,51 @@ fn loader_global_succeeds_with_empty_indexes_and_fks_when_bulk_seams_fail() {
         calls.schema_foreign_keys,
         vec![Some("public".to_owned())],
         "the failing foreign-key seam was attempted"
+    );
+}
+
+#[test]
+fn fit_keeps_the_leftmost_table_inside_the_margin() {
+    let viewport = Size::new(px(1200.0), px(800.0));
+    let (zoom, pan) =
+        fit_diagram((0.0, 0.0, 900.0, 400.0), viewport, 1.0).expect("a measured viewport fits");
+
+    assert_eq!(zoom, 1.0, "a diagram that fits opens at its natural size");
+    assert!(
+        f32::from(pan.x) >= 48.0,
+        "the first table must not touch the edge"
+    );
+    assert!(f32::from(pan.y) >= 48.0);
+}
+
+#[test]
+fn fit_shrinks_a_wide_diagram_to_the_viewport() {
+    let viewport = Size::new(px(1000.0), px(800.0));
+    let (zoom, pan) = fit_diagram((-200.0, 0.0, 1800.0, 400.0), viewport, 1.0).expect("fits");
+
+    let left = f32::from(pan.x) + -200.0 * zoom;
+    let right = f32::from(pan.x) + 1800.0 * zoom;
+    assert!(left >= 47.9, "left edge {left} inside the margin");
+    assert!(
+        right <= 1000.0 - 47.9,
+        "right edge {right} inside the margin"
+    );
+}
+
+#[test]
+fn fit_waits_for_a_measured_viewport() {
+    let unmeasured = Size::new(px(0.0), px(0.0));
+    assert!(fit_diagram((0.0, 0.0, 100.0, 100.0), unmeasured, 1.0).is_none());
+}
+
+#[test]
+fn tab_title_names_the_database_then_schema() {
+    assert_eq!(
+        SchemaVizDocument::tab_title(None, Some("shop")),
+        "shop \u{b7} schema"
+    );
+    assert_eq!(
+        SchemaVizDocument::tab_title(Some("orders"), Some("shop")),
+        "orders \u{b7} schema"
     );
 }

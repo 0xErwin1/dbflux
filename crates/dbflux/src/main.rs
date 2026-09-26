@@ -20,9 +20,7 @@ use dbflux_ipc::{
 use dbflux_ui::AppStateEntity;
 use dbflux_ui::assets::Assets;
 use dbflux_ui::ipc_server::IpcServer;
-use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
-use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
 use dbflux_ui::ui::views::workspace::{
     DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
 };
@@ -123,7 +121,7 @@ fn install_shutdown_signal_handlers() {
 fn install_shutdown_signal_handlers() {}
 
 /// Installs a chained best-effort panic hook that:
-/// 1. Attempts to record the panic via AuditService::record_panic_best_effort
+/// 1. Attempts to record the panic via AuditService::record_panic_report_best_effort
 /// 2. Falls back to stderr logging if the service is unavailable or fails
 /// 3. Always delegates to the previously installed panic hook
 fn install_panic_hook() {
@@ -151,13 +149,19 @@ fn install_panic_hook() {
                 "Unknown panic payload".to_string()
             };
 
-            let panic_info_str = format!("{} at {}", panic_message, panic_location);
+            let current_thread = std::thread::current();
 
-            match audit_service.record_panic_best_effort(&panic_info_str) {
+            let report = dbflux_audit::PanicReport {
+                message: &panic_message,
+                location: Some(&panic_location),
+                thread: current_thread.name(),
+            };
+
+            match audit_service.record_panic_report_best_effort(&report) {
                 Some(_) => {}
                 None => {
                     let _ = std::io::stderr().write_all(
-                        b"[dbflux_audit] panic hook: record_panic_best_effort returned None\n",
+                        b"[dbflux_audit] panic hook: record_panic_report_best_effort returned None\n",
                     );
                 }
             }
@@ -355,8 +359,6 @@ fn run_gui() {
     let application = gpui_platform::application().with_assets(Assets);
     application.run(|cx: &mut App| {
         dbflux_ui::theme::init(cx);
-        dbflux_ui::ui::components::data_table::init(cx);
-        dbflux_ui_base::keymap::init_document_tree_keybindings(cx);
 
         let app_state_inner = match AppStateEntity::new() {
             Ok(state) => state,
@@ -370,6 +372,13 @@ fn run_gui() {
             }
         };
         let app_state = cx.new(|_cx| app_state_inner);
+
+        let keymap_overrides = dbflux_app::keymap::load_keymap_overrides(
+            app_state.read(cx).storage_runtime(),
+            dbflux_ui_base::keymap::default_keymap(),
+        );
+        dbflux_ui_base::keymap::apply_keymap_overrides(keymap_overrides, cx);
+        dbflux_ui_base::keymap::init_keymap(cx);
 
         // Wire the bridge into the audit service before cloning it out.
         // `attach_tracing_bridge` must be called on the owned `AppState`
@@ -426,11 +435,8 @@ fn run_gui() {
 
         let window_handle = cx
             .open_window(main_window_options, |window, cx| {
-                cx.bind_keys(command_palette_keybindings());
-                cx.bind_keys(input_context_keybindings());
-                cx.bind_keys(workspace_keybindings());
-
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+                workspace.update(cx, |workspace, cx| workspace.start_update_flow(cx));
 
                 // Publish a weak handle before the view is moved into `Root` so
                 // both shutdown entry points (window close and SIGINT/SIGTERM)
@@ -457,6 +463,31 @@ fn run_gui() {
                 info!("IPC server started");
 
                 dbflux_ui_base::ui_automation::install(window, cx);
+
+                // "Follow system" resolved against the app-level appearance
+                // before any window existed; the window's own appearance is
+                // the reliable source on Linux, so resolve once more here and
+                // again whenever the OS switches between light and dark.
+                if theme_setting == dbflux_core::ThemeSetting::System {
+                    dbflux_ui::theme::apply_theme(theme_setting, style_setting, Some(window), cx);
+                }
+
+                let app_state_for_appearance = app_state.clone();
+                window
+                    .observe_window_appearance(move |window, cx| {
+                        let settings = app_state_for_appearance.read(cx).general_settings();
+                        let (current_theme, current_style) = (settings.theme, settings.style);
+
+                        if current_theme == dbflux_core::ThemeSetting::System {
+                            dbflux_ui::theme::apply_theme(
+                                current_theme,
+                                current_style,
+                                Some(window),
+                                cx,
+                            );
+                        }
+                    })
+                    .detach();
 
                 cx.new(|cx| Root::new(workspace, window, cx))
             })

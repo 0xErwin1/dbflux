@@ -186,6 +186,11 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
     if let Some(app_state_global) = cx.try_global::<AppStateGlobal>() {
         let entity = app_state_global.entity.clone();
         entity.update(cx, |s, cx| {
+            s.notifications
+                .record_error(crate::notifications::ErrorNotification::from_user_error(
+                    &err,
+                    dbflux_core::chrono::Utc::now(),
+                ));
             s.note_user_error(err.correlation_id, err.severity, cx);
         });
     }

@@ -605,7 +605,6 @@ impl MappingPhase {
                     "migrate-bulk-existing",
                     dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.existing"),
                 )
-                .small()
                 .ghost()
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.set_all_modes(TableMappingMode::Existing, cx);
@@ -617,7 +616,6 @@ impl MappingPhase {
                         "migrate-bulk-truncate",
                         dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.truncate"),
                     )
-                    .small()
                     .ghost()
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.set_all_modes(TableMappingMode::Truncate, cx);
@@ -629,7 +627,6 @@ impl MappingPhase {
                     "migrate-bulk-skip",
                     dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.skip"),
                 )
-                .small()
                 .ghost()
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     this.set_all_modes(TableMappingMode::Skip, cx);
@@ -656,7 +653,7 @@ impl MappingPhase {
                     SharedString::from(format!("migrate-transform-{row_index}")),
                     dbflux_i18n::t!("document.migrate_wizard.mapping.columns_button"),
                 )
-                .small()
+                .inline()
                 .ghost()
                 .disabled(matches!(row.target_lookup, NodeLoad::Loading))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -733,7 +730,6 @@ impl MappingPhase {
                             "migrate-drilldown-back",
                             dbflux_i18n::t!("document.migrate_wizard.footer.back"),
                         )
-                        .small()
                         .ghost()
                         .icon(AppIcon::ChevronLeft)
                         .on_click(cx.listener(
@@ -753,10 +749,10 @@ impl MappingPhase {
                     .flex_row()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                    .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
                         "document.migrate_wizard.mapping.target_column_header"
                     ))))
-                    .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+                    .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
                         "document.migrate_wizard.mapping.source_column_header"
                     )))),
             )
@@ -799,17 +795,17 @@ fn render_grid_header(cx: &mut Context<MappingPhase>) -> impl IntoElement {
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .child(Text::label(dbflux_i18n::t!(
+                .child(Text::body(dbflux_i18n::t!(
                     "document.migrate_wizard.mapping.header_source"
                 ))),
         )
-        .child(div().w(TARGET_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(TARGET_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_target"
         ))))
-        .child(div().w(MODE_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(MODE_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_mapping_mode"
         ))))
-        .child(div().w(TRANSFORM_COL_W).child(Text::label(dbflux_i18n::t!(
+        .child(div().w(TRANSFORM_COL_W).child(Text::body(dbflux_i18n::t!(
             "document.migrate_wizard.mapping.header_transform"
         ))))
 }

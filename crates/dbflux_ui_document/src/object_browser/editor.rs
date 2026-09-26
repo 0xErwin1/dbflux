@@ -23,15 +23,17 @@ use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
 use crate::handle::DocumentEvent;
 use crate::object_text::{
     FIND_SHORTCUT_HINT, LineEnding, SAVE_SHORTCUT_HINT, TextBody, body_meta_line, build_text_input,
-    cursor_label, db_error_to_user_facing, open_find_panel, record_save_audit,
+    cursor_label, db_error_to_user_facing, keycap_text, open_find_panel, record_save_audit,
 };
 // The raw `GpuiInput` (not the app's single-line `Input` wrapper) is what
 // `CodeDocument` renders its editor with: only it supports the full-height,
 // line-numbered code-editor layout.
 use dbflux_app::keymap::Modifiers;
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput, InputEvent, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DbError;
 use dbflux_ui_base::keymap::modifiers_from_gpui;
@@ -587,14 +589,6 @@ impl ObjectBrowserDocument {
                             cx.stop_propagation();
                         }),
                     )
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                        let modifiers = modifiers_from_gpui(&event.keystroke.modifiers);
-
-                        if event.keystroke.key == "s" && modifiers == Modifiers::primary() {
-                            this.save_object_edits(cx);
-                            cx.stop_propagation();
-                        }
-                    }))
                     .child(
                         ReadOnlyEditor::new(&editor.input)
                             .appearance(false)
@@ -645,93 +639,55 @@ impl ObjectBrowserDocument {
                     })
                     .when(is_editable, |this| {
                         this.child(
-                            div()
-                                .id("object-browser-editor-save")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .bg(theme.primary)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer().hover(|d| d.opacity(0.9)).on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.save_object_edits(cx);
-                                        }),
-                                    )
-                                })
-                                .child(
-                                    Icon::new(if is_saving {
-                                        AppIcon::Loader
-                                    } else {
-                                        AppIcon::Save
-                                    })
-                                    .small()
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::caption(if is_saving {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.saving"
-                                        )
-                                    } else {
-                                        dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.save"
-                                        )
-                                    })
-                                    .color(theme.primary_foreground),
-                                )
-                                .child(
-                                    Text::key_hint(SAVE_SHORTCUT_HINT)
-                                        .color(theme.primary_foreground),
-                                ),
+                            Button::new(
+                                "object-browser-editor-save",
+                                if is_saving {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
+                                } else {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                                },
+                            )
+                            .primary()
+                            .icon(if is_saving {
+                                AppIcon::Loader
+                            } else {
+                                AppIcon::Save
+                            })
+                            .kbd(keycap_text(SAVE_SHORTCUT_HINT))
+                            .disabled(!can_act)
+                            .tab_stop(false)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.save_object_edits(cx);
+                            })),
                         )
-                    })
-                    .when(is_editable, |this| {
-                        this.child(
-                            div()
-                                .id("object-browser-editor-discard")
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::XS)
-                                .h(Heights::CONTROL)
-                                .px(Spacing::SM)
-                                .rounded(Radii::SM)
-                                .when(!can_act, |d| d.opacity(0.5))
-                                .when(can_act, |d| {
-                                    d.cursor_pointer()
-                                        .hover(|d| d.bg(theme.secondary))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.discard_object_edits(window, cx);
-                                        }))
-                                })
-                                .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "document.object_browser.editor.footer.discard"
-                                ))),
+                        .child(
+                            Button::new(
+                                "object-browser-editor-discard",
+                                dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                            )
+                            .ghost()
+                            .icon(AppIcon::RotateCcw)
+                            .disabled(!can_act)
+                            .tab_stop(false)
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.discard_object_edits(window, cx);
+                                },
+                            )),
                         )
                     })
                     .child(
-                        div()
-                            .id("object-browser-editor-find")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_editor_find(window, cx);
-                            }))
-                            .child(Icon::new(AppIcon::Search).small().muted())
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.editor.footer.find"
-                            )))
-                            .child(Text::key_hint(FIND_SHORTCUT_HINT)),
+                        Button::new(
+                            "object-browser-editor-find",
+                            dbflux_i18n::t!("document.object_browser.editor.footer.find"),
+                        )
+                        .ghost()
+                        .icon(AppIcon::Search)
+                        .kbd(keycap_text(FIND_SHORTCUT_HINT))
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_editor_find(window, cx);
+                        })),
                     ),
             )
             .child(Text::caption(cursor_label(position)).muted_foreground())
@@ -786,123 +742,60 @@ impl ObjectBrowserDocument {
         navigation: &GuardedNavigation,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let key = self
             .editor
             .as_ref()
             .map(|editor| editor.key.clone())
             .unwrap_or_default();
 
-        div()
-            .id("object-browser-unsaved-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(380.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .size(Heights::ICON_MD)
-                                    .warning(),
-                            )
-                            .child(Text::heading(dbflux_i18n::t!(
-                                "document.object_browser.editor.unsaved_confirm.title"
-                            ))),
-                    )
-                    .child(Text::muted(dbflux_i18n::t!(
-                        "document.object_browser.editor.unsaved_confirm.body",
-                        key = key.as_str(),
-                        action = navigation.description().as_str()
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-cancel")
-                                    .flex()
-                                    .items_center()
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_guarded_navigation(cx);
-                                    }))
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.object_browser.editor.unsaved_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-discard")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.discard_and_navigate(window, cx);
-                                    }))
-                                    .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.object_browser.editor.footer.discard"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("object-browser-unsaved-save")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.primary)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save_and_navigate(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Save)
-                                            .small()
-                                            .color(theme.primary_foreground),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.object_browser.editor.footer.save"
-                                        ))
-                                        .color(theme.primary_foreground),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "object-browser-unsaved-cancel",
+                    dbflux_i18n::t!("document.object_browser.editor.unsaved_confirm.cancel"),
+                )
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_guarded_navigation(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "object-browser-unsaved-discard",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                )
+                .icon(AppIcon::RotateCcw)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.discard_and_navigate(window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "object-browser-unsaved-save",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.save"),
+                )
+                .primary()
+                .icon(AppIcon::Save)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.save_and_navigate(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_confirm.title"
+        ))
+        .id("object-browser-unsaved-overlay")
+        .icon(AppIcon::TriangleAlert)
+        .icon_color(cx.theme().warning)
+        .width(px(460.0))
+        .body(Text::body(dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_confirm.body",
+            key = key.as_str(),
+            action = navigation.description().as_str()
+        )))
+        .footer(footer)
     }
 }
 

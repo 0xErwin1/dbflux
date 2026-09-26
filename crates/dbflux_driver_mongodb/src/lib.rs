@@ -9,6 +9,7 @@
     )
 )]
 
+mod document_ops;
 pub mod driver;
 pub mod instance_catalog;
 pub mod language_service;

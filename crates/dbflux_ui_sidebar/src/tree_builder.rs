@@ -612,12 +612,36 @@ impl Sidebar {
                             bucket_cache,
                         );
                         items.push(profile_item);
+                        items.extend(Self::build_connect_failure_rows(profile_id, state));
                     }
                 }
             }
         }
 
         items
+    }
+
+    /// The entries that carry the failed-connection block under a profile:
+    /// present while the last connect attempt failed and no new attempt is
+    /// running. Disabled, so the tree neither selects nor expands them.
+    fn build_connect_failure_rows(profile_id: Uuid, state: &AppStateEntity) -> Vec<TreeItem> {
+        let failed = state.connect_failure(profile_id).is_some()
+            && !state.connections().contains_key(&profile_id)
+            && !state.is_operation_pending(profile_id, None);
+
+        if !failed {
+            return Vec::new();
+        }
+
+        (0..crate::connection_failure::FAILURE_ROW_SLICES)
+            .map(|slice| {
+                TreeItem::new(
+                    crate::connection_failure::failure_row_id(profile_id, slice),
+                    "",
+                )
+                .disabled(true)
+            })
+            .collect()
     }
 
     fn build_profile_item_with_errors(
@@ -631,17 +655,9 @@ impl Sidebar {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
         let is_active = state.active_connection_id() == Some(profile_id);
-        let is_connecting = state.is_operation_pending(profile_id, None);
-
-        let profile_label = if is_connecting {
-            crate::labels::profile_connecting_label(&profile.name)
-        } else {
-            profile.name.clone()
-        };
-
         let mut profile_item = TreeItem::new(
             SchemaNodeId::Profile { profile_id }.to_string(),
-            profile_label,
+            profile.name.clone(),
         );
 
         if is_connected
@@ -682,10 +698,10 @@ impl Sidebar {
             let metric_cache = state.metric_catalog_cache().clone();
 
             if conn_category == DatabaseCategory::ObjectStorage {
-                // Object storage lists its containers flat under the
-                // connection: the prefix hierarchy lives in the object browser
+                // Object storage lists its containers under one Buckets
+                // folder: the prefix hierarchy lives in the object browser
                 // document, never in the global tree.
-                profile_children.extend(build_bucket_children(profile_id, bucket_cache));
+                profile_children.push(build_buckets_folder(profile_id, bucket_cache));
             } else if schema.is_key_value() {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
@@ -1177,6 +1193,10 @@ impl Sidebar {
                     None => return None,
                 };
                 let items = Self::build_scripts_tree_items(&entries);
+                Self::find_item_index_in_tree(&items, item_id, &mut 0)
+            }
+            SidebarTab::Dashboards => {
+                let items = self.build_dashboards_tree_items(cx);
                 Self::find_item_index_in_tree(&items, item_id, &mut 0)
             }
         }
@@ -1749,31 +1769,40 @@ fn build_kv_database_children(
         return Vec::new();
     };
 
-    let mut database_names: Vec<String> = schema
+    let mut keyspaces: Vec<KeyspaceRow> = schema
         .keyspaces()
         .iter()
-        .map(|space| format!("db{}", space.db_index))
+        .map(|space| KeyspaceRow {
+            name: keyspace_name(space.db_index),
+            label: format!("db {}", space.db_index),
+            key_count: space.key_count,
+        })
         .collect();
 
-    if database_names.is_empty() {
-        if let Some(active_database) = connected.active_database.as_ref() {
-            database_names.push(active_database.clone());
-        } else {
-            database_names.push("db0".to_string());
-        }
+    if keyspaces.is_empty() {
+        let name = connected
+            .active_database
+            .clone()
+            .unwrap_or_else(|| "db0".to_string());
+
+        keyspaces.push(KeyspaceRow {
+            label: name.clone(),
+            name,
+            key_count: None,
+        });
     }
 
-    let mut kv_db_items: Vec<TreeItem> = Vec::new();
+    let plan = plan_keyspace_rows(keyspaces, connected.active_database.as_deref());
 
-    for database_name in database_names {
-        let is_pending = state.is_operation_pending(profile_id, Some(&database_name));
-        let is_active_db = connected.active_database.as_deref() == Some(&database_name);
+    let database_item = |row: KeyspaceRow| -> TreeItem {
+        let is_pending = state.is_operation_pending(profile_id, Some(&row.name));
+        let is_active_db = connected.active_database.as_deref() == Some(&row.name);
 
         let db_children = if is_pending {
             vec![TreeItem::new(
                 SchemaNodeId::Loading {
                     profile_id,
-                    database: database_name.clone(),
+                    database: row.name.clone(),
                 }
                 .to_string(),
                 dbflux_i18n::t!("sidebar.tree.status.loading"),
@@ -1783,26 +1812,204 @@ fn build_kv_database_children(
         };
 
         let db_label = if is_pending {
-            crate::labels::node_loading_label(&database_name)
+            crate::labels::node_loading_label(&row.label)
         } else {
-            database_name.clone()
+            row.label.clone()
         };
+
+        TreeItem::new(
+            SchemaNodeId::Database {
+                profile_id,
+                name: row.name,
+            }
+            .to_string(),
+            db_label,
+        )
+        .expanded(uses_lazy_loading && is_active_db)
+        .children(db_children)
+    };
+
+    let folded_count = plan.folded.len();
+    let mut kv_db_items: Vec<TreeItem> = plan.listed.into_iter().map(database_item).collect();
+
+    if folded_count > 0 {
+        let folded_items: Vec<TreeItem> = plan.folded.into_iter().map(database_item).collect();
 
         kv_db_items.push(
             TreeItem::new(
-                SchemaNodeId::Database {
-                    profile_id,
-                    name: database_name,
-                }
-                .to_string(),
-                db_label,
+                SchemaNodeId::EmptyDatabasesFolder { profile_id }.to_string(),
+                crate::labels::empty_databases_label(folded_count),
             )
-            .expanded(uses_lazy_loading && is_active_db)
-            .children(db_children),
+            .expanded(false)
+            .children(folded_items),
         );
     }
 
     kv_db_items
+}
+
+/// Database name of a numbered keyspace, as used in node ids (`db3`).
+fn keyspace_name(db_index: u32) -> String {
+    format!("db{db_index}")
+}
+
+/// Key count of every keyspace row of a key-value connection, keyed by the
+/// row's tree item id, for the count drawn at the right of the row.
+fn keyspace_key_count_entries(
+    profile_id: Uuid,
+    keyspaces: &[dbflux_core::KeySpaceInfo],
+) -> Vec<(String, u64)> {
+    keyspaces
+        .iter()
+        .filter_map(|space| {
+            let count = space.key_count?;
+            let item_id = SchemaNodeId::Database {
+                profile_id,
+                name: keyspace_name(space.db_index),
+            }
+            .to_string();
+
+            Some((item_id, count))
+        })
+        .collect()
+}
+
+/// Key counts of the keyspace rows of every connected key-value profile,
+/// keyed by tree item id. Counts travel beside the tree items, never inside
+/// their labels.
+pub(crate) fn keyspace_key_counts(state: &AppStateEntity) -> HashMap<String, u64> {
+    state
+        .connections()
+        .iter()
+        .filter_map(|(profile_id, connected)| {
+            let schema = connected.schema.as_ref()?;
+            schema
+                .is_key_value()
+                .then(|| keyspace_key_count_entries(*profile_id, schema.keyspaces()))
+        })
+        .flatten()
+        .collect()
+}
+
+/// One keyspace of a key-value connection as the sidebar lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeyspaceRow {
+    /// Database name used in node ids and by the driver (`db3`).
+    name: String,
+    /// Label shown in the tree (`db 3`).
+    label: String,
+    key_count: Option<u64>,
+}
+
+/// Keyspaces listed on their own and the empty ones folded into a single
+/// "N empty databases" row.
+#[derive(Debug, PartialEq, Eq)]
+struct KeyspacePlan {
+    listed: Vec<KeyspaceRow>,
+    folded: Vec<KeyspaceRow>,
+}
+
+/// Splits keyspaces into listed and folded rows.
+///
+/// A keyspace is folded only when it reports zero keys and is not the active
+/// database; a keyspace with an unknown count always stays listed. Folding
+/// only happens for two or more empty keyspaces, since a folder holding a
+/// single row saves nothing.
+fn plan_keyspace_rows(rows: Vec<KeyspaceRow>, active_database: Option<&str>) -> KeyspacePlan {
+    let is_foldable =
+        |row: &KeyspaceRow| row.key_count == Some(0) && Some(row.name.as_str()) != active_database;
+
+    let foldable_count = rows.iter().filter(|row| is_foldable(row)).count();
+
+    if foldable_count < 2 {
+        return KeyspacePlan {
+            listed: rows,
+            folded: Vec::new(),
+        };
+    }
+
+    let (folded, listed) = rows.into_iter().partition(is_foldable);
+
+    KeyspacePlan { listed, folded }
+}
+
+#[cfg(test)]
+mod keyspace_plan_tests {
+    use super::{KeyspaceRow, keyspace_key_count_entries, plan_keyspace_rows};
+    use dbflux_core::{KeySpaceInfo, SchemaNodeId};
+    use uuid::Uuid;
+
+    #[test]
+    fn key_counts_are_keyed_by_the_database_row_id() {
+        let profile_id = Uuid::new_v4();
+        let space = |db_index: u32, key_count: Option<u64>| KeySpaceInfo {
+            db_index,
+            key_count,
+            memory_bytes: None,
+            avg_ttl_seconds: None,
+        };
+
+        let entries =
+            keyspace_key_count_entries(profile_id, &[space(0, Some(1474)), space(1, None)]);
+
+        let expected_id = SchemaNodeId::Database {
+            profile_id,
+            name: "db0".to_string(),
+        }
+        .to_string();
+        assert_eq!(entries, vec![(expected_id, 1474)]);
+    }
+
+    fn row(index: u32, key_count: Option<u64>) -> KeyspaceRow {
+        KeyspaceRow {
+            name: format!("db{index}"),
+            label: format!("db {index}"),
+            key_count,
+        }
+    }
+
+    #[test]
+    fn empty_keyspaces_fold_into_one_row() {
+        let rows = vec![row(0, Some(1474)), row(1, Some(60))]
+            .into_iter()
+            .chain((2..16).map(|index| row(index, Some(0))))
+            .collect();
+
+        let plan = plan_keyspace_rows(rows, Some("db0"));
+
+        assert_eq!(plan.listed.len(), 2);
+        assert_eq!(plan.folded.len(), 14);
+        assert_eq!(plan.folded[0].name, "db2");
+    }
+
+    #[test]
+    fn the_active_database_stays_listed_even_when_empty() {
+        let rows = vec![row(0, Some(0)), row(1, Some(0)), row(2, Some(0))];
+
+        let plan = plan_keyspace_rows(rows, Some("db0"));
+
+        assert_eq!(plan.listed, vec![row(0, Some(0))]);
+        assert_eq!(plan.folded.len(), 2);
+    }
+
+    #[test]
+    fn a_single_empty_keyspace_is_not_folded() {
+        let rows = vec![row(0, Some(12_480)), row(1, Some(88)), row(2, Some(0))];
+
+        let plan = plan_keyspace_rows(rows.clone(), Some("db0"));
+
+        assert_eq!(plan.listed, rows);
+        assert!(plan.folded.is_empty());
+    }
+
+    #[test]
+    fn keyspaces_with_an_unknown_count_are_never_folded() {
+        let rows = vec![row(0, None), row(1, None), row(2, None)];
+
+        let plan = plan_keyspace_rows(rows.clone(), None);
+
+        assert_eq!(plan.listed, rows);
+    }
 }
 
 /// Render shared relational identity with sidebar-local chrome and details.
@@ -2354,6 +2561,29 @@ fn build_instance_section(
     }
 
     items
+}
+
+/// Build the Buckets folder of an object-storage connection.
+///
+/// The label carries the bucket count once the listing resolves; activating
+/// the folder opens the buckets table document.
+fn build_buckets_folder(
+    profile_id: Uuid,
+    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+) -> TreeItem {
+    let label = match bucket_cache.get(&profile_id) {
+        Some(buckets) => {
+            crate::labels::container_folder_label(DatabaseCategory::ObjectStorage, buckets.len())
+        }
+        None => dbflux_i18n::t!("sidebar.tree.folder.buckets"),
+    };
+
+    TreeItem::new(
+        SchemaNodeId::BucketsFolder { profile_id }.to_string(),
+        label,
+    )
+    .expanded(true)
+    .children(build_bucket_children(profile_id, bucket_cache))
 }
 
 /// Build the flat bucket rows shown under an object-storage connection.
@@ -3507,6 +3737,55 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn buckets_folder_wraps_the_bucket_rows_and_counts_them() {
+        use super::build_buckets_folder;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(
+            profile_id,
+            vec![
+                dbflux_core::BucketInfo {
+                    name: "avatars".to_string(),
+                    created_at: None,
+                },
+                dbflux_core::BucketInfo {
+                    name: "exports".to_string(),
+                    created_at: None,
+                },
+            ],
+        );
+
+        let folder = build_buckets_folder(profile_id, &cache);
+
+        assert_eq!(
+            folder.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::BucketsFolder { profile_id })
+        );
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::ObjectStorage, 2)
+        );
+        assert_eq!(folder.children.len(), 2);
+    }
+
+    #[test]
+    fn buckets_folder_shows_a_plain_label_while_the_listing_loads() {
+        use super::build_buckets_folder;
+
+        let profile_id = Uuid::new_v4();
+
+        let folder = build_buckets_folder(profile_id, &HashMap::new());
+
+        assert_eq!(
+            folder.label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.folder.buckets")
+        );
+        assert_eq!(folder.children.len(), 1);
     }
 
     /// T21: a connection with no buckets says so instead of rendering nothing.

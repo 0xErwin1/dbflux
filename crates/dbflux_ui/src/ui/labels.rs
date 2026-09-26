@@ -15,6 +15,24 @@ pub(crate) fn tasks_running_label(count: usize) -> String {
     }
 }
 
+/// "N background tasks", the idle label of the status bar's tasks segment.
+pub(crate) fn background_tasks_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("status_bar.background_tasks.one")
+    } else {
+        dbflux_i18n::t!("status_bar.background_tasks.many", count = count)
+    }
+}
+
+/// "N approvals", the status bar's pending MCP approvals segment.
+pub(crate) fn approvals_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("status_bar.approvals.one")
+    } else {
+        dbflux_i18n::t!("status_bar.approvals.many", count = count)
+    }
+}
+
 /// Formats the shutdown overlay message for the given phase.
 ///
 /// `NotStarted` has no visible message — the overlay only renders while
@@ -61,7 +79,7 @@ pub(crate) fn workspace_delete_connection_message(name: &str) -> String {
     dbflux_i18n::t!("workspace.confirm.delete_connection", name = name)
 }
 
-/// Formats the login modal's "Sign in with X to continue connecting Y" prompt.
+/// Formats the login modal's "Sign in with X to open Y" prompt.
 pub(crate) fn login_sign_in_prompt(provider_name: &str, profile_name: &str) -> String {
     dbflux_i18n::t!(
         "login.body.sign_in_prompt",
@@ -70,9 +88,23 @@ pub(crate) fn login_sign_in_prompt(provider_name: &str, profile_name: &str) -> S
     )
 }
 
-/// Formats the "Elapsed: Ns" caption shown while waiting for login to complete.
-pub(crate) fn login_elapsed_message(elapsed_secs: u64) -> String {
-    dbflux_i18n::t!("login.body.elapsed", seconds = elapsed_secs)
+/// Formats the "1:04 / 5:00" counter next to the sign-in progress bar.
+pub(crate) fn login_progress_label(elapsed_secs: u64, total_secs: u64) -> String {
+    let clock = |seconds: u64| format!("{}:{:02}", seconds / 60, seconds % 60);
+    format!("{} / {}", clock(elapsed_secs), clock(total_secs))
+}
+
+/// The device code carried by an OAuth device-flow verification URL
+/// (`...?user_code=KQXR-TWPB`), which the browser asks the user to confirm.
+pub(crate) fn login_user_code(verification_url: &str) -> Option<String> {
+    let (_, query) = verification_url.split_once('?')?;
+
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == "user_code")
+        .map(|(_, value)| value.to_string())
+        .filter(|code| !code.is_empty())
 }
 
 /// Formats the fallback message shown when the login browser could not be launched.
@@ -352,21 +384,6 @@ pub(crate) fn select_dump_analyzer(
     Some((first.0, multiple_matched))
 }
 
-/// Formats the "Focusing existing audit viewer" toast.
-pub(crate) fn audit_focus_existing_viewer_message() -> String {
-    dbflux_i18n::t!("audit.toast.focus_existing_viewer")
-}
-
-/// Formats the "Opened audit viewer" toast.
-pub(crate) fn audit_opened_viewer_message() -> String {
-    dbflux_i18n::t!("audit.toast.opened_viewer")
-}
-
-/// Formats the "Opened MCP approvals" toast.
-pub(crate) fn audit_opened_mcp_approvals_message() -> String {
-    dbflux_i18n::t!("audit.toast.opened_mcp_approvals")
-}
-
 /// Formats the "MCP governance state persisted" toast.
 pub(crate) fn audit_mcp_governance_persisted_message() -> String {
     dbflux_i18n::t!("audit.toast.mcp_governance_persisted")
@@ -470,10 +487,8 @@ pub(crate) fn unsaved_changes_cannot_save_message(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        NoActiveConnectionKind, audit_focus_existing_viewer_message,
-        audit_mcp_governance_persisted_message, audit_open_viewer_failed_message,
-        audit_opened_mcp_approvals_message, audit_opened_viewer_message,
-        audit_persist_mcp_governance_failed_message,
+        NoActiveConnectionKind, audit_mcp_governance_persisted_message,
+        audit_open_viewer_failed_message, audit_persist_mcp_governance_failed_message,
         charts_instance_overview_create_editable_failed_message,
         charts_instance_overview_created_editable_message, charts_instance_overview_editable_name,
         charts_instance_overview_no_dashboard_message, connections_disconnecting_message,
@@ -497,6 +512,7 @@ mod tests {
     const WORKSPACE_CATALOG_KEYS: &[&str] = &[
         "workspace.background_tasks",
         "workspace.empty_documents",
+        "workspace.empty_hint",
         "workspace.hint.new_query",
         "workspace.hint.command_palette",
         "workspace.hint.open",
@@ -666,9 +682,6 @@ mod tests {
         "scripts.dialog.filter.redis",
         "scripts.dialog.filter.all_files",
         "scripts.error.read_file_failed",
-        "audit.toast.focus_existing_viewer",
-        "audit.toast.opened_viewer",
-        "audit.toast.opened_mcp_approvals",
         "audit.toast.mcp_governance_persisted",
         "audit.error.open_viewer_failed",
         "audit.error.persist_mcp_governance_failed",
@@ -792,9 +805,6 @@ mod tests {
 
     #[test]
     fn audit_toast_messages_resolve() {
-        assert!(!audit_focus_existing_viewer_message().is_empty());
-        assert!(!audit_opened_viewer_message().is_empty());
-        assert!(!audit_opened_mcp_approvals_message().is_empty());
         assert!(!audit_mcp_governance_persisted_message().is_empty());
     }
 

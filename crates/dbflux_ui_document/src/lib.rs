@@ -19,16 +19,19 @@ pub mod dump_analysis;
 pub mod query_builder;
 pub mod schema_diff;
 mod style_guardrails;
+mod syntax_runs;
 
 #[cfg(feature = "mcp")]
 mod governance;
 
 pub mod export_wizard;
 mod handle;
-pub mod history_modal;
+pub mod history_panel;
 pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
+#[cfg(test)]
+mod keyboard_test_support;
 mod labels;
 pub mod migrate_wizard;
 mod new_key_modal;
@@ -67,8 +70,8 @@ pub use key_value::KeyValueDocument;
 pub use object_browser::ObjectBrowserDocument;
 pub use object_editor::ObjectEditorDocument;
 pub use pane::{
-    BoxedDocEventCallback, CodeSessionTabSnapshot, ObjectEditorRequest, ObjectSavedCallback,
-    PaneHandle, StatusSegment,
+    BoxedDocEventCallback, CodeSessionTabSnapshot, DocumentSidePanel, ObjectEditorRequest,
+    ObjectSavedCallback, PaneHandle, StatusSegment,
 };
 pub use result_view::ResultViewMode;
 pub use schema_viz::{SchemaVizDocument, SchemaVizMode};

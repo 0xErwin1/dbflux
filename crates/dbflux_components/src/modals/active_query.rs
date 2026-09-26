@@ -1,12 +1,13 @@
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::{Text, surface_raised};
+use crate::controls::Button;
+use crate::icons::AppIcon;
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::primitives::{SurfaceRole, Text, surface};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
 use gpui_component::ActiveTheme;
-use gpui_component::button::{Button, ButtonVariants};
 use std::time::Duration;
 
 /// Debug selector of the query preview text, for layout tests.
@@ -59,7 +60,7 @@ pub struct ActiveQueryRequest {
 
 /// Modal entity for "active query running" confirmation.
 ///
-/// Uses `ModalShell::Default` (520 px). Displays an elapsed timer that ticks
+/// Uses `Modal` (`ModalVariant::Default`) (520 px). Displays an elapsed timer that ticks
 /// every second via a background task.
 pub struct ModalActiveQuery {
     request: Option<ActiveQueryRequest>,
@@ -247,7 +248,7 @@ impl Render for ModalActiveQuery {
             .gap(Spacing::MD)
             .child(Text::body(prompt).into_any_element())
             .child(
-                surface_raised(cx)
+                surface(SurfaceRole::Raised, cx)
                     .w_full()
                     .px(Spacing::SM)
                     .py(Spacing::XS)
@@ -301,47 +302,49 @@ impl Render for ModalActiveQuery {
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Button::new("active-force-action")
-                    .label(force_btn_label)
+                Button::new("active-force-action", force_btn_label)
                     .ghost()
                     .on_click(on_force_disconnect),
             )
             .child(div().flex_1())
             .child(
-                Button::new("active-keep-waiting")
-                    .label(dbflux_i18n::t!("modals.active_query.keep_waiting"))
-                    .on_click(on_keep_waiting),
+                Button::new(
+                    "active-keep-waiting",
+                    dbflux_i18n::t!("modals.active_query.keep_waiting"),
+                )
+                .on_click(on_keep_waiting),
             )
             .child(
-                Button::new("active-cancel-query")
-                    .label(dbflux_i18n::t!("modals.active_query.cancel_query"))
-                    .danger()
-                    .on_click(on_cancel_query),
+                Button::new(
+                    "active-cancel-query",
+                    dbflux_i18n::t!("modals.active_query.cancel_query"),
+                )
+                .danger()
+                .on_click(on_cancel_query),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.active_query.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(520.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity
-                    .update(cx, |this, cx| this.keep_waiting(cx))
-                    .log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.active_query.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Loader)
+            .variant(ModalVariant::Default)
+            .width(px(520.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity
+                        .update(cx, |this, cx| this.keep_waiting(cx))
+                        .log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 
@@ -550,9 +553,9 @@ mod outcome_tests {
             let (modal, outcomes) = open_modal(cx, ActiveQueryTrigger::Disconnect);
 
             cx.update(|cx| {
-                modal.update(cx, |modal, cx| choice(modal, cx));
+                modal.update(cx, choice);
                 // A second resolution on a closed modal must not emit again.
-                modal.update(cx, |modal, cx| choice(modal, cx));
+                modal.update(cx, choice);
             });
 
             let emitted: Vec<String> = outcomes
@@ -612,6 +615,7 @@ mod keyboard_tests {
         Rc<RefCell<Vec<ActiveQueryOutcome>>>,
     ) {
         cx.update(gpui_component::init);
+        crate::modals::modal::bind_modal_keys_for_tests(cx);
 
         let (host, window) = cx.add_window_view(|_, cx| Host {
             modal: cx.new(ModalActiveQuery::new),

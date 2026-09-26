@@ -1,15 +1,22 @@
+use crate::controls::Button;
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
-use crate::primitives::Icon;
-use crate::semantic::BannerColors as SemBannerColors;
-use crate::tokens::{FontSizes, Spacing};
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
+use crate::modals::parts::{modal_frame, modal_lead};
+use crate::primitives::{Badge, BadgeTone};
+use crate::tokens::{ChromeColors, ModalMetrics};
 use crate::typography::AppFonts;
 use dbflux_core::{
     ColumnSnapshot, IndexSnapshot, LogErr, QueryTableRef, SchemaChange, SchemaDriftDetected,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::button::{Button, ButtonVariants};
+
+/// Width of the schema-drift dialog (P1Modals).
+const SCHEMA_DRIFT_WIDTH: Pixels = px(640.0);
+
+/// Width of the column and change-badge columns of the drift table.
+const DRIFT_NAME_WIDTH: Pixels = px(140.0);
+const DRIFT_NOTE_WIDTH: Pixels = px(150.0);
 
 /// Event emitted when the user clicks "Refresh and re-run".
 #[derive(Clone, Debug)]
@@ -29,7 +36,7 @@ pub struct SchemaDriftDismissed;
 /// in amber. Footer offers two primary actions: refresh-and-rerun or
 /// continue with the stale schema.
 ///
-/// This is an `Entity<ModalSchemaDrift>` rendered inside a `ModalShell`
+/// This is an `Entity<ModalSchemaDrift>` rendered inside a `Modal`
 /// by the code document's render loop via the `pending_schema_drift` pattern.
 pub struct ModalSchemaDrift {
     drift: Option<SchemaDriftDetected>,
@@ -106,80 +113,21 @@ impl Render for ModalSchemaDrift {
         };
 
         let loading = self.loading;
-        let theme = cx.theme();
-        let border_color = theme.border;
-        let muted = theme.muted_foreground;
-        let warning_bg = SemBannerColors::for_current(cx).warning_bg;
 
-        // Build the body: one section per drifted table.
-        let mut body = div().flex().flex_col().gap(Spacing::MD);
+        let mut body = div().flex().flex_col().gap(ModalMetrics::BODY_GAP);
 
         for diff in &drift.diffs {
-            let table_label = format_table_ref(&diff.table);
-
-            let mut section = div().flex().flex_col().gap(Spacing::XS);
-
-            // Table heading row.
-            section = section.child(
-                div()
-                    .text_size(FontSizes::SM)
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.foreground)
-                    .child(table_label),
-            );
-
-            // Column diff table.
-            let header_row = div()
-                .flex()
-                .items_center()
-                .px(Spacing::SM)
-                .py(Spacing::XS)
-                .border_b_1()
-                .border_color(border_color)
-                .child(
-                    div()
-                        .w_1_3()
-                        .text_size(FontSizes::XS)
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(muted)
-                        .child(dbflux_i18n::t!("modals.schema_drift.column_header")),
-                )
-                .child(
-                    div()
-                        .w_1_3()
-                        .text_size(FontSizes::XS)
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(muted)
-                        .child(dbflux_i18n::t!("modals.schema_drift.local_header")),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(FontSizes::XS)
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(muted)
-                        .child(dbflux_i18n::t!("modals.schema_drift.remote_header")),
-                );
-
-            let mut diff_rows = div()
-                .flex()
-                .flex_col()
-                .border_1()
-                .border_color(border_color)
-                .rounded(px(3.0))
-                .overflow_hidden()
-                .child(header_row);
-
-            for change in &diff.changes {
-                let row = render_change_row(change, warning_bg, theme);
-                diff_rows = diff_rows.child(row);
-            }
-
-            section = section.child(diff_rows);
-            body = body.child(section);
+            body = body
+                .child(modal_lead(
+                    dbflux_i18n::t!(
+                        "modals.schema_drift.lead",
+                        table = format_table_ref(&diff.table)
+                    ),
+                    cx,
+                ))
+                .child(render_diff_table(&diff.changes, cx));
         }
 
-        // Footer: Continue (ghost) | Refresh (primary).
         let on_continue = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
             cx.emit(SchemaDriftContinue);
             this.close(cx);
@@ -193,65 +141,61 @@ impl Render for ModalSchemaDrift {
             this.dismiss(cx);
         });
 
+        let refresh_label = if loading {
+            dbflux_i18n::t!("modals.schema_drift.refreshing")
+        } else {
+            dbflux_i18n::t!("modals.schema_drift.refresh")
+        };
+
         let footer = div()
             .flex()
             .items_center()
-            .gap(Spacing::SM)
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
-                Button::new("drift-continue")
-                    .label(dbflux_i18n::t!("modals.schema_drift.continue_stale"))
-                    .ghost()
-                    .on_click(on_continue),
+                Button::new(
+                    "drift-continue",
+                    dbflux_i18n::t!("modals.schema_drift.continue_stale"),
+                )
+                .on_click(on_continue),
             )
-            .child(div().flex_1())
             .child(
-                Button::new("drift-close")
-                    .label(dbflux_i18n::t!("modals.schema_drift.cancel"))
+                Button::new("drift-close", dbflux_i18n::t!("modals.schema_drift.cancel"))
                     .on_click(on_close),
             )
-            .child(if loading {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Icon::new(AppIcon::Loader).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.muted_foreground)
-                            .child(dbflux_i18n::t!("modals.schema_drift.refreshing")),
-                    )
-                    .into_any_element()
-            } else {
-                Button::new("drift-refresh")
-                    .label(dbflux_i18n::t!("modals.schema_drift.refresh"))
+            .child(
+                Button::new("drift-refresh", refresh_label)
                     .primary()
-                    .on_click(on_refresh)
-                    .into_any_element()
-            });
+                    .icon(if loading {
+                        AppIcon::Loader
+                    } else {
+                        AppIcon::RefreshCcw
+                    })
+                    .disabled(loading)
+                    .on_click(on_refresh),
+            );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.schema_drift.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(640.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.refresh(cx)).log_err();
-            }
-        })
-        .confirm_enabled(!loading)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.schema_drift.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::CircleAlert)
+            .icon_color(cx.theme().warning)
+            .variant(ModalVariant::Default)
+            .width(SCHEMA_DRIFT_WIDTH)
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.refresh(cx)).log_err();
+                }
+            })
+            .confirm_enabled(!loading)
+            .into_any_element()
     }
 }
 
@@ -267,100 +211,149 @@ fn format_table_ref(table_ref: &QueryTableRef) -> String {
     }
 }
 
-fn render_change_row(
-    change: &SchemaChange,
-    warning_bg: gpui::Hsla,
-    theme: &gpui_component::Theme,
-) -> gpui::Div {
-    let muted = theme.muted_foreground;
+/// Tone of a change's badge: additions read as success, removals as danger,
+/// every other change as a warning.
+fn change_tone(change: &SchemaChange) -> BadgeTone {
+    match change {
+        SchemaChange::ColumnAdded(_) | SchemaChange::IndexAdded(_) => BadgeTone::Success,
+        SchemaChange::ColumnRemoved(_) | SchemaChange::IndexRemoved(_) => BadgeTone::Danger,
+        SchemaChange::ColumnTypeChanged { .. }
+        | SchemaChange::NullabilityChanged { .. }
+        | SchemaChange::PrimaryKeyChanged { .. }
+        | SchemaChange::ForeignKeyChanged
+        | SchemaChange::DefaultChanged { .. } => BadgeTone::Warning,
+    }
+}
+
+/// The name, cached value, current value and note of one change.
+fn change_cells(change: &SchemaChange) -> (String, String, String, String) {
+    let dash = "\u{2014}".to_string();
 
     match change {
-        SchemaChange::ColumnAdded(snap) => drift_row(
-            warning_bg,
-            "—",
-            &snap.name,
-            &snap_label(snap),
-            &dbflux_i18n::t!("modals.schema_drift.change.new_column"),
-            muted,
+        SchemaChange::ColumnAdded(snap) => (
+            snap.name.clone(),
+            dash,
+            snap_label(snap),
+            dbflux_i18n::t!("modals.schema_drift.change.new_column"),
         ),
-        SchemaChange::ColumnRemoved(snap) => drift_row(
-            warning_bg,
-            &snap.name,
-            &snap_label(snap),
-            "—",
-            &dbflux_i18n::t!("modals.schema_drift.change.removed"),
-            muted,
+        SchemaChange::ColumnRemoved(snap) => (
+            snap.name.clone(),
+            snap_label(snap),
+            dash,
+            dbflux_i18n::t!("modals.schema_drift.change.removed"),
         ),
-        SchemaChange::ColumnTypeChanged { before, after } => drift_row(
-            warning_bg,
-            &before.name,
-            &snap_label(before),
-            &snap_label(after),
-            &dbflux_i18n::t!("modals.schema_drift.change.type_changed"),
-            muted,
+        SchemaChange::ColumnTypeChanged { before, after } => (
+            before.name.clone(),
+            snap_label(before),
+            snap_label(after),
+            dbflux_i18n::t!("modals.schema_drift.change.type_changed"),
         ),
         SchemaChange::NullabilityChanged {
             column,
             before,
             after,
         } => {
-            let nullable_label = dbflux_i18n::t!("modals.schema_drift.change.nullable");
-            let before_label = if *before { &nullable_label } else { "NOT NULL" };
-            let after_label = if *after { &nullable_label } else { "NOT NULL" };
-            drift_row(
-                warning_bg,
-                column,
-                before_label,
-                after_label,
-                &dbflux_i18n::t!("modals.schema_drift.change.nullability_changed"),
-                muted,
+            let nullability = |nullable: bool| {
+                if nullable {
+                    dbflux_i18n::t!("modals.schema_drift.change.nullable")
+                } else {
+                    "NOT NULL".to_string()
+                }
+            };
+
+            (
+                column.clone(),
+                nullability(*before),
+                nullability(*after),
+                dbflux_i18n::t!("modals.schema_drift.change.nullability_changed"),
             )
         }
-        SchemaChange::PrimaryKeyChanged { before, after } => drift_row(
-            warning_bg,
-            &dbflux_i18n::t!("modals.schema_drift.change.primary_key"),
-            &before.join(", "),
-            &after.join(", "),
-            &dbflux_i18n::t!("modals.schema_drift.change.pk_changed"),
-            muted,
+        SchemaChange::PrimaryKeyChanged { before, after } => (
+            dbflux_i18n::t!("modals.schema_drift.change.primary_key"),
+            before.join(", "),
+            after.join(", "),
+            dbflux_i18n::t!("modals.schema_drift.change.pk_changed"),
         ),
-        SchemaChange::ForeignKeyChanged => drift_row(
-            warning_bg,
-            &dbflux_i18n::t!("modals.schema_drift.change.foreign_keys"),
-            &dbflux_i18n::t!("modals.schema_drift.change.cached"),
-            &dbflux_i18n::t!("modals.schema_drift.change.changed"),
-            &dbflux_i18n::t!("modals.schema_drift.change.fk_changed"),
-            muted,
+        SchemaChange::ForeignKeyChanged => (
+            dbflux_i18n::t!("modals.schema_drift.change.foreign_keys"),
+            dbflux_i18n::t!("modals.schema_drift.change.cached"),
+            dbflux_i18n::t!("modals.schema_drift.change.changed"),
+            dbflux_i18n::t!("modals.schema_drift.change.fk_changed"),
         ),
         SchemaChange::DefaultChanged {
             column,
             before,
             after,
-        } => drift_row(
-            warning_bg,
-            column,
-            before.as_deref().unwrap_or("—"),
-            after.as_deref().unwrap_or("—"),
-            &dbflux_i18n::t!("modals.schema_drift.change.default_changed"),
-            muted,
+        } => (
+            column.clone(),
+            before.clone().unwrap_or_else(|| dash.clone()),
+            after.clone().unwrap_or(dash),
+            dbflux_i18n::t!("modals.schema_drift.change.default_changed"),
         ),
-        SchemaChange::IndexAdded(snap) => drift_row(
-            warning_bg,
-            &snap.name,
-            "—",
-            &index_label(snap),
-            &dbflux_i18n::t!("modals.schema_drift.change.index_added"),
-            muted,
+        SchemaChange::IndexAdded(snap) => (
+            snap.name.clone(),
+            dash,
+            index_label(snap),
+            dbflux_i18n::t!("modals.schema_drift.change.index_added"),
         ),
-        SchemaChange::IndexRemoved(snap) => drift_row(
-            warning_bg,
-            &snap.name,
-            &index_label(snap),
-            "—",
-            &dbflux_i18n::t!("modals.schema_drift.change.index_removed"),
-            muted,
+        SchemaChange::IndexRemoved(snap) => (
+            snap.name.clone(),
+            index_label(snap),
+            dash,
+            dbflux_i18n::t!("modals.schema_drift.change.index_removed"),
         ),
     }
+}
+
+/// One table's changes in a cut-8 frame (P1Modals): a header row over a
+/// 30 px row per change with the column, its cached and current definition
+/// and a badge naming the change.
+fn render_diff_table(changes: &[SchemaChange], cx: &App) -> Div {
+    let theme = cx.theme();
+    let strong = ChromeColors::strong(theme);
+    let muted = theme.muted_foreground;
+
+    let columns =
+        |row: Div, name: AnyElement, cached: AnyElement, now: AnyElement, note: AnyElement| {
+            row.flex()
+                .items_center()
+                .h(ModalMetrics::TABLE_ROW_HEIGHT)
+                .px(ModalMetrics::LIST_ROW_PADDING_X)
+                .child(div().w(DRIFT_NAME_WIDTH).min_w_0().truncate().child(name))
+                .child(div().flex_1().min_w_0().truncate().child(cached))
+                .child(div().flex_1().min_w_0().truncate().child(now))
+                .child(div().w(DRIFT_NOTE_WIDTH).flex().child(note))
+        };
+
+    let header = columns(
+        div()
+            .border_b_1()
+            .border_color(theme.input)
+            .text_size(ModalMetrics::TABLE_HEADER_FONT)
+            .text_color(muted),
+        dbflux_i18n::t!("modals.schema_drift.column_header").into_any_element(),
+        dbflux_i18n::t!("modals.schema_drift.local_header").into_any_element(),
+        dbflux_i18n::t!("modals.schema_drift.remote_header").into_any_element(),
+        div().into_any_element(),
+    );
+
+    let rows = changes.iter().map(|change| {
+        let (name, cached, now, note) = change_cells(change);
+
+        columns(
+            div()
+                .border_b_1()
+                .border_color(theme.table_row_border)
+                .font_family(AppFonts::MONO)
+                .text_size(ModalMetrics::CODE_FONT),
+            div().text_color(strong).child(name).into_any_element(),
+            div().text_color(muted).child(cached).into_any_element(),
+            div().text_color(strong).child(now).into_any_element(),
+            Badge::new(note, change_tone(change)).into_any_element(),
+        )
+    });
+
+    modal_frame(cx).child(header).children(rows)
 }
 
 fn snap_label(snap: &ColumnSnapshot) -> String {
@@ -374,59 +367,6 @@ fn index_label(snap: &IndexSnapshot) -> String {
     format!("({}){}", snap.columns.join(", "), unique)
 }
 
-fn drift_row(
-    warning_bg: gpui::Hsla,
-    column: &str,
-    before: &str,
-    after: &str,
-    note: &str,
-    muted: gpui::Hsla,
-) -> gpui::Div {
-    div()
-        .flex()
-        .items_center()
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .bg(warning_bg)
-        .child(
-            div()
-                .w_1_3()
-                .text_size(FontSizes::XS)
-                .font_family(AppFonts::MONO)
-                .text_color(muted)
-                .child(column.to_string()),
-        )
-        .child(
-            div()
-                .w_1_3()
-                .text_size(FontSizes::XS)
-                .font_family(AppFonts::MONO)
-                .text_color(muted)
-                .child(before.to_string()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .font_family(AppFonts::MONO)
-                        .text_color(muted)
-                        .child(after.to_string()),
-                )
-                .child(
-                    div()
-                        .text_size(FontSizes::XS)
-                        .text_color(muted)
-                        .italic()
-                        .child(format!("· {}", note)),
-                ),
-        )
-}
-
 // ---------------------------------------------------------------------------
 // Tests — catalog key resolution
 // ---------------------------------------------------------------------------
@@ -437,6 +377,7 @@ mod tests {
     fn schema_drift_keys_resolve_in_both_locales() {
         let keys = [
             "modals.schema_drift.title",
+            "modals.schema_drift.lead",
             "modals.schema_drift.column_header",
             "modals.schema_drift.local_header",
             "modals.schema_drift.remote_header",
@@ -478,7 +419,7 @@ mod tests {
     fn schema_drift_refresh_differs_between_locales() {
         let en = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "en");
         let es = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "es");
-        assert_eq!(en, "Refresh and re-run");
+        assert_eq!(en, "Refresh and run again");
         assert_eq!(es, "Actualizar y volver a ejecutar");
         assert_ne!(en, es);
     }

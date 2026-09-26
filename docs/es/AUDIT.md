@@ -106,11 +106,93 @@ Estos ajustes se pueden cambiar en tiempo de ejecución vía los métodos
 `AuditService::set_*()`. El servidor MCP expone algunos de ellos a través de la
 configuración de governance.
 
+## Visor de audit
+
+El visor de audit es el único lugar para revisar todo lo que DBFlux registró:
+queries, conexiones, hooks, scripts, cambios de configuración y decisiones de
+governance de AI/MCP.
+
+### Abrirlo
+
+- Teclado: **Ctrl+Shift+A** (**Cmd+Shift+A** en macOS).
+- Command palette: **Open audit viewer**.
+
+Hay una única pestaña de audit; reabrirla enfoca la existente.
+
+### Qué se ve
+
+Una línea de tiempo sobre la lista dibuja una barra por cada tramo del rango de
+tiempo, con los errores apilados sobre el resto de eventos. Arrastra sobre las
+barras para acercar el rango de tiempo a ellas; los selectores del rango
+Custom muestran entonces la ventana ampliada.
+
+Cada fila muestra la hora, un badge de **level** (ERROR/WARN/INFO), la
+**category**, el summary, el actor, la duración y el **outcome**. Expande una
+fila para ver sus detalles (hora, action, actor, conexión, source, correlation
+id y la tool, la clasificación y la decisión de una llamada de agente), su error
+y sus detalles estructurados. La fila expandida ofrece **Filtrar por
+correlación**, **Copiar fila como JSON** y, para una llamada de agente en espera
+de aprobación, **Abrir aprobación**, que abre la vista de aprobaciones MCP.
+
+Las categorías de un vistazo:
+
+| Categoría      | Cubre                                            |
+| -------------- | ------------------------------------------------ |
+| **Query**      | Ejecución de queries y scans.                    |
+| **Connection** | Connect / disconnect / reconnect.                |
+| **Hook**       | Ejecuciones de connection-hooks.                 |
+| **Script**     | Ejecuciones de scripts Lua / Python / Bash.      |
+| **Mcp**        | Llamadas a tools de un AI client.                |
+| **Governance** | Decisiones de policy.                            |
+| **Config**     | Cambios de profile y settings.                   |
+| **System**     | Arranque, migraciones y eventos de log internos. |
+
+### Filtrar
+
+La toolbar ofrece **búsqueda** de texto libre, los presets de **time range** (los
+mismos que los dashboards, más Custom), un **timestamp mode** (Local / UTC), y
+filtros multi-select para **Level** (Error/Warn/Info), **Category** y
+**Outcome** (Success/Failure/Cancelled). **Clear** los restablece, y **Table /
+Chart** alterna entre la lista de eventos y un chart de los eventos agrupados
+por category, outcome o level. Desde el teclado, activar los presets de tiempo
+pasa al siguiente.
+
+El menú contextual de una fila añade **Copy row as CSV**, **Copy summary** y —
+cuando el evento tiene un correlation id — **Filter by correlation**.
+
+### Seguir un error hasta su fila de audit
+
+Cuando algo que hiciste falla, DBFlux muestra un toast con una acción **View in
+Audit**. Al hacer clic se abre el visor de audit filtrado a ese evento exacto
+(emparejado por un correlation id compartido entre el toast y la fila de audit).
+El error también queda en el centro de notificaciones de la campana de la barra
+de título, cuya fila tiene la misma acción **View in Audit**. El **badge de
+error** en la status bar abre el visor pre-filtrado a los fallos recientes
+orientados al usuario.
+
+### Exportar
+
+El botón **Export** escribe los eventos actualmente visibles a **CSV** o
+**JSON**, usando el schema extendido (todos los campos, incluidos los details
+estructurados). Un diálogo de guardado pregunta dónde escribir el archivo y
+propone un nombre con fecha y hora (`audit_export_20260923-140507.csv`), así que
+una segunda exportación no reemplaza a la primera. Cancelar el diálogo no
+escribe nada. Si no hay un selector de archivos nativo disponible, el archivo
+va a `~/.local/share/dbflux/exports/`, igual que en las demás exportaciones. Un
+toast de éxito informa de cuántos eventos se escribieron y dónde.
+
+### Retención
+
+Los eventos antiguos se pueden purgar según una programación de retención cuando
+está configurada (ver [Settings → Audit](SETTINGS.md#audit)). El audit log crece
+con el uso salvo que se purgue; vive en el mismo `dbflux.db` que todo lo demás
+([Data & Privacy](PRIVACY.md#auditoría-y-privacidad)).
+
 ## Ver los audit events
 
 ### En la UI de DBFlux
 
-Navega a **Workspace → Audit**. La vista unificada de audit soporta:
+El [visor de audit](#visor-de-audit) descrito arriba soporta:
 
 - Filtrado por actor, tool/action, rango de fechas, decision, category
 - Exportar los resultados filtrados a CSV o JSON
@@ -240,6 +322,8 @@ Usa las constantes en lugar de strings sueltos:
 | ------------------------- | ------------------------- | ---------- |
 | `QUERY_EXECUTE`           | `query_execute`           | Query      |
 | `QUERY_EXECUTE_FAILED`    | `query_execute_failed`    | Query      |
+| `KEY_BULK_DELETE`         | `key_bulk_delete`         | Query      |
+| `KEY_BULK_DELETE_FAILED`  | `key_bulk_delete_failed`  | Query      |
 | `CONNECTION_CONNECT`      | `connection_connect`      | Connection |
 | `CONNECTION_DISCONNECT`   | `connection_disconnect`   | Connection |
 | `HOOK_EXECUTE`            | `hook_execute`            | Hook       |
@@ -463,7 +547,10 @@ Hay dos caminos desde la UI de vuelta al audit document:
 - **Acción "View in Audit" por toast** — emite
   `OpenAuditRequested(Some(correlation_id))`. El workspace abre (o enfoca) el
   Audit document y aplica el filtro de correlation coincidente para que el
-  usuario vea exactamente el único evento vinculado al toast.
+  usuario vea exactamente el único evento vinculado al toast. `report_error`
+  también registra el error en el centro de notificaciones de la sesión
+  (`AppStateEntity::notifications`), cuya fila ofrece la misma acción a través
+  del mismo evento.
 - **Clic en el badge de error de la status bar** — emite
   `OpenAuditRequested(None)`. El workspace abre el Audit document con el filtro
   de user-error por defecto (`target = dbflux_ui::user_error` sobre una ventana

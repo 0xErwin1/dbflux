@@ -145,14 +145,16 @@ impl Workspace {
                 _ => false,
             }),
 
-            Command::ExpandCollapse => {
-                if self.focus_target == FocusTarget::Sidebar {
+            Command::ExpandCollapse => Some(match self.focus_target {
+                FocusTarget::Sidebar => {
                     self.sidebar.update(cx, |s, cx| s.expand_collapse(cx));
-                    Some(true)
-                } else {
-                    Some(false)
+                    true
                 }
-            }
+                FocusTarget::Document => self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ExpandCollapse, window, cx)
+                }),
+                _ => false,
+            }),
 
             Command::ColumnLeft => Some(match self.focus_target {
                 FocusTarget::Sidebar => {
@@ -201,8 +203,7 @@ impl Workspace {
                     true
                 }
                 FocusTarget::BackgroundTasks => {
-                    self.tasks_state.toggle();
-                    cx.notify();
+                    self.toggle_tasks_panel(cx);
                     true
                 }
                 _ => false,
@@ -269,6 +270,7 @@ impl Workspace {
                         dbflux_ui_sidebar::SidebarTab::Scripts => {
                             s.create_script_folder(cx);
                         }
+                        dbflux_ui_sidebar::SidebarTab::Dashboards => {}
                     });
                     Some(true)
                 } else {
@@ -439,9 +441,11 @@ impl Workspace {
         }) {
             return true;
         }
-        // Workspace-level: Document -> BackgroundTasks
+        // Workspace-level: Document -> BackgroundTasks, only while the tasks
+        // panel is expanded; collapsed, it renders nothing to move onto.
+        let tasks_expanded = self.tasks_state.is_expanded();
         let next = match self.focus_target {
-            FocusTarget::Document => FocusTarget::BackgroundTasks,
+            FocusTarget::Document if tasks_expanded => FocusTarget::BackgroundTasks,
             FocusTarget::BackgroundTasks => FocusTarget::Document,
             _ => return false,
         };
@@ -456,10 +460,12 @@ impl Workspace {
         }) {
             return true;
         }
-        // Workspace-level: BackgroundTasks -> Document
+        // Workspace-level: BackgroundTasks -> Document, and Document ->
+        // BackgroundTasks only while the tasks panel is expanded.
+        let tasks_expanded = self.tasks_state.is_expanded();
         let prev = match self.focus_target {
             FocusTarget::BackgroundTasks => FocusTarget::Document,
-            FocusTarget::Document => FocusTarget::BackgroundTasks,
+            FocusTarget::Document if tasks_expanded => FocusTarget::BackgroundTasks,
             _ => return false,
         };
         self.set_focus(prev, window, cx);

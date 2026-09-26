@@ -85,9 +85,10 @@ pub fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> b
 
 /// Result view a fresh result opens in.
 ///
-/// - The first result of a time-series collection opens as a chart when chart
-///   detection passed.
-/// - A chart stays a chart while the new result is still chartable.
+/// - The first result of a time-series collection opens as the chart above
+///   the grid (`Both`) when chart detection passed.
+/// - A chart view (Chart or Both) stays while the new result is still
+///   chartable.
 /// - Later results of a time-series collection (refresh, paging) keep the view
 ///   the user picked, so an auto-refresh never flips Data back to Chart.
 /// - Everything else falls back to the default view for the result shape.
@@ -101,14 +102,14 @@ pub fn result_view_mode_for_fresh_result(
     let chartable = should_auto_select_chart_for_time_series(detection);
 
     if time_series_collection && first_result && chartable {
-        return ResultViewMode::Chart;
+        return ResultViewMode::Both;
     }
 
-    if current == ResultViewMode::Chart && chartable {
-        return ResultViewMode::Chart;
+    if current.shows_chart() && chartable {
+        return current;
     }
 
-    if time_series_collection && !first_result && current != ResultViewMode::Chart {
+    if time_series_collection && !first_result && !current.shows_chart() {
         return current;
     }
 
@@ -247,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn first_time_series_collection_result_opens_as_chart() {
+    fn first_time_series_collection_result_opens_as_chart_and_grid() {
         let mode = result_view_mode_for_fresh_result(
             ResultViewMode::Table,
             &QueryResultShape::Table,
@@ -256,7 +257,28 @@ mod tests {
             true,
         );
 
-        assert_eq!(mode, ResultViewMode::Chart);
+        assert_eq!(mode, ResultViewMode::Both);
+    }
+
+    #[test]
+    fn chart_and_grid_stays_while_the_result_is_chartable() {
+        let kept = result_view_mode_for_fresh_result(
+            ResultViewMode::Both,
+            &QueryResultShape::Table,
+            &chartable(),
+            true,
+            false,
+        );
+        let dropped = result_view_mode_for_fresh_result(
+            ResultViewMode::Both,
+            &QueryResultShape::Table,
+            &ChartDetection::EmptyResult,
+            true,
+            false,
+        );
+
+        assert_eq!(kept, ResultViewMode::Both);
+        assert_eq!(dropped, ResultViewMode::Table);
     }
 
     #[test]

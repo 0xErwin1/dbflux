@@ -30,9 +30,11 @@
 use super::builder;
 use super::configure_popover;
 use super::{DASHBOARD_GRID_COLUMNS, DASHBOARD_ROW_PX, DashboardDocument, DashboardPanelSlot};
-use dbflux_components::composites::render_menu_overlay;
+use dbflux_components::composites::{EmptyState, render_menu_overlay};
 use dbflux_components::controls::Button;
-use dbflux_components::primitives::{Text, surface_card};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Chamfer, FocusShape, Icon, Text};
+use dbflux_components::tokens::{ChamferCut, DashboardMetrics};
 use gpui::prelude::*;
 use gpui::{Bounds, Context, IntoElement, KeyDownEvent, Pixels, Window, deferred, div, px};
 use gpui_component::ActiveTheme;
@@ -99,20 +101,19 @@ impl Render for DashboardDocument {
                     .items_center()
                     .justify_center()
                     .w_full()
-                    .h(px(240.0))
-                    .gap(px(12.0)) // guardrail-allow: gap between hint and CTA button
-                    .child(
-                        div()
-                            .id("dashboard-empty-hint")
-                            .text_sm()
-                            .child(dbflux_i18n::t!("document.dashboard.status.empty_hint")),
-                    )
+                    .h(DashboardMetrics::EMPTY_HEIGHT)
+                    .gap(DashboardMetrics::DIVIDER_GAP)
+                    .child(div().id("dashboard-empty-hint").child(EmptyState::new(
+                        AppIcon::ChartColumnBig,
+                        dbflux_i18n::t!("document.dashboard.status.empty_hint"),
+                    )))
                     .child(
                         Button::new(
                             "dashboard-add-panel-cta",
                             dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
                         )
                         .primary()
+                        .icon(AppIcon::Plus)
                         .on_click(on_add),
                     )
                     .into_any_element(),
@@ -200,9 +201,19 @@ impl Render for DashboardDocument {
                 // Divider slots omit "Edit title…" from the context menu.
                 let has_editable_title = matches!(slot, DashboardPanelSlot::Loaded { .. });
 
+                let panel_icon = match slot {
+                    DashboardPanelSlot::Loaded { panel, .. } => {
+                        AppIcon::for_chart_kind(panel.read(cx).chart_kind(cx))
+                    }
+                    DashboardPanelSlot::Inspector { .. } => AppIcon::Activity,
+                    DashboardPanelSlot::Orphan { .. } => AppIcon::TriangleAlert,
+                    DashboardPanelSlot::Divider { .. } => AppIcon::Minus,
+                };
+
                 let header: gpui::AnyElement = builder::panel_header(
                     panel_index,
                     &panel_title,
+                    panel_icon,
                     editing_input,
                     drag_active,
                     menu_open_for_this,
@@ -226,11 +237,25 @@ impl Render for DashboardDocument {
                 let card_focus_decoration =
                     move |card: gpui::Stateful<gpui::Div>| -> gpui::Stateful<gpui::Div> {
                         if is_focused {
-                            card.border_2().border_color(ring_color)
+                            let shape = FocusShape::Chamfer(ChamferCut::OVERLAY);
+                            card.child(
+                                Chamfer::new(ChamferCut::OVERLAY).ring(shape.ring(ring_color)),
+                            )
                         } else {
                             card
                         }
                     };
+
+                // Panel card: the overlay cut on the ground with a line border.
+                let card_shell = |cx: &gpui::App| {
+                    let theme = cx.theme();
+
+                    div().relative().child(
+                        Chamfer::new(ChamferCut::OVERLAY)
+                            .fill(theme.background)
+                            .border(theme.border),
+                    )
+                };
 
                 // Resize handles render only in edit mode.
                 let resize_right = if edit_mode {
@@ -244,14 +269,17 @@ impl Render for DashboardDocument {
                     None
                 };
                 let resize_corner = if edit_mode {
-                    Some(builder::panel_resize_corner(panel_index, cx).into_any_element())
+                    Some(
+                        builder::panel_resize_corner(panel_index, is_focused, cx)
+                            .into_any_element(),
+                    )
                 } else {
                     None
                 };
 
                 let panel_card = match slot {
                     DashboardPanelSlot::Loaded { panel, .. } => card_focus_decoration(
-                        surface_card(cx)
+                        card_shell(cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .overflow_hidden()
@@ -260,14 +288,21 @@ impl Render for DashboardDocument {
                             .flex_col()
                             .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
                             .child(header)
-                            .child(div().flex_1().overflow_hidden().child(panel.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .p(DashboardMetrics::PANEL_PADDING)
+                                    .child(panel.clone()),
+                            )
                             .when_some(resize_right, |el, r| el.child(r))
                             .when_some(resize_bottom, |el, r| el.child(r))
                             .when_some(resize_corner, |el, r| el.child(r)),
                     )
                     .into_any_element(),
                     DashboardPanelSlot::Orphan { .. } => card_focus_decoration(
-                        surface_card(cx)
+                        card_shell(cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .relative()
@@ -279,10 +314,19 @@ impl Render for DashboardDocument {
                                 div()
                                     .id(("dashboard-orphan-panel", panel_index))
                                     .flex_1()
-                                    .text_sm()
-                                    .child(dbflux_i18n::t!(
-                                        "document.dashboard.panel.chart_not_found.body"
-                                    )),
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .p(DashboardMetrics::PANEL_PADDING)
+                                    .child(
+                                        EmptyState::new(
+                                            AppIcon::TriangleAlert,
+                                            dbflux_i18n::t!(
+                                                "document.dashboard.panel.chart_not_found.body"
+                                            ),
+                                        )
+                                        .danger(),
+                                    ),
                             )
                             .when_some(resize_right, |el, r| el.child(r))
                             .when_some(resize_bottom, |el, r| el.child(r))
@@ -296,22 +340,34 @@ impl Render for DashboardDocument {
                             cx.listener(move |this, _: &gpui::ClickEvent, _window, cx| {
                                 this.toggle_divider_collapse(panel_index, cx);
                             });
-                        let chevron = if is_collapsed { "▸" } else { "▾" };
+                        let theme = cx.theme();
+
                         div()
                             .id(("dashboard-divider", panel_index))
                             .size_full()
                             .flex()
                             .items_center()
-                            .gap_2()
-                            .px_3()
+                            .gap(DashboardMetrics::DIVIDER_GAP)
                             .cursor_pointer()
+                            .text_color(theme.muted_foreground)
                             .on_click(on_toggle)
-                            .child(Text::heading(chevron))
-                            .child(Text::heading(label))
+                            .child(
+                                Icon::new(if is_collapsed {
+                                    AppIcon::ChevronRight
+                                } else {
+                                    AppIcon::ChevronDown
+                                })
+                                .size(DashboardMetrics::DIVIDER_CHEVRON)
+                                .color(theme.muted_foreground),
+                            )
+                            .child(
+                                Text::label(label).font_size(DashboardMetrics::DIVIDER_LABEL_FONT),
+                            )
+                            .child(div().flex_1().h(px(1.0)).bg(theme.border))
                             .into_any_element()
                     }
                     DashboardPanelSlot::Inspector { entity, .. } => card_focus_decoration(
-                        surface_card(cx)
+                        card_shell(cx)
                             .id(("panel-card", panel_index))
                             .size_full()
                             .overflow_hidden()
@@ -320,7 +376,14 @@ impl Render for DashboardDocument {
                             .flex_col()
                             .on_mouse_down(gpui::MouseButton::Left, on_card_mouse_down)
                             .child(header)
-                            .child(div().flex_1().overflow_hidden().child(entity.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .p(DashboardMetrics::PANEL_PADDING)
+                                    .child(entity.clone()),
+                            )
                             .when_some(resize_right, |el, r| el.child(r))
                             .when_some(resize_bottom, |el, r| el.child(r))
                             .when_some(resize_corner, |el, r| el.child(r)),
@@ -345,7 +408,7 @@ impl Render for DashboardDocument {
                     .top(px(top_px))
                     .w(gpui::relative(width_percent / 100.0))
                     .h(px(height_px))
-                    .p(px(4.0)) // guardrail-allow: gutter so neighbouring cards do not touch
+                    .p(DashboardMetrics::PANEL_GUTTER)
                     .child(panel_card)
                     .into_any_element();
 
@@ -459,14 +522,13 @@ impl Render for DashboardDocument {
                     .top(px(top_px))
                     .w(gpui::relative(width_percent / 100.0))
                     .h(px(height_px))
-                    .p(px(4.0)) // guardrail-allow: match the panel gutter so the ghost lines up
+                    .p(DashboardMetrics::PANEL_GUTTER)
                     .child(
                         div()
                             .size_full()
                             .border_2()
                             .border_dashed()
-                            .border_color(theme.ring)
-                            .rounded(px(4.0)), // guardrail-allow: subtle hint matches surface_card radius
+                            .border_color(theme.ring),
                     )
                     .into_any_element(),
             )
@@ -518,7 +580,8 @@ impl Render for DashboardDocument {
         //   - Enter                 : open Configure popover for focused panel
         //   - F2                    : start inline title edit on focused panel
         //   - Delete / Backspace    : remove focused panel
-        //   - Escape                : close any open popover / menu
+        // Escape runs the keymap's Cancel, which closes an open popover or
+        // menu (see `dispatch_command`).
         let focus_handle = self.focus_handle.clone();
         let on_key_down = cx.listener(
             |this, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>| {
@@ -550,13 +613,6 @@ impl Render for DashboardDocument {
                     "delete" | "backspace" if !this.is_read_only() => {
                         if let Some(idx) = this.focused_panel_index {
                             this.remove_panel(idx, cx);
-                        }
-                    }
-                    "escape" => {
-                        if this.panel_context_menu.is_some() {
-                            this.close_panel_context_menu(cx);
-                        } else if this.pending_configure_panel_index.is_some() {
-                            this.close_configure_panel(cx);
                         }
                     }
                     _ => {}
@@ -603,6 +659,7 @@ impl Render for DashboardDocument {
             .flex()
             .flex_col()
             .size_full()
+            .bg(cx.theme().popover)
             .track_focus(&focus_handle)
             .on_key_down(on_key_down)
             .child(toolbar)
@@ -616,7 +673,12 @@ impl Render for DashboardDocument {
                     // the workspace document area. Without this, scrolling
                     // to the end leaves the final row's bottom edge flush
                     // with — and partially hidden behind — the Tasks bar.
-                    .child(div().child(grid_container).pb(px(24.0))), // guardrail-allow: bespoke bottom slack to clear the Tasks-panel splitter
+                    .child(
+                        div()
+                            .p(DashboardMetrics::GRID_PADDING)
+                            .pb(DashboardMetrics::BOTTOM_SLACK)
+                            .child(grid_container),
+                    ),
             )
             .when(drag_active_global, |el| {
                 el.on_mouse_move(on_global_mouse_move)

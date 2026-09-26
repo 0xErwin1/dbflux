@@ -249,6 +249,18 @@ impl SettingsSection for ServicesSection {
     ) -> Option<AnyElement> {
         Some(self.render_service_footer_actions(cx))
     }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.render_service_footer_leading_actions(cx)
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_service(window, cx);
+    }
 }
 
 impl FormSection for ServicesSection {

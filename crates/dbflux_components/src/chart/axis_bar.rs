@@ -16,13 +16,15 @@
 
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, ElementId, MouseButton, SharedString, Window, anchored, deferred, div,
-    point, px,
+    Anchor, AnyElement, App, ElementId, MouseButton, Pixels, SharedString, Window, anchored,
+    deferred, div, point, px,
 };
 
 use crate::chart::spec::{AggKind, BindingSpec};
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, Icon};
 use crate::semantic::ChartColors;
-use crate::tokens::{ChartGeometry, Spacing};
+use crate::tokens::{AxisBarMetrics, ChamferCut, ChartGeometry, Fields, FontSizes};
 use dbflux_core::{ColumnKind, ColumnMeta};
 
 /// Identifies which AxisBar pill is currently open (showing its picker).
@@ -121,6 +123,11 @@ where
 
     let agg_label: SharedString = agg_label(bindings.aggregation).into();
 
+    let x_icon = match columns.get(bindings.x).map(|column| column.kind) {
+        Some(ColumnKind::Timestamp) => AppIcon::Clock,
+        _ => AppIcon::Hash,
+    };
+
     let x_open = open_pill == Some(AxisPill::X);
     let y_open = open_pill == Some(AxisPill::Y);
     let group_open = open_pill == Some(AxisPill::Group);
@@ -129,9 +136,18 @@ where
     // X pill
     let x_pill = {
         let handler = on_pill_click.clone();
-        pill_element("axis-pill-x", "X", x_label, x_open, colors, move |w, cx| {
-            handler(AxisPill::X, w, cx)
-        })
+        pill_element(
+            "axis-pill-x",
+            "X",
+            AxisPillStyle {
+                icon: x_icon,
+                width: AxisBarMetrics::X_WIDTH,
+            },
+            x_label,
+            x_open,
+            colors,
+            move |w, cx| handler(AxisPill::X, w, cx),
+        )
     };
 
     // X picker dropdown (shown when x_open == true)
@@ -165,9 +181,18 @@ where
     // Y pill
     let y_pill = {
         let handler = on_pill_click.clone();
-        pill_element("axis-pill-y", "Y", y_label, y_open, colors, move |w, cx| {
-            handler(AxisPill::Y, w, cx)
-        })
+        pill_element(
+            "axis-pill-y",
+            "Y",
+            AxisPillStyle {
+                icon: AppIcon::Hash,
+                width: AxisBarMetrics::FIELD_WIDTH,
+            },
+            y_label,
+            y_open,
+            colors,
+            move |w, cx| handler(AxisPill::Y, w, cx),
+        )
     };
 
     // Y picker (multi-select: show all numeric columns with checkboxes)
@@ -204,6 +229,10 @@ where
         pill_element(
             "axis-pill-group",
             &group_role,
+            AxisPillStyle {
+                icon: AppIcon::Tag,
+                width: AxisBarMetrics::FIELD_WIDTH,
+            },
             group_label,
             group_open,
             colors,
@@ -246,6 +275,10 @@ where
         pill_element(
             "axis-pill-agg",
             "Agg",
+            AxisPillStyle {
+                icon: AppIcon::Sigma,
+                width: AxisBarMetrics::AGG_WIDTH,
+            },
             agg_label,
             agg_open,
             colors,
@@ -284,10 +317,9 @@ where
     div()
         .flex()
         .flex_row()
+        .flex_wrap()
         .items_center()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(ChartGeometry::ACCENT_STRIPE)
+        .gap(AxisBarMetrics::GAP)
         .child(pill_group("axis-x-group", x_pill, x_picker))
         .child(pill_group("axis-y-group", y_pill, y_picker))
         .child(pill_group("axis-group-group", group_pill, group_picker))
@@ -298,64 +330,83 @@ where
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Build a single axis pill button.
-///
-/// The pill has a role label ("X", "Y", …) and a value label (column name).
-/// When `active`, the pill border is highlighted.
+/// Leading icon and width of an axis field.
+struct AxisPillStyle {
+    icon: AppIcon,
+    width: Pixels,
+}
+
+/// Build a single axis field (P1Chart): the role ("X", "Y", "Group") in
+/// muted text, then a 30 px chamfered select with a leading icon, the bound
+/// column and a chevron. The open field keeps its hover fill.
+#[allow(clippy::too_many_arguments)]
 fn pill_element(
     id: impl Into<ElementId>,
     role: &str,
+    style: AxisPillStyle,
     value: SharedString,
     active: bool,
     colors: &ChartColors,
     on_click: impl Fn(&mut Window, &mut App) + Send + Sync + 'static,
 ) -> impl IntoElement {
-    // Active pills get a more opaque border; inactive use the standard pill_border.
-    // Expressed as an alpha override on the pill_border hue/sat/lum so the
-    // on-Light theme border color still follows the role.
-    let border_color = if active {
-        gpui::Hsla {
-            a: 0.6,
-            ..colors.pill_border
-        }
-    } else {
-        colors.pill_border
-    };
-    let bg_color = if active {
-        colors.pill_bg
-    } else {
-        colors.hover_bg
-    };
+    let id: ElementId = id.into();
+
+    let shape = Chamfer::new(ChamferCut::CONTROL)
+        .fill(if active {
+            colors.panel_border
+        } else {
+            colors.pill_bg
+        })
+        .fill_hover(colors.panel_border)
+        .border(colors.panel_border)
+        .interactive(ElementId::Name(format!("{id}-shape").into()));
 
     div()
-        .id(id.into())
         .flex()
         .flex_row()
         .items_center()
-        .gap(ChartGeometry::TICK_GAP)
-        .px(Spacing::XXS)
-        .py(ChartGeometry::ACCENT_STRIPE)
-        .rounded(Spacing::XS)
-        .border_1()
-        .border_color(border_color)
-        .bg(bg_color)
-        .cursor_pointer()
-        .hover(|s| s.bg(colors.hover_bg))
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            on_click(window, cx);
-        })
+        .gap(AxisBarMetrics::GAP)
         .child(
             div()
-                .text_size(ChartGeometry::FONT_TINY)
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_size(AxisBarMetrics::ROLE_FONT)
                 .text_color(colors.label_fg)
                 .child(SharedString::from(role.to_string())),
         )
         .child(
             div()
-                .text_size(ChartGeometry::FONT_LABEL)
-                .text_color(colors.value_fg)
-                .child(value),
+                .id(id)
+                .relative()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(Fields::GAP)
+                .w(style.width)
+                .h(Fields::HEIGHT)
+                .px(Fields::PADDING_X)
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    on_click(window, cx);
+                })
+                .child(shape)
+                .child(
+                    Icon::new(style.icon)
+                        .size(Fields::LEADING_ICON)
+                        .color(colors.label_fg),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(Fields::TEXT)
+                        .text_color(colors.value_fg)
+                        .child(value),
+                )
+                .child(
+                    Icon::new(AppIcon::ChevronDown)
+                        .size(Fields::CHEVRON)
+                        .color(colors.label_fg),
+                ),
         )
 }
 
@@ -374,7 +425,7 @@ fn pill_group(
             deferred(
                 anchored()
                     .anchor(Anchor::TopLeft)
-                    .offset(point(px(0.0), Spacing::XL))
+                    .offset(point(px(0.0), AxisBarMetrics::PICKER_OFFSET))
                     .snap_to_window()
                     .child(picker_el),
             )
@@ -409,9 +460,10 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::XXS)
-                .px(Spacing::SM)
-                .py(ChartGeometry::TICK_GAP)
+                .gap(Fields::CHECKBOX_GAP)
+                .h(Fields::MENU_ROW_HEIGHT)
+                .mx(Fields::MENU_ROW_INSET)
+                .px(Fields::PADDING_X)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
@@ -420,7 +472,7 @@ where
                 })
                 .child(
                     div()
-                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_size(FontSizes::BASE)
                         .text_color(value_fg)
                         .child(label),
                 )
@@ -455,9 +507,10 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::XXS)
-                .px(Spacing::SM)
-                .py(ChartGeometry::TICK_GAP)
+                .gap(Fields::CHECKBOX_GAP)
+                .h(Fields::MENU_ROW_HEIGHT)
+                .mx(Fields::MENU_ROW_INSET)
+                .px(Fields::PADDING_X)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -466,9 +519,7 @@ where
                 .child(
                     // Checkbox indicator
                     div()
-                        .w(ChartGeometry::SWATCH)
-                        .h(ChartGeometry::SWATCH)
-                        .rounded(ChartGeometry::ACCENT_STRIPE)
+                        .size(Fields::CHECKBOX_SIZE)
                         .border_1()
                         .border_color(pill_border)
                         .bg(if checked {
@@ -479,7 +530,7 @@ where
                 )
                 .child(
                     div()
-                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_size(FontSizes::BASE)
                         .text_color(value_fg)
                         .child(label),
                 )
@@ -522,9 +573,10 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::XXS)
-                .px(Spacing::SM)
-                .py(ChartGeometry::TICK_GAP)
+                .gap(Fields::CHECKBOX_GAP)
+                .h(Fields::MENU_ROW_HEIGHT)
+                .mx(Fields::MENU_ROW_INSET)
+                .px(Fields::PADDING_X)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
@@ -533,7 +585,7 @@ where
                 })
                 .child(
                     div()
-                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_size(FontSizes::BASE)
                         .text_color(value_fg)
                         .child(label),
                 )
@@ -568,9 +620,10 @@ where
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(Spacing::XXS)
-                .px(Spacing::SM)
-                .py(ChartGeometry::TICK_GAP)
+                .gap(Fields::CHECKBOX_GAP)
+                .h(Fields::MENU_ROW_HEIGHT)
+                .mx(Fields::MENU_ROW_INSET)
+                .px(Fields::PADDING_X)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
@@ -579,7 +632,7 @@ where
                 })
                 .child(
                     div()
-                        .text_size(ChartGeometry::FONT_LABEL)
+                        .text_size(FontSizes::BASE)
                         .text_color(value_fg)
                         .child(label),
                 )
@@ -590,7 +643,8 @@ where
     picker_container(id, rows, colors)
 }
 
-/// Shared container styling for picker dropdowns.
+/// Shared container styling for picker dropdowns: the overlay chamfer on
+/// the raised fill with the strong line, rows inset like a select menu.
 fn picker_container(
     id: impl Into<ElementId>,
     rows: Vec<AnyElement>,
@@ -598,16 +652,20 @@ fn picker_container(
 ) -> impl IntoElement {
     div()
         .id(id.into())
+        .relative()
         .flex()
         .flex_col()
         .min_w(ChartGeometry::DROPDOWN_PANEL)
-        .bg(colors.panel_bg)
-        .border_1()
-        .border_color(colors.pill_border)
-        .rounded(Spacing::XS)
+        .max_h(Fields::MENU_MAX_HEIGHT)
+        .overflow_y_scroll()
+        .py(Fields::MENU_PADDING_Y)
         .shadow_lg()
-        .py(ChartGeometry::ACCENT_STRIPE)
         .occlude()
+        .child(
+            Chamfer::new(ChamferCut::OVERLAY)
+                .fill(colors.pill_bg)
+                .border(colors.pill_border),
+        )
         .children(rows)
 }
 

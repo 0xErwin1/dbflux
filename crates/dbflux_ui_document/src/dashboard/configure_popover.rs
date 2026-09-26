@@ -10,7 +10,8 @@
 use super::{DashboardDocument, DashboardPanelSlot};
 use dbflux_components::chart::{AggKind, AxisPill, BindingSpec, ChartKind, axis_bar_element};
 use dbflux_components::controls::Button;
-use dbflux_components::modals::ModalShell;
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::Text;
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::Spacing;
@@ -34,7 +35,7 @@ const CHART_KIND_OPTIONS: &[(ChartKind, &str)] = &[
 /// Build the Configure popover overlay element for the panel at `panel_index`.
 ///
 /// Returns `None` when the slot is `Orphan` (no chart to configure) or out of
-/// bounds. The returned element is a `ModalShell` overlay; the caller is
+/// bounds. The returned element is a `Modal` overlay; the caller is
 /// expected to push it into the dashboard's render tree.
 pub(super) fn render_configure_popover(
     dashboard: &DashboardDocument,
@@ -117,11 +118,14 @@ pub(super) fn render_configure_popover(
         )
         .into_any_element();
 
-    // Bridge ModalShell's App-scoped handlers into the DashboardDocument
+    // Bridge Modal's App-scoped handlers into the DashboardDocument
     // entity via a weak handle: Escape, the X button and a backdrop click
     // close the popover, and Enter applies like the Apply button.
     let modal_title = dbflux_i18n::t!("document.dashboard.configure.title", name = panel_title);
-    let modal = ModalShell::new(modal_title, body, footer)
+    let modal = Modal::new(modal_title)
+        .body(body)
+        .footer(footer)
+        .icon(AppIcon::Settings)
         .width(px(720.0))
         .focus_handle(dashboard.configure_focus.handle())
         .on_close({
@@ -151,7 +155,7 @@ fn section(label: impl Into<gpui::SharedString>, body: AnyElement) -> AnyElement
         .flex()
         .flex_col()
         .gap(Spacing::SM)
-        .child(Text::subsection_label(label).into_any_element())
+        .child(Text::label(label).into_any_element())
         .child(body)
         .into_any_element()
 }
@@ -422,6 +426,7 @@ mod keyboard_tests {
     /// without applying it yet.
     fn open_popover(cx: &mut TestAppContext) -> Setup<'_> {
         cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
         cx.update(|cx| {
             let host = cx.new(|_| ToastHost::new());
             cx.set_global(ToastGlobal { host });

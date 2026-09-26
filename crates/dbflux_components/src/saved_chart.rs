@@ -92,7 +92,7 @@ impl Default for SavedChartSource {
 
 /// Quick-select time-range presets stored alongside a chart.
 ///
-/// Mirrors the variants in `dbflux_ui::ui::common::time_range::TimeRange` but
+/// Mirrors the variants in `dbflux_components::common::time_range::TimeRange` but
 /// lives here so `SavedChart` can be (de)serialized without a GPUI dependency.
 /// Phase D will bridge between the two types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

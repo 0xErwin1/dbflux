@@ -19,9 +19,6 @@ Este documento es la referencia orientada a humanos. El skill automatizado
 El canal `-dev.N` está **retirado**. Nightly lo reemplaza. Los tags `-dev.N`
 antiguos permanecen en GitHub pero no se crean nuevos.
 
-Los íconos de aplicación por canal se rastrean en el [issue
-#183](https://github.com/0xErwin1/dbflux/issues/183). No los implementes aquí.
-
 ## Modelo de Changelog
 
 Dos artefactos, cada uno con una única fuente de autoría:
@@ -147,6 +144,8 @@ agregando `-nightly+<short-sha>`.
      push.
    - En `main`: subir cada artefacto versionado a `0.8.0-dev.0`. Commit y push.
      `main` ahora apunta al siguiente minor.
+   - En `main`: agregar `v0.7` a `web/versions.json`, sin marcarlo como
+     current. El sitio sigue sirviendo `v0.6` en `/docs/`.
    - Tag `v0.7.0-rc.0` en el release branch. git-cliff renderiza el rango
      unreleased como el cuerpo del RC automáticamente.
 3. Se encuentra un bug durante el RC:
@@ -158,7 +157,8 @@ agregando `-nightly+<short-sha>`.
    ese mismo commit. Tag `v0.7.0`. git-cliff renderiza el rango completo desde
    `v0.6.0` como el cuerpo del release stable.
 5. `main` ya está en `0.8.0-dev.0` — no se necesita más bump después de stable.
-   Un commit cierra la sección `[Unreleased]` publicada y abre una nueva encima.
+   Un commit cierra la sección `[Unreleased]` publicada y abre una nueva encima,
+   y otro mueve `"current": true` en `web/versions.json` de `v0.6` a `v0.7`.
 6. Los patches (`v0.7.1`, `v0.7.2`, …) vienen del mismo release branch vía
    cherry-picks desde `main`, y cada uno antepone a `CHANGELOG.md` una sección
    `## [0.7.N]` generada.
@@ -220,15 +220,18 @@ instalador. Regenéralos desde `resources/branding/<channel>/` cuando cambie
 el arte:
 
 ```bash
-magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
-# ... 128, 64 desde mark.svg; 48, 32, 16 desde mark-small.svg
-magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+scripts/branding/generate-icons.sh
 ```
 
-Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
-`dbflux-nightly.icns`) se construyen del mismo modo con `png2icns` de
-`libicns`, añadiendo los tamaños 512 y 1024, y llegan al bundle como
-`AppIcon.icns`.
+El script renderiza 48 px o más desde `mark.svg` (el icono completo) y 32 px
+o menos desde `mark-small.svg` (el glifo). También reconstruye los archivos
+`.icns` de macOS que están al lado (`dbflux.icns`, `dbflux-nightly.icns`,
+añadiendo los tamaños 512 y 1024), que llegan al bundle como `AppIcon.icns`,
+los PNG de hicolor bajo `packaging/icons/<size>/apps/`, los PNG de la app y el
+`wordmark.svg` del lockup en cada directorio de channel, y las copias del sitio
+en `web/public/brand/`. Se vuelve a ejecutar dentro de una shell de Nix cuando
+faltan `rsvg-convert`, `icotool`, `png2icns` o Python con `fonttools` y
+`uharfbuzz`.
 
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 
@@ -261,7 +264,21 @@ Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Tag `vX.Y.0-rc.0` en el release branch.
+6. Todavía en `main`, registra el minor en el sitio web. `release/vX.Y` ya
+   tiene que estar en origin (paso 4); ver [Sitio Web](#sitio-web) para el
+   motivo. Agrega la entrada justo después de `nightly`, sin `current` — un RC
+   no es el release actual:
+
+   ```json
+   { "id": "nightly", "ref": "main", "noindex": true },
+   { "id": "vX.Y", "ref": "release/vX.Y" },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
+   ```
+
+   - Commit: `chore(web): add vX.Y to the site versions`.
+   - Push.
+
+7. Tag `vX.Y.0-rc.0` en el release branch.
 
 El cuerpo del release RC se genera automáticamente a partir de commits
 convencionales, así que un RC no necesita ningún paso de CHANGELOG.
@@ -288,6 +305,18 @@ Ejecuta esto en `release/vX.Y` cuando el RC está limpio:
 4. Tag `vX.Y.0` en el release branch y push del branch + tag.
 5. CI genera el cuerpo del release stable a partir de todos los commits
    visibles para el usuario desde el último tag stable.
+6. En `main`, haz del nuevo minor el release actual del sitio: en
+   `web/versions.json`, mueve `"current": true` de `vX.(Y-1)` a `vX.Y`.
+
+   ```json
+   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
+   ```
+
+   - Commit: `chore(web): make vX.Y the current site version`.
+   - Push. El sitio se despliega desde `main`, así que este commit cambia
+     `/docs/` a `vX.Y` y la versión de producto que muestran la landing y las
+     páginas de comparación a `X.Y.0`.
 
 El workflow de release se niega a publicar un tag stable cuya versión no tiene
 una sección `## [X.Y.Z]` en `CHANGELOG.md`, así que el paso 2 no puede saltarse
@@ -308,6 +337,35 @@ ejemplo de ese commit. El trabajo que aterrizó en `main` después del corte y n
 se publicó pertenece al nuevo `[Unreleased]`, no a la sección publicada; esa
 separación es el único ajuste a mano del modelo.
 
+## Sitio Web
+
+El sitio publica un conjunto de documentación por minor, listado en
+`web/versions.json` (los campos están descritos en `web/src/data/versions.ts`).
+No se actualiza en cada release: cambia en tres momentos de la vida de un
+minor, siempre con un commit en `main`, porque el sitio se despliega desde
+`main` (`.github/workflows/web.yml`).
+
+| Evento | Cambio en `web/versions.json` | Commit |
+|--------|-------------------------------|--------|
+| Corte (push de `release/vX.Y`) | agregar `{ "id": "vX.Y", "ref": "release/vX.Y" }` justo después de `nightly` | `chore(web): add vX.Y to the site versions` |
+| Stable (`vX.Y.0` taggeado y pusheado) | mover `"current": true` a `vX.Y` | `chore(web): make vX.Y the current site version` |
+| EOL (antes de borrar `release/vX.Y`) | apuntar el `ref` de `vX.Y` a su último tag, p. ej. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
+
+- **El ref tiene que existir primero en origin.** `web/scripts/fetch-docs.ts`
+  lee cada entrada desde su ref de git, y lo trae de `origin` cuando el clon no
+  lo tiene. Un ref que no puede leer se salta solo con un warning, pero después
+  el build falla al renderizar las páginas de esa versión
+  (`No materialised documentation for version "vX.Y"`). Una entrada que
+  aterriza antes de que se pushee su branch, o que sigue nombrando un branch
+  borrado, rompe cada despliegue del sitio desde `main`.
+- **La versión de producto no se escribe en ningún lado.** El sitio la lee del
+  `Cargo.toml` de cada ref, así que sigue los bumps del release branch
+  (`X.Y.0-rc.N`, después `X.Y.0`, después los patches) sin cambios en el sitio.
+- **El texto del sitio para un minor nuevo espera al release stable.** Texto de
+  la landing o de las páginas de comparación que describa features de `vX.Y` no
+  debe llegar a `main` antes del commit que hace current a `vX.Y`; hasta
+  entonces el sitio describe `vX.(Y-1)`.
+
 ## Archivos a Actualizar
 
 Por cada release, actualiza todos los siguientes a exactamente la misma versión:
@@ -325,6 +383,9 @@ actualiza también:
   prebuilt (ver [Nix](#nix-this-repos-flake) abajo). Este es un puntero de canal
   por branch. Requiere los artefactos publicados, así que aterriza como un
   commit de seguimiento una vez que el workflow de release termina.
+
+`web/versions.json` no forma parte del bump de cada release; cambia en el
+corte, la promoción a stable y el EOL de un minor (ver [Sitio Web](#sitio-web)).
 
 El `PKGBUILD` de AUR vive en un **repositorio AUR externo**, no en este repo.
 Solo se sube para tags stable.
@@ -484,6 +545,10 @@ Aún no está en upstream. Cuando lo esté, solo los tags stable recibirán un P
 - Cortar `release/vX.Y` desde un `main` HEAD que no contiene el job `Classify
   release` en `release.yml`.
 - Crear tags `-dev.N` nuevos (el canal está retirado; usa nightly en su lugar).
+- Marcar un minor en RC con `"current": true` en `web/versions.json`, o dejar el
+  minor anterior como current después de publicar `vX.Y.0`.
+- Agregar una entrada a `web/versions.json` cuyo ref todavía no está en origin,
+  o borrar un branch `release/vX.Y` al que una entrada sigue apuntando.
 
 ## Validación Local Antes de Etiquetar
 
@@ -506,5 +571,7 @@ Estas suites rápidas no cubren las pruebas de integración en vivo de los drive
 - `.github/release-template.md` — sección de instalación agregada a cada cuerpo
   de release
 - `cliff.toml` — configuración de git-cliff para la generación de changelog
+- `web/versions.json` — versiones de documentación que publica el sitio, y cuál
+  es la actual
 - `skills/dbflux-release/SKILL.md` — skill orientado a agentes que automatiza
   este proceso

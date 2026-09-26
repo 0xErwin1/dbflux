@@ -60,3 +60,10 @@ no anunció la capacidad se descartan en lugar de ser confiados.
 - La emisión de auditoría necesita protocolo v1.2 o posterior y `AuditEmit` en el handshake.
   Los drivers más antiguos no emiten nada, y sus operaciones aparecen en el log solo a través de
   los eventos que DBFlux registra en su nombre.
+- Las operaciones clave-valor opcionales (`KeyValueFeatures`: filtro de tipo en
+  el servidor, metadatos de claves por lotes, lecturas por rangos de sorted sets
+  y streams, grupos de consumidores, eliminación masiva, prefijo de valor y
+  escrituras que conservan la caducidad) no viajan por el protocolo. El puente
+  no anuncia ninguna, así que el explorador de claves oculta esos controles para
+  un driver clave-valor externo, y una escritura de valor a través de él no
+  conserva la caducidad de la clave.

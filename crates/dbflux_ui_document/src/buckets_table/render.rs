@@ -7,25 +7,26 @@
 
 use super::data::{BucketDetailsState, BucketRow, BucketSizeEstimateState};
 use super::{BucketsFocusMode, BucketsTableDocument};
+use crate::chrome::{
+    connection_segment, document_bar, document_footer, footer_item, footer_key_hint, search_field,
+};
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
 use dbflux_app::keymap::{Command, ContextId};
-use dbflux_components::controls::Input;
+use dbflux_components::composites::{
+    Breadcrumb, BreadcrumbSegment, EmptyState, EmptyStateAction, ListRow,
+};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, Status, StatusIndicator, Text};
+use dbflux_components::tokens::{ChromeColors, DocumentMetrics, ObjectStoreMetrics, Spacing};
+use dbflux_components::typography::AppFonts;
+use dbflux_core::VersioningStatus;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
-
-/// Column widths. `Name` takes the remaining space; the rest are fixed so the
-/// numeric columns stay right-aligned against a stable edge.
-const REGION_WIDTH: Pixels = px(120.0);
-const OBJECTS_WIDTH: Pixels = px(96.0);
-const SIZE_WIDTH: Pixels = px(112.0);
-const VERSIONING_WIDTH: Pixels = px(96.0);
-const CREATED_WIDTH: Pixels = px(160.0);
 
 /// Placeholder for a value that has not been fetched (and never is fetched
 /// automatically — see DEC-14).
@@ -55,19 +56,8 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
 /// from the keymap so the empty-state hint always names the live binding.
 /// `None` when nothing in the table context refreshes the document.
 pub(super) fn refresh_shortcut() -> Option<String> {
-    dbflux_ui_base::default_keymap()
+    dbflux_ui_base::effective_keymap()
         .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
-}
-
-/// Empty-state hint for refreshing the bucket list, or `None` when no key
-/// refreshes it (see [`refresh_shortcut`]).
-pub(super) fn refresh_hint() -> Option<String> {
-    refresh_shortcut().map(|key| {
-        dbflux_i18n::t!(
-            "document.buckets_table.empty.hint_refresh",
-            key = key.as_str()
-        )
-    })
 }
 
 /// Footer summary line: how many buckets are listed and how many distinct
@@ -86,222 +76,320 @@ pub(super) fn summary_line(rows: &[&BucketRow]) -> String {
     crate::labels::buckets_table_summary_line(rows.len(), regions.len())
 }
 
-fn region_label(row: &BucketRow) -> String {
-    match &row.details {
-        BucketDetailsState::Loaded(details) => details.region.clone(),
-        BucketDetailsState::Loading => "…".to_string(),
-        _ => UNKNOWN.to_string(),
+/// What a bucket cell shows: a fetched value, a value still being fetched,
+/// or the single "—" placeholder for anything unknown (not fetched yet, not
+/// requested, failed, or not provided by the driver).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CellValue {
+    Known(String),
+    Loading,
+    Missing,
+}
+
+impl CellValue {
+    /// Renders the value in `color`; loading and missing values stay muted
+    /// so they never read as data.
+    fn render(self, color: Hsla, muted: Hsla) -> AnyElement {
+        match self {
+            CellValue::Known(value) => div().text_color(color).child(value).into_any_element(),
+            CellValue::Loading => Icon::new(AppIcon::Loader)
+                .size(ObjectStoreMetrics::LOADING_ICON)
+                .color(muted)
+                .into_any_element(),
+            CellValue::Missing => div().text_color(muted).child(UNKNOWN).into_any_element(),
+        }
     }
 }
 
-fn versioning_label(row: &BucketRow) -> Option<String> {
+fn region_value(row: &BucketRow) -> CellValue {
     match &row.details {
-        BucketDetailsState::Loaded(details) => {
+        BucketDetailsState::Loaded(details) => CellValue::Known(details.region.clone()),
+        BucketDetailsState::Loading => CellValue::Loading,
+        _ => CellValue::Missing,
+    }
+}
+
+/// Versioning as the details strip spells it: `Off` for a bucket that never
+/// had versioning, once its details resolved.
+fn versioning_value(row: &BucketRow) -> CellValue {
+    match &row.details {
+        BucketDetailsState::Loaded(details) => CellValue::Known(
             crate::labels::versioning_status_label(details.versioning)
+                .unwrap_or_else(crate::labels::versioning_off_label),
+        ),
+        BucketDetailsState::Loading => CellValue::Loading,
+        _ => CellValue::Missing,
+    }
+}
+
+fn object_count_value(row: &BucketRow) -> CellValue {
+    match &row.size_estimate {
+        BucketSizeEstimateState::Loaded(estimate) if estimate.truncated => {
+            CellValue::Known(format!("{}+", estimate.object_count))
         }
+        BucketSizeEstimateState::Loaded(estimate) => {
+            CellValue::Known(estimate.object_count.to_string())
+        }
+        BucketSizeEstimateState::Loading => CellValue::Loading,
+        _ => CellValue::Missing,
+    }
+}
+
+fn size_value(row: &BucketRow) -> CellValue {
+    match &row.size_estimate {
+        BucketSizeEstimateState::Loaded(estimate) if estimate.truncated => {
+            CellValue::Known(format!("{}+", format_bytes(estimate.total_bytes)))
+        }
+        BucketSizeEstimateState::Loaded(estimate) => {
+            CellValue::Known(format_bytes(estimate.total_bytes))
+        }
+        BucketSizeEstimateState::Loading => CellValue::Loading,
+        _ => CellValue::Missing,
+    }
+}
+
+/// Default encryption once the loaded details report it; `None` hides the
+/// field, since not every store (or caller) can read it.
+fn encryption_value(row: &BucketRow) -> Option<CellValue> {
+    match &row.details {
+        BucketDetailsState::Loaded(details) => details
+            .encryption
+            .as_ref()
+            .map(|encryption| CellValue::Known(crate::labels::bucket_encryption_label(encryption))),
         _ => None,
     }
 }
 
-fn object_count_label(row: &BucketRow) -> String {
-    match &row.size_estimate {
-        BucketSizeEstimateState::Loaded(estimate) if estimate.truncated => {
-            format!("{}+", estimate.object_count)
-        }
-        BucketSizeEstimateState::Loaded(estimate) => estimate.object_count.to_string(),
-        BucketSizeEstimateState::Loading => "…".to_string(),
-        _ => UNKNOWN.to_string(),
+/// Public-access blocking once the loaded details report it; `None` hides
+/// the field.
+fn public_access_value(row: &BucketRow) -> Option<CellValue> {
+    match &row.details {
+        BucketDetailsState::Loaded(details) => details
+            .public_access
+            .map(|status| CellValue::Known(crate::labels::public_access_status_label(status))),
+        _ => None,
     }
 }
 
-fn size_label(row: &BucketRow) -> String {
-    match &row.size_estimate {
-        BucketSizeEstimateState::Loaded(estimate) if estimate.truncated => {
-            format!("{}+", format_bytes(estimate.total_bytes))
-        }
-        BucketSizeEstimateState::Loaded(estimate) => format_bytes(estimate.total_bytes),
-        BucketSizeEstimateState::Loading => "…".to_string(),
-        _ => UNKNOWN.to_string(),
+/// Label and value of every field the details strip shows, in board order.
+/// Only fields the object-store API reports are listed: region and
+/// versioning from the bucket details, objects and size from the on-demand
+/// estimate, and encryption and public access only when the details carry
+/// them.
+fn details_fields(row: &BucketRow) -> Vec<(String, CellValue)> {
+    let mut fields = vec![
+        (
+            dbflux_i18n::t!("document.buckets_table.columns.region"),
+            region_value(row),
+        ),
+        (
+            dbflux_i18n::t!("document.buckets_table.columns.versioning"),
+            versioning_value(row),
+        ),
+    ];
+
+    if let Some(encryption) = encryption_value(row) {
+        fields.push((
+            dbflux_i18n::t!("document.buckets_table.columns.encryption"),
+            encryption,
+        ));
     }
+
+    fields.push((
+        dbflux_i18n::t!("document.buckets_table.columns.objects"),
+        object_count_value(row),
+    ));
+    fields.push((
+        dbflux_i18n::t!("document.buckets_table.columns.size"),
+        size_value(row),
+    ));
+
+    if let Some(public_access) = public_access_value(row) {
+        fields.push((
+            dbflux_i18n::t!("document.buckets_table.columns.public_access"),
+            public_access,
+        ));
+    }
+
+    fields
 }
 
-fn created_label(row: &BucketRow) -> String {
+/// Status diamond and label of a bucket's versioning, or `None` until its
+/// details load.
+fn versioning_status(row: &BucketRow) -> Option<(Status, String)> {
+    let BucketDetailsState::Loaded(details) = &row.details else {
+        return None;
+    };
+
+    let status = match details.versioning {
+        VersioningStatus::Enabled => Status::Connected,
+        VersioningStatus::Suspended => Status::Warning,
+        VersioningStatus::Disabled => Status::Idle,
+    };
+
+    let label = crate::labels::versioning_status_label(details.versioning)
+        .unwrap_or_else(crate::labels::versioning_off_label);
+
+    Some((status, label))
+}
+
+/// Creation date of a bucket as the table shows it.
+fn created_date_label(row: &BucketRow) -> String {
     row.info
         .created_at
-        .map(|created| created.format("%Y-%m-%d %H:%M").to_string())
+        .map(|created| created.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| UNKNOWN.to_string())
 }
 
+/// Keystroke bound to `command` in the table, from the live keymap.
+fn table_shortcut(command: Command) -> Option<String> {
+    dbflux_ui_base::effective_keymap().shortcut_for_command(ContextId::Results, command)
+}
+
 impl BucketsTableDocument {
+    /// Header row: the connection and "Buckets" breadcrumb, the bucket
+    /// search, New bucket and the primary Refresh.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let is_loading = self.state == DocumentState::Loading;
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .max_w(px(360.0))
-                    .child(Icon::new(AppIcon::Search).small().muted())
-                    .child(
-                        div()
-                            .flex_1()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus_mode = BucketsFocusMode::Search;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                Input::new(&self.search_input)
-                                    .small()
-                                    .cleanable(true)
-                                    .w_full(),
-                            ),
-                    ),
+        let mut segments: Vec<BreadcrumbSegment> =
+            connection_segment(&self.app_state, self.profile_id, cx)
+                .into_iter()
+                .collect();
+        segments.push(BreadcrumbSegment::new(dbflux_i18n::t!(
+            "document.buckets_table.breadcrumb"
+        )));
+
+        let search = div()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus_mode = BucketsFocusMode::Search;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
             )
+            .child(search_field(
+                &self.search_input,
+                Some(ObjectStoreMetrics::SEARCH_WIDTH),
+                self.focus_mode == BucketsFocusMode::Search,
+                cx,
+            ));
+
+        let mut refresh = Button::new(
+            "buckets-refresh",
+            dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
+        )
+        .primary()
+        .icon(if is_loading {
+            AppIcon::Loader
+        } else {
+            AppIcon::RefreshCcw
+        })
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.load_buckets(cx);
+        }));
+
+        if let Some(key) = refresh_shortcut() {
+            refresh = refresh.kbd(key);
+        }
+
+        document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
+            .child(Breadcrumb::new(segments))
+            .child(div().flex_1())
+            .child(search)
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div()
-                            .id("buckets-refresh")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.load_buckets(cx);
-                            }))
-                            .child(
-                                Icon::new(if is_loading {
-                                    AppIcon::Loader
-                                } else {
-                                    AppIcon::RefreshCcw
-                                })
-                                .small()
-                                .muted(),
-                            )
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.buckets_table.toolbar.refresh"
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .id("buckets-new")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .bg(theme.primary)
-                            .hover(|d| d.opacity(0.9))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_new_bucket(cx);
-                            }))
-                            .child(
-                                Icon::new(AppIcon::Plus)
-                                    .size(Heights::ICON_SM)
-                                    .color(theme.primary_foreground),
-                            )
-                            .child(
-                                Text::caption(dbflux_i18n::t!(
-                                    "document.buckets_table.toolbar.new_bucket"
-                                ))
-                                .color(theme.primary_foreground),
-                            ),
-                    ),
+                Button::new(
+                    "buckets-new",
+                    dbflux_i18n::t!("document.buckets_table.toolbar.new_bucket"),
+                )
+                .icon(AppIcon::Plus)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.request_new_bucket(cx);
+                })),
             )
+            .child(refresh)
     }
 
     fn render_header(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let column = |width: Option<Pixels>, key: &str| {
+            let label = dbflux_i18n::t!(key);
+            match width {
+                Some(width) => div().w(width).flex_shrink_0().child(label),
+                None => div().flex_1().min_w_0().child(label),
+            }
+        };
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
+            .h(DocumentMetrics::TABLE_ROW_HEIGHT)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(div().flex_1().child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.name"
-            ))))
-            .child(div().w(REGION_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.region"
-            ))))
-            .child(
-                div()
-                    .w(OBJECTS_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.objects"
-                    ))),
-            )
-            .child(
-                div()
-                    .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.size"
-                    ))),
-            )
-            .child(
-                div()
-                    .w(VERSIONING_WIDTH)
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.buckets_table.columns.versioning"
-                    ))),
-            )
-            .child(div().w(CREATED_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.buckets_table.columns.created"
-            ))))
+            .border_color(theme.input)
+            .bg(theme.background)
+            .text_size(DocumentMetrics::TABLE_HEADER_FONT)
+            .text_color(theme.muted_foreground)
+            .child(column(None, "document.buckets_table.columns.name"))
+            .child(column(
+                Some(ObjectStoreMetrics::REGION_WIDTH),
+                "document.buckets_table.columns.region",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::OBJECTS_WIDTH),
+                "document.buckets_table.columns.objects",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::SIZE_WIDTH),
+                "document.buckets_table.columns.size",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::VERSIONING_WIDTH),
+                "document.buckets_table.columns.versioning",
+            ))
+            .child(column(
+                Some(ObjectStoreMetrics::CREATED_WIDTH),
+                "document.buckets_table.columns.created",
+            ))
     }
 
     fn render_row(&self, row: &BucketRow, selected: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let muted = theme.muted_foreground;
         let name = row.info.name.clone();
         let row_id = SharedString::from(format!("bucket-row-{name}"));
         let select_name = name.clone();
+        let bucket_color = theme.warning;
 
-        div()
-            .id(row_id)
+        let mono_cell = |width: Pixels, value: CellValue, color: Hsla| {
+            div()
+                .w(width)
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .pr(DocumentMetrics::GAP)
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_size(DocumentMetrics::TABLE_META_FONT)
+                .child(value.render(color, muted))
+        };
+
+        ListRow::new(row_id)
+            .selected(selected)
+            .selection_bar(true)
+            .build(cx)
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW)
-            .px(Spacing::SM)
+            .h(ObjectStoreMetrics::BUCKET_ROW_HEIGHT)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .when(selected, |d| d.bg(theme.list_active))
-            .when(!selected, |d| d.hover(|d| d.bg(theme.list_active)))
+            .border_color(theme.table_row_border)
+            .text_size(ObjectStoreMetrics::NAME_FONT)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -313,49 +401,57 @@ impl BucketsTableDocument {
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .items_center()
-                    .gap(Spacing::SM)
+                    .gap(ObjectStoreMetrics::NAME_GAP)
                     .overflow_hidden()
-                    .child(Icon::new(AppIcon::Box).small().muted())
+                    .child(
+                        Icon::new(AppIcon::Box)
+                            .size(ObjectStoreMetrics::NAME_ICON)
+                            .color(bucket_color),
+                    )
                     .child(
                         div()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(Text::code(name)),
+                            .truncate()
+                            .font_family(AppFonts::MONO)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(name),
                     ),
             )
+            .child(mono_cell(
+                ObjectStoreMetrics::REGION_WIDTH,
+                region_value(row),
+                muted,
+            ))
+            .child(mono_cell(
+                ObjectStoreMetrics::OBJECTS_WIDTH,
+                object_count_value(row),
+                ChromeColors::strong(theme),
+            ))
+            .child(mono_cell(
+                ObjectStoreMetrics::SIZE_WIDTH,
+                size_value(row),
+                theme.foreground,
+            ))
             .child(
                 div()
-                    .w(REGION_WIDTH)
-                    .child(Text::code(region_label(row)).muted_foreground()),
-            )
-            .child(
-                div()
-                    .w(OBJECTS_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::code(object_count_label(row))),
-            )
-            .child(
-                div()
-                    .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::code(size_label(row))),
-            )
-            .child(
-                div()
-                    .w(VERSIONING_WIDTH)
-                    .child(match versioning_label(row) {
-                        Some(label) => Text::code(label).success(),
-                        None => Text::code(UNKNOWN).muted_foreground(),
+                    .w(ObjectStoreMetrics::VERSIONING_WIDTH)
+                    .flex_shrink_0()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .child(match versioning_status(row) {
+                        Some((status, label)) => {
+                            StatusIndicator::new(status).label(label).into_any_element()
+                        }
+                        None => versioning_value(row).render(muted, muted),
                     }),
             )
             .child(
                 div()
-                    .w(CREATED_WIDTH)
-                    .child(Text::code(created_label(row)).muted_foreground()),
+                    .w(ObjectStoreMetrics::CREATED_WIDTH)
+                    .flex_shrink_0()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(created_date_label(row)),
             )
             .into_any_element()
     }
@@ -367,117 +463,123 @@ impl BucketsTableDocument {
         let theme = cx.theme();
         let estimate_pending = matches!(row.size_estimate, BucketSizeEstimateState::Loading);
 
-        let versioning = versioning_label(row).unwrap_or_else(crate::labels::versioning_off_label);
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
 
-        let detail_pair = |label: String, value: String| {
+        let detail_pair = |label: String, value: CellValue| {
             div()
                 .flex()
                 .flex_col()
-                .gap(Spacing::XXS)
-                .child(Text::caption(label))
-                .child(Text::code(value))
+                .flex_shrink_0()
+                .gap(DocumentMetrics::DETAIL_LABEL_GAP)
+                .child(
+                    div()
+                        .text_size(DocumentMetrics::DETAIL_LABEL_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .font_family(AppFonts::MONO)
+                        .text_size(ObjectStoreMetrics::DETAILS_VALUE_FONT)
+                        .child(value.render(strong, muted)),
+                )
         };
+
+        let mut browse = Button::new(
+            "buckets-browse",
+            dbflux_i18n::t!("document.buckets_table.details.browse"),
+        )
+        .primary()
+        .icon(AppIcon::ChevronRight)
+        .tab_stop(false)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.open_selected_bucket(cx);
+        }));
+
+        if let Some(key) = table_shortcut(Command::Execute) {
+            browse = browse.kbd(key);
+        }
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .gap(Spacing::LG)
-            .px(Spacing::SM)
-            .py(Spacing::SM)
+            .gap(ObjectStoreMetrics::DETAILS_GAP)
+            .px(ObjectStoreMetrics::TABLE_PADDING_X)
+            .py(ObjectStoreMetrics::DETAILS_PADDING_Y)
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
+            .bg(theme.background)
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(Spacing::XL)
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.region"),
-                        region_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.versioning"),
-                        versioning,
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.created"),
-                        created_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.objects"),
-                        object_count_label(row),
-                    ))
-                    .child(detail_pair(
-                        dbflux_i18n::t!("document.buckets_table.columns.size"),
-                        size_label(row),
-                    )),
+                    .gap(DocumentMetrics::GAP)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(
+                        Icon::new(AppIcon::Box)
+                            .size(ObjectStoreMetrics::DETAILS_ICON)
+                            .color(theme.warning),
+                    )
+                    .child(row.info.name.clone()),
             )
+            .children(
+                details_fields(row)
+                    .into_iter()
+                    .map(|(label, value)| detail_pair(label, value)),
+            )
+            .child(div().flex_1())
             .child(
-                div()
-                    .id("buckets-calculate-size")
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h(Heights::CONTROL)
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(theme.border)
-                    .when(!estimate_pending, |d| {
-                        d.cursor_pointer()
-                            .hover(|d| d.bg(theme.muted))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.estimate_selected_bucket_size(cx);
-                            }))
-                    })
-                    .when(estimate_pending, |d| d.opacity(0.6))
-                    .child(Icon::new(AppIcon::Sigma).small().muted())
-                    .child(Text::caption(if estimate_pending {
+                Button::new(
+                    "buckets-calculate-size",
+                    if estimate_pending {
                         dbflux_i18n::t!("document.buckets_table.details.calculating")
                     } else {
                         dbflux_i18n::t!("document.buckets_table.details.calculate_size")
-                    })),
+                    },
+                )
+                .icon(if estimate_pending {
+                    AppIcon::Loader
+                } else {
+                    AppIcon::Sigma
+                })
+                .disabled(estimate_pending)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.estimate_selected_bucket_size(cx);
+                })),
             )
+            .child(browse)
     }
 
     fn render_footer(&self, rows: &[&BucketRow], cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let hints = [
+            (Command::Execute, "document.buckets_table.footer.hint.open"),
+            (
+                Command::ExpandCollapse,
+                "document.buckets_table.footer.hint.properties",
+            ),
+            (
+                Command::ResultsAddRow,
+                "document.buckets_table.footer.hint.new",
+            ),
+            (Command::Delete, "document.buckets_table.footer.hint.delete"),
+        ]
+        .into_iter()
+        .filter_map(|(command, key)| {
+            table_shortcut(command).map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
+        });
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Icon::new(AppIcon::Box).small().muted())
-                    .child(Text::caption(summary_line(rows))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::MD)
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.open"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.properties"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.buckets_table.footer.hint.delete"
-                    ))),
-            )
+        document_footer(cx)
+            .h(ObjectStoreMetrics::FOOTER_HEIGHT)
+            .child(footer_item(AppIcon::Box, summary_line(rows), cx))
+            .child(div().flex_1())
+            .children(hints)
     }
 
     fn render_empty_state(&self) -> AnyElement {
@@ -499,126 +601,74 @@ impl BucketsTableDocument {
 
         let is_error = self.state == DocumentState::Error;
 
+        let mut empty = EmptyState::new(
+            if is_error {
+                AppIcon::TriangleAlert
+            } else {
+                AppIcon::Box
+            },
+            message,
+        );
+
+        if is_error {
+            empty = empty.danger();
+        }
+
+        if let Some(key) = refresh_shortcut() {
+            empty = empty.action(EmptyStateAction::new(
+                AppIcon::RefreshCcw,
+                dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
+                [key],
+            ));
+        }
+
         div()
             .flex_1()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(Spacing::SM)
-            .child(
-                Icon::new(if is_error {
-                    AppIcon::TriangleAlert
-                } else {
-                    AppIcon::Box
-                })
-                .size(Heights::ICON_LG)
-                .muted(),
-            )
-            .child(if is_error {
-                Text::body(message).danger()
-            } else {
-                Text::muted(message)
-            })
-            .when_some(refresh_hint(), |this, hint| {
-                this.child(Text::key_hint(hint))
-            })
+            .p(DocumentMetrics::PADDING_X)
+            .child(empty)
             .into_any_element()
     }
 
     fn render_delete_confirm(&self, bucket: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .id("buckets-delete-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(340.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .size(Heights::ICON_MD)
-                                    .warning(),
-                            )
-                            .child(Text::heading(dbflux_i18n::t!(
-                                "document.buckets_table.delete_confirm.title"
-                            ))),
-                    )
-                    .child(Text::muted(dbflux_i18n::t!(
-                        "document.buckets_table.delete_confirm.body",
-                        bucket = bucket
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("buckets-delete-cancel")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_delete_bucket(cx);
-                                    }))
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.buckets_table.delete_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("buckets-delete-confirm")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_delete_bucket(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete)
-                                            .size(Heights::ICON_SM)
-                                            .color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.buckets_table.delete_confirm.confirm"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "buckets-delete-cancel",
+                    dbflux_i18n::t!("document.buckets_table.delete_confirm.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_delete_bucket(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "buckets-delete-confirm",
+                    dbflux_i18n::t!("document.buckets_table.delete_confirm.confirm"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_delete_bucket(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!(
+            "document.buckets_table.delete_confirm.title"
+        ))
+        .id("buckets-delete-overlay")
+        .danger()
+        .icon(AppIcon::TriangleAlert)
+        .width(px(420.0))
+        .body(Text::body(dbflux_i18n::t!(
+            "document.buckets_table.delete_confirm.body",
+            bucket = bucket
+        )))
+        .footer(footer)
     }
 }
 
@@ -652,14 +702,23 @@ impl Render for BucketsTableDocument {
             self.render_empty_state()
         } else {
             div()
-                .id("buckets-table-rows")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .children(rows.iter().map(|row| {
-                    let is_selected = selected.as_deref() == Some(row.info.name.as_str());
-                    self.render_row(row, is_selected, cx)
-                }))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .id("buckets-table-rows")
+                        .min_h_0()
+                        .overflow_y_scrollbar()
+                        .children(rows.iter().map(|row| {
+                            let is_selected = selected.as_deref() == Some(row.info.name.as_str());
+                            self.render_row(row, is_selected, cx)
+                        })),
+                )
+                .when_some(details_row, |this, row| {
+                    this.child(self.render_details(&row, cx))
+                })
                 .into_any_element()
         };
 
@@ -668,7 +727,7 @@ impl Render for BucketsTableDocument {
             .size_full()
             .flex()
             .flex_col()
-            .bg(cx.theme().background)
+            .bg(cx.theme().popover)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -679,9 +738,6 @@ impl Render for BucketsTableDocument {
             )
             .child(self.render_toolbar(cx))
             .child(self.render_header(cx))
-            .when_some(details_row, |this, row| {
-                this.child(self.render_details(&row, cx))
-            })
             .child(body)
             .child(self.render_footer(&row_refs, cx))
             .when_some(pending_delete, |this, bucket| {
@@ -700,9 +756,13 @@ mod tests {
     // `#[test]` attribute below.
     use super::{BucketDetailsState, BucketRow, BucketSizeEstimateState};
     use super::{
-        UNKNOWN, format_bytes, object_count_label, size_label, summary_line, versioning_label,
+        CellValue, details_fields, format_bytes, object_count_value, region_value, size_value,
+        summary_line, versioning_value,
     };
-    use dbflux_core::{BucketDetails, BucketInfo, BucketSizeEstimate, VersioningStatus};
+    use dbflux_core::{
+        BucketDetails, BucketEncryption, BucketInfo, BucketSizeEstimate, PublicAccessStatus,
+        VersioningStatus,
+    };
 
     fn row(name: &str, region: Option<&str>) -> BucketRow {
         BucketRow {
@@ -714,6 +774,8 @@ mod tests {
                 Some(region) => BucketDetailsState::Loaded(BucketDetails {
                     region: region.to_string(),
                     versioning: VersioningStatus::Enabled,
+                    encryption: None,
+                    public_access: None,
                 }),
                 None => BucketDetailsState::NotLoaded,
             },
@@ -758,11 +820,11 @@ mod tests {
     /// T20: an unfetched estimate renders as the em-dash placeholder — the
     /// table never implies a count it did not pay for.
     #[test]
-    fn object_and_size_labels_stay_unknown_until_estimated() {
+    fn object_and_size_values_stay_unknown_until_estimated() {
         let row = row("a", Some("us-east-1"));
 
-        assert_eq!(object_count_label(&row), UNKNOWN);
-        assert_eq!(size_label(&row), UNKNOWN);
+        assert_eq!(object_count_value(&row), CellValue::Missing);
+        assert_eq!(size_value(&row), CellValue::Missing);
     }
 
     /// T20: a truncated estimate is marked so the user can tell the walk hit
@@ -776,18 +838,114 @@ mod tests {
             truncated: true,
         });
 
-        assert_eq!(object_count_label(&row), "10000+");
-        assert_eq!(size_label(&row), "2.0 KiB+");
+        assert_eq!(
+            object_count_value(&row),
+            CellValue::Known("10000+".to_string())
+        );
+        assert_eq!(size_value(&row), CellValue::Known("2.0 KiB+".to_string()));
     }
 
-    /// T20: versioning renders only for buckets whose details resolved, and
-    /// `Disabled` collapses to the muted placeholder rather than a label.
+    /// Values still being fetched share one loading state, distinct from the
+    /// placeholder of a value that is not known.
     #[test]
-    fn versioning_label_reflects_details_state() {
+    fn fetches_in_flight_render_as_loading_not_as_a_dash() {
+        let mut row = row("a", None);
+        row.details = BucketDetailsState::Loading;
+        row.size_estimate = BucketSizeEstimateState::Loading;
+
+        assert_eq!(region_value(&row), CellValue::Loading);
+        assert_eq!(versioning_value(&row), CellValue::Loading);
+        assert_eq!(object_count_value(&row), CellValue::Loading);
+        assert_eq!(size_value(&row), CellValue::Loading);
+    }
+
+    /// Failed lookups fall back to the same placeholder as unfetched ones.
+    #[test]
+    fn failed_lookups_render_as_missing() {
+        let mut row = row("a", None);
+        row.details = BucketDetailsState::Error("denied".to_string());
+        row.size_estimate = BucketSizeEstimateState::Error("denied".to_string());
+
+        assert_eq!(region_value(&row), CellValue::Missing);
+        assert_eq!(versioning_value(&row), CellValue::Missing);
+        assert_eq!(size_value(&row), CellValue::Missing);
+    }
+
+    /// Versioning reads `On` once enabled, `Off` once resolved as disabled,
+    /// and stays unknown until the details land.
+    #[test]
+    fn versioning_value_reflects_details_state() {
         assert_eq!(
-            versioning_label(&row("a", Some("us-east-1"))),
-            Some(dbflux_i18n::t!("document.buckets_table.versioning.on"))
+            versioning_value(&row("a", Some("us-east-1"))),
+            CellValue::Known(dbflux_i18n::t!("document.buckets_table.versioning.on"))
         );
-        assert_eq!(versioning_label(&row("b", None)), None);
+        assert_eq!(versioning_value(&row("b", None)), CellValue::Missing);
+
+        let mut disabled = row("c", Some("us-east-1"));
+        disabled.details = BucketDetailsState::Loaded(BucketDetails {
+            region: "us-east-1".to_string(),
+            versioning: VersioningStatus::Disabled,
+            encryption: None,
+            public_access: None,
+        });
+        assert_eq!(
+            versioning_value(&disabled),
+            CellValue::Known(crate::labels::versioning_off_label())
+        );
+    }
+
+    /// The details strip lists region, versioning, objects and size, in that
+    /// order, with the row's current values.
+    #[test]
+    fn details_strip_lists_the_fields_the_driver_reports() {
+        let fields = details_fields(&row("a", Some("eu-west-1")));
+
+        let labels: Vec<&str> = fields.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                dbflux_i18n::t!("document.buckets_table.columns.region"),
+                dbflux_i18n::t!("document.buckets_table.columns.versioning"),
+                dbflux_i18n::t!("document.buckets_table.columns.objects"),
+                dbflux_i18n::t!("document.buckets_table.columns.size"),
+            ]
+        );
+        assert_eq!(fields[0].1, CellValue::Known("eu-west-1".to_string()));
+        assert_eq!(fields[2].1, CellValue::Missing);
+    }
+
+    /// Encryption and public access join the strip in board order once the
+    /// details report them.
+    #[test]
+    fn details_strip_adds_encryption_and_public_access_when_known() {
+        let mut bucket = row("a", Some("eu-west-1"));
+        bucket.details = BucketDetailsState::Loaded(BucketDetails {
+            region: "eu-west-1".to_string(),
+            versioning: VersioningStatus::Enabled,
+            encryption: Some(BucketEncryption::SseKms { key_id: None }),
+            public_access: Some(PublicAccessStatus::Blocked),
+        });
+
+        let fields = details_fields(&bucket);
+
+        let labels: Vec<&str> = fields.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                dbflux_i18n::t!("document.buckets_table.columns.region"),
+                dbflux_i18n::t!("document.buckets_table.columns.versioning"),
+                dbflux_i18n::t!("document.buckets_table.columns.encryption"),
+                dbflux_i18n::t!("document.buckets_table.columns.objects"),
+                dbflux_i18n::t!("document.buckets_table.columns.size"),
+                dbflux_i18n::t!("document.buckets_table.columns.public_access"),
+            ]
+        );
+        assert_eq!(fields[2].1, CellValue::Known("SSE-KMS".to_string()));
+        assert_eq!(
+            fields[5].1,
+            CellValue::Known(dbflux_i18n::t!(
+                "document.buckets_table.public_access.blocked"
+            ))
+        );
     }
 }

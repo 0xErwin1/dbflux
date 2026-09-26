@@ -1,16 +1,22 @@
-//! `SchemaInspector` — content entity rendered inside the workspace-level
-//! inspector rail when the user double-clicks a table node in the schema-viz
-//! document (or selects "Inspect schema" from the context menu).
+//! `SchemaInspector` — the table details panel mounted in the workspace-level
+//! inspector rail when the user selects a table node in the schema-viz
+//! document (or picks "Inspect schema" from the context menu).
 //!
-//! Pure content: no chrome, no resize, no close button. The frame is owned by
-//! `WorkspaceInspector`.
+//! Laid out as IslSchema's rail: a header with the qualified table name and a
+//! close button, a one-line summary, then the indexes, foreign keys and the
+//! tables that reference this one. The rail owns only the island and the
+//! resize grip; this content draws its own header.
 
-use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{FontSizes, Radii, Spacing};
+use dbflux_components::controls::Button;
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::{ChromeColors, SchemaInspectorMetrics, SyntaxColors};
+use dbflux_components::typography::AppFonts;
 use dbflux_schema_viz::graph::{FkEdge, IndexSummary, TableNode};
 use gpui::prelude::*;
 use gpui::{
-    App, Context, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, Render, Window, div, px,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, IntoElement,
+    Render, SharedString, Window, div,
 };
 use gpui_component::theme::ActiveTheme;
 
@@ -30,6 +36,30 @@ pub struct OutgoingFk {
 pub struct SchemaInspectorSnapshot {
     pub node: TableNode,
     pub outgoing_fks: Vec<OutgoingFk>,
+    /// Columns of other tables whose foreign keys point at this table, as
+    /// `table.column`.
+    pub referenced_by: Vec<String>,
+}
+
+impl SchemaInspectorSnapshot {
+    /// The table name, schema-qualified when the schema is known.
+    pub fn qualified_name(&self) -> String {
+        match &self.node.id.schema {
+            Some(schema) => format!("{}.{}", schema, self.node.id.name),
+            None => self.node.id.name.clone(),
+        }
+    }
+
+    /// "5 columns · 3 indexes · 1 foreign key · referenced by 2".
+    pub fn summary(&self) -> String {
+        dbflux_i18n::t!(
+            "document.schema_viz.inspector.summary_full",
+            columns = crate::labels::schema_inspector_columns(self.node.columns.len()),
+            indexes = crate::labels::schema_inspector_indexes(self.node.indexes.len()),
+            foreign_keys = crate::labels::schema_inspector_foreign_keys(self.outgoing_fks.len()),
+            referenced_by = self.referenced_by.len()
+        )
+    }
 }
 
 pub struct SchemaInspector {
@@ -37,8 +67,12 @@ pub struct SchemaInspector {
     focus_handle: FocusHandle,
 }
 
-#[derive(Clone, Debug)]
-pub enum SchemaInspectorEvent {}
+/// Requests from the inspector's buttons; the owning diagram carries them out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchemaInspectorEvent {
+    /// The close button: dismiss the rail.
+    Close,
+}
 
 impl EventEmitter<SchemaInspectorEvent> for SchemaInspector {}
 
@@ -54,6 +88,53 @@ impl SchemaInspector {
         self.snapshot = snapshot;
         cx.notify();
     }
+
+    #[cfg(test)]
+    pub fn snapshot(&self) -> &SchemaInspectorSnapshot {
+        &self.snapshot
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(SchemaInspectorMetrics::HEADER_GAP)
+            .h(SchemaInspectorMetrics::HEADER_HEIGHT)
+            .px(SchemaInspectorMetrics::HEADER_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Icon::new(AppIcon::Table)
+                    .size(SchemaInspectorMetrics::HEADER_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(AppFonts::MONO)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ChromeColors::strong(theme))
+                    .child(self.snapshot.qualified_name()),
+            )
+            .child(
+                Button::new(
+                    "schema-inspector-close",
+                    dbflux_i18n::t!("document.data.row_inspector.action.close"),
+                )
+                .icon(AppIcon::CircleX)
+                .icon_only()
+                .tab_stop(false)
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(SchemaInspectorEvent::Close);
+                })),
+            )
+            .into_any_element()
+    }
 }
 
 impl Focusable for SchemaInspector {
@@ -64,221 +145,160 @@ impl Focusable for SchemaInspector {
 
 impl Render for SchemaInspector {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let header = self.render_header(cx);
+
+        let index_color = SyntaxColors::for_current(cx).number;
         let theme = cx.theme();
-        let node = self.snapshot.node.clone();
-        let outgoing = self.snapshot.outgoing_fks.clone();
-        let has_indexes = !node.indexes.is_empty();
-        let has_outgoing = !outgoing.is_empty();
+        let summary = self.snapshot.summary();
+
+        let index_rows: Vec<AnyElement> = self
+            .snapshot
+            .node
+            .indexes
+            .iter()
+            .map(|index| {
+                mono_row(
+                    Some((AppIcon::Hash, index_color)),
+                    index_label(index),
+                    theme,
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        let own_schema = self.snapshot.node.id.schema.as_deref();
+        let fk_rows: Vec<AnyElement> = self
+            .snapshot
+            .outgoing_fks
+            .iter()
+            .map(|fk| {
+                mono_row(
+                    Some((AppIcon::Cable, theme.info)),
+                    fk_label(fk, own_schema),
+                    theme,
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        let referenced_by = self.snapshot.referenced_by.clone();
+
+        let mut sections: Vec<AnyElement> = Vec::new();
+
+        if !index_rows.is_empty() {
+            sections.push(section_label(dbflux_i18n::t!(
+                "document.schema_viz.inspector.indexes"
+            )));
+            sections.extend(index_rows);
+        }
+
+        if !fk_rows.is_empty() {
+            sections.push(section_label(dbflux_i18n::t!(
+                "document.schema_viz.inspector.foreign_keys"
+            )));
+            sections.extend(fk_rows);
+        }
+
+        if !referenced_by.is_empty() {
+            sections.push(section_label(dbflux_i18n::t!(
+                "document.schema_viz.inspector.referenced_by"
+            )));
+            sections.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .font_family(AppFonts::MONO)
+                    .text_size(SchemaInspectorMetrics::ROW_FONT)
+                    .text_color(ChromeColors::strong(theme))
+                    .children(referenced_by.into_iter().map(SharedString::from))
+                    .into_any_element(),
+            );
+        }
 
         div()
             .id("schema-inspector-content")
             .size_full()
             .flex()
             .flex_col()
-            .overflow_y_scroll()
             .track_focus(&self.focus_handle)
-            .child(render_section_header(
-                dbflux_i18n::t!("document.schema_viz.inspector.table"),
-                theme,
-            ))
-            .child(render_table_summary(&node, theme))
-            .child(render_section_header(
-                dbflux_i18n::t!("document.schema_viz.inspector.columns"),
-                theme,
-            ))
-            .children(node.columns.iter().map(|col| render_column_row(col, theme)))
-            .when(has_indexes, |d| {
-                d.child(render_section_header(
-                    dbflux_i18n::t!("document.schema_viz.inspector.indexes"),
-                    theme,
-                ))
-                .children(node.indexes.iter().map(|idx| render_index_row(idx, theme)))
-            })
-            .when(has_outgoing, |d| {
-                d.child(render_section_header(
-                    dbflux_i18n::t!("document.schema_viz.inspector.foreign_keys"),
-                    theme,
-                ))
-                .children(outgoing.iter().map(|fk| render_outgoing_fk(fk, theme)))
-            })
+            .child(header)
+            .child(
+                div()
+                    .id("schema-inspector-body")
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .gap(SchemaInspectorMetrics::GAP)
+                    .px(SchemaInspectorMetrics::PADDING_X)
+                    .py(SchemaInspectorMetrics::PADDING_Y)
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .text_size(SchemaInspectorMetrics::SUMMARY_FONT)
+                            .text_color(theme.muted_foreground)
+                            .child(summary),
+                    )
+                    .children(sections),
+            )
     }
 }
 
-fn render_section_header(label: String, theme: &gpui_component::theme::Theme) -> impl IntoElement {
-    div()
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .border_b_1()
-        .border_color(theme.border)
-        .bg(theme.secondary.opacity(0.5))
-        .child(
-            Text::caption(label)
-                .font_size(FontSizes::XS)
-                .color(theme.muted_foreground),
-        )
+/// The uppercase label over a group of rows.
+fn section_label(label: String) -> AnyElement {
+    Text::label(label)
+        .font_size(SchemaInspectorMetrics::LABEL_FONT)
+        .into_any_element()
 }
 
-fn render_table_summary(
-    node: &TableNode,
+/// A 12 px mono row: an optional 11 px icon and the value in the strong color.
+fn mono_row(
+    icon: Option<(AppIcon, Hsla)>,
+    value: String,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
-    let qualified_name = match &node.id.schema {
-        Some(s) => format!("{}.{}", s, node.id.name),
-        None => node.id.name.clone(),
-    };
-    let col_count = node.columns.len();
-    let idx_count = node.indexes.len();
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(Spacing::SM)
-        .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        .child(
-            div()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
-                .font_weight(gpui::FontWeight::BOLD)
-                .child(qualified_name),
-        )
-        .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(dbflux_i18n::t!(
-                    "document.schema_viz.inspector.summary",
-                    columns = col_count,
-                    indexes = idx_count
-                )),
-        )
-}
-
-fn render_column_row(
-    col: &dbflux_schema_viz::graph::ColumnSummary,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    let is_nn = !col.nullable && !col.is_pk;
-    let pk_color = theme.primary;
-    let muted = theme.muted_foreground;
-
     div()
         .flex()
         .items_center()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(col.name.clone()),
-        )
-        .when(col.is_pk, |d| d.child(badge("PK", true, pk_color, theme)))
-        .when(col.is_fk, |d| d.child(badge("FK", false, pk_color, theme)))
-        .when(is_nn, |d| {
-            d.child(badge("NN", true, muted.opacity(0.5), theme))
+        .gap(SchemaInspectorMetrics::ICON_GAP)
+        .font_family(AppFonts::MONO)
+        .text_size(SchemaInspectorMetrics::ROW_FONT)
+        .when_some(icon, |row, (icon, color)| {
+            row.child(
+                Icon::new(icon)
+                    .size(SchemaInspectorMetrics::ICON)
+                    .color(color),
+            )
         })
         .child(
             div()
-                .flex_shrink_0()
-                .text_size(FontSizes::XS)
-                .text_color(muted)
-                .child(col.type_name.clone()),
-        )
-}
-
-fn render_index_row(idx: &IndexSummary, theme: &gpui_component::theme::Theme) -> impl IntoElement {
-    let cols = idx.columns.join(", ");
-    let label = format!("{} ({})", idx.name, cols);
-
-    div()
-        .flex()
-        .items_center()
-        .gap(Spacing::XS)
-        .px(Spacing::SM)
-        .py(Spacing::XS)
-        .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        .child(
-            div()
                 .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .text_ellipsis()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
-                .child(label),
+                .min_w_0()
+                .truncate()
+                .text_color(ChromeColors::strong(theme))
+                .child(SharedString::from(value)),
         )
-        .when(idx.unique, |d| {
-            d.child(badge("UNIQUE", false, theme.primary, theme))
-        })
 }
 
-fn render_outgoing_fk(fk: &OutgoingFk, theme: &gpui_component::theme::Theme) -> impl IntoElement {
-    let target = match &fk.target_schema {
-        Some(s) => format!("{}.{}", s, fk.target_table),
-        None => fk.target_table.clone(),
+/// `name (col, col)`.
+fn index_label(index: &IndexSummary) -> String {
+    format!("{} ({})", index.name, index.columns.join(", "))
+}
+
+/// `from → target.to`, the target schema-qualified only when it lives in
+/// another schema than the inspected table.
+fn fk_label(fk: &OutgoingFk, own_schema: Option<&str>) -> String {
+    let target = match fk.target_schema.as_deref() {
+        Some(schema) if Some(schema) != own_schema => format!("{}.{}", schema, fk.target_table),
+        _ => fk.target_table.clone(),
     };
-    let arrow = format!(
-        "{} → {}.{}",
+
+    format!(
+        "{} \u{2192} {}.{}",
         fk.from_columns.join(", "),
         target,
         fk.to_columns.join(", "),
-    );
-
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(2.0))
-        .px(Spacing::SM)
-        .py(Spacing::XXS)
-        .border_b_1()
-        .border_color(theme.border.opacity(0.5))
-        .child(
-            div()
-                .text_size(FontSizes::XS)
-                .text_color(theme.muted_foreground)
-                .child(fk.fk_name.clone()),
-        )
-        .child(
-            div()
-                .text_size(FontSizes::SM)
-                .text_color(theme.foreground)
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(arrow),
-        )
-}
-
-fn badge(
-    label: &str,
-    filled: bool,
-    color: Hsla,
-    _theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
-    let base = div()
-        .px(px(5.0))
-        .py(px(1.0))
-        .rounded(Radii::FULL)
-        .text_size(FontSizes::XS)
-        .font_weight(gpui::FontWeight::BOLD)
-        .line_height(px(14.0));
-
-    if filled {
-        base.bg(color).text_color(gpui::white())
-    } else {
-        base.border_1().border_color(color).text_color(color)
-    }
-    .child(label.to_owned())
+    )
 }
 
 /// Build a snapshot of `node_idx` from a schema graph, collecting outgoing FKs.
@@ -307,5 +327,105 @@ pub fn snapshot_for_node(
         })
         .collect();
 
-    Some(SchemaInspectorSnapshot { node, outgoing_fks })
+    let referenced_by: Vec<String> = graph
+        .edge_indices()
+        .filter_map(|edge_idx| {
+            let (source, target) = graph.edge_endpoints(edge_idx)?;
+            if target != node_idx {
+                return None;
+            }
+            let source_node = graph.node_weight(source)?;
+            let fk: &FkEdge = graph.edge_weight(edge_idx)?;
+            Some(format!(
+                "{}.{}",
+                source_node.id.name,
+                fk.from_columns.join(", ")
+            ))
+        })
+        .collect();
+
+    Some(SchemaInspectorSnapshot {
+        node,
+        outgoing_fks,
+        referenced_by,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OutgoingFk, SchemaInspectorSnapshot, fk_label};
+    use dbflux_schema_viz::graph::{ColumnSummary, IndexSummary, TableNode, TableNodeId};
+
+    fn column(name: &str) -> ColumnSummary {
+        ColumnSummary {
+            name: name.to_owned(),
+            type_name: "int8".to_owned(),
+            is_pk: false,
+            is_fk: false,
+            nullable: false,
+        }
+    }
+
+    fn orders_fk(target_schema: Option<&str>) -> OutgoingFk {
+        OutgoingFk {
+            fk_name: "orders_customer_fk".to_owned(),
+            from_columns: vec!["customer_id".to_owned()],
+            target_schema: target_schema.map(str::to_owned),
+            target_table: "customers".to_owned(),
+            to_columns: vec!["id".to_owned()],
+        }
+    }
+
+    fn orders_snapshot() -> SchemaInspectorSnapshot {
+        SchemaInspectorSnapshot {
+            node: TableNode {
+                id: TableNodeId {
+                    schema: Some("public".to_owned()),
+                    name: "orders".to_owned(),
+                },
+                columns: ["id", "customer_id", "status", "total", "created_at"]
+                    .into_iter()
+                    .map(column)
+                    .collect(),
+                indexes: ["orders_pkey", "orders_status_idx", "orders_created_idx"]
+                    .into_iter()
+                    .map(|name| IndexSummary {
+                        name: name.to_owned(),
+                        columns: vec!["id".to_owned()],
+                        unique: false,
+                    })
+                    .collect(),
+            },
+            outgoing_fks: vec![orders_fk(Some("public"))],
+            referenced_by: vec![
+                "order_items.order_id".to_owned(),
+                "payments.order_id".to_owned(),
+            ],
+        }
+    }
+
+    #[test]
+    fn summary_counts_each_part_with_its_own_plural() {
+        assert_eq!(
+            orders_snapshot().summary(),
+            "5 columns \u{b7} 3 indexes \u{b7} 1 foreign key \u{b7} referenced by 2"
+        );
+    }
+
+    #[test]
+    fn qualified_name_prefixes_the_schema() {
+        assert_eq!(orders_snapshot().qualified_name(), "public.orders");
+    }
+
+    #[test]
+    fn foreign_key_target_is_qualified_only_across_schemas() {
+        assert_eq!(
+            fk_label(&orders_fk(Some("public")), Some("public")),
+            "customer_id \u{2192} customers.id"
+        );
+        assert_eq!(
+            fk_label(&orders_fk(Some("billing")), Some("public")),
+            "customer_id \u{2192} billing.customers.id"
+        );
+    }
 }

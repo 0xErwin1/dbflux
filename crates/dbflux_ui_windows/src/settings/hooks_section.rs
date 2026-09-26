@@ -303,7 +303,7 @@ impl HooksSection {
                 .selected_index(Some(0))
         });
         let input_hook_command = cx.new(|cx| InputState::new(window, cx).placeholder("command"));
-        let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 ..."));
+        let input_hook_args = cx.new(|cx| InputState::new(window, cx).placeholder("arg1 arg2 …"));
         let script_language_dropdown = cx.new(|_cx| {
             let items = ScriptLanguage::available()
                 .into_iter()
@@ -670,6 +670,18 @@ impl SettingsSection for HooksSection {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         Some(self.render_hook_footer_actions(cx))
+    }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        self.render_hook_footer_leading_actions(cx)
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_hook(window, cx);
     }
 }
 

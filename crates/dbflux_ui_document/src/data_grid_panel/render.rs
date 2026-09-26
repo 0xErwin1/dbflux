@@ -1,7 +1,7 @@
 use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
+    documents,
 };
-use crate::chrome::compact_top_bar;
 use crate::data_grid_panel::filter_bar::{
     filter_input_has_error, render_relational_chip, render_relational_error,
     render_resolving_indicator,
@@ -16,11 +16,22 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::components::data_table::SortState as TableSortState;
-use dbflux_components::controls::{Checkbox, Input, InputState};
+use dbflux_components::components::filter_bar::FilterField;
+use dbflux_components::composites::{
+    Breadcrumb, BreadcrumbSegment, MenuItem, SplitButton, menu_frame, menu_row, render_menu_header,
+    render_separator,
+};
+use dbflux_components::controls::{Button, ButtonVariant, Checkbox, Dropdown, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, Icon, SegmentedControl, SegmentedItem, SurfaceRole, Text, surface,
+};
 use dbflux_components::semantic::ChartColors;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{
+    ChromeColors, Fields, FontSizes, Heights, Radii, ResultMetrics, Spacing, TableViewMetrics,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
@@ -38,8 +49,6 @@ struct RenderState {
     exec_time: String,
     show_data_toolbar: bool,
     is_paginated: bool,
-    source_name: String,
-    source_query_prefix: &'static str,
     filter_keyword: String,
     filter_input: Entity<EditorState>,
     filter_has_value: bool,
@@ -60,7 +69,6 @@ struct RenderState {
     content_mode: DataGridContentMode,
     shows_content_controls: bool,
     is_editable: bool,
-    has_pending_changes: bool,
     dirty_count: usize,
     can_undo: bool,
     can_redo: bool,
@@ -70,14 +78,25 @@ struct RenderState {
     show_builder_readonly_hint: bool,
     show_edit_toolbar: bool,
     result_view_mode: ResultViewMode,
+    /// The source is a collection on a document connection.
+    document_collection: bool,
+    document_tab: documents::CollectionTab,
 }
 
 // Save-row shortcut hint: matches the SaveRow binding in the data-table
 // component (`secondary-enter` — Cmd+Enter on macOS, Ctrl+Enter elsewhere).
 #[cfg(target_os = "macos")]
-const SAVE_ROW_SHORTCUT_HINT: &str = "Cmd+↵";
+const SAVE_ROW_SHORTCUT_HINT: &str = "Cmd ↵";
 #[cfg(not(target_os = "macos"))]
-const SAVE_ROW_SHORTCUT_HINT: &str = "Ctrl+↵";
+const SAVE_ROW_SHORTCUT_HINT: &str = "Ctrl ↵";
+
+/// Edit state shown in the header of an editable table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EditControls {
+    dirty_count: usize,
+    can_undo: bool,
+    can_redo: bool,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DataGridContentMode {
@@ -130,7 +149,16 @@ pub(super) fn content_mode_for_result(
 impl Render for DataGridPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.process_pending_actions(window, cx);
+        self.flush_aggregate_json(window, cx);
         let st = self.derive_render_state(cx);
+
+        // The Schema view of a collection shows only its sample toolbar and
+        // field table (IslDocSchema): no query bar and no documents footer.
+        // The Aggregate view brings its own editor, results and footer.
+        let schema_view =
+            st.document_collection && st.document_tab == documents::CollectionTab::Schema;
+        let aggregate_view =
+            st.document_collection && st.document_tab == documents::CollectionTab::Aggregate;
 
         div()
             .track_focus(&st.focus_handle)
@@ -138,52 +166,64 @@ impl Render for DataGridPanel {
             .flex_col()
             .size_full()
             .child(self.panel_origin_canvas(cx))
-            .when(st.show_data_toolbar, |d| {
+            .when(st.show_data_toolbar && st.document_collection, |d| {
+                let documents_tab = st.document_tab == documents::CollectionTab::Documents;
+
+                d.child(self.render_table_header(None, &st.theme, cx))
+                    .when(documents_tab, |d| {
+                        d.child(self.render_document_query_bar(cx))
+                            .child(self.render_document_view_row(cx))
+                    })
+            })
+            .when(st.show_data_toolbar && !st.document_collection, |d| {
+                let edit_controls = st.show_edit_toolbar.then_some(EditControls {
+                    dirty_count: st.dirty_count,
+                    can_undo: st.can_undo,
+                    can_redo: st.can_redo,
+                });
+
                 d.child(self.render_toolbar(
-                    st.source_query_prefix,
                     &st.filter_keyword,
-                    &st.source_name,
                     &st.filter_input,
                     st.filter_has_value,
                     &st.limit_input,
                     st.show_toolbar_focus,
                     st.toolbar_focus,
+                    edit_controls,
                     &st.theme,
                     cx,
                 ))
             })
             .child(self.render_warning_banners(&st))
-            .when(st.show_edit_toolbar, |d| {
-                d.child(self.render_edit_toolbar(
-                    st.dirty_count,
-                    st.has_pending_changes,
-                    st.can_undo,
-                    st.can_redo,
-                    &st.theme,
-                    cx,
-                ))
-            })
             .when(st.show_panel_controls && st.shows_content_controls, |d| {
                 d.child(self.render_panel_controls_header(&st, cx))
             })
             .child(self.render_content_body(&st, cx))
-            .child(self.render_status_bar(
-                st.row_count,
-                &st.exec_time,
-                st.is_paginated,
-                st.pagination_info,
-                st.total_pages,
-                st.can_prev,
-                st.can_next,
-                st.sort_info,
-                st.has_data,
-                st.uses_result_view,
-                st.dirty_count,
-                &st.theme,
-                cx,
-            ))
+            .when(!schema_view && !aggregate_view, |d| {
+                d.child(self.render_status_bar(
+                    st.row_count,
+                    &st.exec_time,
+                    st.is_paginated,
+                    st.pagination_info,
+                    st.total_pages,
+                    st.can_prev,
+                    st.can_next,
+                    st.sort_info,
+                    st.has_data,
+                    st.uses_result_view,
+                    // A document collection counts its staged edits in the view row.
+                    if st.document_collection {
+                        0
+                    } else {
+                        st.dirty_count
+                    },
+                    st.is_editable,
+                    &st.theme,
+                    cx,
+                ))
+            })
             .when_some(self.context_menu.as_ref(), |d, menu| {
-                d.child(self.render_context_menu(menu, st.is_editable, &st.theme, cx))
+                d.child(self.render_context_menu(menu, st.is_editable, cx))
             })
             .when(self.chrome.export_menu_open, |d| {
                 d.child(self.render_export_backdrop(cx))
@@ -215,6 +255,7 @@ impl Render for DataGridPanel {
                     .is_visible(),
                 |d| d.child(self.mutation_confirm.mutation_confirm_hard.clone()),
             )
+            .when_some(self.render_aggregate_confirm(cx), |d, modal| d.child(modal))
     }
 }
 
@@ -226,6 +267,8 @@ impl DataGridPanel {
         if let Some(pending) = self.pending.total_count.take() {
             self.apply_total_count(pending.source_qualified, pending.total, cx);
         }
+
+        self.flush_json_reload(window, cx);
 
         dbflux_ui_base::toast::flush_pending_toast(self.pending.toast.take(), window, cx);
 
@@ -269,8 +312,22 @@ impl DataGridPanel {
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
+            let column = self
+                .result
+                .columns
+                .get(modal.col)
+                .map(|column| (column.name.clone(), column.type_name.clone()));
+
             self.document_view.cell_editor.update(cx, |editor, cx| {
-                editor.open(modal.row, modal.col, modal.value, modal.is_json, window, cx);
+                editor.open(
+                    modal.row,
+                    modal.col,
+                    modal.value,
+                    modal.is_json,
+                    column,
+                    window,
+                    cx,
+                );
             });
         }
 
@@ -278,11 +335,21 @@ impl DataGridPanel {
             self.apply_pending_value_panel(target, window, cx);
         }
 
+        if let Some(action) = self.pending.row_inspector_action.take() {
+            self.apply_row_inspector_action(action, window, cx);
+        }
+
         if let Some(preview) = self.pending.document_preview.take() {
+            // A driver with field patches edits the document in document JSON,
+            // which keeps every type through the round trip.
+            let document_json = self
+                .document_preview_json(preview.doc_index, cx)
+                .unwrap_or(preview.document_json);
+
             self.document_view
                 .document_preview_modal
                 .update(cx, |modal, cx| {
-                    modal.open(preview.doc_index, preview.document_json, window, cx);
+                    modal.open(preview.doc_index, document_json, window, cx);
                 });
         }
 
@@ -315,19 +382,17 @@ impl DataGridPanel {
         let exec_time = format!("{}ms", self.result.execution_time.as_millis());
 
         let is_table_view = self.source.is_table();
-        let show_data_toolbar = !self.chrome.toolbar_in_chrome_row
-            && matches!(
-                self.source,
-                DataSource::Table { .. } | DataSource::Collection { .. }
-            );
+        let show_data_toolbar = matches!(
+            self.source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        );
         let is_paginated = self.source.is_paginated();
-        let (source_query_prefix, source_name) = self.source_query_labels(cx);
         let (_, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
-        let filter_keyword = if self.builder.filter_input_hidden {
-            String::new()
-        } else {
+        let filter_keyword = if self.filter_input_visible() {
             raw_filter_keyword.to_string()
+        } else {
+            String::new()
         };
         let filter_input = self.filter_bar.filter_input.clone();
         let filter_has_value = !self.filter_bar.filter_input.read(cx).value().is_empty();
@@ -361,7 +426,7 @@ impl DataGridPanel {
         let shows_table_content = matches!(content_mode, DataGridContentMode::Table);
         let shows_content_controls = has_data || shows_table_content;
 
-        let (is_editable, has_pending_changes, dirty_count, can_undo, can_redo) = self
+        let (is_editable, dirty_count, can_undo, can_redo) = self
             .grid_table
             .table_state
             .as_ref()
@@ -376,13 +441,12 @@ impl DataGridPanel {
 
                 (
                     state.is_editable(),
-                    total_count > 0,
                     total_count,
                     buffer.can_undo(),
                     buffer.can_redo(),
                 )
             })
-            .unwrap_or((false, false, 0, false, false));
+            .unwrap_or((false, 0, false, false));
 
         let is_grouped_result = self.is_grouped_result();
 
@@ -401,6 +465,7 @@ impl DataGridPanel {
             && self.builder.builder_editable_binding.is_none();
         let show_edit_toolbar = is_table_view && has_columns && is_editable;
         let result_view_mode = self.chrome.result_view_mode;
+        let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
 
         RenderState {
             theme,
@@ -408,8 +473,6 @@ impl DataGridPanel {
             exec_time,
             show_data_toolbar,
             is_paginated,
-            source_name,
-            source_query_prefix,
             filter_keyword,
             filter_input,
             filter_has_value,
@@ -430,7 +493,6 @@ impl DataGridPanel {
             content_mode,
             shows_content_controls,
             is_editable,
-            has_pending_changes,
             dirty_count,
             can_undo,
             can_redo,
@@ -440,6 +502,8 @@ impl DataGridPanel {
             show_builder_readonly_hint,
             show_edit_toolbar,
             result_view_mode,
+            document_collection,
+            document_tab: self.collection.tab,
         }
     }
 
@@ -614,18 +678,70 @@ impl DataGridPanel {
 
     /// Renders the content area: empty fallback, result view, document view, or
     /// the data table — selected by `st.content_mode`.
-    fn render_content_body(
-        &mut self,
-        st: &RenderState,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_content_body(&mut self, st: &RenderState, cx: &mut Context<Self>) -> AnyElement {
         let content_mode = st.content_mode;
         let result_view_mode = st.result_view_mode;
         let theme = st.theme.clone();
         let is_loading = st.is_loading;
 
+        if st.document_collection {
+            let conflict = self.render_conflict_card(cx);
+
+            let body = if st.document_tab == documents::CollectionTab::Schema {
+                self.render_schema_view(cx).into_any_element()
+            } else if st.document_tab == documents::CollectionTab::Aggregate {
+                self.render_aggregate_view(cx)
+            } else if self.view_config.mode == DataViewMode::Json {
+                self.render_document_json_view(cx).into_any_element()
+            } else {
+                self.render_content_body_inner(
+                    content_mode,
+                    result_view_mode,
+                    &theme,
+                    is_loading,
+                    cx,
+                )
+                .into_any_element()
+            };
+
+            // The Aggregate view keeps its own focus (the pipeline editor and
+            // the result views), so a click there must not pull focus back to
+            // the documents grid.
+            let focuses_documents = st.document_tab != documents::CollectionTab::Aggregate;
+
+            return div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .when(focuses_documents, |body| {
+                    body.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.focus.focus_mode != GridFocusMode::Table {
+                                this.focus_table(window, cx);
+                            }
+                        }),
+                    )
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .child(body),
+                )
+                .when_some(conflict, |body, card| body.child(card))
+                .into_any_element();
+        }
+
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -637,410 +753,282 @@ impl DataGridPanel {
                     }
                 }),
             )
-            .child({
-                let content = div().flex_1().overflow_hidden();
-
-                let content = content.when(
-                    matches!(content_mode, DataGridContentMode::EmptyFallback),
-                    |d| {
-                        d.flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if is_loading {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Icon::new(AppIcon::Loader)
-                                            .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                            .color(theme.muted_foreground),
-                                    )
-                                    .child(Text::muted(dbflux_i18n::t!(
-                                        "document.data.grid.loading"
-                                    )))
-                                    .into_any_element()
-                            } else {
-                                Text::muted(dbflux_i18n::t!("document.data.grid.empty"))
-                                    .into_any_element()
-                            })
-                    },
-                );
-
-                let content = content.when(
-                    matches!(content_mode, DataGridContentMode::ResultView),
-                    |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
-                );
-
-                let content = content
-                    .when(matches!(content_mode, DataGridContentMode::Document), |d| {
-                        d.child(self.render_document_view(&theme, cx))
-                    });
-
-                content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
-                    d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
-                        d.child(data_table)
-                    })
-                })
-            })
-    }
-}
-
-/// Build the filter-bar element for use as a `ToolbarSegment` builder closure.
-///
-/// Unlike `DataGridPanel::render_toolbar`, this function captures
-/// `Entity<DataGridPanel>` instead of `&self`, making it suitable for use in
-/// a `Box<dyn Fn(&mut Window, &mut App) -> AnyElement>` closure. Event handlers
-/// call `grid.update(cx, ...)` instead of `cx.listener`.
-///
-/// Only rendered for Table and Collection sources. Returns an empty element for
-/// QueryResult sources that do not show a filter bar.
-pub(super) fn render_filter_bar_as_segment(
-    grid: &Entity<DataGridPanel>,
-    _window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
-    let g = grid.read(cx);
-
-    let is_table_or_collection = matches!(
-        g.source,
-        DataSource::Table { .. } | DataSource::Collection { .. }
-    );
-
-    if !is_table_or_collection {
-        return div().into_any();
+            .child(self.render_content_body_inner(
+                content_mode,
+                result_view_mode,
+                &theme,
+                is_loading,
+                cx,
+            ))
+            .into_any_element()
     }
 
-    let (source_query_prefix, source_name) = g.source_query_labels(cx);
-    let (_, raw_filter_keyword) =
-        DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
-    let filter_keyword = if g.builder.filter_input_hidden {
-        String::new()
-    } else {
-        raw_filter_keyword.to_string()
-    };
+    /// The content for `content_mode`: empty fallback, result view, document
+    /// tree or data table.
+    fn render_content_body_inner(
+        &mut self,
+        content_mode: DataGridContentMode,
+        result_view_mode: ResultViewMode,
+        theme: &gpui_component::theme::Theme,
+        is_loading: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = theme.clone();
 
-    let filter_input = g.filter_bar.filter_input.clone();
-    let filter_has_value = !g.filter_bar.filter_input.read(cx).value().is_empty();
-    let limit_input = g.filter_bar.limit_input.clone();
-    let focus_mode = g.focus.focus_mode;
-    let toolbar_focus = g.focus.toolbar_focus;
-    let edit_state = g.focus.edit_state;
-    let refresh_policy = g.refresh.refresh_policy;
-    let is_runner_active = g.runner.is_primary_active();
-    let refresh_dropdown = g.filter_bar.refresh_dropdown.clone();
+        let content = div().flex_1().min_h_0().overflow_hidden();
 
-    let show_toolbar_focus =
-        focus_mode == GridFocusMode::Toolbar && edit_state == EditState::Navigating;
-
-    let theme = cx.theme().clone();
-
-    let refresh_label = if refresh_policy.is_auto() {
-        crate::labels::refresh_policy_label(refresh_policy)
-    } else {
-        dbflux_i18n::t!("document.data.grid.toolbar.refresh")
-    };
-
-    let can_open_builder = g.can_open_builder(cx);
-    let relational_filter_state = g.builder.relational_filter_state.clone();
-    let has_filter_error = filter_input_has_error(&relational_filter_state);
-
-    let grid_for_filter = grid.clone();
-    let grid_for_limit = grid.clone();
-    let grid_for_clear = grid.clone();
-    let grid_for_refresh = grid.clone();
-    let grid_for_builder = grid.clone();
-    let grid_for_chip = grid.clone();
-    let grid_for_error = grid.clone();
-
-    // Pre-clone theme for each section that needs it in a closure.
-    let theme_filter = theme.clone();
-    let theme_limit = theme.clone();
-    let theme_refresh = theme.clone();
-
-    let chip_element: Option<AnyElement> = render_relational_chip(
-        &relational_filter_state,
-        cx,
-        Box::new({
-            let grid = grid_for_chip.clone();
-            move |_, window, cx| {
-                grid.update(cx, |this, cx| {
-                    if let Some(spec) = this.builder.builder_draft_spec.clone()
-                        && !this.reload_blocked_by_pending_edits(cx)
-                    {
-                        this.apply_builder_draft_spec(spec, cx);
-                    }
-                    this.open_query_builder(window, cx);
-                });
-            }
-        }),
-    );
-
-    let resolving_element: Option<AnyElement> =
-        render_resolving_indicator(&relational_filter_state, cx);
-
-    let error_element: Option<AnyElement> = render_relational_error(
-        &relational_filter_state,
-        cx,
-        Box::new({
-            let grid = grid_for_error.clone();
-            move |_, window, cx| {
-                grid.update(cx, |this, cx| {
-                    let partial_spec = if let super::filter_bar::RelationalFilterState::Error {
-                        partial_spec,
-                        ..
-                    } = &this.builder.relational_filter_state
-                    {
-                        Some(*partial_spec.clone())
-                    } else {
-                        None
-                    };
-                    if let Some(spec) = partial_spec
-                        && !this.reload_blocked_by_pending_edits(cx)
-                    {
-                        this.apply_builder_draft_spec(spec, cx);
-                    }
-                    this.open_query_builder(window, cx);
-                });
-            }
-        }),
-    );
-
-    // NOTE: do not use `.h_full()` here. The segment is hosted inside
-    // `ResultPanel`'s chrome row which has `min_h(Heights::TOOLBAR)`. If the
-    // segment is constrained to that height, its internal `flex_wrap` rows
-    // overflow the box and get clipped — narrow widths lose the WHERE / LIMIT
-    // / Refresh row entirely.
-    //
-    // `flex_1` + `min_w_0` are REQUIRED so the segment shrinks to the chrome
-    // row's available width instead of taking its intrinsic ~880px content
-    // width. Without this, the segment overflows the chrome row horizontally
-    // and the trailing Refresh control is pushed off-screen — `flex_wrap`
-    // never triggers because from the segment's perspective its children
-    // "fit" inside its own oversized box.
-    div()
-        .flex()
-        .flex_wrap()
-        .items_center()
-        .gap(Spacing::SM)
-        .flex_1()
-        .min_w(px(0.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .when(!source_query_prefix.is_empty(), |d| {
-                    d.child(Text::caption(source_query_prefix).primary())
-                })
-                .child(Text::label(source_name)),
-        )
-        // Toolbar order: WHERE filter (flex_1) | LIMIT | Builder | Refresh.
-        .when(!filter_keyword.is_empty(), move |d| {
-            let grid_for_filter_event = grid_for_filter.clone();
-            let grid_for_clear_event = grid_for_clear.clone();
-            let theme_inner = theme_filter.clone();
-            let theme_clear = theme_filter.clone();
-            let theme_error_border = theme_filter.clone();
-            d.child(
-                div()
-                    .flex()
-                    .flex_1()
+        let content = content.when(
+            matches!(content_mode, DataGridContentMode::EmptyFallback),
+            |d| {
+                d.flex()
                     .items_center()
-                    .gap(Spacing::XS)
-                    .child(Text::caption(filter_keyword).primary())
-                    .child(
+                    .justify_center()
+                    .child(if is_loading {
                         div()
                             .flex()
-                            .flex_1()
                             .items_center()
-                            .h(Heights::ROW_COMPACT)
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus
-                                    && toolbar_focus == ToolbarFocus::Filter
-                                    && !has_filter_error,
-                                move |d| d.border_1().border_color(theme_inner.ring),
-                            )
-                            .when(has_filter_error, move |d| {
-                                d.border_1().border_color(theme_error_border.danger)
-                            })
-                            .on_mouse_down(MouseButton::Left, {
-                                let grid = grid_for_filter_event.clone();
-                                move |_, _, cx| {
-                                    grid.update(cx, |this, cx| {
-                                        this.focus.switching_input = true;
-                                        this.focus.focus_mode = GridFocusMode::Toolbar;
-                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
-                                        this.focus.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    });
-                                }
-                            })
+                            .gap(Spacing::SM)
                             .child(
-                                crate::completion_support::single_line_completion_editor(
-                                    &filter_input,
-                                )
-                                .flex_1(),
+                                Icon::new(AppIcon::Loader)
+                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                    .color(theme.muted_foreground),
                             )
-                            .when(filter_has_value, move |d| {
-                                let grid = grid_for_clear_event.clone();
-                                let theme_hover = theme_clear.clone();
-                                d.child(
-                                    div()
-                                        .id("clear-filter")
-                                        .w(px(20.0))
-                                        .h(px(20.0))
-                                        .mr(Spacing::XS)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(Radii::SM)
-                                        .text_size(FontSizes::SM)
-                                        .text_color(theme_clear.muted_foreground)
-                                        .cursor_pointer()
-                                        .hover(move |d| {
-                                            d.bg(theme_hover.secondary)
-                                                .text_color(theme_hover.foreground)
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            grid.update(cx, |this, cx| {
-                                                this.replace_filter_and_reload("", window, cx);
-                                            });
-                                        })
-                                        .child("\u{00d7}"),
-                                )
-                            })
-                            .when_some(chip_element, |d, chip| d.child(chip))
-                            .when_some(resolving_element, |d, indicator| d.child(indicator)),
-                    )
-                    .when_some(error_element, |d, err| d.child(err)),
-            )
-        })
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XS)
-                .child(Text::caption("LIMIT").primary())
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .w(px(60.0))
-                        .h(Heights::ROW_COMPACT)
-                        .rounded(Radii::SM)
-                        .when(
-                            show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                            move |d| d.border_1().border_color(theme_limit.ring),
-                        )
-                        .on_mouse_down(MouseButton::Left, {
-                            let grid = grid_for_limit.clone();
-                            move |_, _, cx| {
-                                grid.update(cx, |this, cx| {
-                                    this.focus.switching_input = true;
-                                    this.focus.focus_mode = GridFocusMode::Toolbar;
-                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
-                                    this.focus.edit_state = EditState::Editing;
-                                    cx.notify();
-                                });
-                            }
-                        })
-                        .child(Input::new(&limit_input).small()),
-                ),
-        )
-        .when(can_open_builder, {
-            let theme_btn = theme.clone();
-            let icon_color = theme.muted_foreground;
-            move |d| {
-                d.child(
-                    div()
-                        .id("open-builder-btn")
-                        .h(Heights::ROW_COMPACT)
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme_btn.muted_foreground)
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(theme_btn.secondary).text_color(theme_btn.foreground))
-                        .on_click(move |_, window, cx| {
-                            grid_for_builder.update(cx, |this, cx| {
-                                this.open_query_builder(window, cx);
-                            });
-                        })
-                        .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
-                        .child(Text::muted(dbflux_i18n::t!(
-                            "document.data.grid.toolbar.builder"
-                        ))),
-                )
-            }
-        })
-        .child(
-            div()
-                .id("refresh-action-btn")
-                .h(Heights::ROW_COMPACT)
-                .flex()
-                .items_center()
-                .gap_0()
-                .rounded(Radii::SM)
-                .bg(theme_refresh.background)
-                .border_1()
-                .border_color(
-                    if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                        theme_refresh.ring
+                            .child(Text::caption(dbflux_i18n::t!("document.data.grid.loading")))
+                            .into_any_element()
                     } else {
-                        theme_refresh.input
-                    },
-                )
-                .child(
-                    div()
-                        .id("refresh-action")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .cursor_pointer()
-                        .hover(move |d| d.bg(theme_refresh.accent.opacity(0.08)))
-                        .on_click(move |_, window, cx| {
-                            grid_for_refresh.update(cx, |this, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.request_refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            });
-                        })
-                        .child(
-                            Icon::new(if is_runner_active {
-                                AppIcon::Loader
-                            } else if refresh_policy.is_auto() {
-                                AppIcon::Clock
-                            } else {
-                                AppIcon::RefreshCcw
-                            })
-                            .small()
-                            .color(theme.foreground),
-                        )
-                        .child(Text::body(refresh_label)),
-                )
-                .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                .child(div().w(px(28.0)).h_full().child(refresh_dropdown)), // guardrail-allow: dropdown control width, not a height token
-        )
-        .into_any()
+                        Text::caption(dbflux_i18n::t!("document.data.grid.empty"))
+                            .into_any_element()
+                    })
+            },
+        );
+
+        let content = content.when(
+            matches!(content_mode, DataGridContentMode::ResultView),
+            |d| d.child(self.render_result_view(result_view_mode, &theme, cx)),
+        );
+
+        let content = content.when(matches!(content_mode, DataGridContentMode::Document), |d| {
+            d.child(self.render_document_view(&theme, cx))
+        });
+
+        content.when(matches!(content_mode, DataGridContentMode::Table), |d| {
+            d.when_some(self.grid_table.data_table.clone(), |d, data_table| {
+                d.child(data_table)
+            })
+        })
+    }
 }
 
 impl DataGridPanel {
+    /// Breadcrumb of a table or collection source (AppByzTable header): the
+    /// driver logo and connection name, the database and schema, then the
+    /// table itself with its column and row counts. `None` for query results.
+    pub(super) fn source_breadcrumb(&self, cx: &App) -> Option<Breadcrumb> {
+        let (profile_id, database, schema, name, total_rows) = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                total_rows,
+                ..
+            } => (
+                *profile_id,
+                database.clone(),
+                table.schema.clone(),
+                table.name.clone(),
+                *total_rows,
+            ),
+            DataSource::Collection {
+                profile_id,
+                collection,
+                total_docs,
+                ..
+            } => (
+                *profile_id,
+                Some(collection.database.clone()),
+                None,
+                collection.name.clone(),
+                *total_docs,
+            ),
+            DataSource::QueryResult { .. } => return None,
+        };
+
+        let (_, source_label) = self.source_query_labels(cx);
+        let current_label = match &self.source {
+            DataSource::Collection { .. } if self.filter_bar.browse_query_label.is_some() => {
+                source_label
+            }
+            _ => name,
+        };
+
+        let state = self.app_state.read(cx);
+        let profile = state
+            .profiles()
+            .iter()
+            .find(|profile| profile.id == profile_id);
+
+        let mut segments = Vec::new();
+
+        if let Some(profile) = profile {
+            let mut segment = BreadcrumbSegment::new(profile.name.clone());
+
+            if let Some(driver) = state.drivers().get(&profile.driver_id()) {
+                let metadata = driver.metadata();
+                segment = segment.icon(
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    Some(DriverIconTone::for_driver(metadata.icon, metadata.category).resolve(cx)),
+                );
+            }
+
+            segments.push(segment);
+        }
+
+        segments.extend(database.map(BreadcrumbSegment::new));
+        segments.extend(schema.map(BreadcrumbSegment::new));
+        if self.collection.raw.is_some() {
+            segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Box, None));
+            let breadcrumb = Breadcrumb::new(segments);
+            return Some(match self.collection_meta_label() {
+                Some(meta) => breadcrumb.meta(meta),
+                None => breadcrumb,
+            });
+        }
+
+        segments.push(BreadcrumbSegment::new(current_label).icon(AppIcon::Table, None));
+
+        let meta = crate::labels::breadcrumb_meta_label(self.result.columns.len(), total_rows);
+
+        Some(Breadcrumb::new(segments).meta(meta))
+    }
+}
+
+/// Width of the footer's export menu.
+const EXPORT_MENU_WIDTH: Pixels = px(220.0);
+
+/// Height of the chart above the grid in the Both view (P2Series). (330 px)
+const BOTH_CHART_HEIGHT: Pixels = px(330.0);
+
+/// Width of the chart stats rail. (320 px)
+const CHART_STATS_RAIL_WIDTH: Pixels = px(320.0);
+
+/// The Builder button beside the filter field (AppByzTable: secondary,
+/// icon and label).
+fn builder_button(
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    Button::new(
+        "open-builder-btn",
+        dbflux_i18n::t!("document.data.grid.toolbar.builder"),
+    )
+    .icon(AppIcon::ListFilter)
+    .tab_stop(false)
+    .on_click(on_click)
+}
+
+/// Icon of the refresh action: a loader while a query runs, a clock while
+/// auto-refresh is on, a circling arrow otherwise.
+fn refresh_icon(is_running: bool, is_auto: bool) -> AppIcon {
+    if is_running {
+        AppIcon::Loader
+    } else if is_auto {
+        AppIcon::Clock
+    } else {
+        AppIcon::RefreshCcw
+    }
+}
+
+/// The table view's primary Refresh split: the main action refreshes (or
+/// cancels a running query) and the menu segment hosts the auto-refresh
+/// dropdown as a bare chevron.
+fn refresh_split(
+    label: String,
+    icon: AppIcon,
+    focused: bool,
+    refresh_dropdown: Entity<Dropdown>,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> SplitButton {
+    SplitButton::new(
+        "refresh-action-btn",
+        Button::new("refresh-action", label)
+            .primary()
+            .icon(icon)
+            .focused(focused)
+            .tab_stop(false)
+            .on_click(on_click),
+        refresh_dropdown,
+    )
+}
+
+impl DataGridPanel {
+    /// The table view's two top rows (AppByzTable): the header with the
+    /// source breadcrumb and, for an editable table, the edit status and the
+    /// undo, redo, save and revert actions; then the filter row with the
+    /// WHERE / LIMIT field, the Builder and the Refresh split.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn render_toolbar(
+    fn render_toolbar(
         &self,
-        source_query_prefix: &str,
         filter_keyword: &str,
-        source_name: &str,
+        filter_input: &Entity<EditorState>,
+        filter_has_value: bool,
+        limit_input: &Entity<InputState>,
+        show_toolbar_focus: bool,
+        toolbar_focus: ToolbarFocus,
+        edit_controls: Option<EditControls>,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .child(self.render_table_header(edit_controls, theme, cx))
+            .child(self.render_filter_row(
+                filter_keyword,
+                filter_input,
+                filter_has_value,
+                limit_input,
+                show_toolbar_focus,
+                toolbar_focus,
+                theme,
+                cx,
+            ))
+    }
+
+    /// Header row: breadcrumb and metadata chip on the left, the edit
+    /// controls of an editable table on the right.
+    fn render_table_header(
+        &self,
+        edit_controls: Option<EditControls>,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(TableViewMetrics::HEADER_GAP)
+            .h(TableViewMetrics::HEADER_HEIGHT)
+            .px(TableViewMetrics::HEADER_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .when_some(self.source_breadcrumb(cx), |header, breadcrumb| {
+                header.child(div().min_w_0().overflow_hidden().child(breadcrumb))
+            })
+            .child(div().flex_1())
+            .when_some(edit_controls, |header, controls| {
+                header.child(self.render_edit_controls(controls, theme, cx))
+            })
+            .when(self.collection_tabs(cx).len() > 1, |header| {
+                header.child(self.render_collection_tabs(cx))
+            })
+    }
+
+    /// Filter row: WHERE filter and LIMIT in one field (flex_1) | view toggle
+    /// | Builder | Refresh.
+    #[allow(clippy::too_many_arguments)]
+    fn render_filter_row(
+        &self,
+        filter_keyword: &str,
         filter_input: &Entity<EditorState>,
         filter_has_value: bool,
         limit_input: &Entity<InputState>,
@@ -1057,6 +1045,10 @@ impl DataGridPanel {
 
         let toolbar_has_filter_error =
             filter_input_has_error(&self.builder.relational_filter_state);
+        let filter_field_focused = self.focus.focus_mode == GridFocusMode::Toolbar
+            && self.focus.toolbar_focus == ToolbarFocus::Filter;
+        let limit_field_focused = self.focus.focus_mode == GridFocusMode::Toolbar
+            && self.focus.toolbar_focus == ToolbarFocus::Limit;
         let toolbar_chip = render_relational_chip(
             &self.builder.relational_filter_state,
             cx,
@@ -1095,430 +1087,350 @@ impl DataGridPanel {
             })),
         );
 
-        compact_top_bar(theme, std::iter::empty::<AnyElement>())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .when(!source_query_prefix.is_empty(), |d| {
-                        d.child(Text::caption(source_query_prefix.to_string()).primary())
-                    })
-                    .child(Text::label(source_name.to_string())),
+        let filter_editor = div()
+            .flex()
+            .items_center()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus.switching_input = true;
+                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                    this.focus.toolbar_focus = ToolbarFocus::Filter;
+                    this.focus.edit_state = EditState::Editing;
+                    cx.notify();
+                }),
             )
-            // Toolbar order: WHERE filter (flex_1) | LIMIT | view toggle | Builder | Refresh.
-            .when(!filter_keyword.is_empty(), |d| {
-                d.child(
+            .child(
+                crate::completion_support::frameless_single_line_completion_editor(filter_input)
+                    .text_color(theme.accent_foreground)
+                    .flex_1(),
+            );
+
+        let limit_value = div()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus.switching_input = true;
+                    this.focus.focus_mode = GridFocusMode::Toolbar;
+                    this.focus.toolbar_focus = ToolbarFocus::Limit;
+                    this.focus.edit_state = EditState::Editing;
+                    cx.notify();
+                }),
+            )
+            .child(Input::new(limit_input).small().appearance(false));
+
+        let has_filter = !filter_keyword.is_empty();
+
+        let field = FilterField::new("data-grid-filter-field")
+            .when(has_filter, |field| {
+                field.filter(filter_keyword.to_string(), filter_editor)
+            })
+            .when(filter_has_value && has_filter, |field| {
+                field.trailing(
                     div()
+                        .id("clear-filter")
+                        .w(Heights::ICON_MD)
+                        .h(Heights::ICON_MD)
                         .flex()
-                        .flex_1()
+                        .flex_none()
                         .items_center()
-                        .gap(Spacing::XS)
-                        .child(Text::caption(filter_keyword.to_string()).primary())
-                        .child(
-                            div()
-                                .flex()
-                                .flex_1()
-                                .items_center()
-                                .rounded(Radii::SM)
-                                .when(
-                                    show_toolbar_focus
-                                        && toolbar_focus == ToolbarFocus::Filter
-                                        && !toolbar_has_filter_error,
-                                    |d| d.border_1().border_color(theme.ring),
-                                )
-                                .when(toolbar_has_filter_error, |d| {
-                                    d.border_1().border_color(theme.danger)
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.focus.switching_input = true;
-                                        this.focus.focus_mode = GridFocusMode::Toolbar;
-                                        this.focus.toolbar_focus = ToolbarFocus::Filter;
-                                        this.focus.edit_state = EditState::Editing;
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    crate::completion_support::single_line_completion_editor(
-                                        filter_input,
-                                    )
-                                    .flex_1(),
-                                )
-                                .when(filter_has_value, |d| {
-                                    d.child(
-                                        div()
-                                            .id("clear-filter")
-                                            .w(px(20.0))
-                                            .h(px(20.0))
-                                            .mr(Spacing::XS)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(Radii::SM)
-                                            .text_size(FontSizes::SM)
-                                            .text_color(theme.muted_foreground)
-                                            .cursor_pointer()
-                                            .hover(|d| {
-                                                d.bg(theme.secondary).text_color(theme.foreground)
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.replace_filter_and_reload("", window, cx);
-                                            }))
-                                            .child("\u{00d7}"),
-                                    )
-                                })
-                                .when_some(toolbar_chip, |d, chip| d.child(chip))
-                                .when_some(toolbar_resolving, |d, ind| d.child(ind)),
-                        )
-                        .when_some(toolbar_error, |d, err| d.child(err)),
+                        .justify_center()
+                        .rounded(Radii::SM)
+                        .text_size(FontSizes::SM)
+                        .text_color(theme.muted_foreground)
+                        .cursor_pointer()
+                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.replace_filter_and_reload("", window, cx);
+                        }))
+                        .child("\u{00d7}"),
                 )
             })
+            .when_some(toolbar_chip, |field, chip| field.trailing(chip))
+            .when_some(toolbar_resolving, |field, indicator| {
+                field.trailing(indicator)
+            })
+            .limit("LIMIT", limit_value)
+            .filter_focused(filter_field_focused && has_filter)
+            .limit_focused(limit_field_focused)
+            .error(toolbar_has_filter_error);
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(TableViewMetrics::FILTER_ROW_GAP)
+            .h(TableViewMetrics::FILTER_ROW_HEIGHT)
+            .px(TableViewMetrics::FILTER_ROW_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
             .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Text::caption("LIMIT").primary())
-                    .child(
-                        div()
-                            .w(px(60.0))
-                            .rounded(Radii::SM)
-                            .when(
-                                show_toolbar_focus && toolbar_focus == ToolbarFocus::Limit,
-                                |d| d.border_1().border_color(theme.ring),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus.switching_input = true;
-                                    this.focus.focus_mode = GridFocusMode::Toolbar;
-                                    this.focus.toolbar_focus = ToolbarFocus::Limit;
-                                    this.focus.edit_state = EditState::Editing;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(Input::new(limit_input).small()),
-                    ),
+                    .when(self.builder_notice_visible(), |d| {
+                        d.child(self.render_builder_notice(theme, cx))
+                    })
+                    .child(field)
+                    .when_some(toolbar_error, |d, err| d.child(err)),
             )
             .when(self.can_toggle_view(), |d| {
                 let mode = self.view_config.mode;
                 let view_icon: AppIcon = match mode {
                     DataViewMode::Table => AppIcon::Table,
-                    DataViewMode::Document => AppIcon::Braces,
+                    DataViewMode::Document | DataViewMode::Json => AppIcon::Braces,
                 };
-                let _tooltip = match mode {
+                let tooltip = match mode {
                     DataViewMode::Table => {
                         dbflux_i18n::t!("document.data.grid.toolbar.switch_to_document")
                     }
-                    DataViewMode::Document => {
+                    DataViewMode::Document | DataViewMode::Json => {
                         dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
                     }
                 };
 
                 d.child(
-                    div()
-                        .id("view-toggle-btn")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
+                    Button::new("view-toggle-btn", mode.label())
+                        .ghost()
+                        .icon(view_icon)
+                        .tooltip(tooltip)
+                        .tab_stop(false)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_view_mode(cx);
-                        }))
-                        .child(Icon::new(view_icon).small().color(theme.muted_foreground))
-                        .child(Text::muted(mode.label())),
+                        })),
                 )
             })
             .when(self.can_open_builder(cx), |d| {
-                d.child(
-                    div()
-                        .id("open-builder-btn")
-                        .h_full()
-                        .px(Spacing::SM)
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .rounded(Radii::SM)
-                        .text_color(theme.muted_foreground)
-                        .cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary).text_color(theme.foreground))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_query_builder(window, cx);
-                        }))
-                        .child(
-                            Icon::new(AppIcon::ListFilter)
-                                .small()
-                                .color(theme.muted_foreground),
-                        )
-                        .child(Text::muted(dbflux_i18n::t!(
-                            "document.data.grid.toolbar.builder"
-                        ))),
-                )
+                d.child(builder_button(cx.listener(|this, _, window, cx| {
+                    this.open_query_builder(window, cx);
+                })))
             })
-            .child(
-                div()
-                    .id("refresh-action-btn")
-                    .h(Heights::CONTROL)
-                    .flex()
-                    .items_center()
-                    .gap_0()
-                    .rounded(Radii::SM)
-                    .bg(theme.background)
-                    .border_1()
-                    .border_color(
-                        if show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh {
-                            theme.ring
-                        } else {
-                            theme.input
-                        },
-                    )
-                    .child(
-                        div()
-                            .id("refresh-action")
-                            .h_full()
-                            .px(Spacing::SM)
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.runner.is_primary_active() {
-                                    this.runner.cancel_primary(cx);
-                                    cx.notify();
-                                } else {
-                                    this.request_refresh(window, cx);
-                                    this.focus_table(window, cx);
-                                }
-                            }))
-                            .child(
-                                Icon::new(if self.runner.is_primary_active() {
-                                    AppIcon::Loader
-                                } else if self.refresh.refresh_policy.is_auto() {
-                                    AppIcon::Clock
-                                } else {
-                                    AppIcon::RefreshCcw
-                                })
-                                .small()
-                                .color(theme.foreground),
-                            )
-                            .child(Text::body(refresh_label)),
-                    )
-                    .child(div().w(px(1.0)).h_full().bg(theme.input)) // guardrail-allow: vertical separator div, not a border-width token
-                    .child(
-                        div()
-                            .w(px(28.0)) // guardrail-allow: dropdown control width, not a height token
-                            .h_full()
-                            .child(self.filter_bar.refresh_dropdown.clone()),
-                    ),
-            )
+            .child(refresh_split(
+                refresh_label,
+                refresh_icon(
+                    self.runner.is_primary_active(),
+                    self.refresh.refresh_policy.is_auto(),
+                ),
+                show_toolbar_focus && toolbar_focus == ToolbarFocus::Refresh,
+                self.filter_bar.refresh_dropdown.clone(),
+                cx.listener(|this, _, window, cx| {
+                    if this.runner.is_primary_active() {
+                        this.runner.cancel_primary(cx);
+                        cx.notify();
+                    } else {
+                        this.request_refresh(window, cx);
+                        this.focus_table(window, cx);
+                    }
+                }),
+            ))
     }
 
-    pub(super) fn render_edit_toolbar(
+    /// Stands in for the WHERE input while a closed builder's spec drives the
+    /// rows: says where the rows come from and offers to reopen the builder
+    /// or reset back to the plain table read.
+    fn render_builder_notice(
         &self,
-        dirty_count: usize,
-        has_changes: bool,
-        can_undo: bool,
-        can_redo: bool,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
+            .id("builder-query-notice")
+            .debug_selector(|| "builder-query-notice".to_string())
             .flex()
+            .flex_1()
+            .min_w(px(0.0))
             .items_center()
-            .justify_between()
-            .h(px(44.0))
-            .px(Spacing::MD)
-            .border_b_1()
-            .border_color(theme.border)
-            // Left: status text
+            .gap(Spacing::SM)
             .child(
-                Text::caption(crate::labels::unsaved_changes_label(dirty_count)).color(
-                    if has_changes {
-                        theme.warning
-                    } else {
-                        theme.muted_foreground
-                    },
+                Icon::new(AppIcon::ListFilter)
+                    .size(Fields::FILTER_ICON)
+                    .color(theme.muted_foreground),
+            )
+            .child(
+                div().min_w(px(0.0)).truncate().child(
+                    Text::body_sm(dbflux_i18n::t!("document.data.grid.filter.builder_notice"))
+                        .color(theme.muted_foreground),
                 ),
             )
-            // Right: buttons
+            .child(
+                Button::new(
+                    "builder-notice-edit",
+                    dbflux_i18n::t!("document.data.grid.filter.edit_in_builder"),
+                )
+                .ghost()
+                .inline()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_query_builder(window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "builder-notice-reset",
+                    dbflux_i18n::t!("document.data.grid.filter.reset_builder"),
+                )
+                .ghost()
+                .inline()
+                .icon(AppIcon::RotateCcw)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.reset_builder_query(window, cx);
+                    cx.notify();
+                })),
+            )
+    }
+
+    /// Right side of the header of an editable table: the unsaved-changes
+    /// status, a divider, undo and redo, then Save (primary while there are
+    /// changes) and Revert.
+    fn render_edit_controls(
+        &self,
+        controls: EditControls,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let has_changes = controls.dirty_count > 0;
+        let status_color = if has_changes {
+            theme.warning
+        } else {
+            theme.muted_foreground
+        };
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(TableViewMetrics::HEADER_GAP)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::SM)
-                    // Undo button
+                    .gap(TableViewMetrics::STATUS_GAP)
+                    .text_size(TableViewMetrics::STATUS_FONT)
+                    .text_color(status_color)
                     .child(
-                        div()
-                            .id("undo-btn")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(Heights::BUTTON)
-                            .rounded(Radii::MD)
-                            .border_1()
-                            .when(can_undo, |d| {
-                                d.border_color(theme.border)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.grid_table.table_state {
-                                            table_state.update(cx, |state, cx| {
-                                                if state.is_editing() {
-                                                    state.stop_editing(false, cx);
-                                                }
-                                                if state.edit_buffer_mut().undo() {
-                                                    let visual_count = state
-                                                        .edit_buffer()
-                                                        .compute_visual_order()
-                                                        .len();
-                                                    if let Some(active) = state.selection().active
-                                                        && active.row >= visual_count
-                                                    {
-                                                        state.clear_selection(cx);
-                                                    }
-                                                    cx.notify();
-                                                }
-                                            });
-                                        }
-                                        window.focus(&this.focus_handle, cx);
-                                    }))
-                            })
-                            .when(!can_undo, |d| d.border_color(theme.border))
-                            .child(Icon::new(AppIcon::Undo).small().color(if can_undo {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })),
+                        Icon::new(if has_changes {
+                            AppIcon::CircleAlert
+                        } else {
+                            AppIcon::Check
+                        })
+                        .size(TableViewMetrics::STATUS_ICON)
+                        .color(if has_changes {
+                            theme.warning
+                        } else {
+                            theme.success
+                        }),
                     )
-                    // Redo button
-                    .child(
-                        div()
-                            .id("redo-btn")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(Heights::BUTTON)
-                            .rounded(Radii::MD)
-                            .border_1()
-                            .when(can_redo, |d| {
-                                d.border_color(theme.border)
-                                    .cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.grid_table.table_state {
-                                            table_state.update(cx, |state, cx| {
-                                                if state.is_editing() {
-                                                    state.stop_editing(false, cx);
-                                                }
-                                                if state.edit_buffer_mut().redo() {
-                                                    let visual_count = state
-                                                        .edit_buffer()
-                                                        .compute_visual_order()
-                                                        .len();
-                                                    if let Some(active) = state.selection().active
-                                                        && active.row >= visual_count
-                                                    {
-                                                        state.clear_selection(cx);
-                                                    }
-                                                    cx.notify();
-                                                }
-                                            });
-                                        }
-                                        window.focus(&this.focus_handle, cx);
-                                    }))
-                            })
-                            .when(!can_redo, |d| d.border_color(theme.border))
-                            .child(Icon::new(AppIcon::Redo).small().color(if can_redo {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })),
-                    )
-                    // Save button
-                    .child(
-                        div()
-                            .id("save-btn")
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px(Spacing::MD)
-                            .h(Heights::BUTTON)
-                            .rounded(Radii::MD)
-                            .border_1()
-                            .when(has_changes, |d| {
-                                d.border_color(theme.primary)
-                                    .bg(theme.primary)
-                                    .cursor_pointer()
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.grid_table.table_state {
-                                            table_state.update(cx, |state, cx| {
-                                                state.request_save_all(cx);
-                                            });
-                                        }
-                                        // Refocus table after button click
-                                        window.focus(&this.focus_handle, cx);
-                                    }))
-                            })
-                            .when(!has_changes, |d| d.border_color(theme.border))
-                            .child(
-                                Text::caption(dbflux_i18n::t!("document.data.grid.edit_bar.save"))
-                                    .color(if has_changes {
-                                        theme.primary_foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }),
-                            )
-                            .child(Text::caption(SAVE_ROW_SHORTCUT_HINT).color(if has_changes {
-                                theme.primary_foreground.opacity(0.7)
-                            } else {
-                                theme.muted_foreground.opacity(0.5)
-                            })),
-                    )
-                    // Revert button
-                    .child(
-                        div()
-                            .id("revert-btn")
-                            .flex()
-                            .items_center()
-                            .px(Spacing::MD)
-                            .h(Heights::BUTTON)
-                            .rounded(Radii::MD)
-                            .border_1()
-                            .border_color(theme.border)
-                            .when(has_changes, |d| {
-                                d.cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(table_state) = &this.grid_table.table_state {
-                                            table_state.update(cx, |state, cx| {
-                                                state.revert_all(cx);
-                                            });
-                                        }
-                                        // Refocus table after button click
-                                        window.focus(&this.focus_handle, cx);
-                                    }))
-                            })
-                            .child(
-                                Text::caption(dbflux_i18n::t!(
-                                    "document.data.grid.edit_bar.revert"
-                                ))
-                                .color(if has_changes {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                            ),
-                    ),
+                    .child(crate::labels::unsaved_changes_label(controls.dirty_count)),
             )
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(TableViewMetrics::DIVIDER_HEIGHT)
+                    .mx(TableViewMetrics::HEADER_DIVIDER_MARGIN_X)
+                    .bg(theme.border),
+            )
+            .child(
+                Button::new(
+                    "undo-btn",
+                    dbflux_i18n::t!("document.data.grid.edit_bar.undo"),
+                )
+                .icon(AppIcon::Undo)
+                .icon_only()
+                .disabled(!controls.can_undo)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.step_edit_history(true, window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "redo-btn",
+                    dbflux_i18n::t!("document.data.grid.edit_bar.redo"),
+                )
+                .icon(AppIcon::Redo)
+                .icon_only()
+                .disabled(!controls.can_redo)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.step_edit_history(false, window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "save-btn",
+                    dbflux_i18n::t!("document.data.grid.edit_bar.save"),
+                )
+                .variant(if has_changes {
+                    ButtonVariant::Primary
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .icon(AppIcon::Save)
+                .kbd(SAVE_ROW_SHORTCUT_HINT)
+                .disabled(!has_changes)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(table_state) = &this.grid_table.table_state {
+                        table_state.update(cx, |state, cx| {
+                            state.request_save_all(cx);
+                        });
+                    }
+                    window.focus(&this.focus_handle, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "revert-btn",
+                    dbflux_i18n::t!("document.data.grid.edit_bar.revert"),
+                )
+                .ghost()
+                .icon(AppIcon::RotateCcw)
+                .disabled(!has_changes)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(table_state) = &this.grid_table.table_state {
+                        table_state.update(cx, |state, cx| {
+                            state.revert_all(cx);
+                        });
+                    }
+                    window.focus(&this.focus_handle, cx);
+                })),
+            )
+    }
+
+    /// Undo (`undo == true`) or redo one step of the staged edits, dropping
+    /// the selection when it now points past the last row, and hand focus
+    /// back to the grid.
+    fn step_edit_history(&mut self, undo: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, cx| {
+                if state.is_editing() {
+                    state.stop_editing(false, cx);
+                }
+
+                let changed = if undo {
+                    state.edit_buffer_mut().undo()
+                } else {
+                    state.edit_buffer_mut().redo()
+                };
+
+                if changed {
+                    let visual_count = state.edit_buffer().compute_visual_order().len();
+                    if let Some(active) = state.selection().active
+                        && active.row >= visual_count
+                    {
+                        state.clear_selection(cx);
+                    }
+                    cx.notify();
+                }
+            });
+        }
+
+        window.focus(&self.focus_handle, cx);
     }
 
     pub(super) fn render_document_view(
@@ -1605,7 +1517,7 @@ impl DataGridPanel {
             .flex()
             .pl(indent)
             .gap(Spacing::SM)
-            .child(Text::label_sm(format!("{}:", name)).muted_foreground())
+            .child(Text::body_sm(format!("{}:", name)).muted_foreground())
             .child(self.render_value(value, theme, depth))
     }
 
@@ -1735,21 +1647,20 @@ impl DataGridPanel {
         let shell_for_stats = chart_shell.clone();
         let shell_for_kind = chart_shell.clone();
 
-        let dropdown_time_range = self
-            .chart
-            .chart_source_time_range_panel
-            .as_ref()
-            .map(|p| p.read(cx).dropdown_time_range.clone());
-
         let ctx = ChartToolbarContext {
             theme,
             chart_shell,
             refresh_policy: self.refresh.refresh_policy,
             refresh_dropdown: self.filter_bar.refresh_dropdown.clone(),
-            dropdown_time_range,
+            time_range_panel: self.chart.chart_source_time_range_panel.clone(),
             row_count: self.result.row_count(),
             resolved_window,
-            source_supports_save: true,
+            // Saving a chart stores its query; a table browse has none, so
+            // `open_collection_chart_save` does nothing for it.
+            source_supports_save: !matches!(self.source, DataSource::Table { .. }),
+            refresh_variant: ButtonVariant::Primary,
+            leading: None,
+            show_window: true,
         };
 
         let weak_panel_for_save = cx.weak_entity();
@@ -1833,7 +1744,6 @@ impl DataGridPanel {
                             "data-grid-chart-time-range-apply",
                             dbflux_i18n::t!("document.data.chart_dock.toolbar.apply"),
                         )
-                        .small()
                         .disabled(!can_apply)
                         .on_click(move |_, _, cx| {
                             panel_clone.update(cx, |p, cx| {
@@ -1952,6 +1862,104 @@ impl DataGridPanel {
             .into_any_element()
     }
 
+    /// The chart view of a result: the chart toolbar and axis row, the
+    /// canvas with its legend and rail, the point inspector dock and the
+    /// save prompt. Shared by the Chart view and the chart half of Both.
+    fn render_chart_body(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        // Build chart_view on first render before checking whether it exists.
+        self.ensure_chart_view(cx);
+
+        let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
+            .chart
+            .chart_shell
+            .as_ref()
+            .map_or((false, false, None, None), |s| {
+                let shell = s.read(cx);
+                let point = shell.hovered_data_point(cx);
+                (
+                    shell.chart_view().is_some(),
+                    shell.chart_rail_open,
+                    shell.chart_view().cloned(),
+                    point,
+                )
+            });
+
+        let hovered_source =
+            hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
+
+        // The chart occupies 100% of the area regardless of whether the rail
+        // is open. The rail floats as an absolute-positioned overlay on the
+        // right edge so opening it does not resize the canvas.
+        let chart_area = if let Some(chart_entity) = chart_view_entity {
+            div().size_full().child(chart_entity).into_any_element()
+        } else {
+            div()
+                .size_full()
+                .child(self.render_chart_degraded(cx))
+                .into_any_element()
+        };
+
+        let chart_row = div()
+            .flex_grow(1.0)
+            .size_full()
+            .pt(Spacing::MD)
+            .pb(Spacing::SM)
+            .pl(Spacing::SM)
+            .pr(Spacing::MD)
+            .child(chart_area);
+
+        let body = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_grow(1.0)
+            .min_h_0()
+            .child(chart_row)
+            .when(has_chart_view, |d| {
+                d.child(self.render_chart_legend_row(theme, cx))
+            })
+            .when(rail_open && !self.side_panels_hosted, |d| {
+                d.child(self.render_chart_rail(theme, cx))
+            });
+
+        // PointInspector right dock — only visible when the host has a back-link
+        // to the source row (DataDocument with track_source_indices=true).
+        // CodeDocument-backed charts always get None here and the dock stays hidden.
+        let inspector_dock = hovered_source.map(|source| self.render_point_inspector(source, cx));
+
+        let chart_with_inspector = div()
+            .flex()
+            .flex_row()
+            .size_full()
+            .min_h_0()
+            .child(body)
+            .when_some(inspector_dock, |row, dock| row.child(dock));
+
+        // Name-prompt overlay for "Save chart" on Collection sources.
+        // Build the overlay outside of a closure to avoid borrow conflicts.
+        let save_overlay: Option<AnyElement> = if self.pending_collection_chart_save.is_some() {
+            Some(
+                self.render_collection_chart_save_overlay(theme, cx)
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(self.render_chart_toolbar(theme, cx))
+            .child(chart_with_inspector)
+            .when_some(save_overlay, |el, overlay| el.child(overlay))
+    }
+
     // -- Result View Renderers --
 
     pub(super) fn render_result_view(
@@ -1968,96 +1976,32 @@ impl DataGridPanel {
                     container.when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt));
             }
             ResultViewMode::Chart => {
-                // Build chart_view on first render before checking whether it exists.
-                let _ = self.ensure_chart_view(cx);
+                container = container.child(self.render_chart_body(theme, cx));
+            }
+            ResultViewMode::Both => {
+                let chart = self.render_chart_body(theme, cx);
 
-                let (has_chart_view, rail_open, chart_view_entity, hovered_point) = self
-                    .chart
-                    .chart_shell
-                    .as_ref()
-                    .map_or((false, false, None, None), |s| {
-                        let shell = s.read(cx);
-                        let point = shell.hovered_data_point(cx);
-                        (
-                            shell.chart_view().is_some(),
-                            shell.chart_rail_open,
-                            shell.chart_view().cloned(),
-                            point,
-                        )
-                    });
-
-                let hovered_source =
-                    hovered_point.and_then(|point| self.chart_host_source_for_point(point, cx));
-
-                // The chart occupies 100% of the area regardless of whether the rail
-                // is open. The rail floats as an absolute-positioned overlay on the
-                // right edge so opening it does not resize the canvas.
-                let chart_area = if let Some(chart_entity) = chart_view_entity {
-                    div().size_full().child(chart_entity).into_any_element()
-                } else {
+                container = container.child(
                     div()
+                        .flex()
+                        .flex_col()
                         .size_full()
-                        .child(self.render_chart_degraded(cx))
-                        .into_any_element()
-                };
-
-                let chart_row = div()
-                    .flex_grow(1.0)
-                    .size_full()
-                    .pt(Spacing::MD)
-                    .pb(Spacing::SM)
-                    .pl(Spacing::SM)
-                    .pr(Spacing::MD)
-                    .child(chart_area);
-
-                let body = div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .flex_grow(1.0)
-                    .min_h_0()
-                    .child(chart_row)
-                    .when(has_chart_view, |d| {
-                        d.child(self.render_chart_legend_row(theme, cx))
-                    })
-                    .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
-
-                // PointInspector right dock — only visible when the host has a back-link
-                // to the source row (DataDocument with track_source_indices=true).
-                // CodeDocument-backed charts always get None here and the dock stays hidden.
-                let inspector_dock =
-                    hovered_source.map(|source| self.render_point_inspector(source, cx));
-
-                let chart_with_inspector = div()
-                    .flex()
-                    .flex_row()
-                    .size_full()
-                    .min_h_0()
-                    .child(body)
-                    .when_some(inspector_dock, |row, dock| row.child(dock));
-
-                // Name-prompt overlay for "Save chart" on Collection sources.
-                // Build the overlay outside of a closure to avoid borrow conflicts.
-                let save_overlay: Option<AnyElement> =
-                    if self.pending_collection_chart_save.is_some() {
-                        Some(
-                            self.render_collection_chart_save_overlay(theme, cx)
-                                .into_any_element(),
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .h(BOTH_CHART_HEIGHT)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .child(chart),
                         )
-                    } else {
-                        None
-                    };
-
-                let col = div()
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .size_full()
-                    .child(self.render_chart_toolbar(theme, cx))
-                    .child(chart_with_inspector)
-                    .when_some(save_overlay, |el, overlay| el.child(overlay));
-
-                container = container.child(col);
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .when_some(self.grid_table.data_table.clone(), |d, dt| d.child(dt)),
+                        ),
+                );
             }
             ResultViewMode::Text => {
                 let text = self.derived_text().to_string();
@@ -2253,10 +2197,10 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        use dbflux_components::controls::Button;
         use dbflux_components::controls::Input;
         use dbflux_components::primitives::Text;
         use gpui_component::Sizable;
-        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 
         let name_input = self
             .pending_collection_chart_save
@@ -2282,7 +2226,7 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Text::label(dbflux_i18n::t!(
+                    .child(Text::body(dbflux_i18n::t!(
                         "document.data.chart_dock.save.title"
                     )))
                     .child(Input::new(&name_input).placeholder(dbflux_i18n::t!(
@@ -2295,21 +2239,27 @@ impl DataGridPanel {
                             .gap(Spacing::XXS)
                             .justify_end()
                             .child(
-                                Button::new("cancel-collection-chart-save")
-                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.cancel"))
-                                    .small()
-                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                Button::new(
+                                    "cancel-collection-chart-save",
+                                    dbflux_i18n::t!("document.data.chart_dock.save.cancel"),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
                                         this.cancel_collection_chart_save(cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new("confirm-collection-chart-save")
-                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.save"))
-                                    .small()
-                                    .with_variant(ButtonVariant::Primary)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                Button::new(
+                                    "confirm-collection-chart-save",
+                                    dbflux_i18n::t!("document.data.chart_dock.save.save"),
+                                )
+                                .primary()
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
                                         this.confirm_collection_chart_save(cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             )
@@ -2397,7 +2347,7 @@ impl DataGridPanel {
                             .size(px(20.0))
                             .color(gpui::Hsla {
                                 a: 0.8,
-                                ..cx.theme().primary
+                                ..ChromeColors::tint(cx.theme())
                             }),
                     )
                     .child(
@@ -2471,6 +2421,7 @@ impl DataGridPanel {
                             dbflux_i18n::t!("document.data.chart_dock.degraded.pick_time_column")
                         };
                         let primary = cx.theme().primary;
+                        let primary_foreground = cx.theme().primary_foreground;
                         d.child(
                             div()
                                 .id("cd-pick-column")
@@ -2480,7 +2431,7 @@ impl DataGridPanel {
                                 .text_size(FontSizes::SM)
                                 .cursor_pointer()
                                 .bg(primary.opacity(0.9))
-                                .text_color(gpui::black())
+                                .text_color(primary_foreground)
                                 .hover(move |d| d.bg(primary))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -2520,6 +2471,8 @@ impl DataGridPanel {
     /// Extracted from the old inline degraded view so the card action button can toggle it.
     fn render_chart_picker_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let primary = cx.theme().primary;
+        let primary_foreground = cx.theme().primary_foreground;
+        let tint = ChromeColors::tint(cx.theme());
         let chart_colors = ChartColors::for_current(cx);
 
         let y_candidates: Vec<(usize, String)> = self
@@ -2606,7 +2559,7 @@ impl DataGridPanel {
                                     .rounded(Radii::SM)
                                     .cursor_pointer()
                                     .text_size(FontSizes::SM)
-                                    .when(is_selected, |d| d.bg(gpui::Hsla { a: 0.2, ..primary }))
+                                    .when(is_selected, |d| d.bg(gpui::Hsla { a: 0.2, ..tint }))
                                     .when(!is_selected, |d| {
                                         d.hover(|d| d.bg(chart_colors.hover_bg))
                                     })
@@ -2699,7 +2652,7 @@ impl DataGridPanel {
             .when(any_y_checked, |d| {
                 d.cursor_pointer()
                     .bg(primary.opacity(0.9))
-                    .text_color(gpui::black())
+                    .text_color(primary_foreground)
                     .hover(move |d| d.bg(primary))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -2736,7 +2689,9 @@ impl DataGridPanel {
         picker.child(apply_btn)
     }
 
-    /// Render the 320px Stats rail shown when `chart_rail_open` is true.
+    /// Render the 320px Stats rail shown when `chart_rail_open` is true,
+    /// docked on the right edge of the chart. Used only when the host does
+    /// not take the rail as a workspace island (`side_panels`).
     ///
     /// The Configure tab was removed in Phase E (replaced by AxisBar pills).
     /// Only the Stats tab remains accessible via the Stats toolbar button.
@@ -2745,21 +2700,64 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
+        let body = self.render_chart_rail_content(theme, cx);
 
-        div()
+        dbflux_components::composites::docked_island_frame(theme)
             .absolute()
             .top_0()
             .right_0()
             .bottom_0()
-            .w(gpui::px(320.0))
-            .flex()
-            .flex_col()
-            .border_l_1()
-            .border_color(theme.border)
-            .bg(theme.popover)
+            .w(CHART_STATS_RAIL_WIDTH + dbflux_components::tokens::IslandMetrics::GAP)
             .occlude()
-            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
+            .child(
+                dbflux_components::composites::Island::new()
+                    .flex_1()
+                    .min_h_0()
+                    .child(body),
+            )
+    }
+
+    fn render_chart_rail_content(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
+
+        div()
+            .flex_grow(1.0)
+            .min_h_0()
+            .overflow_hidden()
+            .child(body)
+            .into_any_element()
+    }
+
+    /// The grid's side panels for a host that forwards them to the
+    /// workspace: the chart stats rail while the chart shows and the rail is
+    /// open. Empty unless the host declared `set_side_panels_hosted`.
+    pub fn side_panels(&mut self, cx: &mut Context<Self>) -> Vec<crate::pane::DocumentSidePanel> {
+        if !self.side_panels_hosted || !self.result_view_mode().shows_chart() {
+            return Vec::new();
+        }
+
+        let rail_open = self
+            .chart
+            .chart_shell
+            .as_ref()
+            .is_some_and(|shell| shell.read(cx).chart_rail_open);
+
+        if !rail_open {
+            return Vec::new();
+        }
+
+        let theme = cx.theme().clone();
+        let content = self.render_chart_rail_content(&theme, cx);
+
+        vec![crate::pane::DocumentSidePanel {
+            id: "grid-chart-stats".into(),
+            width: CHART_STATS_RAIL_WIDTH,
+            content,
+        }]
     }
 
     /// Section container helper for the right dock panels.
@@ -2936,7 +2934,7 @@ impl DataGridPanel {
                                 .when(is_selected, |d| {
                                     d.bg(gpui::Hsla {
                                         a: 0.18,
-                                        ..cx.theme().primary
+                                        ..ChromeColors::tint(cx.theme())
                                     })
                                     .text_color(theme.foreground)
                                 })
@@ -3200,11 +3198,11 @@ impl DataGridPanel {
         let points_count = self.result.rows.len();
 
         // Value color per stat:
-        //   min, max, avg  → theme.cyan   (≈ #95E6CB on Dark/Mirage, #4CBF99 on Light)
-        //   p99            → theme.primary (≈ #FFB454 on Dark, varies per theme)
+        //   min, max, avg  → theme.cyan    (#6FD3D8 on Dark, #0F7C82 on Light)
+        //   p99            → tint (#D48CC8 on Dark, #702963 on Light)
         //   others         → theme.foreground
         let cyan_color = theme.cyan;
-        let primary_color = theme.primary;
+        let tint_color = ChromeColors::tint(theme);
         let cyan_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
@@ -3212,10 +3210,10 @@ impl DataGridPanel {
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
-        let primary_val = |v: f64| -> gpui::AnyElement {
+        let tint_val = |v: f64| -> gpui::AnyElement {
             div()
                 .text_size(px(11.0))
-                .text_color(primary_color)
+                .text_color(tint_color)
                 .child(SharedString::from(format_y_value(v)))
                 .into_any_element()
         };
@@ -3282,11 +3280,7 @@ impl DataGridPanel {
                     .child(Self::dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
                     .child(Self::dock_kv_row("p50", fg_val(stats.p50), &chart_colors))
                     .child(Self::dock_kv_row("p95", fg_val(stats.p95), &chart_colors))
-                    .child(Self::dock_kv_row(
-                        "p99",
-                        primary_val(stats.p99),
-                        &chart_colors,
-                    ))
+                    .child(Self::dock_kv_row("p99", tint_val(stats.p99), &chart_colors))
                     .child(Self::dock_kv_row("last", fg_val(stats.last), &chart_colors)),
                 theme,
             ))
@@ -3450,27 +3444,30 @@ impl DataGridPanel {
         has_data: bool,
         uses_result_view: bool,
         pending_change_count: usize,
+        is_editable: bool,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let result_shape_label = if uses_result_view {
+        // A grid of rows that cannot be edited says so next to its row count
+        // (AppByzEditor footer). Document collections count documents instead.
+        let shows_read_only =
+            !is_editable && self.collection.raw.is_none() && !self.result.columns.is_empty();
+
+        let result_shape_label = if uses_result_view && !self.footer_hosts_view_switch() {
             Some(self.result.shape.clone())
         } else {
             None
         };
 
-        // Chart toggling for Table-shaped results is now handled by the
-        // result-tabs strip rendered at the top of the content area (T12).
-        // The status-bar pill row must NOT include Chart for Table-shaped results
-        // to avoid duplicating the control.
-        //
-        // For non-Table shapes (Json / Text / Binary), the pill row remains the
-        // only mode selector and Chart is never eligible there.
-        // Chart toggling for Table-shaped results is now handled by the
-        // result-tabs strip rendered at the top of the content area (T12).
-        // The status-bar pills never include Chart — for non-Table shapes,
-        // `available_for_shape` never returns Chart anyway.
-        let available_modes = if uses_result_view {
+        // A table or collection hosts its whole view switch here, Chart
+        // included (AppByzTable footer). A query result switches views from
+        // the `ResultPanel` mode bar above its content, so this row only
+        // offers the shape's other views while one of them is showing, and
+        // never Chart.
+        let footer_hosts_switch = self.footer_hosts_view_switch();
+        let available_modes = if footer_hosts_switch {
+            self.available_result_view_modes(cx)
+        } else if uses_result_view {
             ResultViewMode::available_for_shape(&self.result.shape)
         } else {
             vec![]
@@ -3478,231 +3475,227 @@ impl DataGridPanel {
         let current_result_mode = self.chrome.result_view_mode;
 
         let show_record_toggle = self.record_view_available();
+        let record_mode = self.chrome.record_mode;
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
+        let panel = cx.entity().downgrade();
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            // Left: pending-change count (when applicable), row count / shape info, sort info
-            .child(
+        let view_switch =
+            (available_modes.len() > 1
+                && (footer_hosts_switch || !current_result_mode.shows_chart()))
+            .then(|| {
+                let items: Vec<SegmentedItem> = available_modes
+                    .iter()
+                    .map(|mode| {
+                        SegmentedItem::new(
+                            SharedString::from(format!("result-view-{}", mode.label())),
+                            if footer_hosts_switch {
+                                crate::labels::table_view_mode_label(*mode)
+                            } else {
+                                crate::labels::result_view_mode_label(*mode)
+                            },
+                        )
+                        .icon(Self::result_mode_icon(*mode))
+                    })
+                    .collect();
+                let modes = available_modes.clone();
+
+                SegmentedControl::new(
+                    items,
+                    SharedString::from(format!("result-view-{}", current_result_mode.label())),
+                    move |selected, _, cx| {
+                        let Some(mode) = modes.iter().copied().find(|mode| {
+                            selected.as_ref() == format!("result-view-{}", mode.label())
+                        }) else {
+                            return;
+                        };
+
+                        let updated = panel.update(cx, |this, cx| {
+                            this.set_result_view_mode(mode, cx);
+                        });
+                        if let Err(error) = updated {
+                            log::debug!("data grid released before its view switch: {error}");
+                        }
+                    },
+                )
+            });
+
+        let footer_item = |icon: AppIcon, label: String| {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap(ResultMetrics::FOOTER_ITEM_GAP)
+                .child(
+                    Icon::new(icon)
+                        .size(ResultMetrics::FOOTER_ICON)
+                        .color(muted),
+                )
+                .child(label)
+        };
+
+        let pager_arrow = |id: &'static str, icon: AppIcon, enabled: bool| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .text_color(muted)
+                .when(!enabled, |arrow| arrow.opacity(Fields::DISABLED_OPACITY))
+                .when(enabled, |arrow| {
+                    arrow
+                        .cursor_pointer()
+                        .hover(move |arrow| arrow.text_color(strong))
+                })
+                .child(
+                    Icon::new(icon)
+                        .size(ResultMetrics::FOOTER_ICON)
+                        .color(if enabled { theme.foreground } else { muted }),
+                )
+        };
+
+        let pager = pagination_info
+            .clone()
+            .filter(|_| is_paginated)
+            .map(|pagination| {
+                let page = pagination.current_page();
+
                 div()
                     .flex()
                     .items_center()
-                    .gap(Spacing::SM)
-                    // Pending-change count — visible only when there are unsaved edits
-                    .when(pending_change_count > 0, |d| {
-                        d.child(
-                            Text::caption(crate::labels::pending_change_count_label(
-                                pending_change_count,
-                            ))
-                            .color(theme.warning),
-                        )
-                    })
-                    .when(
-                        available_modes.len() > 1 && current_result_mode != ResultViewMode::Chart,
-                        |d| {
-                            d.child(div().flex().items_center().gap_0().children(
-                                available_modes.iter().enumerate().map(|(i, mode)| {
-                                    let mode = *mode;
-                                    let is_active = mode == current_result_mode;
-                                    let icon_color = if is_active {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    };
-                                    div()
-                                        .id(ElementId::Name(format!("result-view-{}", i).into()))
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .px(Spacing::SM)
-                                        .text_size(FontSizes::XS)
-                                        .cursor_pointer()
-                                        .rounded(Radii::SM)
-                                        .when(is_active, |d| d.bg(theme.accent.opacity(0.15)))
-                                        .when(!is_active, |d| d.hover(|d| d.bg(theme.secondary)))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_result_view_mode(mode, cx);
-                                        }))
-                                        .child(
-                                            Icon::new(Self::result_mode_icon(mode))
-                                                .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                                .color(icon_color),
-                                        )
-                                        .child(Self::result_mode_label(
-                                            crate::labels::result_view_mode_label(mode),
-                                            is_active,
-                                        ))
-                                }),
-                            ))
-                        },
-                    )
-                    // Grid / record presentation toggle. Mirrors the `i`
-                    // binding so the mode is discoverable and reversible with
-                    // the mouse alone.
-                    .when(show_record_toggle, |d| {
-                        let record_mode = self.chrome.record_mode;
-                        let icon = if record_mode {
-                            AppIcon::Columns
-                        } else {
-                            AppIcon::Table
-                        };
-                        d.child(
-                            div()
-                                .id("record-mode-toggle")
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .px(Spacing::SM)
-                                .text_size(FontSizes::XS)
-                                .cursor_pointer()
-                                .rounded(Radii::SM)
-                                .when(record_mode, |d| d.bg(theme.accent.opacity(0.15)))
-                                .when(!record_mode, |d| d.hover(|d| d.bg(theme.secondary)))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.set_record_mode(!this.record_mode(), cx);
+                    .gap(ResultMetrics::PAGER_GAP)
+                    .font_family(AppFonts::MONO)
+                    .child(
+                        pager_arrow("prev-page", AppIcon::ChevronLeft, can_prev).when(
+                            can_prev,
+                            |arrow| {
+                                arrow.on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_to_prev_page(window, cx);
                                 }))
-                                .child(
-                                    Icon::new(icon)
-                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                        .color(if record_mode {
-                                            theme.foreground
-                                        } else {
-                                            theme.muted_foreground
-                                        }),
-                                )
-                                .child(Self::result_mode_label(
-                                    crate::labels::record_mode_label(record_mode),
-                                    record_mode,
-                                )),
-                        )
-                    })
-                    // Shape badge
-                    .when_some(result_shape_label, |d, shape| {
-                        let label = match &shape {
-                            dbflux_core::QueryResultShape::Table => "table",
-                            dbflux_core::QueryResultShape::Json => "json",
-                            dbflux_core::QueryResultShape::Text => "text",
-                            dbflux_core::QueryResultShape::Binary => "binary",
-                        };
-                        d.child(Text::caption(label.to_string()))
+                            },
+                        ),
+                    )
+                    .child(div().text_color(strong).child(page.to_string()))
+                    .when_some(total_pages, |pager, total| {
+                        pager.child(format!("/ {}", total))
                     })
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                Icon::new(AppIcon::Rows3)
-                                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                    .color(theme.muted_foreground),
-                            )
-                            .child(Text::caption(crate::labels::row_count_label(row_count))),
+                        pager_arrow("next-page", AppIcon::ChevronRight, can_next).when(
+                            can_next,
+                            |arrow| {
+                                arrow.on_click(cx.listener(|this, _, window, cx| {
+                                    this.go_to_next_page(window, cx);
+                                }))
+                            },
+                        ),
                     )
-                    .when_some(sort_info, |d, (col_name, direction, is_server)| {
-                        let arrow_icon = match direction {
-                            SortDirection::Ascending => AppIcon::ArrowUp,
-                            SortDirection::Descending => AppIcon::ArrowDown,
-                        };
-                        let mode = if is_server { "db" } else { "local" };
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    Icon::new(arrow_icon)
-                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                                        .color(theme.muted_foreground),
-                                )
-                                .child(Text::caption(format!("{} ({})", col_name, mode))),
-                        )
-                    }),
-            )
-            // Center: pagination (for Table and Collection sources).
-            // Layout: ‹  N / Total  › using Unicode single-chevrons.
-            .child(div().flex().items_center().gap(Spacing::XS).when_some(
-                pagination_info.clone().filter(|_| is_paginated),
-                |d, pagination| {
-                    let page = pagination.current_page();
+            });
 
-                    let page_label = if let Some(total) = total_pages {
-                        format!("{} / {}", page, total)
-                    } else {
-                        format!("{}", page)
-                    };
-
-                    d.child(
-                        div()
-                            .id("prev-page")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(20.0))
-                            .h(px(20.0))
-                            .rounded(Radii::SM)
-                            .text_size(FontSizes::SM)
-                            .when(can_prev, |d| {
-                                d.cursor_pointer()
-                                    .text_color(theme.foreground)
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.go_to_prev_page(window, cx);
-                                    }))
-                            })
-                            .when(!can_prev, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("\u{2039}"),
-                    )
-                    .child(
-                        Text::caption(page_label)
-                            .font_size(FontSizes::XS)
-                            .color(theme.muted_foreground),
-                    )
-                    .child(
-                        div()
-                            .id("next-page")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(20.0))
-                            .h(px(20.0))
-                            .rounded(Radii::SM)
-                            .text_size(FontSizes::SM)
-                            .when(can_next, |d| {
-                                d.cursor_pointer()
-                                    .text_color(theme.foreground)
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.go_to_next_page(window, cx);
-                                    }))
-                            })
-                            .when(!can_next, |d| {
-                                d.text_color(theme.muted_foreground).opacity(0.5)
-                            })
-                            .child("\u{203a}"),
-                    )
+        // Left and right groups share the remaining width equally so the
+        // pager stays centred on the footer regardless of their contents.
+        let left_group = div()
+            .flex()
+            .flex_1()
+            .flex_basis(px(0.))
+            .min_w_0()
+            .overflow_hidden()
+            .items_center()
+            .gap(ResultMetrics::FOOTER_GAP)
+            // Pending-change count — visible only when there are unsaved edits
+            .when(pending_change_count > 0, |d| {
+                d.child(div().flex_shrink_0().text_color(theme.warning).child(
+                    crate::labels::pending_change_count_label(pending_change_count),
+                ))
+            })
+            .when_some(view_switch, |d, switch| d.child(switch))
+            // Grid / record presentation toggle. Mirrors the `i` binding so
+            // the mode is discoverable and reversible with the mouse alone.
+            .when(show_record_toggle, |d| {
+                d.child(
+                    Button::new("record-mode-toggle", crate::labels::record_view_label())
+                        .ghost()
+                        .icon(AppIcon::Columns)
+                        .selected(record_mode)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_record_mode(!this.record_mode(), cx);
+                        })),
+                )
+            })
+            .when_some(result_shape_label, |d, shape| {
+                let label = match &shape {
+                    dbflux_core::QueryResultShape::Table => "table",
+                    dbflux_core::QueryResultShape::Json => "json",
+                    dbflux_core::QueryResultShape::Text => "text",
+                    dbflux_core::QueryResultShape::Binary => "binary",
+                };
+                d.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(AppFonts::MONO)
+                        .child(label),
+                )
+            })
+            .child(footer_item(
+                AppIcon::Rows3,
+                if self.collection.raw.is_some() {
+                    self.document_count_footer()
+                } else {
+                    crate::labels::row_count_label(row_count)
                 },
             ))
-            // Right: export and execution time
+            .when(shows_read_only, |d| {
+                d.child(
+                    footer_item(
+                        AppIcon::Lock,
+                        dbflux_i18n::t!("document.data.grid.status.read_only"),
+                    )
+                    .debug_selector(|| "footer-read-only".to_string()),
+                )
+            })
+            .when_some(self.presence_footer(), |d, note| {
+                d.child(div().min_w_0().truncate().child(note))
+            })
+            .when_some(sort_info, |d, (col_name, direction, is_server)| {
+                let arrow_icon = match direction {
+                    SortDirection::Ascending => AppIcon::ArrowUp,
+                    SortDirection::Descending => AppIcon::ArrowDown,
+                };
+                let mode = if is_server { "db" } else { "local" };
+                d.child(footer_item(arrow_icon, format!("{} ({})", col_name, mode)))
+            });
+
+        let right_group = div()
+            .flex()
+            .flex_1()
+            .flex_basis(px(0.))
+            .min_w_0()
+            .justify_end()
+            .items_center()
+            .gap(ResultMetrics::FOOTER_GAP)
+            .when(has_data, |d| d.child(self.render_export_button(cx)))
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .when(has_data, |d| d.child(self.render_export_button(theme, cx)))
-                    .child({
-                        let mut muted = theme.muted_foreground;
-                        muted.a = 0.5;
-                        Text::caption(exec_time.to_string()).color(muted)
-                    }),
-            )
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .child(exec_time.to_string()),
+            );
+
+        div()
+            .debug_selector(|| "data-grid-footer".to_string())
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(ResultMetrics::FOOTER_GAP)
+            .h(ResultMetrics::FOOTER_HEIGHT)
+            .px(ResultMetrics::FOOTER_PADDING_X)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .text_size(ResultMetrics::FOOTER_FONT)
+            .text_color(muted)
+            .child(left_group)
+            .when_some(pager, |d, pager| d.child(pager.flex_shrink_0()))
+            .child(right_group)
     }
 
     /// Icon shown next to each result-view mode chip (Data, Chart, JSON, ...).
@@ -3710,170 +3703,114 @@ impl DataGridPanel {
         match mode {
             ResultViewMode::Table => AppIcon::Table,
             ResultViewMode::Chart => AppIcon::ChartSpline,
+            ResultViewMode::Both => AppIcon::Columns,
             ResultViewMode::Json => AppIcon::Braces,
             ResultViewMode::Text => AppIcon::ScrollText,
             ResultViewMode::Raw => AppIcon::Code,
         }
     }
 
-    fn result_mode_label(label: impl Into<SharedString>, is_active: bool) -> Text {
-        if is_active {
-            Text::label_sm(label).font_size(FontSizes::XS)
-        } else {
-            Text::caption(label).font_size(FontSizes::XS)
-        }
-    }
-
-    fn render_export_button(
-        &self,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    /// The Export button in the footer (secondary, with a chevron) and, when
+    /// open, its menu of save and copy formats.
+    fn render_export_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let formats = dbflux_export::available_formats(&self.result.shape);
         let menu_open = self.chrome.export_menu_open;
 
         div()
-            .id("export-trigger")
             .relative()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px(Spacing::XS)
-            .rounded(Radii::SM)
-            .text_size(FontSizes::XS)
-            .cursor_pointer()
-            .hover(|d| d.bg(theme.secondary))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.export_results(window, cx);
-            }))
+            .flex_shrink_0()
             .child(
-                Icon::new(AppIcon::FileSpreadsheet)
-                    .small()
-                    .color(theme.muted_foreground),
+                Button::new(
+                    "export-trigger",
+                    dbflux_i18n::t!("document.data.grid.export.trigger"),
+                )
+                .icon(AppIcon::FileSpreadsheet)
+                .trailing_icon(AppIcon::ChevronDown)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.export_results(window, cx);
+                })),
             )
-            .child(
-                Text::caption(dbflux_i18n::t!("document.data.grid.export.trigger"))
-                    .muted_foreground(),
-            )
-            .child(
-                Icon::new(AppIcon::ChevronDown)
-                    .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .color(theme.muted_foreground),
-            )
-            .when(menu_open, |d| {
-                d.child(self.render_export_menu(formats, theme, cx))
-            })
+            .when(menu_open, |d| d.child(self.render_export_menu(formats, cx)))
     }
 
     fn render_export_menu(
         &self,
         formats: &[dbflux_export::ExportFormat],
-        theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let section_header = |label: SharedString| -> AnyElement {
-            div()
-                .px(Spacing::SM)
-                .mx(Spacing::XS)
-                .pt(Spacing::XS)
-                .pb_0()
-                .child(
-                    Text::caption(label)
-                        .font_size(FontSizes::XS)
-                        .muted_foreground(),
-                )
-                .into_any_element()
-        };
-
         let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
 
-        items.push(section_header(
-            dbflux_i18n::t!("document.data.grid.export.save_as_file").into(),
-        ));
+        items.push(
+            render_menu_header(
+                &MenuItem::header(dbflux_i18n::t!("document.data.grid.export.save_as_file")),
+                cx,
+            )
+            .into_any_element(),
+        );
 
         for (idx, &format) in formats.iter().enumerate() {
+            let item =
+                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Download);
+
             items.push(
-                div()
-                    .id(SharedString::from(format!("export-save-{}", idx)))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .text_size(FontSizes::SM)
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.export_with_format(format, window, cx);
-                    }))
-                    .child(
-                        Icon::new(AppIcon::Download)
-                            .small()
-                            .color(theme.muted_foreground),
-                    )
-                    .child(Text::body(crate::labels::export_format_label(format)))
-                    .into_any_element(),
+                menu_row(
+                    SharedString::from(format!("export-save-{}", idx)),
+                    &item,
+                    false,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.export_with_format(format, window, cx);
+                }))
+                .into_any_element(),
             );
         }
 
-        items.push(
-            div()
-                .mx(Spacing::XS)
-                .my(Spacing::XS)
-                .h(px(1.0))
-                .bg(theme.border)
-                .into_any_element(),
-        );
+        items.push(render_separator(cx).into_any_element());
 
-        items.push(section_header(
-            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard").into(),
-        ));
+        items.push(
+            render_menu_header(
+                &MenuItem::header(dbflux_i18n::t!(
+                    "document.data.grid.export.copy_to_clipboard"
+                )),
+                cx,
+            )
+            .into_any_element(),
+        );
 
         for (idx, &format) in formats.iter().enumerate() {
             let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
-            let row = div()
-                .id(SharedString::from(format!("export-copy-{}", idx)))
-                .flex()
-                .items_center()
-                .gap(Spacing::SM)
-                .h(Heights::ROW_COMPACT)
-                .px(Spacing::SM)
-                .mx(Spacing::XS)
-                .rounded(Radii::SM)
-                .text_size(FontSizes::SM)
-                .when(copyable, |d| {
-                    d.cursor_pointer()
-                        .hover(|d| d.bg(theme.secondary))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.copy_to_clipboard_with_format(format, window, cx);
-                        }))
-                })
-                .when(!copyable, |d| d.opacity(0.5))
-                .child(
-                    Icon::new(AppIcon::Copy)
-                        .small()
-                        .color(theme.muted_foreground),
+            let mut item =
+                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Copy);
+            if !copyable {
+                item = item.disabled();
+            }
+
+            items.push(
+                menu_row(
+                    SharedString::from(format!("export-copy-{}", idx)),
+                    &item,
+                    false,
+                    cx,
                 )
-                .child(Text::body(crate::labels::export_format_label(format)))
-                .into_any_element();
-            items.push(row);
+                .when(copyable, |row| {
+                    row.on_click(cx.listener(move |this, _, window, cx| {
+                        this.copy_to_clipboard_with_format(format, window, cx);
+                    }))
+                })
+                .into_any_element(),
+            );
         }
 
         deferred(
-            surface_raised(cx)
+            menu_frame(cx)
                 .absolute()
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
-                .w(px(200.0))
-                .shadow_lg()
-                .py(Spacing::XS)
+                .w(EXPORT_MENU_WIDTH)
                 .occlude()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
                 .children(items),
         )
         // Above the backdrop, which shares the deferred layer.

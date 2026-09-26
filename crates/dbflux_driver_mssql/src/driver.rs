@@ -46,6 +46,7 @@ pub static SQLSERVER_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverForm
             sections: vec![
                 FormSection {
                     title: "Server".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Server),
                     fields: vec![
                         field_use_uri(),
                         when_checked(
@@ -93,6 +94,7 @@ pub static SQLSERVER_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverForm
                 },
                 FormSection {
                     title: "Authentication".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Authentication),
                     fields: vec![
                         when_unchecked(
                             with_default(
@@ -572,6 +574,10 @@ impl DbDriver for MssqlDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    fn picker_rank(&self) -> u16 {
+        3
     }
 
     fn driver_key(&self) -> dbflux_core::DriverKey {

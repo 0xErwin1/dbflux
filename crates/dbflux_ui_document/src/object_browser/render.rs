@@ -10,23 +10,34 @@ use super::metadata::is_archived_storage_class;
 use super::tree::{ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
 use super::{ListingRow, ObjectBrowserDocument, ObjectBrowserFocusMode, VisibleRow};
 use crate::buckets_table::format_bytes;
+use crate::chrome::{document_bar, document_footer, footer_item, footer_key_hint, search_field};
 use crate::handle::DocumentEvent;
 use crate::labels::object_browser_status_summary;
 use crate::types::DocumentState;
-use dbflux_components::controls::Input;
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::{EmptyState, ListRow};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{
+    Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, SegmentedControl, SegmentedItem,
+};
+use dbflux_components::tokens::{
+    ChamferCut, ChromeColors, DocumentMetrics, Fields, ObjectStoreMetrics, SyntaxColors,
+};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::chrono::{DateTime, Utc};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 
-/// Column widths. `Key` takes the remaining space; the rest are fixed so the
-/// size column stays right-aligned against a stable edge.
-const SIZE_WIDTH: Pixels = px(96.0);
-const CLASS_WIDTH: Pixels = px(132.0);
-const MODIFIED_WIDTH: Pixels = px(150.0);
+/// Column widths after the key (P1Objects: 1fr, 100, 130, 140).
+const SIZE_WIDTH: Pixels = px(100.0);
+const CLASS_WIDTH: Pixels = px(130.0);
+const MODIFIED_WIDTH: Pixels = px(140.0);
+/// Width of the filter field in the header.
+const FILTER_WIDTH: Pixels = px(240.0);
+/// Height of the "Load more" row.
+const LOAD_MORE_HEIGHT: Pixels = px(38.0);
 
 /// Indentation applied per tree-mode depth level. Matches the connections
 /// sidebar so both trees read at the same rhythm.
@@ -38,6 +49,9 @@ const TREE_INDENT: Pixels = px(14.0);
 const CHEVRON_SLOT: Pixels = px(14.0);
 
 const UNKNOWN: &str = "—";
+
+/// Opacity of an archived object's row: it cannot be read without a restore.
+const ARCHIVED_ROW_OPACITY: f32 = 0.55;
 
 /// How a storage class is presented in the listing. `Archived` also dims the
 /// whole row: those objects cannot be read without a restore.
@@ -70,7 +84,7 @@ pub(super) fn storage_class_label(storage_class: Option<&str>) -> String {
 
 /// Icon for an object, chosen from its file extension. Prefixes always use the
 /// folder icon and never reach here.
-pub(super) fn object_icon(display_name: &str) -> AppIcon {
+pub(crate) fn object_icon(display_name: &str) -> AppIcon {
     let extension = display_name
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_lowercase())
@@ -86,6 +100,25 @@ pub(super) fn object_icon(display_name: &str) -> AppIcon {
         "zip" | "gz" | "tar" | "tgz" | "bz2" | "zst" | "7z" => AppIcon::Layers,
         _ => AppIcon::File,
     }
+}
+
+/// Palette color of an object's icon: folders in amber, tables in green,
+/// structured documents in blue, images in the NULL violet, the rest muted.
+pub(crate) fn object_icon_color(icon: AppIcon, cx: &App) -> Hsla {
+    let theme = cx.theme();
+
+    match icon {
+        AppIcon::Folder => theme.warning,
+        AppIcon::FileSpreadsheet => theme.success,
+        AppIcon::Braces | AppIcon::FileCode => theme.info,
+        AppIcon::Image => SyntaxColors::for_current(cx).number,
+        _ => theme.muted_foreground,
+    }
+}
+
+/// Keystroke bound to `command` in the listing, from the live keymap.
+fn listing_shortcut(command: Command) -> Option<String> {
+    dbflux_ui_base::effective_keymap().shortcut_for_command(ContextId::Results, command)
 }
 
 pub(super) fn format_modified(modified: Option<DateTime<Utc>>) -> String {
@@ -112,20 +145,55 @@ pub(super) fn summary_line(rows: &[VisibleRow]) -> String {
 }
 
 impl ObjectBrowserDocument {
-    /// Breadcrumb path bar: `s3:/` root, the bucket, then one clickable
-    /// segment per prefix level. Clicking a segment navigates to that level.
-    fn render_breadcrumb(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The path field: the URI scheme, the bucket in the tint, one
+    /// clickable segment per prefix level with the current one in the strong
+    /// color, and a copy button for the current prefix's URI.
+    fn render_path_field(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
         let segments = self.tree.breadcrumb_segments();
-        let at_root = self.tree.current_prefix.is_empty();
+        let segment_count = segments.len();
+        let entity = cx.entity();
 
-        let separator = |cx: &Context<Self>| {
-            div()
-                .px(Spacing::XXS)
-                .child(Text::caption("/").color(cx.theme().muted_foreground))
-        };
+        let mut path = div()
+            .relative()
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap(ObjectStoreMetrics::PATH_GAP)
+            .h(Fields::HEIGHT)
+            .px(Fields::PADDING_X)
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .font_family(AppFonts::MONO)
+            .text_size(Fields::TEXT)
+            .text_color(muted)
+            .child(
+                Chamfer::new(ChamferCut::CONTROL)
+                    .fill(theme.background)
+                    .border(theme.border),
+            )
+            .child(div().child("s3://"))
+            .child(
+                div()
+                    .id("object-path-bucket")
+                    .cursor_pointer()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(tint)
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.navigate_to_prefix(String::new(), window, cx);
+                            });
+                        }
+                    })
+                    .child(self.bucket.clone()),
+            )
+            .child(div().child("/"));
 
-        let mut trail = div().flex().items_center().overflow_hidden();
         let mut walked = String::new();
 
         for (index, segment) in segments.iter().enumerate() {
@@ -133,198 +201,156 @@ impl ObjectBrowserDocument {
             walked.push('/');
 
             let target = walked.clone();
-            let is_last = index + 1 == segments.len();
+            let entity = entity.clone();
+            let is_current = index + 1 == segment_count;
 
-            trail = trail.child(separator(cx)).child(
-                div()
-                    .id(SharedString::from(format!("breadcrumb-{index}")))
-                    .px(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.navigate_to_prefix(target.clone(), window, cx);
-                    }))
-                    .child(if is_last {
-                        Text::code(segment.clone())
-                    } else {
-                        Text::code(segment.clone()).muted_foreground()
-                    }),
-            );
+            path = path
+                .child(
+                    div()
+                        .id(SharedString::from(format!("object-path-segment-{index}")))
+                        .cursor_pointer()
+                        .when(is_current, |segment| segment.text_color(strong))
+                        .when(!is_current, |segment| {
+                            segment.hover(move |segment| segment.text_color(strong))
+                        })
+                        .on_click(move |_, window, cx| {
+                            entity.update(cx, |this, cx| {
+                                this.navigate_to_prefix(target.clone(), window, cx);
+                            });
+                        })
+                        .child(segment.clone()),
+                )
+                .child(div().child("/"));
         }
 
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::XS)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .child(
-                div()
-                    .id("object-browser-up")
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(Heights::CONTROL)
-                    .rounded(Radii::SM)
-                    .when(at_root, |d| d.opacity(0.4))
-                    .when(!at_root, |d| {
-                        d.cursor_pointer()
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.navigate_up(window, cx);
-                            }))
-                    })
-                    .child(Icon::new(AppIcon::ChevronUp).small().muted()),
-            )
-            .child(Text::caption("s3:/").color(theme.muted_foreground))
-            .child(
-                div()
-                    .id("breadcrumb-bucket")
-                    .px(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.navigate_to_prefix(String::new(), window, cx);
-                    }))
-                    .child(Text::code(self.bucket.clone()).primary()),
-            )
-            .child(trail)
+        let current_prefix = self.tree.current_prefix.clone();
+
+        path.child(
+            div()
+                .id("object-path-copy")
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .hover(move |copy| copy.text_color(strong))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.copy_object_uri(&current_prefix, cx);
+                }))
+                .child(
+                    Icon::new(AppIcon::Copy)
+                        .size(ObjectStoreMetrics::PATH_COPY_ICON)
+                        .color(muted),
+                ),
+        )
     }
 
+    /// The header row: up a level, the path, the prefix filter, the List and
+    /// Tree switch, Upload, New folder and the primary Refresh.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let is_loading = self.state == DocumentState::Loading;
         let tree_mode_on = self.tree.is_tree_mode();
+        let at_root = self.tree.current_prefix.is_empty();
 
-        // Ghost buttons: no border, background only on hover — and, for the
-        // toggles among them, a tinted background while active, the same way
-        // the result-view switcher marks its current mode.
-        let action_button =
-            |id: &'static str, icon: AppIcon, label: String, active: bool, cx: &Context<Self>| {
-                let theme = cx.theme();
+        let filter = div()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus_mode = ObjectBrowserFocusMode::Filter;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .child(search_field(
+                &self.filter_input,
+                Some(FILTER_WIDTH),
+                self.focus_mode == ObjectBrowserFocusMode::Filter,
+                cx,
+            ));
 
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h(Heights::CONTROL)
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .when(active, |d| d.bg(theme.primary))
-                    .when(!active, |d| d.hover(|d| d.bg(theme.secondary)))
-                    .child(if active {
-                        Icon::new(icon).small().color(theme.primary_foreground)
-                    } else {
-                        Icon::new(icon).small().muted()
-                    })
-                    .child(if active {
-                        Text::caption(label).color(theme.primary_foreground)
-                    } else {
-                        Text::caption(label)
-                    })
-            };
+        let weak_self = cx.weak_entity();
+        let mode_switch = SegmentedControl::new(
+            vec![
+                SegmentedItem::new(
+                    "object-browser-mode-list",
+                    dbflux_i18n::t!("document.object_browser.toolbar.list"),
+                )
+                .icon(AppIcon::Rows3),
+                SegmentedItem::new(
+                    "object-browser-mode-tree",
+                    dbflux_i18n::t!("document.object_browser.toolbar.tree"),
+                )
+                .icon(AppIcon::Layers),
+            ],
+            if tree_mode_on {
+                "object-browser-mode-tree"
+            } else {
+                "object-browser-mode-list"
+            },
+            move |id, _, cx| {
+                let wants_tree = id.as_ref() == "object-browser-mode-tree";
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .h(Heights::TOOLBAR)
-            .px(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
+                if let Some(doc) = weak_self.upgrade() {
+                    doc.update(cx, |this, cx| {
+                        if this.tree.is_tree_mode() != wants_tree {
+                            this.toggle_tree_mode(cx);
+                        }
+                    });
+                }
+            },
+        );
+
+        document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
             .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .max_w(px(360.0))
-                    .child(Icon::new(AppIcon::ListFilter).small().muted())
-                    .child(
-                        div()
-                            .flex_1()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.focus_mode = ObjectBrowserFocusMode::Filter;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                Input::new(&self.filter_input)
-                                    .small()
-                                    .cleanable(true)
-                                    .w_full(),
-                            ),
-                    ),
+                Button::new("object-browser-up", "")
+                    .icon(AppIcon::ChevronUp)
+                    .icon_only()
+                    .disabled(at_root)
+                    .tooltip(dbflux_i18n::t!("document.object_browser.toolbar.up"))
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.navigate_up(window, cx);
+                    })),
+            )
+            .child(self.render_path_field(cx))
+            .child(div().flex_1())
+            .child(filter)
+            .child(mode_switch)
+            .child(
+                Button::new(
+                    "object-browser-upload",
+                    dbflux_i18n::t!("document.object_browser.toolbar.upload"),
+                )
+                .icon(AppIcon::ArrowUp)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.request_upload(cx);
+                })),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        action_button(
-                            "object-browser-tree-mode",
-                            AppIcon::Layers,
-                            dbflux_i18n::t!("document.object_browser.toolbar.tree"),
-                            tree_mode_on,
-                            cx,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_tree_mode(cx);
-                        })),
-                    )
-                    .child(
-                        action_button(
-                            "object-browser-upload",
-                            AppIcon::ArrowUp,
-                            dbflux_i18n::t!("document.object_browser.toolbar.upload"),
-                            false,
-                            cx,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_upload(cx);
-                        })),
-                    )
-                    .child(
-                        action_button(
-                            "object-browser-new-folder",
-                            AppIcon::Folder,
-                            dbflux_i18n::t!("document.object_browser.toolbar.new_folder"),
-                            false,
-                            cx,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_new_folder(cx);
-                        })),
-                    )
-                    .child(
-                        action_button(
-                            "object-browser-refresh",
-                            if is_loading {
-                                AppIcon::Loader
-                            } else {
-                                AppIcon::RefreshCcw
-                            },
-                            dbflux_i18n::t!("document.object_browser.toolbar.refresh"),
-                            false,
-                            cx,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.reload_current_prefix(cx);
-                        })),
-                    ),
+                Button::new(
+                    "object-browser-new-folder",
+                    dbflux_i18n::t!("document.object_browser.toolbar.new_folder"),
+                )
+                .icon(AppIcon::Folder)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.request_new_folder(cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "object-browser-refresh",
+                    dbflux_i18n::t!("document.object_browser.toolbar.refresh"),
+                )
+                .primary()
+                .icon(if is_loading {
+                    AppIcon::Loader
+                } else {
+                    AppIcon::RefreshCcw
+                })
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.reload_current_prefix(cx);
+                })),
             )
     }
 
@@ -333,61 +359,57 @@ impl ObjectBrowserDocument {
 
         div()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
+            .h(DocumentMetrics::TABLE_ROW_HEIGHT)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(div().flex_1().child(Text::caption(dbflux_i18n::t!(
-                "document.object_browser.columns.key"
-            ))))
+            .border_color(theme.input)
+            .bg(theme.background)
+            .text_size(DocumentMetrics::TABLE_HEADER_FONT)
+            .text_color(theme.muted_foreground)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(dbflux_i18n::t!("document.object_browser.columns.key")),
+            )
             .child(
                 div()
                     .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.object_browser.columns.size"
-                    ))),
+                    .flex_shrink_0()
+                    .child(dbflux_i18n::t!("document.object_browser.columns.size")),
             )
-            .child(div().w(CLASS_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.object_browser.columns.class"
-            ))))
-            .child(div().w(MODIFIED_WIDTH).child(Text::caption(dbflux_i18n::t!(
-                "document.object_browser.columns.last_modified"
-            ))))
+            .child(
+                div()
+                    .w(CLASS_WIDTH)
+                    .flex_shrink_0()
+                    .child(dbflux_i18n::t!("document.object_browser.columns.class")),
+            )
+            .child(
+                div()
+                    .w(MODIFIED_WIDTH)
+                    .flex_shrink_0()
+                    .child(dbflux_i18n::t!(
+                        "document.object_browser.columns.last_modified"
+                    )),
+            )
     }
 
     pub(super) fn render_storage_class(
         &self,
         storage_class: Option<&str>,
-        cx: &Context<Self>,
+        _cx: &Context<Self>,
     ) -> AnyElement {
-        let theme = cx.theme();
         let label = storage_class_label(storage_class);
 
         match storage_class_style(storage_class) {
-            StorageClassStyle::Standard => Text::code(label).muted_foreground().into_any_element(),
-            StorageClassStyle::Infrequent => div()
-                .px(Spacing::XS)
-                .rounded(Radii::SM)
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.secondary)
-                .child(Text::caption(label))
-                .into_any_element(),
-            StorageClassStyle::Archived => div()
-                .flex()
-                .items_center()
-                .gap(Spacing::XXS)
-                .px(Spacing::XS)
-                .rounded(Radii::SM)
-                .border_1()
-                .border_color(theme.warning)
-                .child(Icon::new(AppIcon::Lock).small().warning())
-                .child(Text::caption(label).warning())
+            StorageClassStyle::Standard => Badge::new(label, BadgeTone::Neutral).into_any_element(),
+            StorageClassStyle::Infrequent => {
+                Badge::new(label, BadgeTone::Accent).into_any_element()
+            }
+            StorageClassStyle::Archived => Badge::new(label, BadgeTone::Info)
+                .icon(AppIcon::Lock)
                 .into_any_element(),
         }
     }
@@ -435,14 +457,14 @@ impl ObjectBrowserDocument {
         // so needs `cx` mutably.
         let tree_mode = self.tree.is_tree_mode();
         let chevron = tree_mode.then(|| self.render_tree_chevron(row, cx));
-
         let theme = cx.theme();
-
+        let muted = theme.muted_foreground;
+        let strong = ChromeColors::strong(theme);
         let display_name = row.entry.display_name(&row.parent_prefix);
         let node_id = row.entry.node_id();
         let row_id = SharedString::from(format!("object-row-{}", row.entry.full_key()));
 
-        let (icon, name_element, size_label, class_element, modified_label, archived) =
+        let (icon, name_label, size_label, class_element, modified_label, archived) =
             match &row.entry {
                 ObjectTreeEntry::Prefix(prefix) => {
                     let child_count = self
@@ -450,7 +472,6 @@ impl ObjectBrowserDocument {
                         .level(prefix)
                         .filter(|level| level.state == PrefixLoadState::Loaded)
                         .map(|level| level.entries.len());
-
                     let label = match child_count {
                         Some(count) => format!("{display_name}/  ({count})"),
                         None => format!("{display_name}/"),
@@ -458,7 +479,7 @@ impl ObjectBrowserDocument {
 
                     (
                         AppIcon::Folder,
-                        Text::code(label).primary(),
+                        label,
                         UNKNOWN.to_string(),
                         div().into_any_element(),
                         UNKNOWN.to_string(),
@@ -467,7 +488,7 @@ impl ObjectBrowserDocument {
                 }
                 ObjectTreeEntry::Object(summary) => (
                     object_icon(&display_name),
-                    Text::code(display_name.clone()),
+                    display_name.clone(),
                     format_bytes(summary.size_bytes),
                     self.render_storage_class(summary.storage_class.as_deref(), cx),
                     format_modified(summary.last_modified),
@@ -476,27 +497,26 @@ impl ObjectBrowserDocument {
                 ),
             };
 
+        let icon_color = object_icon_color(icon, cx);
         let activate_id = node_id.clone();
         let select_id = node_id.clone();
         let menu_id = node_id.clone();
 
-        div()
-            .id(row_id)
+        ListRow::new(row_id)
+            .selected(selected)
+            .selection_bar(true)
+            .build(cx)
             // `uniform_list` sizes each item from its own content instead of
             // stretching it like a flex column child, so the row needs an
             // explicit full width to line up with the header columns.
             .w_full()
             .flex()
             .items_center()
-            .gap(Spacing::MD)
-            .h(Heights::ROW)
-            .px(Spacing::SM)
+            .h(ObjectStoreMetrics::OBJECT_ROW_HEIGHT)
+            .px(DocumentMetrics::PADDING_X)
             .border_b_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .when(archived, |d| d.opacity(0.55))
-            .when(selected, |d| d.bg(theme.list_active))
-            .when(!selected, |d| d.hover(|d| d.bg(theme.list_active)))
+            .border_color(theme.table_row_border)
+            .when(archived, |d| d.opacity(ARCHIVED_ROW_OPACITY))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -540,36 +560,50 @@ impl ObjectBrowserDocument {
                 div()
                     .flex()
                     .flex_1()
+                    .min_w_0()
                     .items_center()
-                    .gap(Spacing::SM)
+                    .gap(ObjectStoreMetrics::NAME_GAP)
                     .overflow_hidden()
                     .pl(TREE_INDENT * row.depth as f32)
                     .when_some(chevron, |d, chevron| d.child(chevron))
-                    .child(if row.entry.is_prefix() {
-                        Icon::new(icon).small().primary()
-                    } else {
-                        Icon::new(icon).small().muted()
-                    })
+                    .child(
+                        Icon::new(icon)
+                            .size(ObjectStoreMetrics::NAME_ICON)
+                            .color(icon_color),
+                    )
                     .child(
                         div()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(name_element),
+                            .truncate()
+                            .font_family(AppFonts::MONO)
+                            .text_size(ObjectStoreMetrics::OBJECT_NAME_FONT)
+                            .text_color(strong)
+                            .child(name_label),
                     ),
             )
             .child(
                 div()
                     .w(SIZE_WIDTH)
-                    .flex()
-                    .justify_end()
-                    .child(Text::code(size_label).muted_foreground()),
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(size_label),
             )
-            .child(div().w(CLASS_WIDTH).child(class_element))
+            .child(
+                div()
+                    .w(CLASS_WIDTH)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .child(class_element),
+            )
             .child(
                 div()
                     .w(MODIFIED_WIDTH)
-                    .child(Text::code(modified_label).muted_foreground()),
+                    .flex_shrink_0()
+                    .text_size(DocumentMetrics::TABLE_META_FONT)
+                    .text_color(muted)
+                    .child(modified_label),
             )
             .into_any_element()
     }
@@ -588,6 +622,7 @@ impl ObjectBrowserDocument {
         let theme = cx.theme();
         let row_id = SharedString::from(format!("object-browser-load-more-{prefix}"));
         let prefix = prefix.to_string();
+        let strong = ChromeColors::strong(theme);
 
         div()
             .id(row_id)
@@ -595,15 +630,15 @@ impl ObjectBrowserDocument {
             .flex()
             .items_center()
             .justify_center()
-            .gap(Spacing::XS)
-            .h(Heights::ROW)
+            .gap(DocumentMetrics::GAP)
+            .h(LOAD_MORE_HEIGHT)
             .pl(TREE_INDENT * depth as f32)
-            .border_b_1()
-            .border_color(theme.border)
-            .when(loading, |d| d.opacity(0.6))
+            .text_size(Fields::TEXT)
+            .text_color(theme.muted_foreground)
+            .when(loading, |d| d.opacity(Fields::DISABLED_OPACITY))
             .when(!loading, |d| {
                 d.cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
+                    .hover(move |d| d.text_color(strong))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.load_more(prefix.clone(), cx);
                     }))
@@ -614,59 +649,30 @@ impl ObjectBrowserDocument {
                 } else {
                     AppIcon::ChevronDown
                 })
-                .small()
-                .muted(),
+                .size(Fields::CHEVRON)
+                .color(theme.muted_foreground),
             )
-            .child(Text::caption(if loading {
+            .child(if loading {
                 dbflux_i18n::t!("document.object_browser.status.loading_more")
             } else {
                 dbflux_i18n::t!("document.object_browser.status.load_more")
-            }))
+            })
     }
 
     /// Per-level error strip: the failure stays attached to the level that
     /// failed instead of replacing the whole document with an error state.
     fn render_level_error(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::SM)
-            .px(Spacing::SM)
-            .py(Spacing::XS)
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .overflow_hidden()
-                    .child(Icon::new(AppIcon::TriangleAlert).small().danger())
-                    .child(Text::caption(message.to_string()).danger()),
+        BannerBlock::new(BannerVariant::Danger, message.to_string()).with_actions(
+            Button::new(
+                "object-browser-retry",
+                dbflux_i18n::t!("document.object_browser.status.retry"),
             )
-            .child(
-                div()
-                    .id("object-browser-retry")
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .h(Heights::CONTROL)
-                    .px(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.muted))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.reload_current_prefix(cx);
-                    }))
-                    .child(Icon::new(AppIcon::RefreshCcw).small().muted())
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.object_browser.status.retry"
-                    ))),
-            )
+            .icon(AppIcon::RefreshCcw)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.reload_current_prefix(cx);
+            })),
+        )
     }
 
     fn render_empty_state(&self, loading: bool) -> AnyElement {
@@ -687,75 +693,52 @@ impl ObjectBrowserDocument {
         div()
             .flex_1()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap(Spacing::SM)
-            .child(Icon::new(AppIcon::Folder).size(Heights::ICON_LG).muted())
-            .child(Text::muted(message))
+            .p(DocumentMetrics::PADDING_X)
+            .child(EmptyState::new(AppIcon::Folder, message))
             .into_any_element()
     }
 
     fn render_footer(&self, rows: &[VisibleRow], cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let tree_mode_on = self.tree.is_tree_mode();
 
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(Spacing::MD)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .child(Icon::new(AppIcon::Folder).small().muted())
-                            .child(Text::caption(summary_line(rows))),
-                    )
-                    .when(tree_mode_on, |this| {
-                        this.child(
-                            Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.status.tree_mode"
-                            ))
-                            .muted_foreground(),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::MD)
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.open"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.preview"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.up"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.filter"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.delete"
-                    )))
-                    .child(Text::key_hint(dbflux_i18n::t!(
-                        "document.object_browser.status.key_hint.rename"
-                    ))),
-            )
+        let hints = [
+            (
+                Command::Execute,
+                "document.object_browser.status.key_hint.open",
+            ),
+            (
+                Command::ExpandCollapse,
+                "document.object_browser.status.key_hint.preview",
+            ),
+            (
+                Command::ColumnLeft,
+                "document.object_browser.status.key_hint.up",
+            ),
+            (
+                Command::Rename,
+                "document.object_browser.status.key_hint.rename",
+            ),
+            (
+                Command::Delete,
+                "document.object_browser.status.key_hint.delete",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(command, key)| {
+            listing_shortcut(command)
+                .map(|shortcut| footer_key_hint(shortcut, dbflux_i18n::t!(key)))
+        });
+
+        document_footer(cx)
+            .h(ObjectStoreMetrics::FOOTER_HEIGHT)
+            .child(footer_item(AppIcon::Folder, summary_line(rows), cx))
+            .when(tree_mode_on, |footer| {
+                footer.child(dbflux_i18n::t!("document.object_browser.status.tree_mode"))
+            })
+            .child(div().flex_1())
+            .children(hints)
     }
 }
 
@@ -869,7 +852,6 @@ impl Render for ObjectBrowserDocument {
         .absolute()
         .size_full();
 
-        let preview_key = self.preview_key.clone();
         let pending_navigation = self.pending_navigation.clone();
         let pending_object_delete = self.pending_object_delete.clone();
         let delete_prefix_confirm = self.delete_prefix_confirm().cloned();
@@ -882,7 +864,7 @@ impl Render for ObjectBrowserDocument {
             .size_full()
             .flex()
             .flex_col()
-            .bg(cx.theme().background)
+            .bg(cx.theme().popover)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -892,7 +874,6 @@ impl Render for ObjectBrowserDocument {
                 }),
             )
             .child(origin_canvas)
-            .child(self.render_breadcrumb(cx))
             .child(self.render_toolbar(cx))
             .when_some(level_error, |this, message| {
                 this.child(self.render_level_error(&message, cx))
@@ -917,10 +898,7 @@ impl Render for ObjectBrowserDocument {
                             .overflow_hidden()
                             .child(self.render_header(cx))
                             .child(listing),
-                    )
-                    .when_some(preview_key, |this, key| {
-                        this.child(self.render_preview_pane(&key, cx))
-                    }),
+                    ),
             )
             .child(self.render_footer(&entry_rows, cx))
             .when_some(pending_navigation, |this, navigation| {

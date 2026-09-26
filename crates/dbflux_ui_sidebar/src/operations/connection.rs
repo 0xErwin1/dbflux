@@ -319,9 +319,10 @@ impl Sidebar {
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             state.clear_connect_failure(profile_id);
-            let result = state.start_task(
+            let result = state.start_task_for_profile(
                 TaskKind::Connect,
                 crate::labels::connecting_task_label(&profile_name),
+                Some(profile_id),
             );
             cx.emit(AppStateChanged);
             result
@@ -727,6 +728,67 @@ impl Sidebar {
             });
         })
         .detach();
+    }
+
+    /// Measures one `ping` round trip for every connected profile that has
+    /// no measurement yet, and forgets the profiles that are no longer
+    /// connected. Driver-agnostic: it only uses [`Connection::ping`].
+    ///
+    /// [`Connection::ping`]: dbflux_core::Connection::ping
+    pub(crate) fn sync_connection_latencies(&mut self, cx: &mut Context<Self>) {
+        let connected: Vec<(Uuid, Arc<dyn dbflux_core::Connection>)> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .iter()
+            .map(|(profile_id, connected)| (*profile_id, connected.connection.clone()))
+            .collect();
+
+        let connected_ids: HashSet<Uuid> = connected.iter().map(|(id, _)| *id).collect();
+
+        self.connection_latencies
+            .retain(|profile_id, _| connected_ids.contains(profile_id));
+        self.pending_latency_probes
+            .retain(|profile_id, _| connected_ids.contains(profile_id));
+
+        for (profile_id, connection) in connected {
+            let already_measured = self.connection_latencies.contains_key(&profile_id)
+                || self.pending_latency_probes.contains_key(&profile_id);
+
+            if already_measured {
+                continue;
+            }
+
+            let probe = cx.background_executor().spawn(async move {
+                let started = std::time::Instant::now();
+                connection.ping().map(|()| started.elapsed())
+            });
+
+            let task = cx.spawn(async move |this, cx| {
+                let result = probe.await;
+
+                let update = this.update(cx, |sidebar, cx| {
+                    sidebar.pending_latency_probes.remove(&profile_id);
+
+                    let latency = match result {
+                        Ok(latency) => Some(latency),
+                        Err(error) => {
+                            log::debug!("Latency probe for profile {profile_id} failed: {error}");
+                            None
+                        }
+                    };
+
+                    sidebar.connection_latencies.insert(profile_id, latency);
+                    cx.notify();
+                });
+
+                if let Err(error) = update {
+                    log::debug!("Sidebar dropped before the latency probe finished: {error}");
+                }
+            });
+
+            self.pending_latency_probes.insert(profile_id, task);
+        }
     }
 
     /// User-initiated disconnect. When a query is still running on the

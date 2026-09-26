@@ -1,6 +1,8 @@
 use dbflux_components::chart::ChartKind;
+use dbflux_components::composites::{inline_tab, inline_tab_bar};
 use dbflux_components::controls::{Button, GpuiInput as Input, InputEvent, InputState};
-use dbflux_components::modals::shell::{ModalFocus, ModalShell};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::modal::{Modal, ModalFocus};
 use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -588,9 +590,8 @@ impl ModalAddPanelPicker {
     fn render_tab_strip(&self, cx: &mut Context<Self>) -> AnyElement {
         let visible = self.visible_tabs();
         let active = self.active_tab;
-        let theme = cx.theme();
 
-        let buttons: Vec<AnyElement> = visible
+        let tabs: Vec<AnyElement> = visible
             .into_iter()
             .map(|tab| {
                 let label = match tab {
@@ -604,27 +605,22 @@ impl ModalAddPanelPicker {
                     AddPanelTab::Metric => "add-panel-tab-metric",
                 };
                 let is_active = tab == active;
-                let mut btn =
-                    Button::new(id, label).on_click(cx.listener(move |this, _, _, cx| {
+
+                inline_tab(id, is_active, cx)
+                    .role(gpui::Role::Tab)
+                    .aria_selected(is_active)
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_active_tab(tab, cx);
-                    }));
-                if is_active {
-                    btn = btn.primary();
-                } else {
-                    btn = btn.ghost();
-                }
-                btn.into_any_element()
+                    }))
+                    .child(Text::body(label))
+                    .into_any_element()
             })
             .collect();
 
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .pb(Spacing::SM)
-            .border_b_1()
-            .border_color(theme.border)
-            .children(buttons)
+        inline_tab_bar(cx)
+            .id("add-panel-tab-list")
+            .role(gpui::Role::TabList)
+            .children(tabs)
             .into_any_element()
     }
 
@@ -643,7 +639,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::body(dbflux_i18n::t!(
                     "modals.add_panel_picker.saved.search_label"
                 ))
                 .into_any_element(),
@@ -717,7 +713,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                Text::body(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
                     .into_any_element(),
             )
             .child(Input::new(&self.query_name_input))
@@ -729,7 +725,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.query.label"))
+                Text::body(dbflux_i18n::t!("modals.add_panel_picker.query.label"))
                     .into_any_element(),
             )
             .child(
@@ -745,7 +741,7 @@ impl ModalAddPanelPicker {
                         Editor::new(&self.query_input)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::BODY)
+                            .font_family(AppFonts::MONO)
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     )
@@ -758,7 +754,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.chart_kind.label"))
+                Text::body(dbflux_i18n::t!("modals.add_panel_picker.chart_kind.label"))
                     .into_any_element(),
             )
             .child(self.render_chart_kind_picker(cx))
@@ -986,7 +982,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                Text::body(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
                     .into_any_element(),
             )
             .child(Input::new(&self.metric_name_input))
@@ -1000,7 +996,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::body(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.namespace_label"
                 ))
                 .into_any_element(),
@@ -1016,7 +1012,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::body(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.metric_label"
                 ))
                 .into_any_element(),
@@ -1039,7 +1035,7 @@ impl ModalAddPanelPicker {
             .gap(Spacing::XS)
             .w(px(180.0))
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::body(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.period_label"
                 ))
                 .into_any_element(),
@@ -1074,7 +1070,7 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .child(
-                Text::subsection_label(dbflux_i18n::t!(
+                Text::body(dbflux_i18n::t!(
                     "modals.add_panel_picker.metric.statistic_label"
                 ))
                 .into_any_element(),
@@ -1161,27 +1157,26 @@ impl Render for ModalAddPanelPicker {
                     .on_click(on_confirm),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.add_panel_picker.title"),
-            body,
-            footer.into_any_element(),
-        )
-        .width(gpui::px(900.0))
-        .focus_handle(self.focus.handle())
-        .on_close({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
-            }
-        })
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |_, cx| {
-                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
-            }
-        })
-        .confirm_enabled(can_confirm)
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.add_panel_picker.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Plus)
+            .width(gpui::px(900.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(can_confirm)
+            .into_any_element()
     }
 }
 
@@ -1222,8 +1217,8 @@ mod tests {
     #[test]
     fn submit_label_updates_live_based_on_selection_count() {
         let ids_0: Vec<Uuid> = vec![];
-        let ids_1 = vec![Uuid::new_v4()];
-        let ids_3 = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let ids_1 = [Uuid::new_v4()];
+        let ids_3 = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
 
         assert_eq!(
             submit_label_for(AddPanelTab::Saved, ids_0.len()),

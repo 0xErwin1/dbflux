@@ -45,6 +45,8 @@ pub enum DocumentEvent {
     OpenInspector {
         title: gpui::SharedString,
         content: gpui::AnyView,
+        /// The content draws its own title bar; the rail must not add one.
+        content_has_header: bool,
     },
     /// Request to hide the workspace inspector rail without losing the
     /// document's cached inspector state (e.g. when switching away from a
@@ -70,6 +72,9 @@ pub enum DocumentEvent {
         source_title: String,
         profile_id: uuid::Uuid,
     },
+    /// The audit viewer asked to open the MCP approvals view for an agent
+    /// call that a policy parked for approval.
+    RequestOpenApprovals,
     /// The query builder's "Open in Editor" was pressed.
     ///
     /// Carries the target connection profile and the fully materialized SQL

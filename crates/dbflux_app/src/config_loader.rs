@@ -352,6 +352,9 @@ pub fn save_profiles(
             ssh_tunnel_profile_id: ssh_tunnel_profile_id_str,
             created_at: String::new(),
             updated_at: String::new(),
+            environment: profile
+                .environment
+                .map(|environment| environment.as_str().to_string()),
         };
 
         repo.upsert(&dto)?;
@@ -1091,16 +1094,16 @@ fn load_general_settings(
 
 fn general_settings_theme_to_storage(theme: dbflux_core::ThemeSetting) -> &'static str {
     match theme {
+        dbflux_core::ThemeSetting::System => "system",
         dbflux_core::ThemeSetting::Dark => "dark",
-        dbflux_core::ThemeSetting::Mirage => "mirage",
         dbflux_core::ThemeSetting::Light => "light",
     }
 }
 
 fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
     match theme {
+        "system" => dbflux_core::ThemeSetting::System,
         "light" => dbflux_core::ThemeSetting::Light,
-        "mirage" => dbflux_core::ThemeSetting::Mirage,
         _ => dbflux_core::ThemeSetting::Dark,
     }
 }
@@ -1703,6 +1706,10 @@ fn load_profiles(
                 access_kind,
                 mcp_governance,
                 read_only_flag: false,
+                environment: dto
+                    .environment
+                    .as_deref()
+                    .and_then(dbflux_core::ConnectionEnvironment::from_id),
             })
         })
         .collect()
@@ -2301,6 +2308,32 @@ mod tests {
     }
 
     #[test]
+    fn profile_environment_round_trips_and_defaults_to_none() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let mut production = ConnectionProfile::new("prod", DbConfig::default_postgres());
+        production.environment = Some(dbflux_core::ConnectionEnvironment::Production);
+        let unset = ConnectionProfile::new("unset", DbConfig::default_postgres());
+
+        save_profiles(&runtime, &[production.clone(), unset.clone()])
+            .expect("save profiles with environment");
+
+        let loaded = load_config(&runtime).expect("load configuration").profiles;
+        let find = |id| {
+            loaded
+                .iter()
+                .find(|candidate| candidate.id == id)
+                .expect("reloaded profile")
+        };
+
+        assert_eq!(
+            find(production.id).environment(),
+            Some(dbflux_core::ConnectionEnvironment::Production)
+        );
+        assert_eq!(find(unset.id).environment(), None);
+    }
+
+    #[test]
     fn profile_hook_with_empty_command_round_trips_as_command_not_dropped() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
         let mut profile = ConnectionProfile::new("empty-command", DbConfig::default_postgres());
@@ -2385,23 +2418,28 @@ mod tests {
     }
 
     #[test]
-    fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {
+    fn theme_setting_storage_round_trip_supports_system_dark_and_light() {
+        assert_eq!(
+            general_settings_theme_to_storage(ThemeSetting::System),
+            "system"
+        );
         assert_eq!(
             general_settings_theme_to_storage(ThemeSetting::Dark),
             "dark"
-        );
-        assert_eq!(
-            general_settings_theme_to_storage(ThemeSetting::Mirage),
-            "mirage"
         );
         assert_eq!(
             general_settings_theme_to_storage(ThemeSetting::Light),
             "light"
         );
 
+        assert_eq!(theme_setting_from_storage("system"), ThemeSetting::System);
         assert_eq!(theme_setting_from_storage("dark"), ThemeSetting::Dark);
-        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Mirage);
         assert_eq!(theme_setting_from_storage("light"), ThemeSetting::Light);
+    }
+
+    #[test]
+    fn legacy_mirage_theme_storage_value_reads_back_as_dark() {
+        assert_eq!(theme_setting_from_storage("mirage"), ThemeSetting::Dark);
     }
 
     #[test]
@@ -2586,8 +2624,10 @@ mod tests {
             return;
         }
 
-        let mut settings = GeneralSettings::default();
-        settings.editor_row_limit = usize::MAX;
+        let settings = GeneralSettings {
+            editor_row_limit: usize::MAX,
+            ..GeneralSettings::default()
+        };
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
         assert!(
@@ -2614,9 +2654,9 @@ mod tests {
     }
 
     #[test]
-    fn save_general_settings_persists_mirage_without_mutating_fonts_or_other_fields() {
+    fn save_general_settings_persists_system_without_mutating_fonts_or_other_fields() {
         let settings = GeneralSettings {
-            theme: ThemeSetting::Mirage,
+            theme: ThemeSetting::System,
             max_history_entries: 77,
             auto_save_interval_ms: 1234,
             ..Default::default()
@@ -2632,7 +2672,7 @@ mod tests {
             .expect("load saved dto")
             .expect("general settings row");
 
-        assert_eq!(dto.theme, "mirage");
+        assert_eq!(dto.theme, "system");
         assert_eq!(dto.max_history_entries, 77);
         assert_eq!(dto.auto_save_interval_ms, 1234);
     }

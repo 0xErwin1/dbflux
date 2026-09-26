@@ -1,7 +1,7 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
-use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -35,6 +35,7 @@ actions!(
         OpenPreview,
         DeleteDocument,
         ToggleViewMode,
+        CycleDataView,
         OpenSearch,
         NextMatch,
         PrevMatch,
@@ -48,14 +49,6 @@ actions!(
 /// keymap's `DocumentTree` layer by the UI layer, so this domain-free crate
 /// never hard-codes those keys.
 pub const CONTEXT: &str = "DocumentTree";
-
-/// Registers the keybindings the app keymap cannot express.
-///
-/// `d d` is a two-keystroke sequence, and a keymap chord describes a single
-/// keystroke, so the sequence stays a native GPUI binding here.
-pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("d d", DeleteDocument, Some(CONTEXT))]);
-}
 
 /// Document tree component for displaying MongoDB documents.
 pub struct DocumentTree {
@@ -263,6 +256,14 @@ impl Render for DocumentTree {
             })
             .on_action({
                 let state = self.state.clone();
+                move |_: &CycleDataView, _window, cx| {
+                    state.update(cx, |_, cx| {
+                        cx.emit(DocumentTreeEvent::CycleDataViewRequested)
+                    });
+                }
+            })
+            .on_action({
+                let state = self.state.clone();
                 move |_: &OpenSearch, _window, cx| {
                     state.update(cx, |s, cx| s.open_search(cx));
                 }
@@ -306,6 +307,7 @@ impl Render for DocumentTree {
                 div()
                     .flex_1()
                     .overflow_hidden()
+                    .font_family(AppFonts::MONO)
                     .when(is_tree_mode, |d| {
                         d.child(
                             uniform_list("document-tree-list", node_count, {
@@ -392,7 +394,7 @@ impl Render for DocumentTree {
                                 Editor::new(&input)
                                     .w_full()
                                     .h_full()
-                                    .font_family(AppFonts::BODY)
+                                    .font_family(AppFonts::MONO)
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_size(FontSizes::BASE),
                             ),
@@ -539,7 +541,7 @@ fn render_tree_row(
 
     let selection_color = theme.selection;
     let secondary_color = theme.secondary;
-    let primary_color = theme.primary;
+    let key_color = ChromeColors::tint(&theme);
     let muted_color = theme.muted_foreground;
     let warning_color = theme.warning;
 
@@ -618,7 +620,7 @@ fn render_tree_row(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(Text::label_sm(node.key.to_string()).color(primary_color))
+                .child(Text::body_sm(node.key.to_string()).color(key_color))
                 .child(
                     Text::caption(":")
                         .font_size(FontSizes::XS)
@@ -628,6 +630,7 @@ fn render_tree_row(
         // Value preview
         .child(render_value_preview_with_expand(
             &node.value,
+            node.summary.as_deref().filter(|_| !is_expanded),
             is_value_expanded,
             is_editing,
             inline_edit_input,
@@ -693,7 +696,7 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
                 hsla(150.0 / 360.0, 0.5, 0.5, 1.0) // guardrail-allow: JSON type color
             }
             dbflux_core::Value::Text(_) => hsla(30.0 / 360.0, 0.7, 0.6, 1.0), // guardrail-allow: JSON type color
-            dbflux_core::Value::ObjectId(_) => theme.primary,
+            dbflux_core::Value::ObjectId(_) => ChromeColors::tint(theme),
             dbflux_core::Value::DateTime(_)
             | dbflux_core::Value::Date(_)
             | dbflux_core::Value::Time(_) => hsla(200.0 / 360.0, 0.6, 0.5, 1.0), // guardrail-allow: JSON type color
@@ -705,8 +708,10 @@ fn get_type_color(value: &NodeValue, theme: &gpui_component::Theme) -> Hsla {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_value_preview_with_expand(
     value: &NodeValue,
+    collapsed_summary: Option<&str>,
     is_expanded: bool,
     is_editing: bool,
     inline_edit_input: Option<Entity<InputState>>,
@@ -716,7 +721,9 @@ fn render_value_preview_with_expand(
 ) -> Stateful<Div> {
     let color = get_type_color(value, theme);
 
-    let text = if is_expanded {
+    let text = if let Some(summary) = collapsed_summary {
+        summary.to_string()
+    } else if is_expanded {
         value.full_preview().to_string()
     } else {
         value.preview().to_string()

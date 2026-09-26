@@ -23,17 +23,39 @@ export interface DocsSection {
  * The repository's `docs/` files carry no ordering metadata, so the sequence is
  * declared here rather than inferred from filenames. An entry listed here but
  * missing from disk is reported at build time by `docsSections()`.
+ *
+ * Pages that older published versions still ship (`usage` as the full guide,
+ * `dashboards_and_audit`, `data_and_privacy`) stay listed so those versions keep
+ * filing them; a version without the page simply drops the entry.
  */
 export const DOCS_SECTIONS: readonly DocsSection[] = [
-  { id: 'start', title: 'Start here', entries: ['install', 'usage', 'connections'] },
-  { id: 'using', title: 'Using DBFlux', entries: ['charts', 'dashboards', 'dashboards_and_audit'] },
+  {
+    id: 'start',
+    title: 'Start here',
+    entries: ['install', 'getting_started', 'usage', 'connections'],
+  },
+  {
+    id: 'using',
+    title: 'Using DBFlux',
+    entries: [
+      'schema_browser',
+      'editor',
+      'results',
+      'key_value',
+      'documents',
+      'query_builder',
+      'charts',
+      'dashboards',
+      'dashboards_and_audit',
+    ],
+  },
   {
     id: 'configure',
     title: 'Configuring',
     entries: ['settings', 'lua', 'data_and_privacy', 'privacy'],
   },
   { id: 'integrate', title: 'Integrations', entries: ['mcp_ai_integration', 'audit'] },
-  { id: 'reference', title: 'Reference', entries: ['drivers', 'concepts'] },
+  { id: 'reference', title: 'Reference', entries: ['keyboard', 'drivers', 'concepts'] },
   {
     id: 'drivers',
     title: 'Driver reference',
@@ -75,8 +97,15 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
 /** Display titles for the rail. The markdown H1 stays the page heading. */
 export const DOC_TITLES: Readonly<Record<string, string>> = {
   install: 'Installing',
+  getting_started: 'Getting started',
   usage: 'Usage guide',
   connections: 'Connecting',
+  schema_browser: 'Schema browser',
+  editor: 'Query editor',
+  results: 'Results',
+  key_value: 'Key-value browser',
+  documents: 'Document collections',
+  query_builder: 'Visual query builder',
   charts: 'Charts',
   dashboards: 'Dashboards',
   dashboards_and_audit: 'Dashboards & audit',
@@ -85,6 +114,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   data_and_privacy: 'Data & privacy',
   mcp_ai_integration: 'AI + MCP',
   audit: 'Audit events',
+  keyboard: 'Keyboard reference',
   drivers: 'Drivers',
   concepts: 'Key concepts',
   driver_authoring: 'Driver authoring',

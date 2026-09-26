@@ -1,14 +1,12 @@
 use super::*;
-use crate::keymap::ContextId;
-use dbflux_components::composites::{PanelHeaderVariant, panel_header_collapsible_variant};
+use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
-use dbflux_components::modals::shell::{ModalShell, ModalVariant};
-use dbflux_components::primitives::{Chord, Icon, Text};
-use dbflux_components::typography::Body;
-use dbflux_ui_base::keymap::chord_display_parts;
-use dbflux_ui_base::modal_frame::ModalFrame;
-use dbflux_ui_base::platform;
-use gpui_component::IconName;
+use dbflux_components::modals::Modal;
+use dbflux_components::modals::ModalVariant;
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::{ChromeColors, IslandMetrics, ShellMetrics, TabMetrics};
+use dbflux_ui_document::DocumentSidePanel;
+use gpui_component::resizable::ResizablePanel;
 
 /// Schedules `run` at the end of the current effect cycle instead of running
 /// it inline (`Context::defer_in`). Commands that open native windows
@@ -49,33 +47,66 @@ impl Workspace {
     }
 }
 
-/// Display labels of the chord the default keymap binds to `command` in the
-/// global context, so the empty-workspace hints show the binding that is
-/// actually registered, with the platform's modifier (Cmd on macOS).
-fn empty_state_shortcut_keys(command: Command) -> Option<Vec<gpui::SharedString>> {
-    default_keymap()
-        .chord_for_command(ContextId::Global, command)
-        .map(chord_display_parts)
+/// A document's side panel as a full-height island after the document
+/// island, `IslandMetrics::GAP` of desk on its left. A click inside makes the
+/// document the focused area again, but leaves keyboard focus where the
+/// panel put it (a search field, the panel itself).
+fn document_side_island(
+    panel: DocumentSidePanel,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement + use<> {
+    let focus_document = |this: &mut Workspace, cx: &mut Context<Workspace>| {
+        if this.focus_target != FocusTarget::Document {
+            this.mark_focus_target(FocusTarget::Document, cx);
+        }
+    };
+
+    div()
+        .id(ElementId::Name(
+            format!("document-side-panel-{}", panel.id).into(),
+        ))
+        .h_full()
+        .w(panel.width + IslandMetrics::GAP)
+        .pl(IslandMetrics::GAP)
+        .flex_shrink_0()
+        .flex()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| focus_document(this, cx)),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, _, _, cx| focus_document(this, cx)),
+        )
+        .child(Island::new().h_full().w(panel.width).child(panel.content))
 }
 
-/// One row of the empty-workspace placeholder: a `Chord` followed by a
-/// muted description. Returns `None` when `command` has no global binding,
-/// so the placeholder never advertises a shortcut that does nothing.
-fn empty_state_shortcut(
-    command: Command,
-    description: impl Into<gpui::SharedString>,
-) -> Option<gpui::Div> {
-    let keys = empty_state_shortcut_keys(command)?;
-
-    Some(
-        gpui::div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(Chord::new(keys))
-            .child(Text::dim_secondary(description)),
-    )
+impl Workspace {
+    /// The expanded background tasks panel under the document area, with its
+    /// own header. Collapsed, nothing is rendered there: the status bar's
+    /// tasks chip is the only way back in.
+    fn render_tasks_panel(&self, cx: &mut Context<Self>) -> ResizablePanel {
+        resizable_panel()
+            .size(ShellMetrics::TASKS_PANEL_HEIGHT)
+            .size_range(px(80.0)..px(2000.0))
+            .child(
+                div()
+                    .id("tasks-panel")
+                    .debug_selector(|| "tasks-panel".to_string())
+                    .flex()
+                    .flex_col()
+                    .size_full()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            if this.focus_target != FocusTarget::BackgroundTasks {
+                                this.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                            }
+                        }),
+                    )
+                    .child(self.tasks_panel.clone()),
+            )
+    }
 }
 
 impl Render for Workspace {
@@ -175,277 +206,125 @@ impl Render for Workspace {
 
         let sidebar_dock = self.sidebar_dock.clone();
         let status_bar = self.status_bar.clone();
-        let tasks_panel = self.tasks_panel.clone();
-        let toast_host = self.toast_host.clone();
+        // Toasts stack at the top right of the document area, never over the
+        // sidebar or the status bar. They are deferred so they still paint
+        // above modals, below the open notifications popover, and hidden
+        // while the shutdown overlay is up.
+        let toast_layer = (!self.app_state.read(cx).shutdown_phase().is_active()).then(|| {
+            deferred(self.toast_host.clone())
+                .with_priority(super::notifications::TOAST_LAYER_PRIORITY)
+        });
         let command_palette = self.command_palette.clone();
         let login_modal = self.login_modal.clone();
         let sso_wizard = self.sso_wizard.clone();
 
-        let tab_bar = self.tab_bar.clone();
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
+        let document_side_panels = self
+            .tab_manager
+            .update(cx, |mgr, cx| mgr.active_side_panels(window, cx));
         let inspector_open = self.workspace_inspector.read(cx).is_open();
         let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
         let inspector_entity = self.workspace_inspector.clone();
 
-        let tasks_expanded = self.tasks_state.is_expanded();
-        let tasks_focused = self.focus_target == FocusTarget::BackgroundTasks;
-
-        let theme = cx.theme().clone();
-        let bg_color = theme.background;
-        let muted_fg = theme.muted_foreground;
-        let header_size = px(25.0);
+        let desk = ChromeColors::desk(cx.theme());
+        let sidebar_collapsed = self.is_sidebar_collapsed(cx);
         let sidebar_context_menu = self.sidebar.read(cx).context_menu_state().cloned();
         let tab_context_menu = self.tab_bar.read(cx).context_menu_state().cloned();
         let child_picker_open = self.sidebar.read(cx).has_child_picker_open();
 
-        // Linux CSD title bar: render only when the compositor has negotiated CSD mode.
-        // Include the active connection name as a breadcrumb when connected.
-        let crumbs: Vec<platform::TitleCrumb> = {
-            let connection_name = self
-                .app_state
-                .read(cx)
-                .active_connection()
-                .map(|c| c.profile.name.clone());
+        let title_bar = self.render_title_bar(window, cx).into_any_element();
+        let rail = self.render_rail(cx).into_any_element();
 
-            if let Some(name) = connection_name {
-                vec![platform::TitleCrumb {
-                    icon: Some(crate::ui::icons::AppIcon::Database),
-                    label: name.into(),
-                }]
-            } else {
-                vec![]
-            }
-        };
-        let title_bar_close = self.title_bar_close_handler(cx);
-        let linux_title_bar = platform::render_csd_title_bar_with_crumbs(
-            window,
-            cx,
-            "DBFlux",
-            &crumbs,
-            Some(title_bar_close),
-        );
-
-        let right_pane = if has_tabs {
-            let workspace = cx.entity().clone();
-            let tasks_header = panel_header_collapsible_variant(
-                "panel-header-Background Tasks",
-                dbflux_i18n::t!("workspace.background_tasks"),
-                PanelHeaderVariant::WorkspaceTasks,
-                !tasks_expanded,
-                tasks_focused,
-                Some(IconName::Loader),
-                move |_, _, app| {
-                    workspace.update(app, |workspace, cx| {
-                        workspace.toggle_tasks_panel(cx);
-                    });
-                },
-                cx,
-            );
-
-            v_resizable("main-panels")
-                .child(
-                    resizable_panel()
-                        .size(px(500.0))
-                        .size_range(px(200.0)..px(2000.0))
-                        .child(
-                            div()
-                                .id("document-area")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::Document {
-                                            this.set_focus(FocusTarget::Document, window, cx);
-                                        }
-                                    }),
-                                )
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::Document {
-                                            this.set_focus(FocusTarget::Document, window, cx);
-                                        }
-                                    }),
-                                )
-                                .child(tab_bar)
-                                // doc + inspector live in a flex_row under the tab bar.
-                                .child(
-                                    div()
-                                        .id("document-content-row")
-                                        .flex()
-                                        .flex_row()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .overflow_hidden()
-                                        .when_some(active_doc_element, |el, doc| {
-                                            el.child(
-                                                div()
-                                                    .flex()
-                                                    .flex_col()
-                                                    .flex_1()
-                                                    .min_h_0()
-                                                    .overflow_hidden()
-                                                    .child(doc),
-                                            )
-                                        })
-                                        .when(inspector_open, |el| {
-                                            el.child(inspector_entity.clone())
-                                        }),
-                                ),
-                        ),
-                )
-                .child(
-                    resizable_panel()
-                        .size(if tasks_expanded {
-                            px(150.0)
-                        } else {
-                            header_size
-                        })
-                        .size_range(if tasks_expanded {
-                            px(80.0)..px(2000.0)
-                        } else {
-                            header_size..header_size
-                        })
-                        .child(
-                            div()
-                                .id("tasks-panel")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::BackgroundTasks {
-                                            this.set_focus(
-                                                FocusTarget::BackgroundTasks,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                                )
-                                .child(tasks_header)
-                                .when(tasks_expanded, |el| {
-                                    el.child(div().flex_1().overflow_hidden().child(tasks_panel))
-                                }),
-                        ),
-                )
+        let document_area = if has_tabs {
+            div()
+                .id("document-content-row")
+                .relative()
+                .flex()
+                .flex_row()
+                .size_full()
+                .overflow_hidden()
+                .when_some(active_doc_element, |el, doc| {
+                    el.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(doc),
+                    )
+                })
+                .children(toast_layer)
+                .into_any_element()
         } else {
-            // Empty state: welcome message + tasks panel
-            let workspace = cx.entity().clone();
-            let tasks_header_empty = panel_header_collapsible_variant(
-                "panel-header-Background Tasks",
-                dbflux_i18n::t!("workspace.background_tasks"),
-                PanelHeaderVariant::WorkspaceTasks,
-                !tasks_expanded,
-                tasks_focused,
-                Some(IconName::Loader),
-                move |_, _, app| {
-                    workspace.update(app, |workspace, cx| {
-                        workspace.toggle_tasks_panel(cx);
-                    });
-                },
-                cx,
-            );
-
-            v_resizable("main-panels")
-                .child(
-                    resizable_panel()
-                        .size(px(500.0))
-                        .size_range(px(200.0)..px(2000.0))
-                        .child(
-                            div()
-                                .id("empty-state")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_4()
-                                .child(
-                                    Icon::new(AppIcon::Database)
-                                        .size(px(64.0))
-                                        .color(muted_fg.opacity(0.5)),
-                                )
-                                .child(
-                                    Body::new(dbflux_i18n::t!("workspace.empty_documents"))
-                                        .muted(cx),
-                                )
-                                .child(
-                                    div()
-                                        .mt_4()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_2()
-                                        .children(empty_state_shortcut(
-                                            Command::NewQueryTab,
-                                            dbflux_i18n::t!("workspace.hint.new_query"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::ToggleCommandPalette,
-                                            dbflux_i18n::t!("workspace.hint.command_palette"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::OpenScriptFile,
-                                            dbflux_i18n::t!("workspace.hint.open"),
-                                        ))
-                                        .children(empty_state_shortcut(
-                                            Command::OpenConnectionManager,
-                                            dbflux_i18n::t!("workspace.hint.new_connection"),
-                                        )),
-                                ),
-                        ),
-                )
-                .child(
-                    resizable_panel()
-                        .size(if tasks_expanded {
-                            px(150.0)
-                        } else {
-                            header_size
-                        })
-                        .size_range(if tasks_expanded {
-                            px(80.0)..px(2000.0)
-                        } else {
-                            header_size..header_size
-                        })
-                        .child(
-                            div()
-                                .id("tasks-panel")
-                                .flex()
-                                .flex_col()
-                                .size_full()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        if this.focus_target != FocusTarget::BackgroundTasks {
-                                            this.set_focus(
-                                                FocusTarget::BackgroundTasks,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }),
-                                )
-                                .child(tasks_header_empty)
-                                .when(tasks_expanded, |el| {
-                                    el.child(
-                                        div().flex_1().overflow_hidden().child(tasks_panel.clone()),
-                                    )
-                                }),
-                        ),
-                )
+            self.render_empty_workspace(cx)
+                .children(toast_layer)
+                .into_any_element()
         };
+
+        // One resizable state per tasks-panel mode: the panel group keeps the
+        // sizes it laid out, so reusing the documents-only state would reopen
+        // the tasks panel without its default height.
+        let tasks_expanded = self.tasks_state.is_expanded();
+        let panels_id = if tasks_expanded {
+            "main-panels-tasks-expanded"
+        } else {
+            "main-panels"
+        };
+
+        let document_panes = v_resizable(panels_id)
+            .child(
+                resizable_panel()
+                    .size(px(500.0))
+                    .size_range(px(200.0)..px(2000.0))
+                    .child(
+                        div()
+                            .id("document-area")
+                            .flex()
+                            .flex_col()
+                            .size_full()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Document {
+                                        this.set_focus(FocusTarget::Document, window, cx);
+                                    }
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|this, _, window, cx| {
+                                    if this.focus_target != FocusTarget::Document {
+                                        this.set_focus(FocusTarget::Document, window, cx);
+                                    }
+                                }),
+                            )
+                            .child(document_area),
+                    ),
+            )
+            .when(tasks_expanded, |panels| {
+                panels.child(self.render_tasks_panel(cx))
+            });
+
+        // The document island: the tab row (only while a tab is open) over
+        // the documents and, when expanded, the background tasks panel.
+        let document_island = Island::new()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .ml(IslandMetrics::GAP)
+            .when(has_tabs, |island| island.child(self.tab_bar.clone()))
+            .child(div().flex_1().min_h_0().child(document_panes));
 
         let focus_handle = self.focus_handle.clone();
+        let root_key_context = self.root_key_context(cx);
 
         div()
             .id("workspace-root")
             .relative()
             .size_full()
-            .bg(bg_color)
+            .bg(desk)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if this.sidebar_dock.read(cx).is_resizing() {
                     this.sidebar_dock.update(cx, |dock, cx| {
@@ -464,6 +343,7 @@ impl Render for Workspace {
                 }),
             )
             .track_focus(&focus_handle)
+            .key_context(root_key_context)
             .on_action(
                 cx.listener(|this, _: &keymap::ToggleCommandPalette, window, cx| {
                     this.toggle_command_palette(window, cx);
@@ -668,14 +548,13 @@ impl Render for Workspace {
                     cx.propagate();
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                let chord = key_chord_from_gpui(&event.keystroke);
-                let context = this.active_context(cx);
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let Some(command) = run_command(action) else {
+                    return;
+                };
 
-                if let Some(cmd) = this.keymap.resolve(context, &chord)
-                    && this.dispatch(cmd, window, cx)
-                {
-                    cx.stop_propagation();
+                if !this.dispatch(command, window, cx) {
+                    cx.propagate();
                 }
             }))
             .child(
@@ -683,17 +562,22 @@ impl Render for Workspace {
                     .flex()
                     .flex_col()
                     .size_full()
-                    .when_some(linux_title_bar, |el, title_bar| el.child(title_bar))
+                    .child(title_bar)
                     .child(
                         div()
+                            .id("workspace-body")
                             .flex()
                             .flex_row()
                             .flex_1()
+                            .min_h_0()
+                            .px(IslandMetrics::GAP)
                             .overflow_hidden()
+                            .child(rail)
                             .child(
                                 div()
                                     .id("sidebar-panel")
                                     .h_full()
+                                    .when(!sidebar_collapsed, |panel| panel.ml(IslandMetrics::GAP))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, window, cx| {
@@ -706,15 +590,22 @@ impl Render for Workspace {
                                     )
                                     .child(sidebar_dock),
                             )
-                            .child(div().flex_1().overflow_hidden().child(right_pane)),
+                            .child(document_island)
+                            .children(
+                                document_side_panels
+                                    .into_iter()
+                                    .map(|panel| document_side_island(panel, cx)),
+                            )
+                            .when(inspector_open, |body| body.child(inspector_entity.clone())),
                     )
                     .child(status_bar),
             )
+            .children(self.render_notifications_popover(window, cx))
             .child(command_palette)
             .child(self.sql_preview_modal.clone())
             .child(login_modal)
             .child(sso_wizard)
-            // S8 modals — rendered as full-screen overlays using ModalShell chrome.
+            // S8 modals — rendered as full-screen overlays using the shared `Modal` chrome.
             .when(self.modal_delete_connection.read(cx).is_visible(), |root| {
                 root.child(self.modal_delete_connection.clone())
             })
@@ -732,9 +623,6 @@ impl Render for Workspace {
             })
             .when(self.import_wizard.read(cx).is_visible(), |root| {
                 root.child(self.import_wizard.clone())
-            })
-            .when(self.migrate_wizard.read(cx).is_visible(), |root| {
-                root.child(self.migrate_wizard.clone())
             })
             .when(self.export_wizard.read(cx).is_visible(), |root| {
                 root.child(self.export_wizard.clone())
@@ -758,20 +646,17 @@ impl Render for Workspace {
             .when(self.export_modal.read(cx).is_visible(), |root| {
                 root.child(self.export_modal.clone())
             })
+            .when(self.welcome_dialog.read(cx).is_visible(), |root| {
+                root.child(self.welcome_dialog.clone())
+            })
+            .when(self.whats_new_dialog.read(cx).is_visible(), |root| {
+                root.child(self.whats_new_dialog.clone())
+            })
             // Last of the modals so a quit prompt sits above any dialog that
             // was already open.
             .when(self.modal_active_query.read(cx).is_visible(), |root| {
                 root.child(self.modal_active_query.clone())
             })
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .child(toast_host),
-            )
             // Drag mask — rendered only while inspector grip is being dragged.
             // Sits above document/inspector content so cursor tracking works
             // anywhere on screen, but below toast host and shutdown overlay.
@@ -799,93 +684,6 @@ impl Render for Workspace {
             })
             // Shutdown overlay (rendered above everything during shutdown)
             .child(self.shutdown_overlay.clone())
-            .when(cfg!(feature = "mcp"), |root| {
-                #[cfg(feature = "mcp")]
-                {
-                    root.when_some(self.active_governance_panel, |root, panel| {
-                        let workspace_for_backdrop = cx.entity().clone();
-                        let workspace_for_button = cx.entity().clone();
-                        let title = match panel {
-                            super::GovernancePanel::Approvals => {
-                                dbflux_i18n::t!("workspace.mcp_approvals")
-                            }
-                        };
-
-                        let content = match panel {
-                            super::GovernancePanel::Approvals => {
-                                self.mcp_approvals_view.clone().into_any_element()
-                            }
-                        };
-
-                        root.child(
-                            div()
-                                .id("governance-overlay")
-                                .absolute()
-                                .inset_0()
-                                .bg(theme.overlay.opacity(0.45))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    workspace_for_backdrop.update(cx, |workspace, cx| {
-                                        workspace.close_governance_panel(window, cx);
-                                    });
-                                })
-                                .child(
-                                    div()
-                                        .w(px(1080.0))
-                                        .h(px(680.0))
-                                        .bg(theme.sidebar)
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .rounded(Radii::MD)
-                                        .overflow_hidden()
-                                        .flex()
-                                        .flex_col()
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .child(
-                                            div()
-                                                .h(px(40.0))
-                                                .px(Spacing::MD)
-                                                .flex()
-                                                .items_center()
-                                                .justify_between()
-                                                .border_b_1()
-                                                .border_color(theme.border)
-                                                .child(Text::heading(title))
-                                                .child(
-                                                    dbflux_components::primitives::IconButton::new(
-                                                        "governance-overlay-close",
-                                                        dbflux_components::icon::IconSource::Svg(
-                                                            AppIcon::X.path().into(),
-                                                        ),
-                                                    )
-                                                    .icon_size(Heights::ICON_SM)
-                                                    .on_click(move |_, window, cx| {
-                                                        workspace_for_button.update(
-                                                            cx,
-                                                            |workspace, cx| {
-                                                                workspace.close_governance_panel(
-                                                                    window, cx,
-                                                                );
-                                                            },
-                                                        );
-                                                    }),
-                                                ),
-                                        )
-                                        .child(div().flex_1().min_h_0().child(content)),
-                                ),
-                        )
-                    })
-                }
-                #[cfg(not(feature = "mcp"))]
-                {
-                    root
-                }
-            })
             .when(child_picker_open, |root| {
                 let sidebar_entity = self.sidebar.clone();
                 let focus_handle = self
@@ -898,24 +696,24 @@ impl Render for Workspace {
                 });
 
                 root.child(
-                    ModalFrame::new(
-                        "event-stream-child-picker",
-                        &focus_handle,
-                        move |_window, cx| {
+                    Modal::new(dbflux_i18n::t!("workspace.event_streams"))
+                        .id("event-stream-child-picker")
+                        .focus_handle(&focus_handle)
+                        .on_close(move |_window, cx| {
                             sidebar_entity.update(cx, |sidebar, cx| {
                                 sidebar.close_child_picker(cx);
                             });
-                        },
-                    )
-                    .context_id(ContextId::EventStreamsPicker)
-                    .icon(AppIcon::ScrollText)
-                    .title(dbflux_i18n::t!("workspace.event_streams"))
-                    .width(px(1000.0))
-                    .height(px(720.0))
-                    .top_offset(px(60.0))
-                    .block_scroll()
-                    .child(content)
-                    .render(cx),
+                        })
+                        // The workspace answers the picker's Escape and Enter:
+                        // Escape in the filter returns to the list first.
+                        .defer_keys_to_owner()
+                        .icon(AppIcon::ScrollText)
+                        .width(px(1000.0))
+                        .height(px(720.0))
+                        .top_offset(px(60.0))
+                        .block_scroll()
+                        .child(content)
+                        .into_any_element(),
                 )
             })
             // Context menu rendered at workspace level for proper positioning
@@ -1042,7 +840,7 @@ impl Render for Workspace {
                 let tab_bar_entity = self.tab_bar.clone();
 
                 let menu_x = menu.position_x;
-                let menu_y = px(36.0);
+                let menu_y = ShellMetrics::TITLE_BAR_HEIGHT + TabMetrics::DOCUMENT_BAR_HEIGHT;
                 let items = TabBar::build_tab_menu_items();
                 let selected = menu.selected_index;
 
@@ -1151,7 +949,10 @@ impl Render for Workspace {
                         .into_any_element();
 
                     el.child(
-                        ModalShell::new(title, body, footer)
+                        Modal::new(title)
+                            .body(body)
+                            .footer(footer)
+                            .icon(AppIcon::Delete)
                             .width(px(360.0))
                             .variant(variant)
                             .focus_handle(&focus_handle)
@@ -1177,47 +978,17 @@ mod tests {
     use std::fs;
     use std::rc::Rc;
 
-    use gpui::{
-        Context, FontWeight, IntoElement, Render, TestAppContext, VisualTestContext, Window, div,
-    };
+    use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
-    use dbflux_components::composites::{
-        PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
-    };
-    use dbflux_components::primitives::SurfaceRole;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-
-    use dbflux_ui_base::keymap::chord_display_parts;
-
-    use super::{
-        defer_to_end_of_effect_cycle, empty_state_shortcut_keys,
-        palette_command_opens_native_window,
-    };
-    use crate::keymap::{Command, KeyChord, Modifiers};
+    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
 
     #[test]
-    fn panel_headers_keep_mono_family_and_focus_weight_difference() {
-        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
-        let unfocused =
-            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
-
-        for inspection in [&focused.title, &unfocused.title] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::SM));
-        }
-
-        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
-        assert_eq!(unfocused.title.weight_override, Some(FontWeight::MEDIUM));
-    }
-
-    #[test]
-    fn workspace_render_uses_canonical_panel_header_contract() {
+    fn workspace_render_draws_no_collapsed_tasks_bar() {
         let source = workspace_render_source();
 
-        assert!(source.contains("panel_header_collapsible_variant("));
-        assert!(source.contains("PanelHeaderVariant::WorkspaceTasks"));
+        assert!(!source.contains("collapsible_bar("));
+        assert!(!source.contains("panel-header-Background Tasks"));
+        assert!(!source.contains("background_tasks_idle"));
         assert!(!source.contains("fn background_tasks_panel_header("));
         assert!(!source.contains("fn render_panel_header("));
         assert!(!source.contains("fn panel_header_title("));
@@ -1233,60 +1004,26 @@ mod tests {
     }
 
     #[test]
-    fn workspace_render_keeps_loader_icon_in_the_tasks_header_contract() {
+    fn tabbed_and_empty_workspace_paths_share_one_tasks_panel_only_while_expanded() {
         let source = workspace_render_source();
 
-        assert!(source.contains("Some(IconName::Loader)"));
+        assert_eq!(source.matches("self.render_tasks_panel(cx)").count(), 1);
+        assert!(source.contains(".when(tasks_expanded, |panels| {"));
+        assert!(source.contains("\"main-panels-tasks-expanded\""));
+        assert!(source.contains("\"main-panels\""));
     }
 
     #[test]
-    fn workspace_tasks_panel_variant_matches_expected_shared_chrome() {
-        let collapsed =
-            inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, false, false);
+    fn document_area_draws_no_focus_ring_of_its_own() {
+        let source = workspace_render_source();
+        let start = source
+            .find(".id(\"document-area\")")
+            .expect("workspace render must draw the document area");
+        let area = &source[start..start + 1200];
 
-        assert_eq!(collapsed.background, PanelHeaderBackground::ThemeTabBar);
-        assert_eq!(
-            collapsed.hover_background,
-            Some(PanelHeaderBackground::Surface(SurfaceRole::Card))
-        );
-        assert_eq!(
-            collapsed.base_title_color,
-            PanelHeaderTitleColor::Foreground
-        );
-
-        let focused = inspect_panel_header(PanelHeaderVariant::WorkspaceTasks, true, true, false);
-
-        assert_eq!(
-            focused.focus_title_color,
-            Some(PanelHeaderTitleColor::Primary)
-        );
-        assert_eq!(focused.title.family, Some(AppFonts::MONO));
-        assert_eq!(focused.title.size_override, Some(FontSizes::SM));
-        assert_eq!(focused.title.weight_override, Some(FontWeight::BOLD));
-    }
-
-    #[test]
-    fn tabbed_and_empty_workspace_paths_both_use_the_workspace_tasks_contract() {
-        let invocations = background_tasks_header_invocations();
-
-        assert_eq!(invocations.len(), 2);
-
-        for invocation in invocations {
-            assert!(invocation.contains("panel_header_collapsible_variant("));
-            assert!(invocation.contains("PanelHeaderVariant::WorkspaceTasks"));
-            assert!(invocation.contains("tasks_focused"));
-            assert!(invocation.contains("Some(IconName::Loader)"));
-        }
-    }
-
-    #[test]
-    fn workspace_background_tasks_contract_stays_out_of_local_helper_code_paths() {
-        let invocations = background_tasks_header_invocations();
-
-        for invocation in invocations {
-            assert!(!invocation.contains("theme.tab_bar"));
-            assert!(!invocation.contains("theme.primary"));
-        }
+        assert!(!area.contains("focus_ring"));
+        assert!(!area.contains("ChamferRing"));
+        assert!(!area.contains("border_color"));
     }
 
     #[test]
@@ -1450,79 +1187,6 @@ mod tests {
             .expect("render.rs should contain production code before tests")
             .to_string()
     }
-
-    fn background_tasks_header_invocations() -> Vec<String> {
-        let source = workspace_render_source();
-        let mut invocations = Vec::new();
-        let mut remaining = source.as_str();
-
-        while let Some(start) = remaining.find("panel_header_collapsible_variant(") {
-            let tail = &remaining[start..];
-            let end = tail
-                .find(",\n                cx,\n            );")
-                .map(|index| index + ",\n                cx,\n            );".len())
-                .expect("workspace render should close the panel_header_collapsible_variant call");
-
-            invocations.push(tail[..end].to_string());
-            remaining = &tail[end..];
-        }
-
-        invocations
-    }
-
-    #[test]
-    fn empty_state_hints_show_the_registered_global_chords() {
-        let expected = [
-            (
-                Command::NewQueryTab,
-                KeyChord::new("n", Modifiers::primary()),
-            ),
-            (
-                Command::ToggleCommandPalette,
-                KeyChord::new("p", Modifiers::primary_shift()),
-            ),
-            (
-                Command::OpenScriptFile,
-                KeyChord::new("o", Modifiers::primary()),
-            ),
-            (
-                Command::OpenConnectionManager,
-                KeyChord::new("n", Modifiers::primary_shift()),
-            ),
-        ];
-
-        for (command, chord) in expected {
-            assert_eq!(
-                empty_state_shortcut_keys(command),
-                Some(chord_display_parts(&chord)),
-                "empty-state hint for {command:?} must match its global binding"
-            );
-        }
-    }
-
-    #[test]
-    fn empty_state_new_connection_hint_uses_the_platform_modifier() {
-        #[cfg(target_os = "macos")]
-        let expected = ["Shift", "Cmd", "N"];
-        #[cfg(not(target_os = "macos"))]
-        let expected = ["Ctrl", "Shift", "N"];
-
-        let keys = empty_state_shortcut_keys(Command::OpenConnectionManager)
-            .expect("the Connection Manager must have a global binding");
-        let keys: Vec<&str> = keys.iter().map(|key| key.as_ref()).collect();
-
-        assert_eq!(keys, expected);
-    }
-
-    #[test]
-    fn empty_state_hints_do_not_hardcode_modifier_labels() {
-        let source = workspace_render_source();
-
-        assert!(
-            !source.contains("\"Ctrl\"") && !source.contains("\"Cmd\""),
-            "empty-state hints must read their chords from the keymap"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -1551,6 +1215,7 @@ mod inline_delete_keyboard_tests {
     fn open_confirmation(cx: &mut TestAppContext) -> Harness<'_> {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {

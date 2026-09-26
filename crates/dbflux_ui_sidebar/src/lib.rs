@@ -2,7 +2,9 @@
 #![recursion_limit = "2048"]
 
 mod code_generation;
+mod connection_failure;
 mod context_menu;
+mod dashboards;
 mod deletion;
 mod drag_drop;
 mod expansion;
@@ -21,9 +23,9 @@ use dbflux_app::AppState;
 use dbflux_components::components::tree_nav::{self, GutterInfo};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::ModalFocus;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Radii, Spacing};
 use dbflux_core::ConnectedProfile;
 use dbflux_core::{
     AddEnumValueRequest, AddForeignKeyRequest, CodeGenCapabilities, CodeGenScope,
@@ -49,6 +51,8 @@ use uuid::Uuid;
 pub enum SidebarTab {
     Connections,
     Scripts,
+    /// Every saved dashboard, grouped by connection profile.
+    Dashboards,
 }
 
 pub enum SidebarEvent {
@@ -182,6 +186,10 @@ pub enum SidebarEvent {
     OpenSavedChart {
         chart_id: Uuid,
     },
+
+    /// Request to create a dashboard without a chosen profile (the Dashboards
+    /// view's add button), the same flow as the "New Dashboard" command.
+    RequestNewDashboard,
 
     /// Request to open the "New Dashboard" creation modal for a specific profile.
     RequestCreateDashboard {
@@ -368,6 +376,8 @@ pub struct ContextMenuItem {
     pub action: ContextMenuAction,
     pub icon: Option<AppIcon>,
     pub is_separator: bool,
+    /// The mono caption at the top of a menu naming what it acts on.
+    pub is_header: bool,
     pub is_danger: bool,
 }
 
@@ -378,6 +388,7 @@ impl ContextMenuItem {
             action,
             icon: None,
             is_separator: false,
+            is_header: false,
             is_danger: false,
         }
     }
@@ -388,7 +399,21 @@ impl ContextMenuItem {
             action,
             icon: None,
             is_separator: false,
+            is_header: false,
             is_danger: true,
+        }
+    }
+
+    /// A non-selectable caption row, for example the qualified name of the
+    /// table a menu acts on.
+    pub fn header(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            action: ContextMenuAction::Open,
+            icon: None,
+            is_separator: false,
+            is_header: true,
+            is_danger: false,
         }
     }
 
@@ -403,12 +428,13 @@ impl ContextMenuItem {
             action: ContextMenuAction::Open,
             icon: None,
             is_separator: true,
+            is_header: false,
             is_danger: false,
         }
     }
 
     pub fn is_selectable(&self) -> bool {
-        !self.is_separator
+        !self.is_separator && !self.is_header
     }
 
     pub fn to_menu_items(
@@ -421,7 +447,19 @@ impl ContextMenuItem {
                     return dbflux_components::composites::MenuItem::separator();
                 }
 
+                if item.is_header {
+                    return dbflux_components::composites::MenuItem::header(item.label.clone());
+                }
+
                 let mut mi = dbflux_components::composites::MenuItem::new(item.label.clone());
+
+                if let Some(shortcut) = item
+                    .action
+                    .shortcut_command()
+                    .and_then(sidebar_shortcut_label)
+                {
+                    mi = mi.shortcut(shortcut);
+                }
 
                 if let Some(icon) = item.icon.or_else(|| item.action.icon()) {
                     mi = mi.icon(icon);
@@ -559,7 +597,51 @@ pub enum CollectionCodeKind {
     DeleteOne,
 }
 
+/// The keys that run `command` in the sidebar, as a menu hint (`r`, `x`,
+/// `Shift R`). A bare Enter reads `↵`, the way P1Sidebar draws `Open ↵`.
+fn sidebar_shortcut_label(command: dbflux_app::keymap::Command) -> Option<String> {
+    let keymap = dbflux_ui_base::keymap::effective_keymap();
+    let keys = keymap.keys_for_command(dbflux_app::keymap::ContextId::Sidebar, command)?;
+
+    Some(menu_hint_for_keys(keys))
+}
+
+fn menu_hint_for_keys(keys: &dbflux_app::keymap::KeySequence) -> String {
+    let chord = keys.first();
+    let bare_enter = keys.is_single()
+        && chord.modifiers == dbflux_app::keymap::Modifiers::none()
+        && chord.key == "enter";
+
+    if bare_enter {
+        return "\u{21b5}".to_string();
+    }
+
+    dbflux_ui_base::keymap::key_sequence_label(keys).to_string()
+}
+
 impl ContextMenuAction {
+    /// The sidebar command whose key runs this action on the selected row.
+    /// The menu shows that key beside the action, and the key runs the same
+    /// action (see [`Sidebar::run_selected_menu_shortcut`]).
+    pub fn shortcut_command(&self) -> Option<dbflux_app::keymap::Command> {
+        use dbflux_app::keymap::Command;
+
+        match self {
+            Self::Open | Self::OpenDatabase | Self::OpenScript => Some(Command::Execute),
+            Self::Refresh | Self::RefreshObject | Self::RefreshDatabase => {
+                Some(Command::RefreshSchema)
+            }
+            Self::RenameFolder | Self::RenameScript => Some(Command::Rename),
+            Self::Delete
+            | Self::DeleteFolder
+            | Self::DeleteScript
+            | Self::DropTable
+            | Self::DropCollection
+            | Self::DropDatabase => Some(Command::Delete),
+            _ => None,
+        }
+    }
+
     /// Returns the icon for this menu action
     fn icon(&self) -> Option<AppIcon> {
         match self {
@@ -910,6 +992,9 @@ pub struct Sidebar {
     scripts_tree_state: Entity<TreeState>,
     scripts_search_input: Entity<InputState>,
     scripts_search_query: String,
+    dashboards_tree_state: Entity<TreeState>,
+    dashboards_search_input: Entity<InputState>,
+    dashboards_search_query: String,
     pending_toast: Option<PendingToast>,
     connections_focused: bool,
     search_input_focused: bool,
@@ -967,6 +1052,10 @@ pub struct Sidebar {
     selection_anchor: Option<String>,
     /// Range-selection anchor for scripts tab
     scripts_selection_anchor: Option<String>,
+    /// Multi-selected rows of the Dashboards view
+    dashboards_multi_selection: HashSet<String>,
+    /// Range-selection anchor for the Dashboards view
+    dashboards_selection_anchor: Option<String>,
     /// Item ID pending delete confirmation (for keyboard x shortcut)
     pending_delete_item: Option<String>,
     /// Delete confirmation modal state (for context menu delete)
@@ -1015,6 +1104,12 @@ pub struct Sidebar {
     bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     /// In-flight `list_buckets` fetches, keyed by profile_id.
     pending_bucket_fetches: HashMap<Uuid, Task<()>>,
+    /// Round trip of one `ping` measured after each profile connected, shown
+    /// after its status diamond. `None` records a probe that failed, so a
+    /// failing connection is not pinged again on every state change.
+    connection_latencies: HashMap<Uuid, Option<std::time::Duration>>,
+    /// In-flight latency probes, keyed by profile_id.
+    pending_latency_probes: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1083,6 +1178,12 @@ impl Sidebar {
                 .placeholder(dbflux_i18n::t!("sidebar.filter.scripts_placeholder"))
         });
 
+        let dashboards_tree_state = cx.new(|cx| TreeState::new(cx));
+        let dashboards_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.dashboards_placeholder"))
+        });
+
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
         let app_state_subscription = cx.subscribe(
@@ -1103,8 +1204,10 @@ impl Sidebar {
                     this.reconnect_profile_after_edit(profile_id, cx);
                 }
 
+                this.sync_connection_latencies(cx);
                 this.refresh_tree(cx);
                 this.refresh_scripts_tree(cx);
+                this.refresh_dashboards_tree(cx);
             },
         );
 
@@ -1181,6 +1284,27 @@ impl Sidebar {
             },
         );
 
+        let dashboards_search_entity = dashboards_search_input.clone();
+        let dashboards_search_subscription = cx.subscribe_in(
+            &dashboards_search_entity,
+            window,
+            |this, input_state, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.dashboards_search_query = input_state.read(cx).value().to_string();
+                    this.refresh_dashboards_tree(cx);
+                }
+                InputEvent::Focus => {
+                    this.search_input_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.search_input_focused = false;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {}
+            },
+        );
+
         let tree_expansion_subscription =
             cx.observe(&tree_state, |this: &mut Self, tree_state, cx| {
                 if this.syncing_expansion {
@@ -1219,6 +1343,9 @@ impl Sidebar {
             scripts_tree_state,
             scripts_search_input,
             scripts_search_query: String::new(),
+            dashboards_tree_state,
+            dashboards_search_input,
+            dashboards_search_query: String::new(),
             pending_toast: None,
             connections_focused: false,
             search_input_focused: false,
@@ -1245,6 +1372,7 @@ impl Sidebar {
                 rename_subscription,
                 connections_search_subscription,
                 scripts_search_subscription,
+                dashboards_search_subscription,
                 tree_expansion_subscription,
             ],
             editing_id: None,
@@ -1260,6 +1388,8 @@ impl Sidebar {
             scripts_multi_selection: HashSet::new(),
             selection_anchor: None,
             scripts_selection_anchor: None,
+            dashboards_multi_selection: HashSet::new(),
+            dashboards_selection_anchor: None,
             pending_delete_item: None,
             delete_confirm_modal: None,
             delete_modal_focus: ModalFocus::new(cx),
@@ -1280,6 +1410,8 @@ impl Sidebar {
             pending_instance_catalog_fetches: HashMap::new(),
             bucket_cache: HashMap::new(),
             pending_bucket_fetches: HashMap::new(),
+            connection_latencies: HashMap::new(),
+            pending_latency_probes: HashMap::new(),
         }
     }
 
@@ -1303,6 +1435,7 @@ impl Sidebar {
         let input = match self.active_tab {
             SidebarTab::Connections => &self.connections_search_input,
             SidebarTab::Scripts => &self.scripts_search_input,
+            SidebarTab::Dashboards => &self.dashboards_search_input,
         };
 
         input.read(cx).focus_handle(cx).is_focused(window)
@@ -1322,6 +1455,10 @@ impl Sidebar {
                 self.scripts_search_input
                     .update(cx, |input, cx| input.focus(window, cx));
             }
+            SidebarTab::Dashboards => {
+                self.dashboards_search_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
         }
 
         cx.notify();
@@ -1330,6 +1467,11 @@ impl Sidebar {
     pub fn set_active_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
         if self.active_tab != tab {
             self.active_tab = tab;
+
+            if tab == SidebarTab::Dashboards {
+                self.refresh_dashboards_tree(cx);
+            }
+
             cx.notify();
         }
     }
@@ -1337,7 +1479,8 @@ impl Sidebar {
     pub fn cycle_tab(&mut self, cx: &mut Context<Self>) {
         let next = match self.active_tab {
             SidebarTab::Connections => SidebarTab::Scripts,
-            SidebarTab::Scripts => SidebarTab::Connections,
+            SidebarTab::Scripts => SidebarTab::Dashboards,
+            SidebarTab::Dashboards => SidebarTab::Connections,
         };
         self.set_active_tab(next, cx);
     }
@@ -1409,6 +1552,7 @@ impl Sidebar {
         match self.active_tab {
             SidebarTab::Connections => &self.tree_state,
             SidebarTab::Scripts => &self.scripts_tree_state,
+            SidebarTab::Dashboards => &self.dashboards_tree_state,
         }
     }
 
@@ -1416,6 +1560,7 @@ impl Sidebar {
         let tree = match self.active_tab {
             SidebarTab::Connections => &self.tree_state,
             SidebarTab::Scripts => &self.scripts_tree_state,
+            SidebarTab::Dashboards => &self.dashboards_tree_state,
         };
 
         let entry = tree.read(cx).selected_entry().cloned();
@@ -1551,6 +1696,9 @@ impl Sidebar {
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
+            }
+            SchemaNodeId::BucketsFolder { profile_id } => {
+                cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
             }
             SchemaNodeId::Bucket { profile_id, name } => {
                 cx.emit(SidebarEvent::OpenObjectStoreBucket {
@@ -1732,11 +1880,13 @@ impl Sidebar {
                     if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
             );
 
-            let is_object_storage_root = matches!(
-                parse_node_id(item_id),
-                Some(SchemaNodeId::Profile { profile_id })
-                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
-            );
+            let is_object_storage_root = match parse_node_id(item_id) {
+                Some(SchemaNodeId::Profile { profile_id }) => {
+                    self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+                }
+                Some(SchemaNodeId::BucketsFolder { .. }) => true,
+                _ => false,
+            };
 
             if is_key_value_db || is_object_storage_root {
                 self.toggle_item_expansion(item_id, cx);
@@ -1865,6 +2015,7 @@ impl Sidebar {
         let items = match self.active_tab {
             SidebarTab::Connections => self.build_tree_items_with_overrides(cx),
             SidebarTab::Scripts => self.build_scripts_tree_items_with_overrides(cx),
+            SidebarTab::Dashboards => self.build_dashboards_tree_items(cx),
         };
         let currently_expanded = Self::find_item_expanded(&items, item_id).unwrap_or(false);
         self.set_expanded(item_id, !currently_expanded, cx);
@@ -2157,6 +2308,90 @@ mod tests {
             menu_items[0].icon.as_ref(),
             Some(IconSource::Svg(path)) if path.as_ref() == AppIcon::Code.path()
         ));
+    }
+
+    #[test]
+    fn menu_header_is_a_caption_that_cannot_be_selected() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem::header("public.orders"),
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+        ];
+
+        assert!(!items[0].is_selectable());
+
+        let menu_items = ContextMenuItem::to_menu_items(&items);
+        assert!(menu_items[0].is_header);
+        assert_eq!(menu_items[0].label.as_ref(), "public.orders");
+        assert!(!menu_items[1].is_header);
+    }
+
+    #[test]
+    fn menu_actions_pair_with_the_sidebar_keys_that_run_them() {
+        use super::ContextMenuAction;
+        use dbflux_app::keymap::Command;
+
+        assert_eq!(
+            ContextMenuAction::Open.shortcut_command(),
+            Some(Command::Execute)
+        );
+        assert_eq!(
+            ContextMenuAction::RefreshObject.shortcut_command(),
+            Some(Command::RefreshSchema)
+        );
+        assert_eq!(
+            ContextMenuAction::DropTable.shortcut_command(),
+            Some(Command::Delete)
+        );
+        assert_eq!(ContextMenuAction::ViewSchema.shortcut_command(), None);
+    }
+
+    #[test]
+    fn sidebar_menu_hints_read_like_the_design() {
+        use super::menu_hint_for_keys;
+        use dbflux_app::keymap::{KeyChord, KeySequence, Modifiers};
+
+        let single =
+            |key: &str, modifiers: Modifiers| KeySequence::from(KeyChord::new(key, modifiers));
+
+        assert_eq!(
+            menu_hint_for_keys(&single("enter", Modifiers::none())),
+            "\u{21b5}"
+        );
+        assert_eq!(menu_hint_for_keys(&single("r", Modifiers::none())), "r");
+        assert_eq!(menu_hint_for_keys(&single("x", Modifiers::none())), "x");
+        assert_eq!(
+            menu_hint_for_keys(&single("r", Modifiers::shift())),
+            "Shift R"
+        );
+    }
+
+    #[test]
+    fn table_menu_hints_come_from_the_effective_sidebar_keymap() {
+        use super::{ContextMenuAction, ContextMenuItem};
+
+        let items = vec![
+            ContextMenuItem::item("Open", ContextMenuAction::Open),
+            ContextMenuItem::item("Refresh", ContextMenuAction::RefreshObject),
+            ContextMenuItem::danger("Drop table", ContextMenuAction::DropTable),
+            ContextMenuItem::item("View schema", ContextMenuAction::ViewSchema),
+        ];
+
+        let shortcuts: Vec<Option<String>> = ContextMenuItem::to_menu_items(&items)
+            .iter()
+            .map(|item| item.shortcut.as_ref().map(|shortcut| shortcut.to_string()))
+            .collect();
+
+        assert_eq!(
+            shortcuts,
+            vec![
+                Some("\u{21b5}".to_string()),
+                Some("r".to_string()),
+                Some("x".to_string()),
+                None,
+            ]
+        );
     }
 
     #[test]
@@ -2577,7 +2812,7 @@ mod tests {
                 dbflux_i18n::t!("sidebar.menu.open"),
                 dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
                 dbflux_i18n::t!("sidebar.menu.duplicate"),
-                dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+                dbflux_i18n::t!("sidebar.menu.delete"),
             ],
             _ => vec![],
         }
@@ -2617,7 +2852,7 @@ mod tests {
             dbflux_i18n::t!("sidebar.menu.open"),
             dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
             dbflux_i18n::t!("sidebar.menu.duplicate"),
-            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.delete"),
         ];
         for e in &expected {
             assert!(
@@ -2634,7 +2869,7 @@ mod tests {
             dbflux_i18n::t!("sidebar.menu.open"),
             dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
             dbflux_i18n::t!("sidebar.menu.duplicate"),
-            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.delete"),
         ];
         for e in &expected {
             assert!(

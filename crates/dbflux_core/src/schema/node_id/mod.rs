@@ -31,6 +31,11 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         name: String,
     },
+    /// Folds the databases of a connection that hold no keys into one row,
+    /// so a keyspace-per-index server does not list a dozen empty entries.
+    EmptyDatabasesFolder {
+        profile_id: Uuid,
+    },
     Loading {
         profile_id: Uuid,
         database: String,
@@ -368,6 +373,12 @@ pub enum SchemaNodeId {
         profile_id: Uuid,
         name: String,
     },
+
+    /// Folder that groups the containers of an object-storage connection.
+    /// Activating it opens the buckets table document.
+    BucketsFolder {
+        profile_id: Uuid,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -377,6 +388,7 @@ pub enum SchemaNodeKind {
     Profile,
     DatabasesFolder,
     Database,
+    EmptyDatabasesFolder,
     Loading,
     Schema,
     TablesFolder,
@@ -436,6 +448,7 @@ pub enum SchemaNodeKind {
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
     Bucket,
+    BucketsFolder,
 }
 
 impl SchemaNodeId {
@@ -445,6 +458,7 @@ impl SchemaNodeId {
             Self::Profile { .. } => SchemaNodeKind::Profile,
             Self::DatabasesFolder { .. } => SchemaNodeKind::DatabasesFolder,
             Self::Database { .. } => SchemaNodeKind::Database,
+            Self::EmptyDatabasesFolder { .. } => SchemaNodeKind::EmptyDatabasesFolder,
             Self::Loading { .. } => SchemaNodeKind::Loading,
             Self::Schema { .. } => SchemaNodeKind::Schema,
             Self::TablesFolder { .. } => SchemaNodeKind::TablesFolder,
@@ -506,6 +520,7 @@ impl SchemaNodeId {
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
             Self::Bucket { .. } => SchemaNodeKind::Bucket,
+            Self::BucketsFolder { .. } => SchemaNodeKind::BucketsFolder,
         }
     }
 
@@ -517,6 +532,7 @@ impl SchemaNodeId {
             Self::Profile { profile_id, .. }
             | Self::DatabasesFolder { profile_id, .. }
             | Self::Database { profile_id, .. }
+            | Self::EmptyDatabasesFolder { profile_id }
             | Self::Loading { profile_id, .. }
             | Self::Schema { profile_id, .. }
             | Self::TablesFolder { profile_id, .. }
@@ -573,7 +589,8 @@ impl SchemaNodeId {
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
             | Self::InstanceOverviewLeaf { profile_id, .. }
-            | Self::Bucket { profile_id, .. } => Some(*profile_id),
+            | Self::Bucket { profile_id, .. }
+            | Self::BucketsFolder { profile_id } => Some(*profile_id),
         }
     }
 }
@@ -584,6 +601,7 @@ const P_CONN_FOLDER: &str = "CF";
 const P_PROFILE: &str = "P";
 const P_DATABASES_FOLDER: &str = "DBSF";
 const P_DATABASE: &str = "DB";
+const P_EMPTY_DATABASES_FOLDER: &str = "EDBF";
 const P_LOADING: &str = "LD";
 const P_SCHEMA: &str = "S";
 const P_TABLES_FOLDER: &str = "TF";
@@ -640,6 +658,7 @@ const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
 // Object-storage bucket leaf.
 const P_BUCKET: &str = "BKT";
+const P_BUCKETS_FOLDER: &str = "BKTF";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -682,6 +701,7 @@ mod tests {
         roundtrip(SchemaNodeId::ConnectionFolder { node_id: uuid });
         roundtrip(SchemaNodeId::Profile { profile_id: uuid });
         roundtrip(SchemaNodeId::DatabasesFolder { profile_id: uuid });
+        roundtrip(SchemaNodeId::EmptyDatabasesFolder { profile_id: uuid });
         roundtrip(SchemaNodeId::Database {
             profile_id: uuid,
             name: "mydb".into(),
@@ -1302,6 +1322,7 @@ mod tests {
             profile_id: uuid,
             name: "media.assets.example".into(),
         });
+        roundtrip(SchemaNodeId::BucketsFolder { profile_id: uuid });
     }
 
     #[test]

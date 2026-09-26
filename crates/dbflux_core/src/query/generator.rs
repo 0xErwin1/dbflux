@@ -364,6 +364,36 @@ pub trait QueryGenerator: Send + Sync {
         None
     }
 
+    /// Native text of the update `Connection::patch_document` sends for
+    /// `request`, shown to the user before a change is applied over a
+    /// document that changed on the server. `None` (default) hides the preview.
+    fn document_patch_query(
+        &self,
+        _request: &crate::DocumentPatchRequest,
+    ) -> Option<GeneratedQuery> {
+        None
+    }
+
+    /// Native text of the replacement `Connection::replace_document` sends for
+    /// `request`. `None` (default) hides the preview.
+    fn document_replace_query(
+        &self,
+        _request: &crate::DocumentReplaceRequest,
+    ) -> Option<GeneratedQuery> {
+        None
+    }
+
+    /// Native text of the pipeline `Connection::aggregate_collection` runs for
+    /// `request`, used to classify it through the language service and to
+    /// show it before a pipeline that writes is confirmed. `None` (default)
+    /// leaves the pipeline unclassified.
+    fn aggregate_query(
+        &self,
+        _request: &crate::CollectionAggregateRequest,
+    ) -> Option<GeneratedQuery> {
+        None
+    }
+
     fn plan_mutation(&self, mutation: &MutationRequest) -> Option<SemanticPlan> {
         self.generate_mutation(mutation).map(|query| {
             SemanticPlan::single_query(SemanticPlanKind::MutationPreview, query.into())

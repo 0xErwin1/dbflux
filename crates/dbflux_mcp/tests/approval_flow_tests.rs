@@ -49,7 +49,7 @@ fn rejected_execution_cannot_be_approved_and_never_executes() {
 
     let pending = request_execution(&mut approval_service, &mutation_plan("DELETE FROM users"))
         .expect("request_execution should succeed");
-    reject_execution(&mut approval_service, &pending.id.to_string())
+    reject_execution(&mut approval_service, &pending.id.to_string(), None)
         .expect("reject should succeed");
 
     let err = approve_execution(&mut approval_service, &pending.id.to_string())

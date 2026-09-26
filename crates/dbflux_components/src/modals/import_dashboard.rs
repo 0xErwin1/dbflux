@@ -1,7 +1,8 @@
 use crate::components::json_editor_view;
+use crate::controls::Button;
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
+use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
@@ -9,8 +10,6 @@ use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::input::{Editor, EditorState};
 
 /// Event emitted when the user clicks "Import" with valid JSON.
@@ -32,7 +31,7 @@ pub const DEFAULT_IMPORT_NAME: &str = "Imported Dashboard";
 
 /// Modal for pasting dashboard JSON and triggering an import.
 ///
-/// Uses the standard `ModalShell` chrome (header / scrollable body / footer
+/// Uses the standard `Modal` chrome (header / scrollable body / footer
 /// with top divider) so it matches the rest of the modal surfaces in the app.
 pub struct ModalImportDashboard {
     visible: bool,
@@ -222,7 +221,7 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "modals.import_dashboard.name_label"
             )))
             .child(Input::new(&self.name_input))
@@ -240,7 +239,7 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label(dbflux_i18n::t!(
+            .child(Text::body(dbflux_i18n::t!(
                 "modals.import_dashboard.json_label"
             )))
             .child(
@@ -256,7 +255,7 @@ impl Render for ModalImportDashboard {
                         Editor::new(&self.input)
                             .w_full()
                             .h_full()
-                            .font_family(AppFonts::BODY)
+                            .font_family(AppFonts::MONO)
                             .font_weight(FontWeight::MEDIUM)
                             .text_size(FontSizes::BASE),
                     ),
@@ -320,18 +319,20 @@ impl Render for ModalImportDashboard {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("import-dashboard-format")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.format"))
-                            .small()
-                            .with_variant(ButtonVariant::Ghost)
-                            .on_click(on_format),
+                        Button::new(
+                            "import-dashboard-format",
+                            dbflux_i18n::t!("modals.import_dashboard.format"),
+                        )
+                        .ghost()
+                        .on_click(on_format),
                     )
                     .child(
-                        Button::new("import-dashboard-compact")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.compact"))
-                            .small()
-                            .with_variant(ButtonVariant::Ghost)
-                            .on_click(on_compact),
+                        Button::new(
+                            "import-dashboard-compact",
+                            dbflux_i18n::t!("modals.import_dashboard.compact"),
+                        )
+                        .ghost()
+                        .on_click(on_compact),
                     ),
             )
             .child(
@@ -340,36 +341,39 @@ impl Render for ModalImportDashboard {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("import-dashboard-cancel")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.cancel"))
-                            .on_click(on_cancel),
+                        Button::new(
+                            "import-dashboard-cancel",
+                            dbflux_i18n::t!("modals.import_dashboard.cancel"),
+                        )
+                        .on_click(on_cancel),
                     )
                     .child(
-                        Button::new("import-dashboard-save")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.confirm"))
-                            .with_variant(ButtonVariant::Primary)
-                            .on_click(on_save),
+                        Button::new(
+                            "import-dashboard-save",
+                            dbflux_i18n::t!("modals.import_dashboard.confirm"),
+                        )
+                        .primary()
+                        .on_click(on_save),
                     ),
             );
 
-        ModalShell::new(
-            dbflux_i18n::t!("modals.import_dashboard.title"),
-            body.into_any_element(),
-            footer.into_any_element(),
-        )
-        .variant(ModalVariant::Default)
-        .width(px(720.0))
-        .focus_handle(self.focus.handle())
-        .on_close(close)
-        .on_confirm({
-            let entity = cx.entity().downgrade();
-            move |window, cx| {
-                entity
-                    .update(cx, |this, cx| this.confirm(window, cx))
-                    .log_err();
-            }
-        })
-        .into_any_element()
+        Modal::new(dbflux_i18n::t!("modals.import_dashboard.title"))
+            .body(body)
+            .footer(footer)
+            .icon(AppIcon::Download)
+            .variant(ModalVariant::Default)
+            .width(px(720.0))
+            .focus_handle(self.focus.handle())
+            .on_close(close)
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.confirm(window, cx))
+                        .log_err();
+                }
+            })
+            .into_any_element()
     }
 }
 

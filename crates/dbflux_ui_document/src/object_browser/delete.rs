@@ -12,9 +12,11 @@ use super::editor::GuardedNavigation;
 use super::metadata::ObjectMetadataState;
 use super::tree::ObjectTreeEntry;
 use super::{ObjectAction, ObjectBrowserDocument};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::Spacing;
 use dbflux_core::DbError;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
@@ -185,102 +187,46 @@ impl ObjectBrowserDocument {
         pending: &PendingObjectDelete,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let size_label = pending
             .size_bytes
             .map(crate::buckets_table::format_bytes)
             .unwrap_or_else(|| dbflux_i18n::t!("document.object_browser.delete.unknown_size"));
 
-        div()
-            .id("object-browser-delete-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(360.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .size(Heights::ICON_MD)
-                                    .warning(),
-                            )
-                            .child(Text::heading(dbflux_i18n::t!(
-                                "document.object_browser.delete.title"
-                            ))),
-                    )
-                    .child(Text::muted(dbflux_i18n::t!(
-                        "document.object_browser.delete.body",
-                        key = pending.key.as_str(),
-                        size = size_label.as_str()
-                    )))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("object-browser-delete-cancel")
-                                    .flex()
-                                    .items_center()
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(theme.muted))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_delete_object(cx);
-                                    }))
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.object_browser.delete.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("object-browser-delete-confirm")
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::XS)
-                                    .h(Heights::CONTROL)
-                                    .px(Spacing::SM)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_delete_object(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete)
-                                            .size(Heights::ICON_SM)
-                                            .color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.object_browser.delete.confirm"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "object-browser-delete-cancel",
+                    dbflux_i18n::t!("document.object_browser.delete.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_delete_object(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "object-browser-delete-confirm",
+                    dbflux_i18n::t!("document.object_browser.delete.confirm"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_delete_object(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!("document.object_browser.delete.title"))
+            .id("object-browser-delete-overlay")
+            .danger()
+            .icon(AppIcon::TriangleAlert)
+            .width(px(420.0))
+            .body(Text::body(dbflux_i18n::t!(
+                "document.object_browser.delete.body",
+                key = pending.key.as_str(),
+                size = size_label.as_str()
+            )))
+            .footer(footer)
     }
 }
 

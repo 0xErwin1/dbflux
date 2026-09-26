@@ -15,8 +15,8 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
 };
-use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::primitives::{Badge, BadgeTone, Icon, Text};
+use dbflux_components::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
     QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange,
@@ -1986,11 +1986,11 @@ impl Focusable for SchemaDiffDocument {
 
 impl EventEmitter<DocumentEvent> for SchemaDiffDocument {}
 
-fn badge_variant(badge: RiskBadge) -> BadgeVariant {
+fn badge_tone(badge: RiskBadge) -> BadgeTone {
     match badge {
-        RiskBadge::Safe => BadgeVariant::Success,
-        RiskBadge::Warning => BadgeVariant::Warning,
-        RiskBadge::Destructive => BadgeVariant::Danger,
+        RiskBadge::Safe => BadgeTone::Success,
+        RiskBadge::Warning => BadgeTone::Warning,
+        RiskBadge::Destructive => BadgeTone::Danger,
     }
 }
 
@@ -2091,7 +2091,7 @@ impl SchemaDiffDocument {
             .border_b_1()
             .border_color(border)
             .child(
-                Text::label_sm(dbflux_i18n::t!("document.schema_diff.view.compare_against"))
+                Text::body_sm(dbflux_i18n::t!("document.schema_diff.view.compare_against"))
                     .muted_foreground(),
             )
             .child(mode_toggle)
@@ -2136,7 +2136,11 @@ impl SchemaDiffDocument {
             .cursor_pointer()
             .when(active, |d| d.bg(primary).text_color(primary_foreground))
             .when(!active, |d| d.bg(secondary).hover(move |h| h.bg(muted)))
-            .child(Text::caption(label))
+            .child(if active {
+                Text::caption(label).color(primary_foreground)
+            } else {
+                Text::caption(label)
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx)))
     }
 
@@ -2150,9 +2154,9 @@ impl SchemaDiffDocument {
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
-        let (primary, muted) = {
+        let (tint, muted) = {
             let theme = cx.theme();
-            (theme.primary, theme.muted)
+            (ChromeColors::tint(theme), theme.muted)
         };
         div()
             .id(id)
@@ -2160,7 +2164,7 @@ impl SchemaDiffDocument {
             .py(Spacing::XS)
             .rounded(Radii::SM)
             .cursor_pointer()
-            .when(selected, |d| d.bg(primary.opacity(0.15)))
+            .when(selected, |d| d.bg(tint.opacity(0.15)))
             .hover(move |h| h.bg(muted))
             .child(Text::body(label))
             .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
@@ -2200,7 +2204,7 @@ impl SchemaDiffDocument {
 
         if !database_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm(dbflux_i18n::t!(
+                Text::body_sm(dbflux_i18n::t!(
                     "document.schema_diff.view.source.database_section"
                 ))
                 .muted_foreground()
@@ -2234,7 +2238,7 @@ impl SchemaDiffDocument {
 
         if !connection_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm(dbflux_i18n::t!(
+                Text::body_sm(dbflux_i18n::t!(
                     "document.schema_diff.view.source.connection_section"
                 ))
                 .muted_foreground()
@@ -2272,9 +2276,9 @@ impl SchemaDiffDocument {
     }
 
     fn render_snapshot_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (primary, muted) = {
+        let (tint, muted) = {
             let theme = cx.theme();
-            (theme.primary, theme.muted)
+            (ChromeColors::tint(theme), theme.muted)
         };
 
         if self.snapshots.is_empty()
@@ -2313,7 +2317,7 @@ impl SchemaDiffDocument {
                     .py(Spacing::XS)
                     .rounded(Radii::SM)
                     .cursor_pointer()
-                    .when(selected, |d| d.bg(primary.opacity(0.15)))
+                    .when(selected, |d| d.bg(tint.opacity(0.15)))
                     .hover(move |h| h.bg(muted))
                     .child(Text::body(label))
                     .on_click(
@@ -2474,7 +2478,7 @@ impl SchemaDiffDocument {
             .gap(Spacing::SM)
             .py(Spacing::XS)
             .child(checkbox)
-            .child(Badge::new(badge.label(), badge_variant(badge)))
+            .child(Badge::new(badge.label(), badge_tone(badge)))
             .child(Text::body(description))
             .into_any_element()
     }
@@ -2520,7 +2524,7 @@ impl SchemaDiffDocument {
                     .gap(Spacing::SM)
                     .py(Spacing::XS)
                     .child(checkbox)
-                    .child(Badge::new(badge.label(), badge_variant(badge)))
+                    .child(Badge::new(badge.label(), badge_tone(badge)))
                     .child(Text::body(description))
                     .into_any_element()
             }
@@ -2547,7 +2551,7 @@ impl SchemaDiffDocument {
                     .py(Spacing::XS)
                     .child(Badge::new(
                         dbflux_i18n::t!("document.schema_diff.status.unsupported"),
-                        BadgeVariant::Neutral,
+                        BadgeTone::Neutral,
                     ))
                     .child(Text::body(description))
                     .child(Text::caption(reason_text).muted_foreground())
@@ -2609,7 +2613,7 @@ fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
         .py(Spacing::XS)
         .child(Badge::new(
             dbflux_i18n::t!("document.schema_diff.status.unsupported"),
-            BadgeVariant::Neutral,
+            BadgeTone::Neutral,
         ))
         .child(Text::body(crate::labels::schema_change_description(
             &unsupported.change,
@@ -3146,7 +3150,7 @@ mod tests {
         empty_loaded.constraints = Some(Vec::new());
 
         assert_ne!(
-            super::schema_fingerprint(&[none_loaded.clone()]),
+            super::schema_fingerprint(std::slice::from_ref(&none_loaded)),
             super::schema_fingerprint(&[empty_loaded.clone()]),
             "None and an explicitly loaded empty collection must remain distinct"
         );

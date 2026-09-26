@@ -12,8 +12,8 @@ pub mod dashboard_manager;
 pub mod file_dialog;
 pub mod hook_phase_runner;
 pub mod keymap;
-pub mod modal_frame;
 pub mod modals;
+pub mod notifications;
 pub mod object_tree;
 pub mod open_external;
 pub mod platform;
@@ -24,6 +24,7 @@ pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
 pub mod ui_automation;
+pub mod updates;
 pub mod user_error;
 
 mod style_guardrails;
@@ -40,7 +41,7 @@ pub use dashboard_manager::{
     Dashboard, DashboardManager, DashboardPanel, DashboardPanelDraft, DashboardPanelKind,
     DraftGridLayout,
 };
-pub use keymap::{default_keymap, key_chord_from_gpui};
+pub use keymap::{default_keymap, effective_keymap, key_chord_from_gpui};
 pub use object_tree::{
     IMPLICIT_DATABASE_LABEL, NodeContent, ObjectTreeCoordinator, ObjectTreeEvent,
     ObjectTreeInstallKey, ObjectTreeKey, ObjectTreeNode, ObjectTreeOutcome, ObjectTreeRejection,

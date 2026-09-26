@@ -8,8 +8,22 @@ pub fn is_builtin(id: &str) -> bool {
     id.starts_with(BUILTIN_ID_PREFIX)
 }
 
+/// Execution classes that change data or schema. Built-in policies send them
+/// to approval by default; reading (`metadata`, `read`) runs without asking.
+pub const MUTATING_CLASS_IDS: &[&str] = &[
+    "write",
+    "destructive",
+    "admin_safe",
+    "admin",
+    "admin_destructive",
+];
+
 /// Returns the three built-in policies.
 /// These are prepended to user-defined policies in all list operations.
+///
+/// Reading is allowed; every mutating class a built-in grants requires
+/// approval. None of them lists `approve_execution` or `reject_execution`:
+/// pending executions are resolved by a person in the DBFlux UI only.
 pub fn builtin_policies() -> Vec<ToolPolicyDto> {
     vec![
         ToolPolicyDto {
@@ -36,6 +50,7 @@ pub fn builtin_policies() -> Vec<ToolPolicyDto> {
                 "get_audit_entry".to_string(),
             ],
             allowed_classes: vec!["metadata".to_string(), "read".to_string()],
+            approval_classes: Vec::new(),
         },
         ToolPolicyDto {
             id: "builtin/write".to_string(),
@@ -65,11 +80,8 @@ pub fn builtin_policies() -> Vec<ToolPolicyDto> {
                 "query_audit_logs".to_string(),
                 "get_audit_entry".to_string(),
             ],
-            allowed_classes: vec![
-                "metadata".to_string(),
-                "read".to_string(),
-                "write".to_string(),
-            ],
+            allowed_classes: vec!["metadata".to_string(), "read".to_string()],
+            approval_classes: vec!["write".to_string()],
         },
         ToolPolicyDto {
             id: "builtin/admin".to_string(),
@@ -109,21 +121,15 @@ pub fn builtin_policies() -> Vec<ToolPolicyDto> {
                 "request_execution".to_string(),
                 "list_pending_executions".to_string(),
                 "get_pending_execution".to_string(),
-                "approve_execution".to_string(),
-                "reject_execution".to_string(),
                 "query_audit_logs".to_string(),
                 "get_audit_entry".to_string(),
                 "export_audit_logs".to_string(),
             ],
-            allowed_classes: vec![
-                "metadata".to_string(),
-                "read".to_string(),
-                "write".to_string(),
-                "destructive".to_string(),
-                "admin_safe".to_string(),
-                "admin".to_string(),
-                "admin_destructive".to_string(),
-            ],
+            allowed_classes: vec!["metadata".to_string(), "read".to_string()],
+            approval_classes: MUTATING_CLASS_IDS
+                .iter()
+                .map(|class| class.to_string())
+                .collect(),
         },
     ]
 }
@@ -159,26 +165,49 @@ pub fn builtin_roles() -> Vec<PolicyRoleDto> {
 
 #[cfg(test)]
 mod tests {
-    use super::builtin_policies;
+    use super::{MUTATING_CLASS_IDS, builtin_policies};
+
+    fn policy(id: &str) -> crate::ToolPolicyDto {
+        builtin_policies()
+            .into_iter()
+            .find(|policy| policy.id == id)
+            .expect("built-in policy should exist")
+    }
 
     #[test]
-    fn admin_policy_covers_safe_and_destructive_admin_classes() {
-        let admin = builtin_policies()
-            .into_iter()
-            .find(|policy| policy.id == "builtin/admin")
-            .expect("admin policy should exist");
+    fn admin_policy_asks_for_every_mutating_class_and_allows_reading() {
+        let admin = policy("builtin/admin");
 
-        assert!(
-            admin
-                .allowed_classes
-                .iter()
-                .any(|class| class == "admin_safe")
-        );
-        assert!(
-            admin
-                .allowed_classes
-                .iter()
-                .any(|class| class == "admin_destructive")
-        );
+        assert_eq!(admin.allowed_classes, vec!["metadata", "read"]);
+        assert_eq!(admin.approval_classes, MUTATING_CLASS_IDS);
+    }
+
+    #[test]
+    fn write_policy_asks_for_write_and_denies_the_other_mutating_classes() {
+        let write = policy("builtin/write");
+
+        assert_eq!(write.allowed_classes, vec!["metadata", "read"]);
+        assert_eq!(write.approval_classes, vec!["write"]);
+    }
+
+    #[test]
+    fn read_only_policy_never_asks_and_denies_every_mutating_class() {
+        let read_only = policy("builtin/read-only");
+
+        assert_eq!(read_only.allowed_classes, vec!["metadata", "read"]);
+        assert!(read_only.approval_classes.is_empty());
+    }
+
+    #[test]
+    fn no_builtin_policy_lets_an_agent_resolve_approvals() {
+        for policy in builtin_policies() {
+            for tool in ["approve_execution", "reject_execution"] {
+                assert!(
+                    !policy.allowed_tools.iter().any(|allowed| allowed == tool),
+                    "{} must not list {tool}",
+                    policy.id
+                );
+            }
+        }
     }
 }

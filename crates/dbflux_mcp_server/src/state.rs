@@ -52,7 +52,8 @@ impl ServerState {
         let profiles = load_profiles(&storage_runtime)?;
         let auth_profiles = load_auth_profiles(&storage_runtime)?;
         let services = dbflux_storage::load_service_configs(&storage_runtime);
-        let (runtime, governance_settings) = build_runtime(config_dir.as_deref())?;
+        let (runtime, governance_settings) =
+            build_runtime(&storage_runtime, config_dir.as_deref())?;
 
         // Validate that the client_id exists as a trusted client
         validate_client_id(&runtime, &client_id, config_dir.as_deref())?;
@@ -137,6 +138,7 @@ fn load_driver_settings(
 }
 
 fn build_runtime(
+    storage_runtime: &StorageRuntime,
     config_dir: Option<&std::path::Path>,
 ) -> Result<(McpRuntime, GovernanceSettings), String> {
     // Use the unified dbflux.db path for audit service regardless of config_dir.
@@ -147,10 +149,7 @@ fn build_runtime(
         error_messages::config_error("initialize audit database", Some(&dbflux_db_path), e)
     })?;
 
-    let mut runtime = McpRuntime::new(
-        audit_service,
-        Box::new(dbflux_approval::InMemoryPendingExecutionStore::default()),
-    );
+    let mut runtime = McpRuntime::new(audit_service, pending_execution_store(storage_runtime));
 
     // Pass config_dir for CLI compatibility only; governance state is read from SQLite.
     let governance_settings = load_governance_into_runtime(&mut runtime, config_dir)?;
@@ -159,6 +158,24 @@ fn build_runtime(
     runtime.drain_events();
 
     Ok((runtime, governance_settings))
+}
+
+/// The pending execution queue shared with the DBFlux app through
+/// `dbflux.db`, so a call a policy sends to approval shows up in the app's
+/// Pending Approvals and an approval given there reaches this server.
+fn pending_execution_store(
+    storage_runtime: &StorageRuntime,
+) -> Box<dyn dbflux_approval::PendingExecutionStore> {
+    match storage_runtime.pending_executions() {
+        Ok(store) => Box::new(store),
+        Err(error) => {
+            log::error!(
+                "Failed to open the shared pending executions store; calls that need \
+                 approval will be queued in memory and cannot be approved from the app: {error}"
+            );
+            Box::new(dbflux_approval::InMemoryPendingExecutionStore::default())
+        }
+    }
 }
 
 fn validate_client_id(
@@ -227,6 +244,7 @@ fn apply_governance_settings(
                 id: policy.id.clone(),
                 allowed_tools: policy.allowed_tools.clone(),
                 allowed_classes: policy.allowed_classes.clone(),
+                approval_classes: policy.approval_classes.clone(),
             })
             .map_err(|e| format!("failed to load policy: {e}"))?;
     }
@@ -368,6 +386,7 @@ fn load_profiles(runtime: &StorageRuntime) -> Result<Vec<ConnectionProfile>, Str
             access_kind,
             mcp_governance,
             read_only_flag: false,
+            environment: None,
         });
     }
 
@@ -660,6 +679,7 @@ fn load_governance_settings(
             id: p.policy_id,
             allowed_tools: p.allowed_tools,
             allowed_classes: p.allowed_classes,
+            approval_classes: p.approval_classes,
         })
         .collect();
 
@@ -1505,6 +1525,7 @@ mod tests {
                 id: String::new(),
                 allowed_tools: vec![],
                 allowed_classes: vec![],
+                approval_classes: vec![],
             }],
         };
 
@@ -1540,6 +1561,7 @@ mod tests {
                 id: "read-only".to_string(),
                 allowed_tools: vec!["select_data".to_string()],
                 allowed_classes: vec![],
+                approval_classes: vec![],
             }],
         };
 

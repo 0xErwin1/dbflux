@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["Presentation — 6 UI crates"]
         uicomp["dbflux_components<br/>(theme, tokens, icons, primitives,<br/>composites, controls, data_table,<br/>document_tree, result_panel, charts,<br/>modals, saved_chart — no dbflux_app dep)"]
-        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>modal_frame, platform,<br/>sql_preview_modal, sso_wizard)"]
+        uibase["dbflux_ui_base<br/>(AppStateEntity, events, keymap helpers,<br/>toast + throttle, user_error,<br/>platform,<br/>sql_preview_modal, sso_wizard)"]
         uidoc["dbflux_ui_document<br/>(tab/pane system, documents,<br/>data_grid_panel, governance)"]
         uisidebar["dbflux_ui_sidebar<br/>(connections + scripts sidebar tree)"]
         uiwindows["dbflux_ui_windows<br/>(connection_manager + settings windows)"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # Icon rendering helpers
       primitives/           # Low-level building blocks (badge, banner, label, button, etc.)
       controls/             # Input controls (button, checkbox, dropdown, input, select, etc.)
-      composites/           # Composed patterns (modal_frame, tab_strip, section_header, etc.)
+      composites/           # Composed patterns (header, tabs, split_button, etc.)
       components/           # Domain components
         data_table/         # Custom virtualized data table
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # Inline JSON editor component
         multi_select.rs     # Multi-select dropdown component
         value_source_selector.rs # Value source dropdown (Env/Secret/Parameter/Auth)
-      modals/               # Reusable modal components (cell_editor, document_preview, etc.)
+      modals/               # The shared `Modal` and the modals built on it (cell_editor, document_preview, etc.)
       result_panel/         # ResultPanel + ViewHandle universal chrome host
       chart/                # Chart engine (detect, spec, decimate, axis, legend, engine)
       saved_chart.rs        # SavedChart + SavedChartStore type alias
@@ -170,12 +170,11 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity wrapper (Deref + EventEmitter), AppStateGlobal,
                             # UserErrorReported + OpenAuditRequested events, unread_error_count
-      keymap.rs             # default_keymap, key_chord_from_gpui
+      keymap/               # Keymap engine: default layers, overrides, native GPUI bindings
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast + ToastHost with severity-aware token-bucket throttle
       user_error/           # Centralized user-facing error reporting (UserFacingError,
                             # ErrorKind, report_error, report_error_async) + throttle
-      modal_frame.rs        # Reusable modal chrome/frame
       platform.rs           # X11/Wayland detection, window options
       sql_preview_modal.rs  # SQL/query preview modal (dual-mode: SQL and generic)
       sso_wizard.rs         # SSO account/role discovery wizard [cfg aws]
@@ -192,8 +191,8 @@ crates/
       data_view.rs          # DataViewMode abstraction (Table vs Document)
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
-      governance.rs         # MCP approvals view for pending executions
-      history_modal.rs      # Recent/saved queries modal
+      governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
+      history_panel.rs      # Recent/saved queries side panel
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
       chart_document/       # ChartDocument: saved/interactive chart tab
@@ -323,6 +322,7 @@ crates/
             actions.rs      # Workspace-level action handlers
             dispatch.rs     # Command dispatch logic
             render.rs       # Workspace rendering
+            shell.rs        # Title bar, activity rail, empty workspace
           status_bar.rs     # Status bar rendering
           tasks_panel.rs    # Background tasks panel
         dock/
@@ -334,14 +334,11 @@ crates/
           # Shims at old overlay paths re-export from dbflux_ui_base / dbflux_components:
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # Shim: pub use dbflux_ui_document::*
         icons/mod.rs        # Shim: re-exports AppIcon + embedded_bytes (SVG resources live here)
         theme.rs            # Shim: pub use dbflux_components::theme::*
         tokens.rs           # Shim: pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # Shim: → dbflux_ui_base::modal_frame
           toast.rs          # Shim: → dbflux_ui_base::toast
         windows/mod.rs      # Shim: pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # Shim: pub use dbflux_ui_sidebar::*
@@ -518,7 +515,7 @@ crates/
   dbflux_approval/           # Approval service for deferred executions
     src/lib.rs              # Exports for ApprovalService and pending store
     src/service.rs          # ApprovalService (approve/reject lifecycle)
-    src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait, InMemoryPendingExecutionStore (tests), ExecutionPlan
   dbflux_audit/             # Audit logging
     src/lib.rs              # AuditService: validate, fingerprint, redact, record
     src/query.rs            # AuditQueryFilter (actor, category, action, outcome, date range)
@@ -652,8 +649,8 @@ A right-rail builder composes SELECT/UPDATE/DELETE statements without writing SQ
 - **Document tree**: `crates/dbflux_components/src/components/document_tree/` hierarchical JSON/BSON viewer for document databases with keyboard navigation (j/k/h/l), search (Ctrl+F or /), collapsible nodes, and view modes (Keys Only, Keys+Preview, Full Values).
 - **Key-value view**: `crates/dbflux_ui_document/src/key_value/` Redis-specific document tab with per-type rendering (String, Hash, List, Set, SortedSet, Stream), pagination, mutations, and context menu. Integrates with the workspace via a `PaneHandle` constructed in `key_value/pane.rs`.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provides `SchemaGraph` (table nodes and FK edges), layout algorithms (LeftRight, Snowflake, Compact), DBML export, and SQL DDL export. Accessed via `SchemaVizDocument` in `crates/dbflux_ui_document/src/schema_viz/mod.rs` with toolbar dropdowns (Layout, Export), toast feedback, audit events, and cancellable background task loading. Integrates with the workspace via a `PaneHandle` constructed in `schema_viz/pane.rs`.
-- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting. (Shim at the old overlay path in `dbflux_ui`.)
-- Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor. (Shim at the old overlay path in `dbflux_ui`.)
+- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provides a modal editor for JSON columns and long/multiline text, with JSON validation and formatting.
+- Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` full-screen JSON document preview with an inline JSON editor.
 - Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` fuzzy-search command palette for all app actions.
 
 ### Dashboards & Saved Charts
@@ -802,7 +799,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 
 **Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, schema, and generic driver-declared source context. The current generic source-window shape is `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Only connection/database/schema annotations are serialized into saved file headers.
 
-**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
+**History panel**: `crates/dbflux_ui_document/src/history_panel.rs` provides a side panel beside the editor for browsing recent queries and saved queries with search, favorites, and rename support. A document hands such panels to the workspace through `PaneHandle::side_panels` (`DocumentSidePanel`), and the workspace draws each one as an island beside the document island; the chart rails, the grid's chart stats rail, the object preview, and the stream consumer groups use the same seam.
 
 ### Release Channels & Branding
 
@@ -812,7 +809,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - `display_name()` — window title and bundle name (`DBFlux Nightly` vs `DBFlux`).
 - `db_file_name()` — `dbflux-nightly.db` vs `dbflux.db`, so a migration that breaks on a pre-release build cannot corrupt a stable database when both channels run side by side. A nightly build can opt into the stable database through the `set_nightly_shares_stable_db` marker (see § Storage & Configuration).
 
-**Branding assets**: full-color brand marks live under `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`, `mark-small.svg`, `wordmark.svg`) plus the shared `resources/branding/glyph.svg`. `crates/dbflux_ui/src/assets.rs` serves the pre-rendered PNG mark per channel for `img(...)`. The platform icon files are committed under `packaging/icons/` (`dbflux.ico` / `dbflux-nightly.ico` for Windows, `dbflux.icns` / `dbflux-nightly.icns` for the macOS bundle) and regenerated from the SVGs when the artwork changes; `crates/dbflux/build.rs` embeds the Windows icon and `VERSIONINFO` into `dbflux.exe`, choosing the channel by the same version rule as `ReleaseChannel`. Packaging metadata (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) and the Nix build (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) substitute channel placeholders so the desktop entry, MIME association, and launcher icon match the running channel.
+**Branding assets**: full-color brand marks live under `resources/branding/{stable,nightly}/` (`mark.svg` is the full app icon for 48 px and up, `mark-small.svg` the glyph for 32 px and below, `wordmark.svg` the glyph + DBFLUX lockup, and their pre-rendered `mark-256.png` / `mark-small-256.png`) plus the shared monochrome `resources/branding/glyph.svg`. `crates/dbflux_ui/src/assets.rs` serves the pre-rendered PNGs per channel for `img(...)`: the glyph for the empty workspace, the full icon for the Welcome dialog and the About section. The platform icon files are committed under `packaging/icons/` (`dbflux.ico` / `dbflux-nightly.ico` for Windows, `dbflux.icns` / `dbflux-nightly.icns` for the macOS bundle) and regenerated from the SVGs with `scripts/branding/generate-icons.sh` when the artwork changes; `crates/dbflux/build.rs` embeds the Windows icon and `VERSIONINFO` into `dbflux.exe`, choosing the channel by the same version rule as `ReleaseChannel`. Packaging metadata (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) and the Nix build (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) substitute channel placeholders so the desktop entry, MIME association, and launcher icon match the running channel.
 
 The channel/branding model is a runtime seam: UI and app code read `ReleaseChannel` accessors; never branch on the raw version string or hardcode `dbflux`/`dbflux-nightly` identifiers. The release/nightly flow itself is documented in `docs/RELEASE.md`.
 
@@ -890,9 +887,9 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
-- Returns `PolicyDecision::Allow` or `PolicyDecision::Deny(reason)`
+- Returns `PolicyDecision::Allow`, `PolicyDecision::RequireApproval`, or `PolicyDecision::Deny(reason)`; among the policies that list the tool, the most permissive class decision wins (Allow > Ask > Deny)
 - `PolicyRole` composes multiple tool policies
-- `ToolPolicy` defines allowed tools and classification levels
+- `ToolPolicy` defines allowed tools and a per-class `ClassDecision` (Allow / Ask / Deny), stored as `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` binds actors/connections to roles and policies
 
 **Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
@@ -901,7 +898,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Approval Flow** (`dbflux_approval`):
 - `ApprovalService` manages approve/reject lifecycle for deferred executions
-- `InMemoryPendingExecutionStore` holds pending executions awaiting human approval
+- Pending executions are persisted in `app_pending_executions` in `dbflux.db` through `SqlitePendingExecutionStore` (`crates/dbflux_storage/src/pending_executions.rs`), shared by the app and the standalone `dbflux mcp` server; `InMemoryPendingExecutionStore` is a fallback when that store cannot be opened, and is used by tests
+- A call whose class is Ask is queued; a person approves or rejects it in the app, and the identical repeated call consumes the approval once (`PendingStatus::Consumed`). MCP clients can never call `approve_execution` / `reject_execution`
 - `ExecutionPlan` captures the original request context for deferred execution
 
 **Audit** (`dbflux_audit`):
@@ -929,7 +927,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `preview_mutation` is strictly read-only; unsafe `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating DDL preview path
 
 **UI Integration**:
-- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) for reviewing pending executions
+- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance/`) document tab for reviewing pending executions
 - `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) in Settings for trusted clients, roles, and policies
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) as the unified event viewer for both internal audit records and driver-backed external event streams exposed through generic `EventStreamTarget`s (no driver-specific audit document path in the UI)
 - `LoginModal` (`crates/dbflux_ui/src/ui/overlays/login_modal.rs`) and `SsoWizard` (`crates/dbflux_ui_base/src/sso_wizard.rs`, shim at old overlay path) for AWS SSO authentication flow
@@ -945,15 +943,16 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Query preview: `SqlPreviewModal` (in `crates/dbflux_ui_base/src/sql_preview_modal.rs`, shim at the old overlay path) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (`crates/dbflux_ui/src/ui/views/workspace/`).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
-- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (`crates/dbflux_core/src/storage/history.rs`). The history modal UI is at `crates/dbflux_ui_document/src/history_modal.rs`.
-- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
+- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history panel (`crates/dbflux_core/src/storage/history.rs`). The history panel UI is at `crates/dbflux_ui_document/src/history_panel.rs`.
+- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history panel (Ctrl+P) allows browsing, searching, and loading saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## Keyboard & Focus Architecture
 
-- Keymap system: `crates/dbflux_ui/src/keymap/` (stays in `dbflux_ui`) defines keymap glue (`actions.rs`, `dispatcher.rs`). Keymap helpers (`default_keymap`, `key_chord_from_gpui`) live in `crates/dbflux_ui_base/src/keymap.rs`. Domain command types (`Command`, `ContextId`) are defined in `dbflux_core::keymap_types` and re-exported through `crates/dbflux_app/src/keymap/`.
-- Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks).
+- Keymap engine: `crates/dbflux_ui_base/src/keymap/` holds the default layers (`defaults.rs`, one per `ContextId`) and turns the effective keymap (defaults plus the user's overrides from `dbflux_app::keymap`) into native GPUI key bindings. Each binding has a key sequence and a context predicate in GPUI's language (`Editor && vim_mode == normal`), so GPUI resolves precedence, sequences and their timeout. Domain command types (`Command`, `ContextId`) are defined in `dbflux_core::keymap_types` and re-exported through `crates/dbflux_app/src/keymap/`, which also holds the override model, its storage and the recorder behind the settings editor.
+- Key contexts: a window root (workspace, settings window, connection manager) sets the identifier of the context that owns the keyboard, computed from its focus model, plus `Global` when that context inherits the global bindings and entries from the active document (`vim_mode`, `language`). Bindings of these contexts dispatch `RunCommand`, which the root handles. Elements set their own contexts (`DataTable`, `Input`, `Modal`, `DocumentTree`, the modal editors, `KeyValueView`); their bindings dispatch the element's actions and win because they sit deeper. Containers add descriptive identifiers (`SidebarPanel`, `CodeEditor`, `ResultPanel`, …) for user predicates only. The vendored GPUI carries the dispatch changes the engine needs (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- Command dispatch: `Workspace` implements `CommandDispatcher` trait; `dispatch()` in `views/workspace/dispatch.rs` routes commands based on `focus_target` (Document, Sidebar, BackgroundTasks). A document that owns some commands handles `RunCommand` on its own root first and lets the others through.
 - Document-focused design: FocusTarget was simplified from Editor/Results/Sidebar/BackgroundTasks to Document/Sidebar/BackgroundTasks, letting documents manage their own internal focus state.
-- Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation).
+- Focus layers: Each context has its own keymap layer with vim-style bindings (j/k/h/l navigation); the contexts that inherit the global bindings require `!Modal`, so an open dialog captures the keyboard.
 - Panel focus modes: Complex panels like data tables have internal focus state machines (`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`) to handle nested keyboard navigation.
 - Mouse/keyboard sync: Mouse handlers update focus state to keep keyboard and mouse navigation consistent; a `switching_input` flag prevents race conditions during input blur events.
 

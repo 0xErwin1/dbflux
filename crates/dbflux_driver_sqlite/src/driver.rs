@@ -37,6 +37,7 @@ pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
         label: "Main".into(),
         sections: vec![FormSection {
             title: "Database".into(),
+            icon: Some(dbflux_core::FormSectionIcon::Database),
             fields: vec![field_file_path()],
         }],
     }],
@@ -414,6 +415,14 @@ impl DbDriver for SqliteDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    fn picker_hint(&self) -> String {
+        "file".to_string()
+    }
+
+    fn picker_rank(&self) -> u16 {
+        4
     }
 
     fn driver_key(&self) -> dbflux_core::DriverKey {
@@ -3306,5 +3315,16 @@ mod tests {
             connection.cancelled.load(Ordering::SeqCst),
             "NUL refusal erased an existing cancellation"
         );
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::SqliteDriver;
+    use dbflux_core::DbDriver;
+
+    #[test]
+    fn picker_names_a_file_instead_of_a_port() {
+        assert_eq!(SqliteDriver::new().picker_hint(), "file");
     }
 }

@@ -10,10 +10,24 @@ mod render_driver_select;
 mod render_tabs;
 
 pub use export_modal::{ExportBundleModal, ExportBundleModalEvent, ExportTarget};
+
+/// Initial Connection Manager window size: the driver picker board is 1180 px
+/// wide and the connection form board 1000 px tall, so one size fits both
+/// views. Shrunk to the display when it does not fit.
+pub const WINDOW_WIDTH: f32 = 1180.0;
+pub const WINDOW_HEIGHT: f32 = 1000.0;
+
+/// Smallest Connection Manager window; the views scroll below the initial size.
+pub const WINDOW_MIN_WIDTH: f32 = 600.0;
+pub const WINDOW_MIN_HEIGHT: f32 = 500.0;
+
+/// Bounds of a new Connection Manager window, fitted to the primary display.
+pub fn window_bounds(cx: &gpui::App) -> gpui::Bounds<gpui::Pixels> {
+    dbflux_ui_base::platform::fitted_window_bounds(WINDOW_WIDTH, WINDOW_HEIGHT, cx)
+}
 pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 
 use crate::ssh_shared::SshAuthSelection;
-use dbflux_app::keymap::KeymapStack;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::components::value_source_selector::ValueSourceSelector;
@@ -122,6 +136,7 @@ impl DriverFocus {
 enum FormFocus {
     // Main tab fields
     Name,
+    Environment,
     AccessMethod,
     UseUri,
     HostValueSource,
@@ -237,12 +252,21 @@ struct DriverInfo {
     category: dbflux_core::DatabaseCategory,
     default_port: Option<u16>,
     uri_scheme: String,
+    /// Short mono line under the name on the picker card (`:5432`, `file`).
+    picker_hint: String,
+    /// Driver-declared position within its picker section.
+    picker_rank: u16,
 }
 
 /// Driver and credential input widgets for the connection form's main tab.
 struct FormState {
     selected_driver_id: Option<String>,
     selected_driver: Option<Arc<dyn DbDriver>>,
+    /// Deployment environment chosen in the Main tab; saved on the profile.
+    environment: Option<dbflux_core::ConnectionEnvironment>,
+    /// Chip the arrow keys moved the environment row's cursor to, when it
+    /// differs from the selected one; cleared by any other command.
+    environment_cursor: Option<usize>,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -392,6 +416,9 @@ pub struct ConnectionManagerWindow {
     import_panel: Entity<ImportConnectionsPanel>,
     active_tab: ActiveTab,
     available_drivers: Vec<DriverInfo>,
+    /// Card columns of the driver picker at its last layout; the keyboard
+    /// grid navigation steps by it.
+    driver_grid_columns: usize,
     editing_profile_id: Option<uuid::Uuid>,
 
     validation_errors: Vec<String>,
@@ -404,7 +431,6 @@ pub struct ConnectionManagerWindow {
 
     // Keyboard navigation state
     focus_handle: FocusHandle,
-    keymap: &'static KeymapStack,
     driver_focus: DriverFocus,
     form_focus: FormFocus,
     edit_state: EditState,
@@ -445,6 +471,8 @@ impl ConnectionManagerWindow {
                     category: metadata.category,
                     default_port: metadata.default_port,
                     uri_scheme: metadata.uri_scheme.clone(),
+                    picker_hint: driver.picker_hint(),
+                    picker_rank: driver.picker_rank(),
                 }
             })
             .collect();
@@ -843,6 +871,7 @@ impl ConnectionManagerWindow {
             import_panel,
             active_tab: ActiveTab::Main,
             available_drivers,
+            driver_grid_columns: render_driver_select::DEFAULT_GRID_COLUMNS,
             editing_profile_id: None,
             validation_errors: Vec::new(),
             test_status: TestStatus::None,
@@ -851,7 +880,6 @@ impl ConnectionManagerWindow {
             ssh_test_status: TestStatus::None,
             ssh_test_error: None,
             focus_handle,
-            keymap: dbflux_ui_base::keymap::default_keymap(),
             driver_focus: DriverFocus::First,
             form_focus: FormFocus::Name,
             edit_state: EditState::Navigating,
@@ -861,6 +889,8 @@ impl ConnectionManagerWindow {
             form: FormState {
                 selected_driver_id: None,
                 selected_driver: None,
+                environment: None,
+                environment_cursor: None,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,
@@ -1009,6 +1039,7 @@ impl ConnectionManagerWindow {
         instance.form.selected_driver = driver.clone();
         instance.form.selected_driver_id = Some(profile.driver_id());
         instance.form.form_save_password = profile.save_password;
+        instance.form.environment = profile.environment();
         instance.view = View::EditForm;
 
         if let Some(driver) = &driver {
@@ -1312,6 +1343,22 @@ impl ConnectionManagerWindow {
     ) {
         self.form.driver_inputs.clear();
         self.form.select_values.clear();
+
+        // A select starts on its declared default, so fields gated on its
+        // value are enabled or disabled from the first render, before the
+        // user touches the control.
+        for field in form
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.fields.iter())
+            .filter(|field| matches!(field.kind, FormFieldKind::Select { .. }))
+            .filter(|field| !field.default_value.is_empty())
+        {
+            self.form
+                .select_values
+                .insert(field.id.clone(), field.default_value.clone());
+        }
 
         let fields: Vec<&FormFieldDef> = form
             .tabs
@@ -4174,6 +4221,7 @@ mod tests {
                     label: "Main".to_string(),
                     sections: vec![FormSection {
                         title: "Settings".to_string(),
+                        icon: None,
                         fields: vec![FormFieldDef {
                             id: "profile".to_string(),
                             label: "Profile".to_string(),
@@ -4283,8 +4331,8 @@ mod tests {
         let en = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "en");
         let es = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "es");
 
-        assert_eq!(en, "New Auth Profile...");
-        assert_eq!(es, "Nuevo perfil de autenticación...");
+        assert_eq!(en, "New auth profile…");
+        assert_eq!(es, "Nuevo perfil de autenticación…");
     }
 
     #[test]

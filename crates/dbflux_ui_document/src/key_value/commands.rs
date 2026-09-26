@@ -43,6 +43,34 @@ impl super::KeyValueDocument {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        if self.bulk_delete.is_some() {
+            return match cmd {
+                Command::Cancel => {
+                    self.close_bulk_delete(window, cx);
+                    true
+                }
+                Command::Execute => {
+                    self.confirm_bulk_delete(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        if self.expiry_editor.is_some() {
+            return match cmd {
+                Command::Cancel => {
+                    self.close_expiry_editor(window, cx);
+                    true
+                }
+                Command::Execute => {
+                    self.apply_expiry_editor(window, cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
         match cmd {
             // -- Context menu --
             Command::OpenContextMenu => {
@@ -79,10 +107,21 @@ impl super::KeyValueDocument {
 
                     self.focus_mode = KeyValueFocusMode::List;
                     cx.notify();
+                } else if let Some((prefix, true)) = self.folder_at_cursor() {
+                    self.toggle_folder(&prefix, cx);
                 }
                 true
             }
             Command::ColumnRight => {
+                if self.focus_mode != KeyValueFocusMode::ValuePanel
+                    && let Some((prefix, expanded)) = self.folder_at_cursor()
+                {
+                    if !expanded {
+                        self.toggle_folder(&prefix, cx);
+                    }
+                    return true;
+                }
+
                 if self.focus_mode == KeyValueFocusMode::List && self.selected_value.is_some() {
                     self.focus_mode = KeyValueFocusMode::ValuePanel;
 
@@ -167,10 +206,8 @@ impl super::KeyValueDocument {
                         }
                     }
                     _ => {
-                        if !self.keys.is_empty() {
-                            self.focus_mode = KeyValueFocusMode::List;
-                            self.select_index(0, cx);
-                        }
+                        self.focus_mode = KeyValueFocusMode::List;
+                        self.move_selection_to_edge(false, cx);
                     }
                 }
                 true
@@ -188,15 +225,20 @@ impl super::KeyValueDocument {
                         }
                     }
                     _ => {
-                        if !self.keys.is_empty() {
-                            self.focus_mode = KeyValueFocusMode::List;
-                            self.select_index(self.keys.len() - 1, cx);
-                        }
+                        self.focus_mode = KeyValueFocusMode::List;
+                        self.move_selection_to_edge(true, cx);
                     }
                 }
                 true
             }
             Command::ExpandCollapse => {
+                if self.focus_mode != KeyValueFocusMode::ValuePanel
+                    && let Some((prefix, _)) = self.folder_at_cursor()
+                {
+                    self.toggle_folder(&prefix, cx);
+                    return true;
+                }
+
                 if self.focus_mode == KeyValueFocusMode::ValuePanel
                     && self.is_document_view_active()
                     && let Some(ts) = &self.document_tree_state
@@ -215,7 +257,7 @@ impl super::KeyValueDocument {
                     if let Some(idx) = self.selected_member_index {
                         self.request_delete_member(idx, cx);
                     }
-                } else {
+                } else if self.folder_at_cursor().is_none() {
                     self.request_delete_key(cx);
                 }
                 true
@@ -249,7 +291,11 @@ impl super::KeyValueDocument {
                 true
             }
             Command::Cancel => {
-                if self.pending_key_delete.is_some() {
+                if self.console.pending.is_some() {
+                    self.cancel_console_command(cx);
+                } else if self.bulk_actions_open {
+                    self.bulk_actions_open = false;
+                } else if self.pending_key_delete.is_some() {
                     self.cancel_delete_key(cx);
                 } else if self.pending_member_delete.is_some() {
                     self.cancel_delete_member(cx);
@@ -280,6 +326,13 @@ impl super::KeyValueDocument {
                     self.confirm_delete_member(cx);
                     return true;
                 }
+                if self.focus_mode != KeyValueFocusMode::ValuePanel
+                    && let Some((prefix, _)) = self.folder_at_cursor()
+                {
+                    self.toggle_folder(&prefix, cx);
+                    return true;
+                }
+
                 if self.focus_mode == KeyValueFocusMode::ValuePanel {
                     if self.is_document_view_active() {
                         if let Some(ts) = &self.document_tree_state {
@@ -310,8 +363,15 @@ impl super::KeyValueDocument {
                     if let Some(ts) = &self.document_tree_state {
                         ts.update(cx, |s, cx| s.page_down(20, cx));
                     }
+                } else if self.focus_mode == KeyValueFocusMode::ValuePanel {
+                    if self.can_load_more_ranged() {
+                        self.load_more_ranged(cx);
+                    }
+                } else if cmd == Command::ResultsNextPage {
+                    self.load_more_keys(cx);
                 } else {
-                    self.go_next_page(cx);
+                    self.focus_mode = KeyValueFocusMode::List;
+                    self.move_selection(20, cx);
                 }
                 true
             }
@@ -322,8 +382,10 @@ impl super::KeyValueDocument {
                     if let Some(ts) = &self.document_tree_state {
                         ts.update(cx, |s, cx| s.page_up(20, cx));
                     }
-                } else {
-                    self.go_prev_page(cx);
+                } else if cmd == Command::PageUp && self.focus_mode != KeyValueFocusMode::ValuePanel
+                {
+                    self.focus_mode = KeyValueFocusMode::List;
+                    self.move_selection(-20, cx);
                 }
                 true
             }

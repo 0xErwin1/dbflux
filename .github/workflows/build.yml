@@ -244,12 +244,12 @@ jobs:
           mkdir -p packaging/icons/32x32/apps
           mkdir -p packaging/icons/16x16/apps
 
-          convert "$BRAND_DIR/mark.svg" -resize 256x256 packaging/icons/256x256/apps/dbflux.png
-          convert "$BRAND_DIR/mark.svg" -resize 128x128 packaging/icons/128x128/apps/dbflux.png
-          convert "$BRAND_DIR/mark.svg" -resize 64x64 packaging/icons/64x64/apps/dbflux.png
-          convert "$BRAND_DIR/mark-small.svg" -resize 48x48 packaging/icons/48x48/apps/dbflux.png
-          convert "$BRAND_DIR/mark-small.svg" -resize 32x32 packaging/icons/32x32/apps/dbflux.png
-          convert "$BRAND_DIR/mark-small.svg" -resize 16x16 packaging/icons/16x16/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark.svg" -resize 256x256 packaging/icons/256x256/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark.svg" -resize 128x128 packaging/icons/128x128/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark.svg" -resize 64x64 packaging/icons/64x64/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark.svg" -resize 48x48 packaging/icons/48x48/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark-small.svg" -resize 32x32 packaging/icons/32x32/apps/dbflux.png
+          convert -background none "$BRAND_DIR/mark-small.svg" -resize 16x16 packaging/icons/16x16/apps/dbflux.png
 
       - name: Install Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0

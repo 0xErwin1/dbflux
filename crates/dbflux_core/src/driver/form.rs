@@ -139,10 +139,39 @@ pub struct FormFieldDef {
     pub help: Option<String>,
 }
 
+/// Icon drawn before a form section's title. It names what the section is
+/// about, so the UI picks a glyph without reading section titles or driver
+/// ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormSectionIcon {
+    /// Where the server listens: host, port, URL.
+    Server,
+    /// Who connects: user, password, token.
+    Authentication,
+    /// How bytes travel: TLS, tunnels.
+    Transport,
+    /// A connection target that is neither a server nor a file.
+    Connection,
+    /// A local database file or a default database.
+    Database,
+    /// Cloud account, region and credentials.
+    Cloud,
+    /// Protocol or product version.
+    Version,
+    /// Deployment shape: standalone, cluster, sentinel.
+    Topology,
+    /// Schema discovery options.
+    Schema,
+}
+
 /// A section of related form fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormSection {
     pub title: String,
+    /// Icon before the title; `None` draws the title alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<FormSectionIcon>,
     pub fields: Vec<FormFieldDef>,
 }
 
@@ -303,6 +332,7 @@ pub fn ssh_tab() -> FormTab {
         label: "SSH".into(),
         sections: vec![FormSection {
             title: "SSH Tunnel".into(),
+            icon: Some(FormSectionIcon::Transport),
             fields: vec![
                 field(
                     "ssh_enabled",

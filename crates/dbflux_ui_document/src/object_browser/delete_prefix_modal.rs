@@ -10,9 +10,10 @@ use super::tree::ObjectTreeNodeId;
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
 use crate::buckets_table::BucketDetailsState;
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, Text, TypeToConfirm};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_ui_base::modal_frame::ModalFrame;
+use dbflux_core::keymap_types::ContextId;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -333,20 +334,18 @@ impl ObjectBrowserDocument {
                 ),
         );
 
-        ModalFrame::new(
-            "object-browser-delete-prefix-modal",
-            &self.focus_handle,
-            close,
-        )
-        .title(dbflux_i18n::t!(
+        Modal::new(dbflux_i18n::t!(
             "document.object_browser.delete_prefix_modal.title"
         ))
+        .id("object-browser-delete-prefix-modal")
+        .focus_handle(&self.focus_handle)
+        .on_close(close)
+        .key_context(ContextId::SqlPreviewModal.as_gpui_context())
         .icon(AppIcon::TriangleAlert)
         .width(px(560.0))
         .max_height(px(560.0))
-        .center_vertically()
         .child(body.into_any_element())
-        .render(cx)
+        .into_any_element()
     }
 }
 

@@ -6,10 +6,13 @@ use super::{
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::detect_chart_columns;
 use dbflux_components::components::data_table::{ContextMenuAction, FilterOperator};
-use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT};
+use dbflux_components::components::data_table::{HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH};
+use dbflux_components::composites::{MenuItem, render_menu_header};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel, surface_raised};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
+use dbflux_components::tokens::{FontSizes, Heights, MenuMetrics, Radii, Spacing};
 use dbflux_core::{
     DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, MutationRequest, RowDelete,
     RowIdentity, RowInsert, RowPatch, Value,
@@ -25,6 +28,7 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
+use sections::MenuRowCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilterBackend {
@@ -40,9 +44,44 @@ const CONTEXT_MENU_EDGE_GAP: Pixels = Spacing::XS;
 /// provided the left side has the room.
 const SUBMENU_MAX_WIDTH: Pixels = px(280.0);
 
-/// How far a submenu overlaps the menu it hangs off (menu width 180 less the
-/// 172 offset in `sections.rs`), so the room it needs is its width less this.
+/// Width of the cell context menu (AppByzMenu).
+const CONTEXT_MENU_WIDTH: Pixels = px(270.0);
+
+/// Width of the menu opened from a column header, which lists every filter
+/// operator inline.
+const COLUMN_HEADER_MENU_WIDTH: Pixels = px(300.0);
+
+/// How far a submenu overlaps the menu it hangs off (the menu width less the
+/// row inset and the offset in `sections.rs`), so the room it needs is its
+/// width less this.
 const SUBMENU_OVERLAP: Pixels = px(8.0); // guardrail-allow: derived from the menu width and submenu offset, not a spacing step
+
+/// Which member of the Filter / Order / Generate SQL / Copy as SQL group
+/// carries the separator that opens it. The four read as one group
+/// (IslMenu), so only the first one present gets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct QueryGroupSeparators {
+    pub(super) filter: bool,
+    pub(super) order: bool,
+    pub(super) generate_sql: bool,
+    pub(super) copy_query: bool,
+}
+
+impl QueryGroupSeparators {
+    pub(super) fn new(
+        has_filter: bool,
+        has_order: bool,
+        has_generate_sql: bool,
+        has_copy_query: bool,
+    ) -> Self {
+        Self {
+            filter: has_filter,
+            order: has_order && !has_filter,
+            generate_sql: has_generate_sql && !has_filter && !has_order,
+            copy_query: has_copy_query && !has_filter && !has_order && !has_generate_sql,
+        }
+    }
+}
 
 /// Where a context menu goes, in panel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,7 +187,7 @@ impl DataGridPanel {
         // y: panel_origin.y + HEADER_HEIGHT + (row * ROW_HEIGHT) + some padding for toolbar
         let toolbar_height = px(36.0); // Approximate toolbar height
         let position = Point {
-            x: self.panel_origin.x + px(cell_x) - horizontal_offset + px(20.0),
+            x: self.panel_origin.x + ROW_NUMBER_WIDTH + px(cell_x) - horizontal_offset + px(20.0),
             y: self.panel_origin.y + toolbar_height + HEADER_HEIGHT + ROW_HEIGHT * row,
         };
 
@@ -673,38 +712,40 @@ impl DataGridPanel {
 
         // Layout:
         //   [base items]
-        //   [sep + Filter trigger]?   (if has_filter)
-        //   [Order trigger]?          (if has_order, shares separator with filter)
-        //   [sep + GenSQL trigger]?   (if has_generate_sql)
-        //   [sep + CopyQuery trigger]?(if has_copy_query)
+        //   [sep] [Filter]? [Order]? [GenSQL]? [CopyQuery]?  (one group; the
+        //                                                    separator opens it)
         //   [sep + row_action...]?    (if row_actions non-empty)
         let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = if is_column_header {
             Vec::new()
         } else {
-            Self::build_context_menu_items(
-                is_editable,
+            self.adapt_menu_items_for_documents(
+                Self::build_context_menu_items(
+                    is_editable,
+                    is_document_view,
+                    has_row_target,
+                    can_chart,
+                    inspect_row_enabled,
+                ),
                 is_document_view,
-                has_row_target,
-                can_chart,
-                inspect_row_enabled,
+                cx,
             )
         };
         let base_count = base_items.len();
 
-        // Filter: sep(1) + filter(1) = 2; Order adds 1 more
-        let filter_slots = if has_filter { 2 } else { 0 };
-        let order_slots = if has_order { 1 } else { 0 };
-        let after_filter_order = base_count + filter_slots + order_slots;
+        let separators =
+            QueryGroupSeparators::new(has_filter, has_order, has_generate_sql, has_copy_query);
 
-        // GenSQL: sep(1) + trigger(1) = 2
-        let gen_sql_slots = if has_generate_sql { 2 } else { 0 };
-        let after_gen_sql = after_filter_order + gen_sql_slots;
+        let slots = |present: bool, with_separator: bool| -> usize {
+            usize::from(present) + usize::from(with_separator)
+        };
 
-        // CopyQuery: sep(1) + trigger(1) = 2
-        let copy_query_slots = if has_copy_query { 2 } else { 0 };
-        let after_copy_query = after_gen_sql + copy_query_slots;
+        let filter_slots = slots(has_filter, separators.filter);
+        let after_filter = base_count + filter_slots;
+        let after_filter_order = after_filter + slots(has_order, separators.order);
+        let after_gen_sql = after_filter_order + slots(has_generate_sql, separators.generate_sql);
+        let after_copy_query = after_gen_sql + slots(has_copy_query, separators.copy_query);
 
         // RowActions: sep(1) + N action items
         let row_action_count = if is_column_header {
@@ -723,29 +764,12 @@ impl DataGridPanel {
         let row_actions_start = after_copy_query; // index of the separator
         let total_count = after_copy_query + row_actions_slots;
 
-        let filter_trigger_idx = if has_filter {
-            Some(base_count + 1) // after separator
-        } else {
-            None
-        };
-
-        let order_trigger_idx = if has_order {
-            Some(base_count + filter_slots) // right after filter trigger
-        } else {
-            None
-        };
-
-        let gen_sql_trigger_idx = if has_generate_sql {
-            Some(after_filter_order + 1) // after separator
-        } else {
-            None
-        };
-
-        let copy_query_trigger_idx = if has_copy_query {
-            Some(after_gen_sql + 1) // after separator
-        } else {
-            None
-        };
+        let filter_trigger_idx = has_filter.then_some(base_count + usize::from(separators.filter));
+        let order_trigger_idx = has_order.then_some(after_filter + usize::from(separators.order));
+        let gen_sql_trigger_idx =
+            has_generate_sql.then_some(after_filter_order + usize::from(separators.generate_sql));
+        let copy_query_trigger_idx =
+            has_copy_query.then_some(after_gen_sql + usize::from(separators.copy_query));
 
         let any_submenu_open = self
             .context_menu
@@ -790,18 +814,12 @@ impl DataGridPanel {
                 return base_items.get(idx).map(|i| i.is_separator).unwrap_or(false);
             }
 
-            // Filter separator
-            if has_filter && idx == base_count {
-                return true;
-            }
+            let group_separator = (separators.filter && idx == base_count)
+                || (separators.order && idx == after_filter)
+                || (separators.generate_sql && idx == after_filter_order)
+                || (separators.copy_query && idx == after_gen_sql);
 
-            // GenSQL separator
-            if has_generate_sql && idx == after_filter_order {
-                return true;
-            }
-
-            // CopyQuery separator
-            if has_copy_query && idx == after_gen_sql {
+            if group_separator {
                 return true;
             }
 
@@ -1063,6 +1081,8 @@ impl DataGridPanel {
                 | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
                 | ContextMenuAction::SetNull
+                | ContextMenuAction::UnsetField
+                | ContextMenuAction::RevertCell
                 | ContextMenuAction::DuplicateRow
                 | ContextMenuAction::DeleteRow
                 | ContextMenuAction::GenerateSelectWhere
@@ -1329,11 +1349,9 @@ impl DataGridPanel {
 
     pub(super) fn render_delete_confirm_modal(
         &self,
-        theme: &gpui_component::theme::Theme,
+        _theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let btn_hover = theme.muted;
-
         let count = self
             .pending_delete_confirm
             .as_ref()
@@ -1342,106 +1360,96 @@ impl DataGridPanel {
 
         let (title, description) = crate::labels::delete_confirm_copy(count);
 
-        // Backdrop with centered modal
-        div()
-            .id("delete-modal-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(300.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .medium()
-                                    .color(theme.warning),
-                            )
-                            .child(Text::heading(title)),
-                    )
-                    .child(Text::muted(description))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("delete-cancel-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(btn_hover))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.cancel_delete(window, cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
-                                    )
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.data.context_menu.delete_confirm.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("delete-confirm-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm_delete(window, cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete).small().color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.data.context_menu.delete_confirm.delete"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "delete-cancel-btn",
+                    dbflux_i18n::t!("document.data.context_menu.delete_confirm.cancel"),
+                )
+                .icon(AppIcon::X)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_delete(window, cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "delete-confirm-btn",
+                    dbflux_i18n::t!("document.data.context_menu.delete_confirm.delete"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.confirm_delete(window, cx);
+                })),
+            );
+
+        Modal::new(title)
+            .id("delete-modal-overlay")
+            .danger()
+            .icon(AppIcon::TriangleAlert)
+            .width(px(420.0))
+            .body(Text::body(description))
+            .footer(footer)
+    }
+
+    /// Header row of the cell menu: the column and row it acts on, with the
+    /// column's key icon (PK in the warning color, FK in the info color) when
+    /// the table metadata marks it as a key.
+    fn render_cell_menu_header(
+        &self,
+        menu: &TableContextMenu,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let column_name = self
+            .result
+            .columns
+            .get(menu.col)
+            .map(|column| column.name.clone())
+            .unwrap_or_default();
+
+        let label = dbflux_i18n::t!(
+            "document.data.context_menu.header",
+            column = column_name,
+            row = menu.row + 1
+        );
+
+        let table_state = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .map(|table| table.read(cx));
+        let is_primary_key =
+            table_state.is_some_and(|state| state.pk_columns().contains(&menu.col));
+        let is_foreign_key =
+            table_state.is_some_and(|state| state.fk_columns().contains(&menu.col));
+
+        let header = MenuItem::header(label);
+        let header = if is_primary_key {
+            header
+                .icon(AppIcon::KeyRound)
+                .header_icon_color(theme.warning)
+        } else if is_foreign_key {
+            header.icon(AppIcon::Cable).header_icon_color(theme.info)
+        } else {
+            header.icon(AppIcon::Columns)
+        };
+
+        render_menu_header(&header, cx).into_any_element()
     }
 
     pub(super) fn render_context_menu(
         &self,
         menu: &TableContextMenu,
         is_editable: bool,
-        theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let menu_width = if menu.is_column_header {
-            px(300.0)
+            COLUMN_HEADER_MENU_WIDTH
         } else {
-            px(180.0)
+            CONTEXT_MENU_WIDTH
         };
 
         // Convert window coordinates to panel-relative coordinates
@@ -1459,24 +1467,31 @@ impl DataGridPanel {
         let is_document_view = menu.is_document_view;
         let backend = self.filter_backend(cx);
         let menu_items = if menu.is_column_header {
-            self.render_column_header_menu_items(menu, backend, theme, cx)
+            self.render_column_header_menu_items(menu, backend, cx)
         } else {
             let has_row_target =
                 self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
             let can_chart = self.can_chart_from_context_menu(cx);
             let inspect_row_enabled = !self.is_grouped_result();
-            let visible_items = Self::build_context_menu_items(
-                is_editable,
+            let visible_items = self.adapt_menu_items_for_documents(
+                Self::build_context_menu_items(
+                    is_editable,
+                    menu.is_document_view,
+                    has_row_target,
+                    can_chart,
+                    inspect_row_enabled,
+                ),
                 menu.is_document_view,
-                has_row_target,
-                can_chart,
-                inspect_row_enabled,
+                cx,
             );
             let mut menu_items: Vec<AnyElement> = Vec::new();
             let mut visual_index = 0usize;
 
+            if has_row_target && !is_document_view {
+                menu_items.push(self.render_cell_menu_header(menu, cx));
+            }
+
             Self::render_menu_item_rows(
-                theme,
                 selected_index,
                 &visible_items,
                 &mut menu_items,
@@ -1486,13 +1501,19 @@ impl DataGridPanel {
 
             let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
             let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            let separators = QueryGroupSeparators::new(
+                has_filter,
+                has_order,
+                !is_document_view,
+                self.has_copy_query_support(),
+            );
+
             self.render_filter_submenu_section(
                 menu,
                 submenus_open_left,
                 backend,
                 has_filter,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1501,37 +1522,42 @@ impl DataGridPanel {
                 menu,
                 submenus_open_left,
                 has_order,
-                selected_index,
-                theme,
-                &mut menu_items,
-                &mut visual_index,
+                separators.order,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
             Self::render_generate_sql_submenu_section(
                 is_document_view,
+                separators.generate_sql,
                 menu,
                 submenus_open_left,
-                selected_index,
-                theme,
-                &mut menu_items,
-                &mut visual_index,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
 
             self.render_copy_query_submenu_section(
                 menu,
                 submenus_open_left,
-                selected_index,
-                theme,
-                &mut menu_items,
-                &mut visual_index,
+                separators.copy_query,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
 
             Self::render_row_actions_section(
                 menu,
                 selected_index,
-                theme,
                 &mut menu_items,
                 &mut visual_index,
                 cx,
@@ -1541,7 +1567,8 @@ impl DataGridPanel {
 
         // Separators are shorter than rows, so this over-estimates a little;
         // a menu placed a few pixels higher than necessary is harmless.
-        let menu_height = Heights::ROW_COMPACT * menu_items.len() as f32 + Spacing::XS * 2.0;
+        let menu_height =
+            MenuMetrics::ROW_HEIGHT * menu_items.len() as f32 + MenuMetrics::PADDING_Y * 2.0;
         let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
 
         self.render_context_menu_overlay(
@@ -1595,6 +1622,8 @@ impl DataGridPanel {
                 }
             }
             ContextMenuAction::SetDefault => self.handle_set_default(menu.row, menu.col, cx),
+            ContextMenuAction::UnsetField => self.handle_unset_field(menu.row, menu.col, cx),
+            ContextMenuAction::RevertCell => self.handle_revert_cell(menu.row, menu.col, cx),
             ContextMenuAction::SetNull => self.handle_set_null(menu.row, menu.col, cx),
             ContextMenuAction::AddRow => self.handle_add_row(menu.row, is_document_view, cx),
             ContextMenuAction::DuplicateRow => {
@@ -1691,8 +1720,14 @@ impl DataGridPanel {
     /// Build an `InspectorSnapshot` from the given row/col and emit
     /// `DataGridEvent::OpenInspector` so the workspace mounts the content.
     pub(super) fn open_row_inspector(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use super::row_inspector::{InspectorCell, InspectorSnapshot, RowInspectorContent};
-        use dbflux_components::components::data_table::model::ColumnKind;
+        use super::row_inspector::{
+            InspectorCell, InspectorSnapshot, RowInspectorContent, column_type_label, row_key_label,
+        };
+
+        if self.collection.raw.is_some() && self.is_document_collection(cx) {
+            self.open_document_inspector(row, col, cx);
+            return;
+        }
 
         let Some(table_state) = &self.grid_table.table_state else {
             return;
@@ -1706,8 +1741,10 @@ impl DataGridPanel {
         // showing a phantom row of nulls.
         if row >= model.row_count() {
             self.inspector.follow_selection = false;
+            self.inspector.pinned = false;
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
+            self.inspector.incoming_references.cancel();
             cx.emit(DataGridEvent::CloseInspector);
             return;
         }
@@ -1715,8 +1752,9 @@ impl DataGridPanel {
         let pk_cols: std::collections::HashSet<usize> =
             state.pk_columns().iter().copied().collect();
         let fk_cols = state.fk_columns().clone();
+        let can_edit = state.is_editable() && !self.is_grouped_result();
+        let referenced_tables = self.foreign_key_targets(cx);
 
-        // Build cell values first so we can cross-reference with FK info below.
         let cells: Vec<InspectorCell> = model
             .columns
             .iter()
@@ -1726,38 +1764,35 @@ impl DataGridPanel {
                     .cell(row, ix)
                     .map(|c| self.cell_to_value(c))
                     .unwrap_or(dbflux_core::Value::Null);
-
-                let type_label = match spec.kind {
-                    ColumnKind::Text => "text",
-                    ColumnKind::Integer => "integer",
-                    ColumnKind::Float => "float",
-                    ColumnKind::Bool => "boolean",
-                    ColumnKind::Bytes => "bytes",
-                    ColumnKind::Json => "json",
-                    ColumnKind::Unknown => "unknown",
-                }
-                .to_string();
+                let name = spec.title.to_string();
+                let type_label = column_type_label(
+                    &spec.type_name,
+                    referenced_tables.get(&name).map(String::as_str),
+                );
 
                 InspectorCell {
-                    name: spec.title.to_string(),
+                    name,
                     value,
+                    type_label,
                     is_primary_key: pk_cols.contains(&ix),
                     is_foreign_key: fk_cols.contains(&ix),
-                    type_label,
-                    nullable: true, // conservative default; refined when column details are cached
                 }
             })
             .collect();
 
-        let row_label = crate::labels::row_inspector_title(row + 1);
-        let snapshot = InspectorSnapshot {
-            cells: cells.clone(),
-            focused_col: col,
+        let table_name = match &self.source {
+            DataSource::Table { table, .. } => Some(table.name.clone()),
+            DataSource::Collection { .. } | DataSource::QueryResult { .. } => None,
         };
 
-        // Build per-FK reference entries from the cached TableInfo.foreign_keys.
-        let fk_references = self.build_fk_references(&cells, cx);
-        let has_fk_lookups = !fk_references.is_empty();
+        let snapshot = InspectorSnapshot {
+            row_number: row + 1,
+            row_key: row_key_label(table_name.as_deref(), &cells),
+            cells: cells.clone(),
+            can_edit,
+        };
+
+        let outgoing_references = self.build_fk_references(&cells, cx);
 
         // Reuse the existing content entity or create a new one.
         let content = match &self.inspector.row_inspector_content {
@@ -1767,44 +1802,124 @@ impl DataGridPanel {
             }
             None => {
                 let new_content = cx.new(|cx| RowInspectorContent::new(snapshot, cx));
-                if !has_fk_lookups {
-                    new_content.update(cx, |c, cx| c.set_references(Vec::new(), cx));
-                }
+                self.inspector._row_inspector_subscription =
+                    Some(cx.subscribe(&new_content, |this, _, event, cx| {
+                        this.handle_row_inspector_event(*event, cx);
+                    }));
                 self.inspector.row_inspector_content = Some(new_content.clone());
                 new_content
             }
         };
 
-        // Fire FK resolution against the (possibly reused) content entity.
-        self.fire_fk_resolution(fk_references, content.clone(), cx);
+        let pinned = self.inspector.pinned;
+        content.update(cx, |c, cx| {
+            c.set_pinned(pinned, cx);
+            c.set_outgoing_references(outgoing_references, cx);
+        });
+
+        self.load_incoming_references(&cells, content.clone(), cx);
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
         self.inspector.follow_selection = true;
         self.inspector.inspector_row = Some((row, col));
 
-        // Tell the workspace to mount/replace the inspector rail.
-        let title = SharedString::from(row_label);
-        let content_view = AnyView::from(content);
+        // Tell the workspace to mount/replace the inspector rail. The row
+        // inspector draws its own header, so the rail skips its title bar.
+        let title = SharedString::from(crate::labels::row_inspector_title(row + 1));
         cx.emit(DataGridEvent::OpenInspector {
             title,
-            content: content_view,
+            content: AnyView::from(content),
+            content_has_header: true,
         });
         cx.notify();
     }
 
-    /// Build the list of FK lookups for the current row from the schema cache.
+    /// Carry out a request from the row inspector's buttons.
     ///
-    /// Returns one entry per FK constraint whose local columns all have
-    /// non-null values in the current row. Multi-column FKs are skipped
-    /// (not supported by `fetch_row_by_pk`).
+    /// Row actions need a `Window`, so they are queued for the next render;
+    /// pin and close only touch the grid's inspector state.
+    pub(in crate::data_grid_panel) fn handle_row_inspector_event(
+        &mut self,
+        event: super::row_inspector::RowInspectorContentEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::RowInspectorContentEvent;
+
+        match event {
+            RowInspectorContentEvent::Close => {
+                self.clear_inspector_state(cx);
+                cx.emit(DataGridEvent::CloseInspector);
+            }
+            RowInspectorContentEvent::TogglePin => {
+                self.inspector.pinned = !self.inspector.pinned;
+                let pinned = self.inspector.pinned;
+                if let Some(content) = &self.inspector.row_inspector_content {
+                    content.update(cx, |c, cx| c.set_pinned(pinned, cx));
+                }
+            }
+            RowInspectorContentEvent::Edit
+            | RowInspectorContentEvent::Duplicate
+            | RowInspectorContentEvent::Delete => {
+                if let Some((row, col)) = self.inspector.inspector_row {
+                    self.pending.row_inspector_action = Some((event, row, col));
+                }
+            }
+        }
+
+        cx.notify();
+    }
+
+    /// Run a row action queued by the row inspector's footer.
+    pub(super) fn apply_row_inspector_action(
+        &mut self,
+        (event, row, col): (super::row_inspector::RowInspectorContentEvent, usize, usize),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use super::row_inspector::RowInspectorContentEvent;
+
+        if !self.has_context_menu_row_target(row, false, cx) {
+            return;
+        }
+
+        match event {
+            RowInspectorContentEvent::Edit => self.handle_edit(row, col, window, cx),
+            RowInspectorContentEvent::Duplicate => self.handle_duplicate_row(row, false, cx),
+            RowInspectorContentEvent::Delete => self.handle_delete_row(row, cx),
+            RowInspectorContentEvent::Close | RowInspectorContentEvent::TogglePin => {}
+        }
+    }
+
+    /// The table each single-column foreign key of the browsed table points
+    /// at, keyed by its column, for the inspector's type labels.
+    fn foreign_key_targets(&self, cx: &Context<Self>) -> std::collections::HashMap<String, String> {
+        let Some(foreign_keys) = self
+            .table_details_for(cx)
+            .and_then(|table_info| table_info.foreign_keys.as_deref())
+        else {
+            return std::collections::HashMap::new();
+        };
+
+        foreign_keys
+            .iter()
+            .filter(|fk| fk.columns.len() == 1)
+            .filter_map(|fk| {
+                fk.columns
+                    .first()
+                    .map(|column| (column.clone(), fk.referenced_table.clone()))
+            })
+            .collect()
+    }
+
+    /// The outgoing references of the current row: one per single-column
+    /// foreign key of the browsed table whose value is not null.
     fn build_fk_references(
         &self,
         cells: &[super::row_inspector::InspectorCell],
         cx: &Context<Self>,
     ) -> Vec<super::row_inspector::FkReference> {
-        use super::row_inspector::FkReference;
-        use dbflux_components::primitives::LoadingState;
+        use super::row_inspector::{FkReference, ReferenceKind};
 
         let Some(table_info) = self.table_details_for(cx) else {
             return Vec::new();
@@ -1818,20 +1933,16 @@ impl DataGridPanel {
         let mut references = Vec::new();
 
         for fk in fk_list {
-            // Only handle single-column FKs.
-            if fk.columns.len() != 1 || fk.referenced_columns.len() != 1 {
+            let ([local_col], [ref_col]) =
+                (fk.columns.as_slice(), fk.referenced_columns.as_slice())
+            else {
                 continue;
-            }
+            };
 
-            let local_col = &fk.columns[0];
-            let ref_col = &fk.referenced_columns[0];
-
-            // Find the value in the current row.
             let Some(cell) = cells.iter().find(|c| &c.name == local_col) else {
                 continue;
             };
 
-            // Skip null FK values.
             if cell.value.is_null() {
                 continue;
             }
@@ -1842,120 +1953,142 @@ impl DataGridPanel {
                 target_table: fk.referenced_table.clone(),
                 target_pk: ref_col.clone(),
                 value: cell.value.clone(),
-                row: LoadingState::Loading,
+                kind: ReferenceKind::Outgoing,
             });
         }
 
         references
     }
 
-    /// Spawn one background task per FK reference and resolve them into the inspector.
-    fn fire_fk_resolution(
-        &self,
-        references: Vec<super::row_inspector::FkReference>,
-        inspector_entity: Entity<super::row_inspector::RowInspectorContent>,
+    /// Where the browsed table lives. `None` for other sources.
+    fn reference_lookup_target(&self, cx: &Context<Self>) -> Option<ReferenceLookupTarget> {
+        let DataSource::Table {
+            profile_id,
+            database,
+            table,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        let state = self.app_state.read(cx);
+        let connected = state.connections().get(profile_id)?;
+        let database = database
+            .clone()
+            .or_else(|| connected.active_database.clone())
+            .unwrap_or_else(|| "default".to_string());
+        let connection = connected.connection_for_database(&database);
+
+        Some(ReferenceLookupTarget {
+            profile_id: *profile_id,
+            database,
+            schema: table.schema.clone(),
+            table: table.name.clone(),
+            connection,
+        })
+    }
+
+    /// Finds the tables whose foreign keys point at the inspected row and
+    /// counts the rows of each that do, in the background, once the cursor
+    /// rests on the row (see `IncomingReferencesLoader`). Foreign keys come
+    /// from the schema's foreign-key cache, fetched once when missing; the
+    /// counts go through the driver's `count_table`, one query per table and
+    /// at most `MAX_CONCURRENT_REFERENCE_COUNTS` at a time.
+    fn load_incoming_references(
+        &mut self,
+        cells: &[super::row_inspector::InspectorCell],
+        content: Entity<super::row_inspector::RowInspectorContent>,
         cx: &mut Context<Self>,
     ) {
-        use super::row_inspector::FkReference;
-        use dbflux_components::primitives::LoadingState;
+        let generation = content.read(cx).generation();
 
-        if references.is_empty() {
+        let Some(ReferenceLookupTarget {
+            profile_id,
+            database,
+            schema,
+            table: table_name,
+            connection,
+        }) = self.reference_lookup_target(cx)
+        else {
+            self.inspector.incoming_references.cancel();
+            content.update(cx, |content, cx| {
+                content.add_incoming_references(generation, Vec::new(), cx);
+            });
             return;
-        }
-
-        let (profile_id, database, schema) = match &self.source {
-            super::DataSource::Table {
-                profile_id,
-                database,
-                table,
-                ..
-            } => {
-                let db = {
-                    let state = self.app_state.read(cx);
-                    let db = database.clone().or_else(|| {
-                        state
-                            .connections()
-                            .get(profile_id)
-                            .and_then(|c| c.active_database.clone())
-                    });
-                    db.unwrap_or_else(|| "default".to_string())
-                };
-                let schema = table.schema.clone().unwrap_or_else(|| "public".to_string());
-                (*profile_id, db, schema)
-            }
-            _ => return,
         };
 
-        // Use the per-database connection for the database being viewed.
-        // `state.get_connection` only returns the primary connection (which
-        // for Postgres is bound to a different database), so FK lookups
-        // failed with "relation public.X does not exist".
-        let connection = {
-            let state = self.app_state.read(cx);
-            let Some(connected) = state.connections().get(&profile_id) else {
+        let values: std::collections::HashMap<String, Value> = cells
+            .iter()
+            .map(|cell| (cell.name.clone(), cell.value.clone()))
+            .collect();
+        let app_state = self.app_state.clone();
+
+        let job = async move |cx: &mut AsyncApp| {
+            let foreign_keys = match cached_or_fetched_schema_foreign_keys(
+                &app_state,
+                profile_id,
+                &database,
+                schema.as_deref(),
+                cx,
+            )
+            .await
+            {
+                Ok(foreign_keys) => foreign_keys,
+                Err(error) => {
+                    log::debug!("row inspector could not read the schema's foreign keys: {error}");
+                    Vec::new()
+                }
+            };
+
+            let references = super::row_inspector::incoming_references(
+                &foreign_keys,
+                &table_name,
+                schema.as_deref(),
+                &values,
+            );
+
+            let first = cx.update(|cx| {
+                content.update(cx, |content, cx| {
+                    content.add_incoming_references(generation, references.clone(), cx)
+                })
+            });
+
+            let Some(first) = first else {
                 return;
             };
-            connected.connection_for_database(&database)
+
+            super::row_inspector::count_incoming_references(
+                &content,
+                generation,
+                first,
+                &references,
+                |reference, executor| {
+                    let connection = connection.clone();
+                    let request = dbflux_core::TableCountRequest::new(dbflux_core::TableRef {
+                        schema: schema.clone(),
+                        name: reference.target_table.clone(),
+                    })
+                    .with_semantic_filter(
+                        dbflux_core::SemanticFilter::compare(
+                            reference.column.as_str(),
+                            dbflux_core::WhereOperator::Eq,
+                            reference.value.clone(),
+                        ),
+                    );
+
+                    executor.spawn(async move {
+                        connection
+                            .count_table(&request)
+                            .map_err(|error| error.to_string())
+                    })
+                },
+                cx,
+            )
+            .await;
         };
 
-        // Initialise the inspector's reference list with Loading state.
-        let loading_refs: Vec<FkReference> = references
-            .iter()
-            .map(|r| FkReference {
-                column: r.column.clone(),
-                target_schema: r.target_schema.clone(),
-                target_table: r.target_table.clone(),
-                target_pk: r.target_pk.clone(),
-                value: r.value.clone(),
-                row: LoadingState::Loading,
-            })
-            .collect();
-
-        inspector_entity.update(cx, |insp, cx| {
-            insp.set_references(loading_refs, cx);
-        });
-
-        // Spawn one task per FK reference.
-        for (index, fk_ref) in references.into_iter().enumerate() {
-            let connection = connection.clone();
-            let inspector = inspector_entity.clone();
-            let database = database.clone();
-            let default_schema = schema.clone();
-
-            cx.spawn(async move |_this, cx| {
-                // Use the FK's own schema if known, otherwise fall back to
-                // the current table's schema (for same-schema FKs).
-                let resolved_schema = fk_ref
-                    .target_schema
-                    .clone()
-                    .unwrap_or(default_schema.clone());
-
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        connection.fetch_row_by_pk(
-                            &database,
-                            &resolved_schema,
-                            &fk_ref.target_table,
-                            &fk_ref.target_pk,
-                            &fk_ref.value,
-                        )
-                    })
-                    .await;
-
-                cx.update(|cx| {
-                    inspector.update(cx, |insp, cx| match result {
-                        Ok(row_opt) => {
-                            insp.resolve_reference(index, Ok(row_opt), cx);
-                        }
-                        Err(e) => {
-                            insp.resolve_reference(index, Err(e.to_string()), cx);
-                        }
-                    })
-                });
-            })
-            .detach();
-        }
+        self.inspector.incoming_references.schedule(job, cx);
     }
 
     /// Convert a `CellValue` to a `dbflux_core::Value` for the inspector.
@@ -1974,6 +2107,8 @@ impl DataGridPanel {
             CellKind::Bytes(len) => dbflux_core::Value::Bytes(vec![0u8; *len]),
             CellKind::AutoGenerated(s) => dbflux_core::Value::Text(s.to_string()),
             CellKind::Unsupported(s) => dbflux_core::Value::Text(s.to_string()),
+            CellKind::Missing => dbflux_core::Value::Null,
+            CellKind::Nested { .. } => dbflux_core::Value::Text(cell.display_text().to_string()),
         }
     }
 
@@ -2185,6 +2320,80 @@ impl DataGridPanel {
         });
     }
 
+    /// In a document grid the column-default entry has no meaning: it becomes
+    /// "Unset field", and "Revert change" follows "Set NULL".
+    fn adapt_menu_items_for_documents(
+        &self,
+        items: Vec<ContextMenuItem>,
+        is_document_view: bool,
+        cx: &App,
+    ) -> Vec<ContextMenuItem> {
+        if is_document_view || !self.commits_document_patches(cx) {
+            return items;
+        }
+
+        let mut adapted = Vec::with_capacity(items.len() + 1);
+
+        for item in items {
+            match item.action {
+                Some(ContextMenuAction::SetDefault) => adapted.push(ContextMenuItem {
+                    label: dbflux_i18n::t!("document.collection.menu.unset_field").into(),
+                    action: Some(ContextMenuAction::UnsetField),
+                    icon: Some(AppIcon::CircleX),
+                    is_separator: false,
+                    is_danger: false,
+                }),
+                Some(ContextMenuAction::SetNull) => {
+                    adapted.push(item);
+                    adapted.push(ContextMenuItem {
+                        label: dbflux_i18n::t!("document.collection.menu.revert_change").into(),
+                        action: Some(ContextMenuAction::RevertCell),
+                        icon: Some(AppIcon::RotateCcw),
+                        is_separator: false,
+                        is_danger: false,
+                    });
+                }
+                _ => adapted.push(item),
+            }
+        }
+
+        adapted
+    }
+
+    /// Stages the removal of a document field (`$unset` on commit).
+    pub(super) fn handle_unset_field(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.grid_table.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            state.stage_cell_value(
+                row,
+                col,
+                dbflux_components::components::data_table::model::CellValue::missing(),
+            );
+            cx.notify();
+        });
+    }
+
+    /// Drops the staged edit of one cell, restoring the loaded value.
+    pub(super) fn handle_revert_cell(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(table_state) = &self.grid_table.table_state else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            use dbflux_components::components::data_table::model::VisualRowSource;
+
+            if let Some(VisualRowSource::Base(base_idx)) =
+                state.edit_buffer().visual_row_source(row)
+            {
+                state.edit_buffer_mut().clear_cell(base_idx, col);
+                cx.notify();
+            }
+        });
+    }
+
     pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
         let Some(table_state) = &self.grid_table.table_state else {
             return;
@@ -2277,13 +2486,12 @@ impl DataGridPanel {
 
         // Insert mode: opened via "Add Document" or "Duplicate Document".
         if doc_index == DOC_INDEX_NEW {
-            let (conn, active_database) = {
-                let state = self.app_state.read(cx);
-                match state.connections().get(profile_id) {
-                    Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
-                    None => (None, None),
-                }
-            };
+            let conn = self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(profile_id)
+                .map(|connected| connected.connection.clone());
 
             let Some(conn) = conn else {
                 let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
@@ -2311,7 +2519,6 @@ impl DataGridPanel {
             let insert = DocumentInsert::one(collection.name.clone(), doc_map.into())
                 .with_database(collection.database.clone());
 
-            let _ = active_database;
             let entity = cx.entity().clone();
 
             cx.spawn(async move |_this, cx| {
@@ -2352,6 +2559,14 @@ impl DataGridPanel {
             })
             .detach();
 
+            return;
+        }
+
+        // Update mode on a driver with field patches: the edited document is
+        // diffed against the loaded copy and written as a minimal patch, with
+        // the server-change check.
+        if self.commits_document_patches(cx) {
+            self.commit_document_preview_edit(doc_index, document_json, cx);
             return;
         }
 
@@ -2422,13 +2637,12 @@ impl DataGridPanel {
 
         let update_doc = serde_json::json!({ "$set": set_fields });
 
-        let (conn, _active_database) = {
-            let state = self.app_state.read(cx);
-            match state.connections().get(profile_id) {
-                Some(c) => (Some(c.connection.clone()), c.active_database.clone()),
-                None => (None, None),
-            }
-        };
+        let conn = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(profile_id)
+            .map(|connected| connected.connection.clone());
 
         let Some(conn) = conn else {
             let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
@@ -3651,6 +3865,8 @@ impl DataGridPanel {
             CellKind::Bytes(len) => Value::Bytes(vec![0u8; *len]),
             CellKind::Unsupported(type_name) => Value::Unsupported(type_name.to_string()),
             CellKind::AutoGenerated(expr) => Value::Text(format!("DEFAULT({})", expr)),
+            CellKind::Missing => Value::Null,
+            CellKind::Nested { .. } => Value::Text(cell.display_text().to_string()),
         }
     }
 }
@@ -3762,9 +3978,72 @@ fn record_clipboard_audit(
     }
 }
 
+/// The browsed table and the connection that reaches it, for the row
+/// inspector's reference lookups.
+struct ReferenceLookupTarget {
+    profile_id: uuid::Uuid,
+    database: String,
+    schema: Option<String>,
+    table: String,
+    connection: std::sync::Arc<dyn dbflux_core::Connection>,
+}
+
+/// The foreign keys of one schema: from the connection's cache when it has
+/// them, otherwise fetched on the background executor and cached for the
+/// next reader.
+async fn cached_or_fetched_schema_foreign_keys(
+    app_state: &Entity<dbflux_ui_base::AppStateEntity>,
+    profile_id: uuid::Uuid,
+    database: &str,
+    schema: Option<&str>,
+    cx: &mut AsyncApp,
+) -> Result<Vec<dbflux_core::SchemaForeignKeyInfo>, String> {
+    let key = dbflux_core::SchemaCacheKey::new(database, schema);
+
+    let cached = cx.update(|cx| {
+        app_state
+            .read(cx)
+            .connections()
+            .get(&profile_id)
+            .and_then(|connected| connected.schema_foreign_keys.get(&key))
+            .cloned()
+    });
+
+    if let Some(foreign_keys) = cached {
+        return Ok(foreign_keys);
+    }
+
+    let params = cx.update(|cx| {
+        app_state
+            .read(cx)
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+    })?;
+
+    let fetched = cx
+        .background_executor()
+        .spawn(async move { params.execute() })
+        .await?;
+
+    let foreign_keys = fetched.foreign_keys.clone();
+
+    cx.update(|cx| {
+        app_state.update(cx, |state, _| {
+            state.set_schema_foreign_keys(
+                fetched.profile_id,
+                fetched.database,
+                fetched.schema,
+                fetched.foreign_keys,
+            );
+        });
+    });
+
+    Ok(foreign_keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::DataGridPanel;
+    use super::QueryGroupSeparators;
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
     use gpui::{Pixels, Point, Size, px};
 
@@ -3773,6 +4052,39 @@ mod tests {
             width: px(1000.0),
             height: px(600.0),
         }
+    }
+
+    #[test]
+    fn query_group_has_one_separator_before_its_first_member() {
+        assert_eq!(
+            QueryGroupSeparators::new(true, true, true, true),
+            QueryGroupSeparators {
+                filter: true,
+                order: false,
+                generate_sql: false,
+                copy_query: false,
+            }
+        );
+
+        assert_eq!(
+            QueryGroupSeparators::new(false, false, true, true),
+            QueryGroupSeparators {
+                filter: false,
+                order: false,
+                generate_sql: true,
+                copy_query: false,
+            }
+        );
+
+        assert_eq!(
+            QueryGroupSeparators::new(false, false, false, true),
+            QueryGroupSeparators {
+                filter: false,
+                order: false,
+                generate_sql: false,
+                copy_query: true,
+            }
+        );
     }
 
     #[test]

@@ -1,9 +1,11 @@
 //! Integration coverage for stable MCP contracts that can be exercised without
 //! Docker-backed databases.
 
+use dbflux_core::observability::EventOrigin;
 use dbflux_core::{NoopSecretStore, SecretManager};
 use dbflux_mcp::{
-    ConnectionPolicyAssignmentDto, McpRuntime, TrustedClientDto, builtin_policies, builtin_roles,
+    ConnectionPolicyAssignmentDto, McpGovernanceService, McpRuntime, PolicyRoleDto, ToolPolicyDto,
+    TrustedClientDto, builtin_policies, builtin_roles,
 };
 use dbflux_mcp_server::{
     connection_cache::ConnectionCache,
@@ -20,6 +22,10 @@ use tokio::sync::RwLock;
 // ---------------------------------------------------------------------------
 // Test setup helpers
 // ---------------------------------------------------------------------------
+
+/// A custom role whose policy allows every class without approval, for tests
+/// about something other than the approval flow.
+const ALLOW_ALL_ROLE: &str = "test/allow-all";
 
 fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
     let audit_path = dbflux_audit::temp_sqlite_path(&format!(
@@ -42,6 +48,37 @@ fn build_runtime_with_role(connection_id: &str, role_id: &str) -> McpRuntime {
             .upsert_policy_mut(policy)
             .expect("built-in policy setup");
     }
+
+    let admin_tools = builtin_policies()
+        .into_iter()
+        .find(|policy| policy.id == "builtin/admin")
+        .expect("built-in admin policy exists")
+        .allowed_tools;
+    runtime
+        .upsert_policy_mut(ToolPolicyDto {
+            id: ALLOW_ALL_ROLE.to_string(),
+            allowed_tools: admin_tools,
+            allowed_classes: [
+                "metadata",
+                "read",
+                "write",
+                "destructive",
+                "admin_safe",
+                "admin",
+                "admin_destructive",
+            ]
+            .iter()
+            .map(|class| class.to_string())
+            .collect(),
+            approval_classes: Vec::new(),
+        })
+        .expect("allow-all policy setup");
+    runtime
+        .upsert_role_mut(PolicyRoleDto {
+            id: ALLOW_ALL_ROLE.to_string(),
+            policy_ids: vec![ALLOW_ALL_ROLE.to_string()],
+        })
+        .expect("allow-all role setup");
 
     runtime
         .upsert_trusted_client_mut(TrustedClientDto {
@@ -680,7 +717,7 @@ async fn seam_merges_query_into_details_json() {
     use dbflux_mcp_server::governance::AuditDetails;
 
     let connection_id = uuid::Uuid::new_v4().to_string();
-    let state = build_state_with_role(&connection_id, "builtin/admin");
+    let state = build_state_with_role(&connection_id, ALLOW_ALL_ROLE);
     let middleware = GovernanceMiddleware::new(state.clone());
 
     let raw_sql = "UPDATE \"users\" SET \"name\" = 'Alice' WHERE \"id\" = 1";
@@ -700,7 +737,7 @@ async fn seam_merges_query_into_details_json() {
             },
         )
         .await
-        .expect("write tool should be authorized for admin role");
+        .expect("write tool should be authorized for the allow-all role");
 
     let details = query_latest_execute_event_details(&state, "update_records").await;
     let map = details.expect("execution event should have details_json");
@@ -729,5 +766,69 @@ async fn seam_merges_query_into_details_json() {
     assert!(
         query_length.unwrap().as_u64().unwrap_or(0) > 0,
         "query_length must be > 0"
+    );
+}
+
+#[tokio::test]
+async fn builtin_admin_write_is_queued_and_runs_once_after_a_person_approves() {
+    let connection_id = uuid::Uuid::new_v4().to_string();
+    let state = build_state_with_role(&connection_id, "builtin/admin");
+    let middleware = GovernanceMiddleware::new(state.clone());
+
+    let run = || {
+        middleware.authorize_and_execute(
+            "update_records",
+            Some(&connection_id),
+            ExecutionClassification::Write,
+            || async {
+                Ok(CallToolResult::success(vec![
+                    rmcp::model::ContentBlock::text("updated 1"),
+                ]))
+            },
+        )
+    };
+
+    let queued = run()
+        .await
+        .expect_err("a Write call must wait for approval");
+    let data = queued.data.expect("a queued call carries error data");
+    assert_eq!(data["code"], "approval_required");
+    let pending_id = data["pending_id"]
+        .as_str()
+        .expect("a queued call carries its pending id")
+        .to_string();
+    assert!(
+        query_latest_execute_event_details(&state, "update_records")
+            .await
+            .is_none(),
+        "a queued call must not execute"
+    );
+
+    {
+        let mut runtime = state.runtime.write().await;
+        let pending = runtime
+            .list_pending_executions()
+            .expect("list pending should succeed");
+        assert!(pending.iter().any(|entry| entry.id == pending_id));
+        runtime
+            .approve_pending_execution_with_origin_mut(&pending_id, "local", EventOrigin::local())
+            .expect("a person should approve the call");
+    }
+
+    let executed = run().await.expect("the approved call should run");
+    assert_eq!(executed.content.len(), 1);
+    assert!(
+        query_latest_execute_event_details(&state, "update_records")
+            .await
+            .is_some(),
+        "the approved call should record its execution event"
+    );
+
+    let requeued = run()
+        .await
+        .expect_err("one approval authorizes exactly one call");
+    assert_eq!(
+        requeued.data.expect("error data")["code"],
+        "approval_required"
     );
 }

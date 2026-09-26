@@ -22,7 +22,9 @@ use dbflux_components::chart::{
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::controls::InputState;
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
@@ -223,7 +225,7 @@ impl ChartDocument {
             Dropdown::new("chart-doc-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe(
@@ -444,7 +446,7 @@ impl ChartDocument {
             Dropdown::new("chart-doc-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe(
@@ -1339,10 +1341,9 @@ impl ChartDocument {
 
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.
     ///
-    /// The three header segments (title Left/0, Run Left/1, Save Right/0) are
-    /// returned by `toolbar_segments`. The content area (chart toolbar row +
-    /// axis bar + chart area) is rendered by `render_chart_content`, which is
-    /// called from the `render` closure.
+    /// The content area (header row with the chart controls, axis row and
+    /// chart area) is rendered by `render_chart_content`, which is called from
+    /// the `render` closure; the panel's own chrome row stays empty.
     ///
     /// `available_modes` returns `[Chart]` only; `ResultPanel` suppresses the
     /// mode bar when the list has fewer than two entries.
@@ -1350,7 +1351,6 @@ impl ChartDocument {
         let e_render = entity.clone();
         let e_focus_do = entity.clone();
         let e_focus_get = entity.clone();
-        let e_segs = entity.clone();
 
         ViewHandle::builder()
             .render(move |window, cx| {
@@ -1360,85 +1360,16 @@ impl ChartDocument {
                 e_focus_do.update(cx, |this, cx| this.focus(window, cx));
             })
             .focus_handle(move |cx| e_focus_get.read(cx).focus_handle.clone())
-            .toolbar_segments(move |cx| Self::header_segments(e_segs.clone(), cx))
+            // The chart draws its own header row (title, presets, refresh,
+            // kind switch, Stats and Save), so the panel's chrome row stays
+            // empty.
+            .toolbar_segments(|_cx| Vec::new())
             .available_modes(|_cx| vec![ResultViewMode::Chart])
             .current_mode(|_cx| ResultViewMode::Chart)
             .set_mode(|_mode, _cx| {
                 // Chart is the only supported mode; no-op.
             })
             .build()
-    }
-
-    /// Build the three chrome-row segments for `ChartDocument`.
-    ///
-    /// - `Left/0`: document title label
-    /// - `Left/1`: Run / Running… primary button
-    /// - `Right/0`: Save button
-    fn header_segments(entity: Entity<Self>, cx: &App) -> Vec<ToolbarSegment> {
-        // When embedded inside another document (e.g. a DashboardDocument
-        // panel) the host owns the chrome and no segments should be rendered.
-        if entity.read(cx).embedded {
-            return Vec::new();
-        }
-
-        use dbflux_components::primitives::Text;
-        use dbflux_components::tokens::Spacing;
-        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
-        use gpui_component::{Disableable, Sizable};
-
-        let e_title = entity.clone();
-        let e_run = entity.clone();
-        let e_save = entity.clone();
-
-        vec![
-            ToolbarSegment {
-                position: SegmentPosition::Left,
-                index: 0,
-                builder: Box::new(move |_window, cx| {
-                    let title = e_title.read(cx).title.clone();
-                    Text::label(title).into_any_element()
-                }),
-            },
-            ToolbarSegment {
-                position: SegmentPosition::Left,
-                index: 1,
-                builder: Box::new(move |_window, cx| {
-                    let is_executing = e_run.read(cx).exec_state == ExecState::Running;
-                    let e = e_run.clone();
-                    Button::new("run-query")
-                        .label(if is_executing {
-                            dbflux_i18n::t!("document.chart.shell.running")
-                        } else {
-                            dbflux_i18n::t!("document.chart.shell.run")
-                        })
-                        .small()
-                        .with_variant(ButtonVariant::Primary)
-                        .disabled(is_executing)
-                        .on_click(move |_, window, cx| {
-                            e.update(cx, |this, cx| {
-                                this.request_reexecute(window, cx);
-                            });
-                        })
-                        .into_any_element()
-                }),
-            },
-            ToolbarSegment {
-                position: SegmentPosition::Right,
-                index: 0,
-                builder: Box::new(move |_window, _cx| {
-                    let e = e_save.clone();
-                    Button::new("save-chart")
-                        .label(dbflux_i18n::t!("document.chart.shell.save"))
-                        .small()
-                        .on_click(move |_, window, cx| {
-                            e.update(cx, |this, cx| {
-                                this.open_name_prompt(window, cx);
-                            });
-                        })
-                        .into_any_element()
-                }),
-            },
-        ]
     }
 }
 
@@ -1843,26 +1774,10 @@ mod tests {
         assert_eq!(modes[0], ResultViewMode::Chart);
     }
 
-    /// Header segments must be ordered: title (Left/0), Run (Left/1), Save (Right/0).
-    ///
-    /// Validates the `header_segments` layout contract: after sorting by
-    /// `(position, index)` the order must match construction order.
-    #[test]
-    fn header_segments_layout_contract() {
-        let positions: Vec<(SegmentPosition, u16)> = vec![
-            (SegmentPosition::Left, 0),
-            (SegmentPosition::Left, 1),
-            (SegmentPosition::Right, 0),
-        ];
-
-        let mut sorted = positions.clone();
-        sorted.sort_by_key(|&(p, i)| (p, i));
-        assert_eq!(
-            sorted, positions,
-            "header segments must already be in sorted order"
-        );
-    }
-
+    // Header segments must be ordered: title (Left/0), Run (Left/1), Save (Right/0).
+    //
+    // Validates the `header_segments` layout contract: after sorting by
+    // `(position, index)` the order must match construction order.
     // ---- Phase 5: set_data_source ----
 
     /// T-DS-10: `DocumentEvent::DataSourceChanged` variant must exist.
@@ -2717,5 +2632,60 @@ mod tests {
             err,
             dbflux_i18n::t!("document.chart.error.collection_source_unsupported")
         );
+    }
+
+    /// A chart tab hands its open rail to the workspace as a side island; a
+    /// chart embedded in a dashboard panel keeps it docked and hands none.
+    #[gpui::test]
+    fn the_open_rail_is_a_side_panel_unless_embedded(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let window = cx.add_empty_window();
+        let document = window.update(|window, cx| {
+            cx.new(|cx| ChartDocument::new(None, "SELECT 1".to_string(), app_state, window, cx))
+        });
+
+        window.update(|_, cx| {
+            let shell = document.read(cx).chart_shell.clone();
+            shell.update(cx, |shell, _| {
+                shell.chart_rail_open = true;
+                shell.chart_rail_tab = crate::chart::ChartRailTab::Stats;
+            });
+        });
+
+        let panels = |window: &mut gpui::VisualTestContext| {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document
+                        .side_panels(window, cx)
+                        .into_iter()
+                        .map(|panel| (panel.id.to_string(), panel.width))
+                        .collect::<Vec<_>>()
+                })
+            })
+        };
+
+        assert_eq!(
+            panels(window),
+            vec![(
+                "chart-stats".to_string(),
+                dbflux_components::tokens::ChartDocumentMetrics::RAIL_WIDTH
+            )]
+        );
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.set_embedded(true, cx));
+        });
+        assert!(panels(window).is_empty());
     }
 }

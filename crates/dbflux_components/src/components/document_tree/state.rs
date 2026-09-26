@@ -71,6 +71,10 @@ pub struct DocumentTreeState {
 
     /// Input state for inline value editing.
     inline_edit_input: Option<gpui::Entity<InputState>>,
+
+    /// Values cannot be edited and documents cannot be deleted: inline edits
+    /// never open and delete requests are not emitted.
+    read_only: bool,
 }
 
 impl DocumentTreeState {
@@ -93,7 +97,22 @@ impl DocumentTreeState {
             search_visible: false,
             editing_node: None,
             inline_edit_input: None,
+            read_only: false,
         }
+    }
+
+    /// Makes the tree view-only: scalar values no longer open the inline
+    /// editor and delete requests are dropped. Expanding and collapsing,
+    /// search and the long-value expansion keep working.
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        self.read_only = read_only;
+        if read_only {
+            self.cancel_inline_edit(cx);
+        }
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Load documents from a QueryResult.
@@ -116,6 +135,13 @@ impl DocumentTreeState {
         // The _id column is typically the first, and the full document is in a "_document" column
         // or the result contains the document fields directly
 
+        let field_order: std::sync::Arc<[String]> = result
+            .columns
+            .iter()
+            .filter(|column| column.name != "_document")
+            .map(|column| column.name.clone())
+            .collect();
+
         for (row_idx, row) in result.rows.iter().enumerate() {
             // Try to find the full document representation
             let doc_value = Self::extract_document_value(row, &result.columns);
@@ -124,9 +150,21 @@ impl DocumentTreeState {
             let key = document_label(row_idx);
             let node_value = NodeValue::from_value(&doc_value);
 
+            let summary = match &doc_value {
+                Value::Document(fields) => super::node::identifying_summary(
+                    fields,
+                    Some(&field_order),
+                    IDENTIFYING_FIELD_COUNT,
+                ),
+                _ => None,
+            };
+
             self.raw_documents.push(doc_value);
-            self.documents
-                .push(TreeNode::new(node_id, &key, node_value, None));
+            self.documents.push(
+                TreeNode::new(node_id, &key, node_value, None)
+                    .with_field_order(field_order.clone())
+                    .with_summary(summary),
+            );
         }
 
         // Expand first document by default if there's only one
@@ -772,7 +810,7 @@ impl DocumentTreeState {
                     return;
                 }
 
-                if self.editing_node.as_ref() == Some(id) {
+                if self.read_only || self.editing_node.as_ref() == Some(id) {
                     return;
                 }
 
@@ -826,7 +864,7 @@ impl DocumentTreeState {
         };
 
         // Only allow delete on root document nodes
-        if cursor.is_root() {
+        if cursor.is_root() && !self.read_only {
             cx.emit(DocumentTreeEvent::DeleteRequested(cursor.clone()));
         }
     }
@@ -922,6 +960,9 @@ impl Focusable for DocumentTreeState {
         self.focus_handle.clone()
     }
 }
+
+/// Fields named in a collapsed document's summary.
+const IDENTIFYING_FIELD_COUNT: usize = 2;
 
 /// Build the root-node label for a document at the given row index.
 fn document_label(index: usize) -> String {
@@ -1055,6 +1096,88 @@ mod tests {
     };
     use dbflux_core::{ColumnKind, ColumnMeta, Value};
     use std::collections::BTreeMap;
+
+    #[gpui::test]
+    fn a_read_only_tree_opens_no_inline_editor_and_requests_no_delete(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use super::super::events::DocumentTreeEvent;
+        use super::super::node::NodeId;
+        use gpui::{AppContext as _, Render};
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        struct Harness;
+
+        impl Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
+
+        let holder = Rc::new(RefCell::new(None));
+        let holder_clone = holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DocumentTreeState::new(cx);
+                state.load_from_values(
+                    vec![(
+                        "doc".to_string(),
+                        Value::Document(BTreeMap::from([(
+                            "name".to_string(),
+                            Value::Text("alice".to_string()),
+                        )])),
+                    )],
+                    cx,
+                );
+                state.set_read_only(true, cx);
+                state
+            });
+            holder_clone.replace(Some(state));
+            Harness
+        });
+
+        let state = holder.borrow().clone().expect("tree state");
+        let deletes = Rc::new(Cell::new(0usize));
+
+        window.update(|_, app| {
+            let deletes = deletes.clone();
+            app.subscribe(&state, move |_, event: &DocumentTreeEvent, _| {
+                if matches!(event, DocumentTreeEvent::DeleteRequested(_)) {
+                    deletes.set(deletes.get() + 1);
+                }
+            })
+            .detach();
+        });
+
+        window.update(|window, app| {
+            state.update(app, |state, cx| {
+                state.handle_value_click(&NodeId::root(0).child("name"), window, cx);
+            });
+        });
+        window.update(|_, app| {
+            assert!(state.read(app).is_read_only());
+            assert!(
+                state.read(app).editing_node().is_none(),
+                "a read-only tree never opens the inline editor"
+            );
+        });
+
+        window.update(|_, app| {
+            state.update(app, |state, cx| {
+                state.set_cursor(&NodeId::root(0), cx);
+                state.request_delete(cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(deletes.get(), 0, "a read-only tree requests no delete");
+    }
 
     #[test]
     fn extract_document_value_prefers_document_column() {

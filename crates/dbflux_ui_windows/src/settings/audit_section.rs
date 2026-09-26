@@ -3,13 +3,13 @@ use super::SettingsSectionId;
 use super::section_trait::SectionFocusEvent;
 use crate::labels::audit_save_failed_copy;
 use crate::settings::layout;
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{
-    Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent, InputState,
+    Checkbox, Dropdown, DropdownItem, DropdownSelectionChanged, Input, InputEvent, InputState,
 };
-use dbflux_components::primitives::{StatusDot, StatusDotVariant, Text};
-use dbflux_components::tokens::Radii;
-use dbflux_components::typography::{FieldLabel, SubSectionLabel};
+use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{Status, StatusIndicator};
 use dbflux_core::observability::EventSeverity;
 use dbflux_storage::repositories::audit_settings::AuditSettingsDto;
 use dbflux_ui_base::AppStateEntity;
@@ -17,9 +17,6 @@ use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::checkbox::Checkbox;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::{ActiveTheme, Sizable};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum AuditFormRow {
@@ -58,11 +55,11 @@ impl AuditStatus {
         }
     }
 
-    fn dot_variant(self) -> StatusDotVariant {
+    fn status(self) -> Status {
         match self {
-            AuditStatus::Enabled => StatusDotVariant::Success,
-            AuditStatus::Degraded => StatusDotVariant::Warning,
-            AuditStatus::Disabled => StatusDotVariant::Idle,
+            AuditStatus::Enabled => Status::Connected,
+            AuditStatus::Degraded => Status::Warning,
+            AuditStatus::Disabled => Status::Idle,
         }
     }
 
@@ -489,6 +486,10 @@ impl SettingsSection for AuditSection {
         Some(self.render_audit_footer_actions(cx))
     }
 
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_audit_settings(window, cx);
+    }
+
     fn handle_key_event(
         &mut self,
         event: &KeyDownEvent,
@@ -570,10 +571,6 @@ impl Render for AuditSection {
 
 impl AuditSection {
     pub(super) fn render_audit_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let primary = theme.primary;
-        let border = theme.border;
-        let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
         let cursor = self.audit_form_cursor;
         let rows = audit_form_rows();
@@ -581,152 +578,141 @@ impl AuditSection {
         let is_at =
             |row: AuditFormRow| -> bool { is_focused && rows.get(cursor).copied() == Some(row) };
 
-        div()
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(dbflux_components::composites::section_header(
+        let group = |title: String, icon: AppIcon, cx: &App| {
+            dbflux_components::composites::section_header(title, Some(icon.into()), cx)
+        };
+
+        layout::single_form_section_shell(
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.audit.section_title"),
                 dbflux_i18n::t!("settings.audit.section_description"),
                 cx,
-            ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .p_4()
-                    .flex()
-                    .flex_col()
-                    .gap_5()
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.status"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_status_indicator(cx))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.enable_disable"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_checkbox(
-                        "audit-enabled",
-                        dbflux_i18n::t!("settings.audit.field.enable_global"),
-                        self.settings.enabled,
-                        is_at(AuditFormRow::EnableAudit),
-                        AuditFormRow::EnableAudit,
-                        |this, value| this.settings.enabled = value,
-                        cx,
-                    ))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.capture_settings"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_unsupported_checkbox(
-                        "capture-user-actions",
-                        dbflux_i18n::t!("settings.audit.field.capture_user_actions"),
-                        self.settings.capture_user_actions,
-                        is_at(AuditFormRow::CaptureUserActions),
-                        cx,
-                    ))
-                    .child(self.render_audit_unsupported_checkbox(
-                        "capture-system-events",
-                        dbflux_i18n::t!("settings.audit.field.capture_system_events"),
-                        self.settings.capture_system_events,
-                        is_at(AuditFormRow::CaptureSystemEvents),
-                        cx,
-                    ))
-                    .child(self.render_audit_checkbox(
-                        "capture-query-text",
-                        dbflux_i18n::t!("settings.audit.field.capture_full_query_text"),
-                        self.settings.capture_query_text,
-                        is_at(AuditFormRow::CaptureQueryText),
-                        AuditFormRow::CaptureQueryText,
-                        |this, value| this.settings.capture_query_text = value,
-                        cx,
-                    ))
-                    .child(self.render_audit_unsupported_checkbox(
-                        "capture-hook-output",
-                        dbflux_i18n::t!("settings.audit.field.capture_hook_output"),
-                        self.settings.capture_hook_output_metadata,
-                        is_at(AuditFormRow::CaptureHookOutputMetadata),
-                        cx,
-                    ))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.privacy"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_checkbox(
-                        "redact-sensitive",
-                        dbflux_i18n::t!("settings.audit.field.redact_sensitive"),
-                        self.settings.redact_sensitive_values,
-                        is_at(AuditFormRow::RedactSensitiveValues),
-                        AuditFormRow::RedactSensitiveValues,
-                        |this, value| this.settings.redact_sensitive_values = value,
-                        cx,
-                    ))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.retention"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_input_field(
-                        &dbflux_i18n::t!("settings.audit.field.retention_days"),
-                        &self.input_retention_days,
-                        is_at(AuditFormRow::RetentionDays),
-                        primary,
-                        AuditFormRow::RetentionDays,
-                        cx,
-                    ))
-                    .child(self.render_audit_input_field(
-                        &dbflux_i18n::t!("settings.audit.field.max_detail_bytes"),
-                        &self.input_max_detail_bytes,
-                        is_at(AuditFormRow::MaxDetailBytes),
-                        primary,
-                        AuditFormRow::MaxDetailBytes,
-                        cx,
-                    ))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.purge"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_checkbox(
-                        "purge-on-startup",
-                        dbflux_i18n::t!("settings.audit.field.purge_on_startup"),
-                        self.settings.purge_on_startup,
-                        is_at(AuditFormRow::PurgeOnStartup),
-                        AuditFormRow::PurgeOnStartup,
-                        |this, value| this.settings.purge_on_startup = value,
-                        cx,
-                    ))
-                    .child(self.render_audit_input_field(
-                        &dbflux_i18n::t!("settings.audit.field.purge_interval_minutes"),
-                        &self.input_background_purge_interval,
-                        is_at(AuditFormRow::BackgroundPurgeInterval),
-                        primary,
-                        AuditFormRow::BackgroundPurgeInterval,
-                        cx,
-                    ))
-                    .child(self.render_audit_group_header(
-                        dbflux_i18n::t!("settings.audit.group.log_capture"),
-                        border,
-                        muted_fg,
-                    ))
-                    .child(self.render_audit_dropdown(
-                        &dbflux_i18n::t!("settings.audit.field.min_log_level"),
-                        &self.dropdown_log_level,
-                        is_at(AuditFormRow::LogCaptureMinLevel),
-                        primary,
-                        AuditFormRow::LogCaptureMinLevel,
-                        cx,
-                    )),
-            )
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.status"),
+                    AppIcon::Info,
+                    cx,
+                ))
+                .child(self.render_audit_status_indicator(cx))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.enable_disable"),
+                    AppIcon::Power,
+                    cx,
+                ))
+                .child(self.render_audit_checkbox(
+                    "audit-enabled",
+                    dbflux_i18n::t!("settings.audit.field.enable_global"),
+                    self.settings.enabled,
+                    is_at(AuditFormRow::EnableAudit),
+                    AuditFormRow::EnableAudit,
+                    |this, value| this.settings.enabled = value,
+                    cx,
+                ))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.capture_settings"),
+                    AppIcon::FingerprintPattern,
+                    cx,
+                ))
+                .child(self.render_audit_unsupported_checkbox(
+                    "capture-user-actions",
+                    dbflux_i18n::t!("settings.audit.field.capture_user_actions"),
+                    self.settings.capture_user_actions,
+                    is_at(AuditFormRow::CaptureUserActions),
+                    cx,
+                ))
+                .child(self.render_audit_unsupported_checkbox(
+                    "capture-system-events",
+                    dbflux_i18n::t!("settings.audit.field.capture_system_events"),
+                    self.settings.capture_system_events,
+                    is_at(AuditFormRow::CaptureSystemEvents),
+                    cx,
+                ))
+                .child(self.render_audit_checkbox(
+                    "capture-query-text",
+                    dbflux_i18n::t!("settings.audit.field.capture_full_query_text"),
+                    self.settings.capture_query_text,
+                    is_at(AuditFormRow::CaptureQueryText),
+                    AuditFormRow::CaptureQueryText,
+                    |this, value| this.settings.capture_query_text = value,
+                    cx,
+                ))
+                .child(self.render_audit_unsupported_checkbox(
+                    "capture-hook-output",
+                    dbflux_i18n::t!("settings.audit.field.capture_hook_output"),
+                    self.settings.capture_hook_output_metadata,
+                    is_at(AuditFormRow::CaptureHookOutputMetadata),
+                    cx,
+                ))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.privacy"),
+                    AppIcon::EyeOff,
+                    cx,
+                ))
+                .child(self.render_audit_checkbox(
+                    "redact-sensitive",
+                    dbflux_i18n::t!("settings.audit.field.redact_sensitive"),
+                    self.settings.redact_sensitive_values,
+                    is_at(AuditFormRow::RedactSensitiveValues),
+                    AuditFormRow::RedactSensitiveValues,
+                    |this, value| this.settings.redact_sensitive_values = value,
+                    cx,
+                ))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.retention"),
+                    AppIcon::History,
+                    cx,
+                ))
+                .child(self.render_audit_input_field(
+                    &dbflux_i18n::t!("settings.audit.field.retention_days"),
+                    &self.input_retention_days,
+                    is_at(AuditFormRow::RetentionDays),
+                    AuditFormRow::RetentionDays,
+                    cx,
+                ))
+                .child(self.render_audit_input_field(
+                    &dbflux_i18n::t!("settings.audit.field.max_detail_bytes"),
+                    &self.input_max_detail_bytes,
+                    is_at(AuditFormRow::MaxDetailBytes),
+                    AuditFormRow::MaxDetailBytes,
+                    cx,
+                ))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.purge"),
+                    AppIcon::Delete,
+                    cx,
+                ))
+                .child(self.render_audit_checkbox(
+                    "purge-on-startup",
+                    dbflux_i18n::t!("settings.audit.field.purge_on_startup"),
+                    self.settings.purge_on_startup,
+                    is_at(AuditFormRow::PurgeOnStartup),
+                    AuditFormRow::PurgeOnStartup,
+                    |this, value| this.settings.purge_on_startup = value,
+                    cx,
+                ))
+                .child(self.render_audit_input_field(
+                    &dbflux_i18n::t!("settings.audit.field.purge_interval_minutes"),
+                    &self.input_background_purge_interval,
+                    is_at(AuditFormRow::BackgroundPurgeInterval),
+                    AuditFormRow::BackgroundPurgeInterval,
+                    cx,
+                ))
+                .child(group(
+                    dbflux_i18n::t!("settings.audit.group.log_capture"),
+                    AppIcon::ScrollText,
+                    cx,
+                ))
+                .child(self.render_audit_dropdown(
+                    &dbflux_i18n::t!("settings.audit.field.min_log_level"),
+                    &self.dropdown_log_level,
+                    is_at(AuditFormRow::LogCaptureMinLevel),
+                    AuditFormRow::LogCaptureMinLevel,
+                    cx,
+                )),
+        )
     }
 
     fn render_audit_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -734,30 +720,34 @@ impl AuditSection {
             && audit_form_rows().get(self.audit_form_cursor).copied()
                 == Some(AuditFormRow::SaveButton);
 
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(layout::footer_action_frame(
-                is_save_focused,
-                cx.theme().primary,
-                dbflux_components::controls::Button::new(
-                    "save-audit",
-                    dbflux_i18n::t!("settings.audit.action.save"),
-                )
-                .small()
-                .primary()
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.content_focused = true;
-                    this.audit_form_cursor = audit_form_rows()
-                        .iter()
-                        .position(|row| *row == AuditFormRow::SaveButton)
-                        .unwrap_or_default();
-                    this.save_audit_settings(window, cx);
-                })),
-            ))
-            .into_any_element()
+        dbflux_components::controls::Button::new(
+            "save-audit",
+            dbflux_i18n::t!("settings.audit.action.save"),
+        )
+        .primary()
+        .icon(AppIcon::Save)
+        .when_some(
+            crate::settings::save_shortcut(),
+            dbflux_components::controls::Button::kbd,
+        )
+        .focused(is_save_focused)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.select_audit_row(AuditFormRow::SaveButton);
+            this.save_audit_settings(window, cx);
+        }))
+        .into_any_element()
+    }
+
+    /// Moves the keyboard cursor to `row` and gives the page focus.
+    fn select_audit_row(&mut self, row: AuditFormRow) {
+        self.content_focused = true;
+
+        if let Some(position) = audit_form_rows()
+            .iter()
+            .position(|candidate| *candidate == row)
+        {
+            self.audit_form_cursor = position;
+        }
     }
 
     fn log_level_items() -> Vec<DropdownItem> {
@@ -797,52 +787,28 @@ impl AuditSection {
         label: &str,
         dropdown: &Entity<Dropdown>,
         is_focused: bool,
-        primary: Hsla,
         row: AuditFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                primary
-            } else {
-                gpui::transparent_black()
-            })
+        layout::form_row(
+            label.to_string(),
+            layout::cursor_ring(
+                is_focused,
+                div()
+                    .w(SettingsMetrics::SELECT_WIDTH)
+                    .child(dropdown.clone()),
+                cx,
+            )
+            .w(SettingsMetrics::SELECT_WIDTH)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.content_focused = true;
-                    if let Some(position) = audit_form_rows()
-                        .iter()
-                        .position(|candidate| *candidate == row)
-                    {
-                        this.audit_form_cursor = position;
-                    }
+                    this.select_audit_row(row);
                     cx.notify();
                 }),
-            )
-            .child(FieldLabel::new(label.to_string()))
-            .child(div().min_w(px(120.0)).child(dropdown.clone()))
-    }
-
-    fn render_audit_group_header(
-        &self,
-        label: impl Into<SharedString>,
-        border: Hsla,
-        _muted_fg: Hsla,
-    ) -> impl IntoElement {
-        div()
-            .pt_2()
-            .pb_1()
-            .border_b_1()
-            .border_color(border)
-            .child(SubSectionLabel::new(label))
+            ),
+            None,
+        )
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -855,14 +821,9 @@ impl AuditSection {
             .id("settings-audit-status")
             .flex()
             .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .child(StatusDot::new(status.dot_variant()))
-            .child(div().text_sm().child(dbflux_i18n::t!(status.label_key())))
+            .py(FormMetrics::ROW_PADDING_Y)
+            .text_size(dbflux_components::tokens::FontSizes::BASE)
+            .child(StatusIndicator::new(status.status()).label(dbflux_i18n::t!(status.label_key())))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -876,45 +837,21 @@ impl AuditSection {
         setter: fn(&mut Self, bool),
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let primary = cx.theme().primary;
-        let label = label.into();
-
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                primary
-            } else {
-                gpui::transparent_black()
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.content_focused = true;
-                    if let Some(position) = audit_form_rows()
-                        .iter()
-                        .position(|candidate| *candidate == row)
-                    {
-                        this.audit_form_cursor = position;
-                    }
-                    cx.notify();
-                }),
-            )
-            .child(
+        layout::check_row(
+            layout::cursor_ring(
+                is_focused,
                 Checkbox::new(id)
                     .checked(checked)
-                    .aria_label(label.clone())
+                    .label(label)
                     .on_click(cx.listener(move |this, value: &bool, _, cx| {
+                        this.select_audit_row(row);
                         setter(this, *value);
                         cx.notify();
                     })),
-            )
-            .child(div().text_sm().child(label))
+                cx,
+            ),
+            None,
+        )
     }
 
     fn render_audit_input_field(
@@ -922,13 +859,34 @@ impl AuditSection {
         label: &str,
         input: &Entity<InputState>,
         is_focused: bool,
-        primary: Hsla,
         row: AuditFormRow,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        self.render_audit_input_field_impl(label, input, is_focused, primary, row, cx, false)
+        layout::form_row(
+            label.to_string(),
+            layout::field_frame(
+                is_focused && !self.audit_editing_field,
+                Some(SettingsMetrics::NUMBER_FIELD_WIDTH),
+                true,
+                Input::new(input).aria_label(label.to_string()),
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.switching_input = true;
+                    this.select_audit_row(row);
+                    this.audit_focus_current_input(window, cx);
+                    cx.notify();
+                }),
+            ),
+            None,
+        )
     }
 
+    /// A capture option that exists in the settings model but is not wired
+    /// to any event source yet: shown checked or not, never toggleable, with
+    /// the "not wired" note as its description.
     fn render_audit_unsupported_checkbox(
         &self,
         id: &'static str,
@@ -937,107 +895,31 @@ impl AuditSection {
         is_focused: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let primary = theme.primary;
-        let label = label.into();
-        // Row is non-interactive: no cursor movement on activation,
-        // checkbox cannot be toggled. Only visual focus state is shown.
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1()
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(if is_focused {
-                primary
-            } else {
-                gpui::transparent_black()
-            })
+        layout::check_row(
+            layout::cursor_ring(
+                is_focused,
+                Checkbox::new(id)
+                    .checked(checked)
+                    .disabled(true)
+                    .label(label),
+                cx,
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
                     this.content_focused = true;
                     cx.notify();
                 }),
-            )
-            .child(Checkbox::new(id).checked(checked).aria_label(label.clone()))
-            .child(Text::muted(label))
-            .child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
-                "settings.audit.field.not_wired"
-            ))))
-    }
-
-    /// Internal implementation for input fields; `unsupported` dims the label
-    /// and removes the on_mouse_down focus/input-switching behavior.
-    #[allow(clippy::too_many_arguments)]
-    fn render_audit_input_field_impl(
-        &self,
-        label: &str,
-        input: &Entity<InputState>,
-        is_focused: bool,
-        primary: Hsla,
-        row: AuditFormRow,
-        cx: &mut Context<Self>,
-        unsupported: bool,
-    ) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(if unsupported {
-                        Text::label_sm(label.to_string()).muted_foreground()
-                    } else {
-                        Text::label_sm(label.to_string())
-                    })
-                    .when(unsupported, |this| {
-                        this.child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
-                            "settings.audit.field.not_wired"
-                        ))))
-                    }),
-            )
-            .child(
-                div()
-                    .w(px(200.0))
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(if is_focused {
-                        primary
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .when(!unsupported, |this| {
-                        this.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                this.switching_input = true;
-                                this.content_focused = true;
-                                if let Some(position) = audit_form_rows()
-                                    .iter()
-                                    .position(|candidate| *candidate == row)
-                                {
-                                    this.audit_form_cursor = position;
-                                }
-                                this.audit_focus_current_input(window, cx);
-                                cx.notify();
-                            }),
-                        )
-                    })
-                    .child(Input::new(input).small().disabled(unsupported)),
-            )
+            ),
+            Some(dbflux_i18n::t!("settings.audit.field.not_wired").into()),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{AuditFormRow, AuditStatus, audit_form_rows};
-    use dbflux_components::primitives::StatusDotVariant;
+    use dbflux_components::primitives::Status;
 
     #[test]
     fn audit_form_rows_excludes_status_indicator_row() {
@@ -1176,17 +1058,17 @@ mod tests {
     fn audit_status_maps_each_variant_to_its_own_dot_token() {
         for status in ALL_AUDIT_STATUSES {
             let expected = match status {
-                AuditStatus::Enabled => StatusDotVariant::Success,
-                AuditStatus::Degraded => StatusDotVariant::Warning,
-                AuditStatus::Disabled => StatusDotVariant::Idle,
+                AuditStatus::Enabled => Status::Connected,
+                AuditStatus::Degraded => Status::Warning,
+                AuditStatus::Disabled => Status::Idle,
             };
 
-            assert_eq!(status.dot_variant(), expected, "status {status:?}");
+            assert_eq!(status.status(), expected, "status {status:?}");
         }
 
         assert_ne!(
-            AuditStatus::Degraded.dot_variant(),
-            AuditStatus::Enabled.dot_variant()
+            AuditStatus::Degraded.status(),
+            AuditStatus::Enabled.status()
         );
     }
 

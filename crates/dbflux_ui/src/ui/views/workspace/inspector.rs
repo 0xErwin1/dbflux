@@ -10,7 +10,9 @@
 //!
 //! # Resize
 //!
-//! The left-edge grip (6 px) starts the drag on `mouse_down`.  Move and up
+//! The rail is its own island, `IslandMetrics::GAP` of desk to the right of
+//! the document island. `width` is the island's width. The grip (6 px) over
+//! the island's left edge starts the drag on `mouse_down`.  Move and up
 //! events are captured by a workspace-root drag mask (an absolute overlay
 //! rendered only while `is_resizing == true`) so the cursor is tracked
 //! anywhere on screen.  When the drag ends the inspector emits
@@ -22,8 +24,11 @@
 //! `workspace/dispatch.rs` as a fallback after the active document declines
 //! Cancel: it calls `close()` and returns `true`.
 
+use dbflux_components::composites::Island;
+use dbflux_components::controls::Button;
+use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{ChromeColors, InspectorMetrics, IslandMetrics};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -34,7 +39,7 @@ use gpui_component::ActiveTheme;
 
 pub const INSPECTOR_MIN_WIDTH: Pixels = px(240.0);
 pub const INSPECTOR_MAX_WIDTH: Pixels = px(1280.0);
-pub const INSPECTOR_DEFAULT_WIDTH: Pixels = px(520.0);
+pub const INSPECTOR_DEFAULT_WIDTH: Pixels = InspectorMetrics::WIDTH;
 pub const INSPECTOR_GRIP_WIDTH: Pixels = px(6.0);
 
 // ---------------------------------------------------------------------------
@@ -45,6 +50,8 @@ pub const INSPECTOR_GRIP_WIDTH: Pixels = px(6.0);
 pub struct WorkspaceInspector {
     content: Option<AnyView>,
     title: SharedString,
+    /// The content draws its own title bar, so the rail shows none.
+    content_has_header: bool,
     width: Pixels,
     is_open: bool,
     is_resizing: bool,
@@ -77,6 +84,7 @@ impl WorkspaceInspector {
         Self {
             content: None,
             title: SharedString::default(),
+            content_has_header: false,
             width,
             is_open: false,
             is_resizing: false,
@@ -103,9 +111,19 @@ impl WorkspaceInspector {
     }
 
     /// Open / replace the inspector content. Reuses the rail if already open.
-    pub fn open_with(&mut self, content: AnyView, title: SharedString, cx: &mut Context<Self>) {
+    ///
+    /// `content_has_header` is set for content that draws its own title bar
+    /// (the row inspector); the rail then shows only the content.
+    pub fn open_with(
+        &mut self,
+        content: AnyView,
+        title: SharedString,
+        content_has_header: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.content = Some(content);
         self.title = title;
+        self.content_has_header = content_has_header;
         self.is_open = true;
         cx.notify();
     }
@@ -204,87 +222,65 @@ impl Focusable for WorkspaceInspector {
 impl Render for WorkspaceInspector {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let content_width = self.width - INSPECTOR_GRIP_WIDTH;
         let is_resizing = self.is_resizing;
         let title = self.title.clone();
         let content = self.content.clone();
         let close_entity = cx.entity().clone();
 
-        // Build header inline to avoid split-borrow issues with render_header.
-        let header = {
-            let theme2 = theme.clone();
-            let close_entity2 = close_entity.clone();
+        let header = (!self.content_has_header).then(|| {
             div()
                 .flex()
-                .items_center()
-                .justify_between()
-                .h(Heights::TOOLBAR)
-                .px(Spacing::SM)
                 .flex_shrink_0()
+                .items_center()
+                .gap(InspectorMetrics::HEADER_GAP)
+                .h(InspectorMetrics::HEADER_HEIGHT)
+                .pl(InspectorMetrics::HEADER_PADDING_LEFT)
+                .pr(InspectorMetrics::HEADER_PADDING_RIGHT)
                 .border_b_1()
-                .border_color(theme2.border)
-                .child(Text::caption(title).color(theme2.muted_foreground))
+                .border_color(theme.border)
                 .child(
-                    div()
-                        .id("workspace-inspector-close")
-                        .w(px(20.0))
-                        .h(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .text_color(theme2.muted_foreground)
-                        .hover(move |d| d.bg(theme2.secondary).text_color(theme2.foreground))
-                        .on_click(move |_, _, cx| {
-                            close_entity2.update(cx, |inspector, cx| {
-                                inspector.close(cx);
-                            });
-                        })
-                        .child("\u{00d7}"),
+                    div().flex_1().min_w_0().truncate().child(
+                        Text::body(title)
+                            .color(ChromeColors::strong(&theme))
+                            .font_weight(FontWeight::BOLD),
+                    ),
                 )
-        };
+                .child(
+                    Button::new(
+                        "workspace-inspector-close",
+                        dbflux_i18n::t!("document.data.row_inspector.action.close"),
+                    )
+                    .icon(AppIcon::CircleX)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(move |_, _, cx| {
+                        close_entity.update(cx, |inspector, cx| {
+                            inspector.close(cx);
+                        });
+                    }),
+                )
+        });
 
-        // Outer flex_row: grip (resize handle) + body (header + content host).
+        // The rail is an island of its own after the document island: the
+        // desk gap on its left, then the island with the grip over its left
+        // edge. mouse_down on the grip starts the drag; move/up are owned by
+        // the workspace drag mask so cursor tracking works even after the
+        // cursor leaves this column.
         div()
             .id("workspace-inspector")
+            .key_context(dbflux_components::key_contexts::ROW_INSPECTOR)
             .h_full()
-            .w(self.width)
+            .w(self.width + IslandMetrics::GAP)
+            .pl(IslandMetrics::GAP)
             .flex_shrink_0()
             .flex()
-            .flex_row()
-            .bg(theme.background)
-            .border_l_1()
-            .border_color(theme.border)
             .track_focus(&self.focus_handle)
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-            // Grip (left edge, INSPECTOR_GRIP_WIDTH px).
-            // mouse_down starts the drag; move/up are owned by the workspace drag mask
-            // so cursor tracking works even after the cursor leaves this column.
             .child(
-                div()
-                    .id("workspace-inspector-grip")
+                Island::new()
                     .h_full()
-                    .w(INSPECTOR_GRIP_WIDTH)
-                    .flex_shrink_0()
-                    .cursor_col_resize()
-                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(is_resizing, |el| el.bg(theme.primary))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.begin_resize(event, cx);
-                        }),
-                    ),
-            )
-            .child(
-                div()
-                    .h_full()
-                    .w(content_width)
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .child(header)
+                    .w(self.width)
+                    .when_some(header, |body, header| body.child(header))
                     .child(
                         div()
                             .id("workspace-inspector-body")
@@ -292,6 +288,24 @@ impl Render for WorkspaceInspector {
                             .min_h_0()
                             .overflow_hidden()
                             .when_some(content, |el, view| el.child(view)),
+                    )
+                    .child(
+                        div()
+                            .id("workspace-inspector-grip")
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(INSPECTOR_GRIP_WIDTH)
+                            .cursor_col_resize()
+                            .hover(|el| el.bg(theme.accent.opacity(0.3)))
+                            .when(is_resizing, |el| el.bg(ChromeColors::tint(&theme)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                    this.begin_resize(event, cx);
+                                }),
+                            ),
                     ),
             )
     }

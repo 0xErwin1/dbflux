@@ -1,9 +1,7 @@
+use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
-use crate::composites::ModalFrame;
-use crate::icon::IconSource;
 use crate::icons::AppIcon;
-use crate::primitives::Icon;
-use crate::tokens::Heights;
+use crate::modals::Modal;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -31,6 +29,8 @@ pub struct DocumentPreviewModal {
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    /// Re-renders on every edit so the JSON status line follows the text.
+    _input_observation: Subscription,
 }
 
 impl DocumentPreviewModal {
@@ -41,6 +41,7 @@ impl DocumentPreviewModal {
                 .language("json")
                 .line_number(true)
         });
+        let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
 
         Self {
             visible: false,
@@ -48,6 +49,7 @@ impl DocumentPreviewModal {
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            _input_observation: input_observation,
         }
     }
 
@@ -155,17 +157,28 @@ impl Render for DocumentPreviewModal {
             cx.listener(|this, _, window, cx| this.compact_json(window, cx)),
         );
 
-        ModalFrame::new("document-preview-modal", &self.focus_handle, close)
+        Modal::new(dbflux_i18n::t!("modals.document_preview.title"))
+            .id("document-preview-modal")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
             .key_context(ContextId::DocumentPreviewModal.as_gpui_context())
-            .close_icon(IconSource::Svg(AppIcon::X.path().into()))
-            .header_leading(Icon::new(AppIcon::Braces).size(Heights::ICON_SM).primary())
-            .title(dbflux_i18n::t!("modals.document_preview.title"))
+            .icon(AppIcon::Braces)
             .width(px(1000.0))
             .height(px(700.0))
             .top_offset(px(60.0))
             .block_scroll()
-            .child(editor.render(cx))
-            .render(cx)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                        this.save(window, cx);
+                    }))
+                    .child(editor.render(cx)),
+            )
+            .into_any_element()
     }
 }
 

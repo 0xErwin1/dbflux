@@ -31,16 +31,6 @@ pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -
     }
 }
 
-/// Translated footer summary of connected vs. idle connections, e.g.
-/// `"2 connected · 5 idle"`.
-pub(crate) fn footer_counts_label(connected: usize, idle: usize) -> String {
-    dbflux_i18n::t!(
-        "sidebar.status.connection_summary",
-        connected = connected,
-        idle = idle
-    )
-}
-
 /// Translated page indicator for the collection child picker, e.g.
 /// `"Page 1/3 (1-50)"`. `page` and `pages` are 1-based, `from`/`to` are the
 /// 1-based inclusive row range shown on the current page.
@@ -70,7 +60,7 @@ pub(crate) fn profile_updated_label(name: &str) -> String {
 }
 
 /// Translated label for the Export Table(s) context menu item, e.g.
-/// `"Export Table…"` for a single table or `"Export 3 Tables…"` for many.
+/// `"Export table…"` for a single table or `"Export 3 tables…"` for many.
 pub(crate) fn export_tables_label(count: usize) -> String {
     if count > 1 {
         dbflux_i18n::t!("sidebar.menu.export_tables_many", count = count)
@@ -80,7 +70,7 @@ pub(crate) fn export_tables_label(count: usize) -> String {
 }
 
 /// Translated label for the Migrate Table(s) context menu item, e.g.
-/// `"Migrate Table…"` for a single table or `"Migrate 3 Tables…"` for many.
+/// `"Migrate table…"` for a single table or `"Migrate 3 tables…"` for many.
 pub(crate) fn migrate_tables_label(count: usize) -> String {
     if count > 1 {
         dbflux_i18n::t!("sidebar.menu.migrate_tables_many", count = count)
@@ -136,6 +126,46 @@ pub(crate) fn connect_failed_tooltip_label(error: &str) -> String {
 /// `"orders (loading…)"`.
 pub(crate) fn node_loading_label(name: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.status.database_loading", name = name)
+}
+
+/// Label of the row that folds a connection's empty databases, e.g.
+/// `"14 empty databases"`.
+pub(crate) fn empty_databases_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("sidebar.tree.folder.empty_databases.one", count = count)
+    } else {
+        dbflux_i18n::t!("sidebar.tree.folder.empty_databases.many", count = count)
+    }
+}
+
+/// Key count shown at the right of a key-value database row: grouped digits
+/// up to 9,999, then an approximate `~12k` / `~1.2M` so the column stays
+/// narrow.
+pub(crate) fn compact_key_count(count: u64) -> String {
+    if count < 10_000 {
+        return group_thousands(count);
+    }
+
+    if count < 1_000_000 {
+        return format!("~{}k", (count + 500) / 1_000);
+    }
+
+    let millions = count as f64 / 1_000_000.0;
+    format!("~{millions:.1}M")
+}
+
+fn group_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+
+    grouped
 }
 
 /// Translated label for a retryable fetch error sentinel row, e.g.
@@ -819,20 +849,6 @@ mod tests {
     }
 
     #[test]
-    fn footer_counts_label_reports_connected_and_idle_counts() {
-        let label = super::footer_counts_label(2, 5);
-        assert!(label.contains("2 connected"));
-        assert!(label.contains("5 idle"));
-    }
-
-    #[test]
-    fn footer_counts_label_reports_zero_counts() {
-        let label = super::footer_counts_label(0, 0);
-        assert!(label.contains("0 connected"));
-        assert!(label.contains("0 idle"));
-    }
-
-    #[test]
     fn slice_translation_keys_resolve_in_every_shipped_locale() {
         for key in SLICE_KEYS {
             for locale in ["en", "es"] {
@@ -1028,6 +1044,40 @@ mod tests {
             label,
             dbflux_i18n::t!("sidebar.tree.status.profile_connecting", name = "prod-db")
         );
+    }
+
+    #[test]
+    fn compact_key_count_groups_small_counts_and_abbreviates_large_ones() {
+        assert_eq!(super::compact_key_count(0), "0");
+        assert_eq!(super::compact_key_count(88), "88");
+        assert_eq!(super::compact_key_count(1_474), "1,474");
+        assert_eq!(super::compact_key_count(9_999), "9,999");
+        assert_eq!(super::compact_key_count(12_480), "~12k");
+        assert_eq!(super::compact_key_count(2_340_000), "~2.3M");
+    }
+
+    #[test]
+    fn empty_databases_label_resolves_in_every_locale() {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            for key in [
+                "sidebar.tree.folder.empty_databases.one",
+                "sidebar.tree.folder.empty_databases.many",
+            ] {
+                let value = dbflux_i18n::t!(key, locale = locale, count = 14);
+
+                assert!(
+                    value.contains("14") || key.ends_with(".one"),
+                    "{locale}: {value}"
+                );
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+
+        assert_eq!(super::empty_databases_label(14), "14 empty databases");
     }
 
     #[test]

@@ -4,6 +4,7 @@ import SiteFooter from '../components/SiteFooter.astro';
 import BackToTop from '../components/BackToTop.astro';
 import Mermaid from '../components/Mermaid.astro';
 import SearchDialog from '../components/SearchDialog.astro';
+import ScrollReveal from '../components/ScrollReveal.astro';
 import { ORIGIN } from '../data/site';
 import { DEFAULT_LOCALE, LOCALES, localeFromPathname, t, withLocale } from '../i18n';
 import type { Locale } from '../i18n';
@@ -12,7 +13,7 @@ import '../styles/global.css';
 interface Props {
   title: string;
   description?: string;
-  current?: 'home' | 'docs' | 'about';
+  current?: 'home' | 'docs' | 'about' | 'compare';
   wide?: boolean;
   /** Keep this page out of search results — used for unreleased documentation. */
   noindex?: boolean;
@@ -64,6 +65,9 @@ const alternateLinks = Astro.site
       href: new URL(withLocale(Astro.url.pathname, target), Astro.site).href,
     }))
   : [];
+// Scroll reveals belong to the site pages; documentation renders without them.
+const revealEnabled = current === 'home' || current === 'about' || current === 'compare';
+
 const xDefaultHref =
   Astro.site && alternateLocales.includes(DEFAULT_LOCALE)
     ? new URL(withLocale(Astro.url.pathname, DEFAULT_LOCALE), Astro.site).href
@@ -79,12 +83,7 @@ const xDefaultHref =
         let preference = 'system';
         try {
           const stored = localStorage.getItem(key);
-          if (
-            stored === 'light' ||
-            stored === 'dark' ||
-            stored === 'mirage' ||
-            stored === 'system'
-          ) {
+          if (stored === 'light' || stored === 'dark' || stored === 'system') {
             preference = stored;
           }
         } catch {
@@ -100,6 +99,7 @@ const xDefaultHref =
         document.documentElement.dataset.theme = theme;
       })();
     </script>
+    {revealEnabled && <ScrollReveal />}
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
@@ -135,7 +135,7 @@ const xDefaultHref =
     />
     <link
       rel="preload"
-      href="/fonts/ibm-plex-sans-latin-400-normal.woff2"
+      href="/fonts/archivo-latin-wdth-normal.woff2"
       as="font"
       type="font/woff2"
       crossorigin
@@ -145,7 +145,11 @@ const xDefaultHref =
     <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
     <SiteNav current={current} locale={locale} />
     <main id="main"><slot /></main>
-    <SiteFooter locale={locale} showLanguagePicker={showLanguagePicker} />
+    <SiteFooter
+      locale={locale}
+      showLanguagePicker={showLanguagePicker}
+      wordmark={current === 'home'}
+    />
     <BackToTop />
     <Mermaid />
     <SearchDialog indexUrl={searchIndex} locale={locale} />

@@ -126,6 +126,11 @@ pub(crate) fn extract_identifier_prefix(source: &str, cursor: usize) -> (usize, 
 /// render as one-row fields. This reproduces the old single-line `InputState`
 /// contract: no gutter, no wrap, no editor chrome, and Enter submits instead
 /// of inserting a newline (Shift+Enter still does, if the field is ever grown).
+///
+/// A code editor reserves empty rows below its last line (half the viewport by
+/// default), which gives a one-line field a scroll range and lets the wheel
+/// push the text out of view. The reservation is turned off so the single line
+/// always fits the field.
 pub(crate) fn new_single_line_completion_state(
     window: &mut gpui::Window,
     cx: &mut gpui::Context<'_, EditorState>,
@@ -137,13 +142,14 @@ pub(crate) fn new_single_line_completion_state(
         .folding(false)
         .searchable(false)
         .submit_on_enter(true)
+        .scroll_beyond_last_line(Some(0))
         .placeholder(placeholder)
 }
 
 /// Renders a single-line completion input as a one-row `Editor`.
 ///
 /// Pairs with [`new_single_line_completion_state`]: same visual contract as
-/// the old `.small()` single-line input (24 px, DBFlux body font) while the
+/// the old `.small()` single-line input (24 px, DBFlux data font) while the
 /// underlying state is the `EditorState` the completion engine requires.
 pub(crate) fn single_line_completion_editor(
     state: &Entity<EditorState>,
@@ -168,9 +174,32 @@ pub(crate) fn single_line_completion_editor(
     gpui_component::input::Editor::new(state)
         .h(dbflux_components::tokens::Heights::ROW_COMPACT)
         .py(leading - EDITOR_INPUT_PADDING_Y - Borders::THIN)
-        .font_family(dbflux_components::typography::AppFonts::BODY)
+        .font_family(dbflux_components::typography::AppFonts::MONO)
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_size(FontSizes::SM)
+}
+
+/// Renders a single-line completion input as a frameless one-row `Editor`,
+/// for hosts that draw the field shape themselves (the table filter field).
+///
+/// Same geometry as [`single_line_completion_editor`] minus the frame: no
+/// background, no border, so the vertical padding does not offset a border.
+/// Text is regular weight at `FontSizes::BASE`; the host sets the color.
+pub(crate) fn frameless_single_line_completion_editor(
+    state: &Entity<EditorState>,
+) -> gpui_component::input::Editor {
+    let leading = (dbflux_components::tokens::Heights::ROW_COMPACT
+        - FontSizes::BASE * EDITOR_LINE_HEIGHT)
+        / 2.0;
+
+    gpui_component::input::Editor::new(state)
+        .appearance(false)
+        .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .py(leading - EDITOR_INPUT_PADDING_Y)
+        .px(px(0.0))
+        .font_family(dbflux_components::typography::AppFonts::MONO)
+        .font_weight(gpui::FontWeight::NORMAL)
+        .text_size(FontSizes::BASE)
 }
 
 /// The line height gpui-component's `Editor::render` applies, relative to the
@@ -259,6 +288,51 @@ mod single_line_editor_geometry_tests {
         assert!(
             (f32::from(caret_center) - f32::from(row_center)).abs() <= 1.0,
             "caret center {caret_center:?} is not centered in the row {row:?}"
+        );
+    }
+
+    // A code editor reserves empty rows below its last line, which gave the
+    // one-line field a vertical scroll range: the wheel pushed the text out.
+    #[gpui::test]
+    fn single_line_editor_does_not_scroll_vertically(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, window) = cx.add_window_view({
+            let state_holder = state_holder.clone();
+            move |window, cx| {
+                let harness = cx.new(|cx| GeometryHarness::new(window, cx));
+                state_holder.replace(Some(harness.read(cx).state.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+
+        let row = window
+            .debug_bounds("completion-row")
+            .expect("the row should render");
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("the harness should build its editor state");
+
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| state.set_value("{ status: 1 }", window, cx));
+        });
+        window.update(|_, _| {});
+
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: row.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-40.0))),
+            ..Default::default()
+        });
+        window.update(|_, _| {});
+
+        let offset = window.update(|_, cx| state.read(cx).scroll_offset());
+        assert_eq!(
+            offset.y,
+            px(0.0),
+            "a single-line field must not scroll vertically"
         );
     }
 }

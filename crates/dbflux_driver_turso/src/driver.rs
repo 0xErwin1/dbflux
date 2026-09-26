@@ -21,6 +21,7 @@ pub static TURSO_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
         label: "Main".into(),
         sections: vec![FormSection {
             title: "Connection".into(),
+            icon: Some(dbflux_core::FormSectionIcon::Connection),
             fields: vec![
                 field_required(
                     "url",
@@ -212,6 +213,10 @@ impl DbDriver for TursoDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &METADATA
+    }
+
+    fn picker_hint(&self) -> String {
+        "libSQL".to_string()
     }
 
     fn driver_key(&self) -> dbflux_core::DriverKey {

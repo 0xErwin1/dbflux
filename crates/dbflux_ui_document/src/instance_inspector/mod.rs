@@ -14,8 +14,10 @@ use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use crate::refresh::MIN_REFRESH_FLOOR_SECS;
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::{Icon, SurfaceRole, Text, overlay_bg, surface};
 use dbflux_components::result_panel::{ResultPanel, ViewHandle};
 use dbflux_components::tokens::{Radii, Spacing};
 use dbflux_core::{
@@ -447,14 +449,8 @@ impl InspectorPanel {
         .detach();
     }
 
-    fn render_kill_confirm_modal(
-        &self,
-        theme: &gpui_component::theme::Theme,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_kill_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui::div;
-
-        let btn_hover = theme.muted;
 
         let action_label = self
             .pending_kill_confirm
@@ -465,92 +461,38 @@ impl InspectorPanel {
         let title = format!("{}?", action_label);
         let description = dbflux_i18n::t!("document.instance_inspector.kill_confirm_body");
 
-        div()
-            .id("kill-confirm-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(gpui::px(300.0))
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::MD)
-                    .p(Spacing::MD)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Icon::new(AppIcon::TriangleAlert)
-                                    .medium()
-                                    .color(theme.warning),
-                            )
-                            .child(Text::heading(title)),
-                    )
-                    .child(Text::muted(description))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(Spacing::SM)
-                            .child(
-                                div()
-                                    .id("kill-cancel-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.secondary)
-                                    .hover(|d| d.bg(btn_hover))
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.cancel_kill_action(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::X).small().color(theme.muted_foreground),
-                                    )
-                                    .child(Text::caption(dbflux_i18n::t!(
-                                        "document.instance_inspector.cancel"
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id("kill-confirm-btn")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .px(Spacing::SM)
-                                    .py(Spacing::XS)
-                                    .rounded(Radii::SM)
-                                    .cursor_pointer()
-                                    .bg(theme.danger)
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                        this.confirm_kill_action(cx);
-                                    }))
-                                    .child(
-                                        Icon::new(AppIcon::Delete).small().color(theme.background),
-                                    )
-                                    .child(
-                                        Text::caption(dbflux_i18n::t!(
-                                            "document.instance_inspector.confirm"
-                                        ))
-                                        .color(theme.background),
-                                    ),
-                            ),
-                    ),
+                Button::new(
+                    "kill-cancel-btn",
+                    dbflux_i18n::t!("document.instance_inspector.cancel"),
+                )
+                .icon(AppIcon::X)
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.cancel_kill_action(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "kill-confirm-btn",
+                    dbflux_i18n::t!("document.instance_inspector.confirm"),
+                )
+                .danger()
+                .icon(AppIcon::Delete)
+                .on_click(cx.listener(|this, _, _window, cx| {
+                    this.confirm_kill_action(cx);
+                })),
+            );
+
+        Modal::new(title)
+            .id("kill-confirm-overlay")
+            .danger()
+            .icon(AppIcon::TriangleAlert)
+            .width(gpui::px(400.0))
+            .body(Text::body(description))
+            .footer(footer)
     }
 }
 
@@ -623,7 +565,6 @@ impl Render for InspectorPanel {
         let focus_handle = self.focus_handle.clone();
 
         if let Some(result_panel) = self.result_panel.as_ref().cloned() {
-            let theme = cx.theme().clone();
             let has_kill_confirm = self.pending_kill_confirm.is_some();
 
             return div()
@@ -632,7 +573,7 @@ impl Render for InspectorPanel {
                 .track_focus(&focus_handle)
                 .child(result_panel)
                 .when(has_kill_confirm, |d| {
-                    d.child(self.render_kill_confirm_modal(&theme, cx))
+                    d.child(self.render_kill_confirm_modal(cx))
                 })
                 .into_any();
         }

@@ -409,6 +409,10 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
+        if let Some(SchemaNodeId::BucketsFolder { profile_id }) = &parsed {
+            self.spawn_fetch_buckets(*profile_id, cx);
+        }
+
         if let Some(SchemaNodeId::Profile { profile_id }) = &parsed {
             if self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage) {
                 self.spawn_fetch_buckets(*profile_id, cx);

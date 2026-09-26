@@ -16,8 +16,11 @@ pub struct ExecutionPlan {
 #[serde(rename_all = "snake_case")]
 pub enum PendingStatus {
     Pending,
+    /// Approved and not yet used: the next identical call may run once.
     Approved,
     Rejected,
+    /// Approved and already used by the call it authorized.
+    Consumed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +30,9 @@ pub struct PendingExecution {
     pub plan: ExecutionPlan,
     pub created_at: i64,
     pub expires_at: Option<i64>,
+    /// Reason the person gave when rejecting, returned to the requesting agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -52,20 +58,51 @@ pub trait PendingExecutionStore: Send + Sync {
 
     fn get_pending(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError>;
 
+    /// Returns the entry with `id` whatever its status or expiry, so a caller
+    /// can report how a request was resolved.
+    fn get_execution(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError>;
+
     fn update_status(
         &mut self,
         id: Uuid,
         status: PendingStatus,
     ) -> Result<Option<PendingExecution>, PendingStoreError>;
 
+    /// Marks the entry `Rejected` and stores the reason the person gave.
+    fn record_rejection(
+        &mut self,
+        id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<Option<PendingExecution>, PendingStoreError>;
+
     /// Returns only entries whose status is `Pending` AND whose `expires_at` is
     /// either absent or in the future relative to the current wall-clock time.
     fn list_pending(&self) -> Result<Vec<PendingExecution>, PendingStoreError>;
 
-    /// Removes rows whose status is terminal (Approved or Rejected) OR whose
-    /// `expires_at` is at or before `now_ms`. Call once at startup to prevent
-    /// unbounded table growth.
+    /// Finds the oldest approved, unexpired entry whose actor, connection,
+    /// tool and payload equal `plan`'s and marks it `Consumed`, so one approval
+    /// authorizes exactly one call. The classification is not compared: an
+    /// approval requested through `request_execution` carries the escalated
+    /// class of that tool, not the class of the call it approves.
+    fn consume_approved(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecution>, PendingStoreError>;
+
+    /// Removes rows that are rejected or consumed OR whose `expires_at` is at
+    /// or before `now_ms`. Approved rows that have not expired are kept,
+    /// because they still authorize the call they were approved for. Call
+    /// once at startup to prevent unbounded table growth.
     fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError>;
+}
+
+/// Whether an approved entry authorizes `plan`: same actor, connection,
+/// tool and payload.
+pub fn approval_matches_plan(approved: &ExecutionPlan, plan: &ExecutionPlan) -> bool {
+    approved.actor_id == plan.actor_id
+        && approved.connection_id == plan.connection_id
+        && approved.tool_id == plan.tool_id
+        && approved.payload == plan.payload
 }
 
 fn now_epoch_ms() -> i64 {
@@ -93,6 +130,7 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
             plan: plan.clone(),
             created_at: now_epoch_ms(),
             expires_at,
+            rejection_reason: None,
         };
 
         self.entries.push(pending.clone());
@@ -127,6 +165,24 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
         }
     }
 
+    fn get_execution(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError> {
+        Ok(self.entries.iter().find(|entry| entry.id == id).cloned())
+    }
+
+    fn record_rejection(
+        &mut self,
+        id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<Option<PendingExecution>, PendingStoreError> {
+        let entry = self.entries.iter_mut().find(|entry| entry.id == id);
+
+        Ok(entry.map(|pending| {
+            pending.status = PendingStatus::Rejected;
+            pending.rejection_reason = reason.map(str::to_string);
+            pending.clone()
+        }))
+    }
+
     fn list_pending(&self) -> Result<Vec<PendingExecution>, PendingStoreError> {
         let now = now_epoch_ms();
         Ok(self
@@ -140,12 +196,37 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
             .collect())
     }
 
+    fn consume_approved(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecution>, PendingStoreError> {
+        let now = now_epoch_ms();
+
+        let entry = self
+            .entries
+            .iter_mut()
+            .filter(|entry| {
+                entry.status == PendingStatus::Approved
+                    && entry.expires_at.is_none_or(|exp| exp > now)
+                    && approval_matches_plan(&entry.plan, plan)
+            })
+            .min_by_key(|entry| entry.created_at);
+
+        Ok(entry.map(|entry| {
+            entry.status = PendingStatus::Consumed;
+            entry.clone()
+        }))
+    }
+
     fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError> {
         let before = self.entries.len();
         self.entries.retain(|entry| {
-            let is_terminal = entry.status != PendingStatus::Pending;
+            let is_finished = matches!(
+                entry.status,
+                PendingStatus::Rejected | PendingStatus::Consumed
+            );
             let is_expired = entry.expires_at.is_some_and(|exp| exp <= now_ms);
-            !is_terminal && !is_expired
+            !is_finished && !is_expired
         });
         Ok(before - self.entries.len())
     }
@@ -270,5 +351,135 @@ mod tests {
             result.is_none(),
             "approved entry must not be returned by get_pending"
         );
+    }
+
+    #[test]
+    fn consume_approved_uses_a_matching_approval_once() {
+        let mut store = InMemoryPendingExecutionStore::default();
+        let entry = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        store
+            .update_status(entry.id, PendingStatus::Approved)
+            .expect("update should succeed");
+
+        let consumed = store
+            .consume_approved(&sample_plan())
+            .expect("consume should succeed")
+            .expect("the approved entry should match");
+
+        assert_eq!(consumed.id, entry.id);
+        assert_eq!(consumed.status, PendingStatus::Consumed);
+        assert!(
+            store
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_none(),
+            "an approval must authorize exactly one call"
+        );
+    }
+
+    #[test]
+    fn consume_approved_ignores_pending_rejected_and_different_payloads() {
+        let mut store = InMemoryPendingExecutionStore::default();
+        store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        let rejected = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        store
+            .update_status(rejected.id, PendingStatus::Rejected)
+            .expect("update should succeed");
+
+        let mut other_payload = sample_plan();
+        other_payload.payload = serde_json::json!({"query": "drop table users"});
+        let approved_other = store
+            .create_pending(&other_payload, None)
+            .expect("create should succeed");
+        store
+            .update_status(approved_other.id, PendingStatus::Approved)
+            .expect("update should succeed");
+
+        assert!(
+            store
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn consume_approved_ignores_classification_and_expired_approvals() {
+        let mut store = InMemoryPendingExecutionStore::default();
+
+        let expired = store
+            .create_pending(&sample_plan(), Some(1_000i64))
+            .expect("create should succeed");
+        store
+            .update_status(expired.id, PendingStatus::Approved)
+            .expect("update should succeed");
+        assert!(
+            store
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_none(),
+            "an expired approval must not authorize a call"
+        );
+
+        let mut escalated = sample_plan();
+        escalated.classification = ExecutionClassification::Admin;
+        let approved = store
+            .create_pending(&escalated, None)
+            .expect("create should succeed");
+        store
+            .update_status(approved.id, PendingStatus::Approved)
+            .expect("update should succeed");
+
+        let consumed = store
+            .consume_approved(&sample_plan())
+            .expect("consume should succeed")
+            .expect("classification is not part of the match");
+        assert_eq!(consumed.id, approved.id);
+    }
+
+    #[test]
+    fn purge_keeps_live_approvals_and_drops_finished_entries() {
+        let mut store = InMemoryPendingExecutionStore::default();
+        let approved = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        store
+            .update_status(approved.id, PendingStatus::Approved)
+            .expect("update should succeed");
+        let rejected = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        store
+            .update_status(rejected.id, PendingStatus::Rejected)
+            .expect("update should succeed");
+        let consumed = store
+            .create_pending(&sample_plan(), None)
+            .expect("create should succeed");
+        store
+            .update_status(consumed.id, PendingStatus::Consumed)
+            .expect("update should succeed");
+
+        let purged = store
+            .purge_terminal_and_expired(now_epoch_ms_for_tests())
+            .expect("purge should succeed");
+
+        assert_eq!(purged, 2);
+        assert!(
+            store
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_some(),
+            "the live approval must survive the purge"
+        );
+    }
+
+    fn now_epoch_ms_for_tests() -> i64 {
+        super::now_epoch_ms()
     }
 }

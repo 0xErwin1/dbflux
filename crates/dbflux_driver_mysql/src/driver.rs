@@ -660,6 +660,7 @@ pub static MYSQL_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
             sections: vec![
                 FormSection {
                     title: "Server".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Server),
                     fields: vec![
                         field_use_uri(),
                         when_checked(
@@ -698,6 +699,7 @@ pub static MYSQL_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                 },
                 FormSection {
                     title: "Authentication".into(),
+                    icon: Some(dbflux_core::FormSectionIcon::Authentication),
                     fields: vec![
                         when_unchecked(
                             with_default(
@@ -734,6 +736,13 @@ impl DbDriver for MysqlDriver {
         match self.kind {
             DbKind::MariaDB => &MARIADB_METADATA,
             _ => &MYSQL_METADATA,
+        }
+    }
+
+    fn picker_rank(&self) -> u16 {
+        match self.kind {
+            DbKind::MariaDB => 2,
+            _ => 1,
         }
     }
 
@@ -5431,5 +5440,20 @@ mod tests {
                 .expect("a plain drop builds"),
             "DROP TABLE IF EXISTS `shop`.`orders`"
         );
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::MysqlDriver;
+    use dbflux_core::{DbDriver, DbKind};
+
+    #[test]
+    fn picker_places_mysql_before_mariadb() {
+        let mysql = MysqlDriver::new(DbKind::MySQL);
+        let mariadb = MysqlDriver::new(DbKind::MariaDB);
+
+        assert!(mysql.picker_rank() < mariadb.picker_rank());
+        assert_eq!(mariadb.picker_hint(), ":3306");
     }
 }

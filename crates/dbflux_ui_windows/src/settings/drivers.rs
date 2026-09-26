@@ -5,15 +5,15 @@ use super::form_section::FormSection;
 use super::layout;
 use super::section_trait::SectionFocusEvent;
 use crate::labels::{override_default_caption, override_default_seconds_caption};
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_components::components::form_renderer;
+use dbflux_components::composites::ListRow;
 use dbflux_components::controls::InputEvent;
-use dbflux_components::controls::{Button, Checkbox, Input};
+use dbflux_components::controls::{Button, Checkbox, Dropdown, Input};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Label};
-use dbflux_components::tokens::{Heights, Radii, Widths};
-use dbflux_components::typography::{
-    Body, FieldLabel, MonoCaption, MonoLabel, MonoMeta, PanelTitle, SubSectionLabel,
-};
+use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{Badge, BadgeTone, Icon};
+use dbflux_components::tokens::{ChromeColors, Fields};
 use dbflux_core::{
     DriverCapabilities, FormFieldKind, FormValues, GlobalOverrides, RefreshPolicySetting,
 };
@@ -113,12 +113,12 @@ fn bool_override_index(value: Option<bool>) -> usize {
     }
 }
 
-fn driver_entry_name_text(text: impl Into<SharedString>) -> MonoLabel {
-    MonoLabel::new(text)
+fn driver_entry_name_text(text: impl Into<SharedString>) -> Text {
+    Text::body(text)
 }
 
-fn driver_entry_key_text(text: impl Into<SharedString>) -> MonoMeta {
-    MonoMeta::new(text)
+fn driver_entry_key_text(text: impl Into<SharedString>) -> Text {
+    Text::code(text).muted_foreground()
 }
 
 impl DriversSection {
@@ -710,7 +710,8 @@ impl DriversSection {
 
     pub(super) fn render_drivers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::section_container(layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            cx.theme().border,
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.drivers.section_title"),
                 dbflux_i18n::t!("settings.drivers.section_description"),
                 cx,
@@ -721,17 +722,88 @@ impl DriversSection {
     }
 
     fn render_driver_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme();
         let list_focused = self.content_focused && self.drv_focus == DriversFocus::List;
 
         if let Some(scroll_idx) = self.drv_pending_scroll_idx.take() {
             self.drv_list_scroll_handle.scroll_to_item(scroll_idx);
         }
 
+        let rows: Vec<AnyElement> = self
+            .drv_entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                let selected = self.drv_selected_idx == Some(idx);
+                let focused = list_focused && selected;
+                let theme = cx.theme();
+                let icon_color = if selected {
+                    ChromeColors::tint(theme)
+                } else {
+                    theme.muted_foreground
+                };
+                let detail = format!(
+                    "{} · {}",
+                    entry.driver_key,
+                    entry.metadata.query_language.display_name()
+                );
+
+                ListRow::new(SharedString::from(format!(
+                    "settings-driver-{}",
+                    entry.driver_key
+                )))
+                .selected(selected)
+                .selection_bar(true)
+                .focused(focused && !selected)
+                .build(cx)
+                .flex()
+                .flex_col()
+                .gap(SettingsMetrics::LIST_ROW_LINE_GAP)
+                .py(SettingsMetrics::LIST_ROW_PADDING_Y)
+                .px(SettingsMetrics::LIST_ROW_PADDING_X)
+                .border_b_1()
+                .border_color(theme.table_row_border)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.drv_select_driver(idx, window, cx);
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(FormMetrics::INLINE_GAP)
+                        .child(
+                            Icon::new(AppIcon::for_driver(
+                                entry.metadata.icon,
+                                entry.metadata.category,
+                            ))
+                            .size(SettingsMetrics::LIST_ROW_ICON)
+                            .color(icon_color),
+                        )
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                driver_entry_name_text(entry.metadata.display_name.clone())
+                                    .font_weight(FontWeight::SEMIBOLD),
+                            ),
+                        )
+                        .when_some(entry.metadata.deployment_class, |row, class| {
+                            row.child(Badge::new(
+                                class.display_name().to_uppercase(),
+                                BadgeTone::Neutral,
+                            ))
+                        }),
+                )
+                .child(driver_entry_key_text(detail).font_size(SettingsMetrics::LIST_ROW_META_FONT))
+                .into_any_element()
+            })
+            .collect();
+
+        let empty = rows.is_empty();
+        let theme = cx.theme();
+
         div()
-            .w(Widths::SETTINGS_LIST_PANEL)
+            .w(SettingsMetrics::LIST_WIDTH)
             .h_full()
             .min_h_0()
+            .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
@@ -740,81 +812,18 @@ impl DriversSection {
             .child(
                 div()
                     .id("drivers-list-scroll")
-                    .p_2()
                     .flex_1()
                     .min_h_0()
                     .overflow_scroll()
                     .track_scroll(&self.drv_list_scroll_handle)
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .when(self.drv_entries.is_empty(), |d| {
-                        d.child(
-                            div().p_3().child(
-                                Body::new(dbflux_i18n::t!("settings.drivers.empty"))
-                                    .color(theme.muted_foreground),
-                            ),
-                        )
+                    .when(empty, |list| {
+                        list.child(layout::master_list_empty(dbflux_i18n::t!(
+                            "settings.drivers.empty"
+                        )))
                     })
-                    .children(self.drv_entries.iter().enumerate().map(|(idx, entry)| {
-                        let selected = self.drv_selected_idx == Some(idx);
-                        let focused = list_focused && selected;
-
-                        div()
-                            .id(SharedString::from(format!(
-                                "settings-driver-{}",
-                                entry.driver_key
-                            )))
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if focused {
-                                theme.primary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .when(selected, |d| d.bg(theme.secondary))
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.drv_select_driver(idx, window, cx);
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(
-                                        div().mt(px(2.0)).child(
-                                            Icon::new(AppIcon::for_driver(
-                                                entry.metadata.icon,
-                                                entry.metadata.category,
-                                            ))
-                                            .size(Heights::ICON_SM)
-                                            .muted(),
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .flex_1()
-                                            .child(driver_entry_name_text(
-                                                entry.metadata.display_name.clone(),
-                                            ))
-                                            .child(driver_entry_key_text(entry.driver_key.clone())),
-                                    )
-                                    .when_some(entry.metadata.deployment_class, |row, class| {
-                                        row.child(Badge::new(
-                                            class.display_name().to_uppercase(),
-                                            BadgeVariant::Neutral,
-                                        ))
-                                    }),
-                            )
-                    })),
+                    .children(rows),
             )
     }
 
@@ -828,72 +837,44 @@ impl DriversSection {
                 .items_center()
                 .justify_center()
                 .child(
-                    Body::new(dbflux_i18n::t!("settings.drivers.select_hint"))
+                    Text::body(dbflux_i18n::t!("settings.drivers.select_hint"))
                         .color(theme.muted_foreground),
                 );
         };
 
         let global = &self.gen_settings;
+        let detail = format!(
+            "{} · {} · {}",
+            entry.driver_key,
+            entry.metadata.category.display_name(),
+            entry.metadata.query_language.display_name()
+        );
 
         let header = div()
             .flex()
-            .items_start()
-            .justify_between()
-            .gap_4()
+            .items_center()
+            .gap(FormMetrics::ROW_GAP)
+            .pt(FormMetrics::ROW_GAP)
             .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap_3()
-                    .child(
-                        Icon::new(AppIcon::for_driver(
-                            entry.metadata.icon,
-                            entry.metadata.category,
-                        ))
-                        .size(px(32.0))
-                        .color(theme.foreground),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(PanelTitle::new(entry.metadata.display_name.clone()))
-                            .child(MonoMeta::new(entry.driver_key.clone()))
-                            .child(
-                                Body::new(entry.metadata.description.clone())
-                                    .color(theme.muted_foreground),
-                            ),
-                    ),
+                Icon::new(AppIcon::for_driver(
+                    entry.metadata.icon,
+                    entry.metadata.category,
+                ))
+                .size(DRIVER_LOGO_SIZE)
+                .color(theme.foreground),
             )
             .child(
                 div()
                     .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded(Radii::SM)
-                            .bg(theme.secondary)
-                            .child(MonoCaption::new(entry.metadata.category.display_name())),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .rounded(Radii::SM)
-                            .bg(theme.secondary)
-                            .child(MonoCaption::new(
-                                entry.metadata.query_language.display_name().to_string(),
-                            )),
-                    ),
+                    .flex_col()
+                    .gap(SettingsMetrics::LIST_ROW_LINE_GAP)
+                    .child(Text::heading(entry.metadata.display_name.clone()))
+                    .child(Text::code(detail).muted_foreground()),
             );
 
         let body = div()
             .flex()
             .flex_col()
-            .gap_5()
             .child(self.render_capabilities(entry, cx))
             .child(self.render_global_overrides(global, cx))
             .child(self.render_driver_schema(entry, cx));
@@ -904,25 +885,63 @@ impl DriversSection {
     pub(super) fn render_driver_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
 
+        Button::new(
+            "save-driver-settings",
+            dbflux_i18n::t!("settings.drivers.action.save"),
+        )
+        .primary()
+        .icon(AppIcon::Save)
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
+        .focused(editor_focused && self.drv_editor_field == DriverEditorField::Save)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.save_driver_settings(window, cx);
+        }))
+        .into_any_element()
+    }
+
+    fn editor_cursor_on(&self, field: DriverEditorField) -> bool {
+        self.content_focused
+            && self.drv_focus == DriversFocus::Editor
+            && self.drv_editor_field == field
+    }
+
+    /// One override row: the override checkbox (when the override can be
+    /// switched off), the setting's name, the global value it replaces and
+    /// the control that holds the driver's value.
+    fn override_row(
+        &self,
+        checkbox: Option<AnyElement>,
+        label: String,
+        global_caption: String,
+        control: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> Div {
         div()
             .flex()
             .items_center()
-            .gap_3()
-            .child(layout::footer_action_frame(
-                editor_focused && self.drv_editor_field == DriverEditorField::Save,
-                cx.theme().primary,
-                Button::new(
-                    "save-driver-settings",
-                    dbflux_i18n::t!("settings.drivers.action.save"),
-                )
-                .small()
-                .primary()
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.save_driver_settings(window, cx);
-                })),
-            ))
-            .into_any_element()
+            .gap(FormMetrics::ROW_GAP)
+            .py(FormMetrics::ROW_PADDING_Y)
+            .border_b_1()
+            .border_color(cx.theme().table_row_border)
+            .child(
+                div()
+                    .w(Fields::CHECKBOX_SIZE)
+                    .flex_shrink_0()
+                    .children(checkbox),
+            )
+            .child(div().flex_1().min_w_0().child(Text::body(label)))
+            .child(
+                div()
+                    .w(OVERRIDE_CAPTION_WIDTH)
+                    .flex_shrink_0()
+                    .child(layout::help_text(global_caption)),
+            )
+            .child(
+                div()
+                    .w(OVERRIDE_CONTROL_WIDTH)
+                    .flex_shrink_0()
+                    .child(control),
+            )
     }
 
     fn render_capabilities(
@@ -930,7 +949,6 @@ impl DriversSection {
         entry: &DriverSettingsEntry,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
         let caps = entry.metadata.capabilities;
         let relevant = entry.metadata.category.relevant_capabilities();
         let catalog = capability_catalog();
@@ -938,35 +956,32 @@ impl DriversSection {
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(FieldLabel::new(dbflux_i18n::t!(
-                "settings.drivers.field.capabilities"
-            )))
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.drivers.field.capabilities"),
+                Some(AppIcon::Zap.into()),
+                cx,
+            ))
             .child(
-                div().flex().flex_wrap().gap_2().children(
-                    catalog
-                        .into_iter()
-                        .filter(|(capability, _)| relevant.contains(*capability))
-                        .map(|(capability, label)| {
-                            let supported = caps.contains(capability);
-                            div()
-                                .px_2()
-                                .py_1()
-                                .rounded(Radii::SM)
-                                .border_1()
-                                .border_color(theme.border)
-                                .bg(if supported {
-                                    theme.secondary
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(FormMetrics::INLINE_GAP)
+                    .py(FormMetrics::ROW_PADDING_Y)
+                    .children(
+                        catalog
+                            .into_iter()
+                            .filter(|(capability, _)| relevant.contains(*capability))
+                            .map(|(capability, label)| {
+                                if caps.contains(capability) {
+                                    Badge::new(label, BadgeTone::Neutral).into_any_element()
                                 } else {
-                                    gpui::transparent_black()
-                                })
-                                .child(Body::new(format!(
-                                    "{} {}",
-                                    if supported { "✓" } else { "-" },
-                                    label
-                                )))
-                        }),
-                ),
+                                    div()
+                                        .opacity(Fields::DISABLED_OPACITY)
+                                        .child(Badge::new(label, BadgeTone::Neutral))
+                                        .into_any_element()
+                                }
+                            }),
+                    ),
             )
     }
 
@@ -975,349 +990,182 @@ impl DriversSection {
         global: &dbflux_core::GeneralSettings,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
-        let editor_focused = self.content_focused && self.drv_focus == DriversFocus::Editor;
+        let policy_checkbox = layout::cursor_ring(
+            self.editor_cursor_on(DriverEditorField::OverrideRefreshPolicy),
+            Checkbox::new("drv-override-refresh-policy")
+                .checked(self.drv_override_refresh_policy)
+                .aria_label(dbflux_i18n::t!("settings.general.refresh_policy.label"))
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.drv_focus = DriversFocus::Editor;
+                    this.drv_editor_field = DriverEditorField::OverrideRefreshPolicy;
+                    this.drv_override_refresh_policy = *checked;
+                    this.drv_editor_dirty = true;
+
+                    if !*checked {
+                        cx.emit(SectionFocusEvent::RequestFocusReturn);
+                    }
+
+                    cx.notify();
+                })),
+            cx,
+        )
+        .into_any_element();
+
+        let policy_control = if self.drv_override_refresh_policy {
+            layout::cursor_ring(
+                self.editor_cursor_on(DriverEditorField::RefreshPolicy),
+                self.drv_refresh_policy_dropdown.clone(),
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.switching_input = true;
+                    this.drv_focus = DriversFocus::Editor;
+                    this.drv_editor_field = DriverEditorField::RefreshPolicy;
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+        } else {
+            layout::help_text(dbflux_i18n::t!("settings.drivers.use_global")).into_any_element()
+        };
+
+        let interval_checkbox = layout::cursor_ring(
+            self.editor_cursor_on(DriverEditorField::OverrideRefreshInterval),
+            Checkbox::new("drv-override-refresh-interval")
+                .checked(self.drv_override_refresh_interval)
+                .aria_label(dbflux_i18n::t!("settings.general.refresh_interval.label"))
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    this.drv_focus = DriversFocus::Editor;
+                    this.drv_editor_field = DriverEditorField::OverrideRefreshInterval;
+                    this.drv_override_refresh_interval = *checked;
+                    this.drv_editor_dirty = true;
+
+                    if !*checked {
+                        cx.emit(SectionFocusEvent::RequestFocusReturn);
+                    }
+
+                    cx.notify();
+                })),
+            cx,
+        )
+        .into_any_element();
+
+        let interval_control = if self.drv_override_refresh_interval {
+            layout::field_frame(
+                self.editor_cursor_on(DriverEditorField::RefreshInterval),
+                None,
+                true,
+                Input::new(&self.drv_refresh_interval_input)
+                    .id("drv-refresh-interval")
+                    .aria_label(dbflux_i18n::t!("settings.general.refresh_interval.label"))
+                    .suffix(
+                        Text::code(dbflux_i18n::t!("settings.general.unit.seconds"))
+                            .muted_foreground(),
+                    ),
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.switching_input = true;
+                    this.drv_focus = DriversFocus::Editor;
+                    this.drv_editor_field = DriverEditorField::RefreshInterval;
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+        } else {
+            layout::help_text(dbflux_i18n::t!("settings.drivers.use_global")).into_any_element()
+        };
+
+        let tri_state = |this: &Self,
+                         field: DriverEditorField,
+                         dropdown: &Entity<Dropdown>,
+                         cx: &mut Context<Self>| {
+            layout::cursor_ring(this.editor_cursor_on(field), dropdown.clone(), cx)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        this.switching_input = true;
+                        this.drv_focus = DriversFocus::Editor;
+                        this.drv_editor_field = field;
+                        cx.notify();
+                    }),
+                )
+                .into_any_element()
+        };
+
+        let confirm_control = tri_state(
+            self,
+            DriverEditorField::ConfirmDangerous,
+            &self.drv_confirm_dangerous_dropdown,
+            cx,
+        );
+        let where_control = tri_state(
+            self,
+            DriverEditorField::RequiresWhere,
+            &self.drv_requires_where_dropdown,
+            cx,
+        );
+        let preview_control = tri_state(
+            self,
+            DriverEditorField::RequiresPreview,
+            &self.drv_requires_preview_dropdown,
+            cx,
+        );
 
         div()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(FieldLabel::new(dbflux_i18n::t!(
-                "settings.drivers.field.global_overrides"
-            )))
-            .child(
-                Body::new(dbflux_i18n::t!("settings.drivers.global_overrides_hint"))
-                    .color(theme.muted_foreground),
-            )
+            .child(dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.drivers.field.global_overrides"),
+                Some(AppIcon::Settings.into()),
+                cx,
+            ))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL))
-                            .child(div().w(px(160.0)).child(FieldLabel::new(dbflux_i18n::t!(
-                                "settings.general.override_value_header"
-                            )))),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::OverrideRefreshPolicy
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::OverrideRefreshPolicy;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        Checkbox::new("drv-override-refresh-policy")
-                                            .checked(self.drv_override_refresh_policy)
-                                            .aria_label(dbflux_i18n::t!(
-                                                "settings.general.refresh_policy.label"
-                                            ))
-                                            .on_click(cx.listener(
-                                                |this, checked: &bool, _, cx| {
-                                                    this.drv_override_refresh_policy = *checked;
-                                                    this.drv_editor_dirty = true;
-
-                                                    if !*checked {
-                                                        cx.emit(
-                                                            SectionFocusEvent::RequestFocusReturn,
-                                                        );
-                                                    }
-
-                                                    cx.notify();
-                                                },
-                                            )),
-                                    ),
-                            )
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
-                                dbflux_i18n::t!("settings.general.refresh_policy.label"),
-                            )))
-                            .child(
-                                div()
-                                    .min_w(px(160.0))
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::RefreshPolicy
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .opacity(if self.drv_override_refresh_policy {
-                                        1.0
-                                    } else {
-                                        0.6
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::RefreshPolicy;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(self.drv_refresh_policy_dropdown.clone()),
-                            )
-                            .child(MonoCaption::new(override_default_caption(&policy_label(
-                                global.default_refresh_policy,
-                            )))),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::OverrideRefreshInterval
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::OverrideRefreshInterval;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        Checkbox::new("drv-override-refresh-interval")
-                                            .checked(self.drv_override_refresh_interval)
-                                            .aria_label(dbflux_i18n::t!(
-                                                "settings.general.refresh_interval.label"
-                                            ))
-                                            .on_click(cx.listener(
-                                                |this, checked: &bool, _, cx| {
-                                                    this.drv_override_refresh_interval = *checked;
-                                                    this.drv_editor_dirty = true;
-
-                                                    if !*checked {
-                                                        cx.emit(
-                                                            SectionFocusEvent::RequestFocusReturn,
-                                                        );
-                                                    }
-
-                                                    cx.notify();
-                                                },
-                                            )),
-                                    ),
-                            )
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
-                                dbflux_i18n::t!("settings.general.refresh_interval.label"),
-                            )))
-                            .child(
-                                div()
-                                    .w(px(160.0))
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::RefreshInterval
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .opacity(if self.drv_override_refresh_interval {
-                                        1.0
-                                    } else {
-                                        0.6
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::RefreshInterval;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        Input::new(&self.drv_refresh_interval_input)
-                                            .small()
-                                            .disabled(!self.drv_override_refresh_interval),
-                                    ),
-                            )
-                            .child(MonoCaption::new(override_default_seconds_caption(
-                                global.default_refresh_interval_secs,
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
-                                dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
-                            )))
-                            .child(
-                                div()
-                                    .w(px(160.0))
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::ConfirmDangerous
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::ConfirmDangerous;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(self.drv_confirm_dangerous_dropdown.clone()),
-                            )
-                            .child(MonoCaption::new(override_default_caption(
-                                &bool_override_caption(global.confirm_dangerous_queries),
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
-                                dbflux_i18n::t!("settings.general.requires_where.label"),
-                            )))
-                            .child(
-                                div()
-                                    .w(px(160.0))
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::RequiresWhere
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::RequiresWhere;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(self.drv_requires_where_dropdown.clone()),
-                            )
-                            .child(MonoCaption::new(override_default_caption(
-                                &bool_override_caption(global.dangerous_requires_where),
-                            ))),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(Label::new(
-                                dbflux_i18n::t!("settings.general.requires_preview.label"),
-                            )))
-                            .child(
-                                div()
-                                    .w(px(160.0))
-                                    .rounded(Radii::SM)
-                                    .border_1()
-                                    .border_color(
-                                        if editor_focused
-                                            && self.drv_editor_field
-                                                == DriverEditorField::RequiresPreview
-                                        {
-                                            theme.primary
-                                        } else {
-                                            gpui::transparent_black()
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _, _, cx| {
-                                            this.switching_input = true;
-                                            this.drv_focus = DriversFocus::Editor;
-                                            this.drv_editor_field =
-                                                DriverEditorField::RequiresPreview;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(self.drv_requires_preview_dropdown.clone()),
-                            )
-                            .child(MonoCaption::new(override_default_caption(
-                                &bool_override_caption(global.dangerous_requires_preview),
-                            ))),
-                    ),
+                    .pb(FormMetrics::HELP_GAP)
+                    .child(layout::help_text(dbflux_i18n::t!(
+                        "settings.drivers.global_overrides_hint"
+                    ))),
             )
+            .child(self.override_row(
+                Some(policy_checkbox),
+                dbflux_i18n::t!("settings.general.refresh_policy.label"),
+                override_default_caption(&policy_label(global.default_refresh_policy)),
+                policy_control,
+                cx,
+            ))
+            .child(self.override_row(
+                Some(interval_checkbox),
+                dbflux_i18n::t!("settings.general.refresh_interval.label"),
+                override_default_seconds_caption(global.default_refresh_interval_secs),
+                interval_control,
+                cx,
+            ))
+            .child(self.override_row(
+                None,
+                dbflux_i18n::t!("settings.general.confirm_dangerous.label"),
+                override_default_caption(&bool_override_caption(global.confirm_dangerous_queries)),
+                confirm_control,
+                cx,
+            ))
+            .child(self.override_row(
+                None,
+                dbflux_i18n::t!("settings.general.requires_where.label"),
+                override_default_caption(&bool_override_caption(global.dangerous_requires_where)),
+                where_control,
+                cx,
+            ))
+            .child(self.override_row(
+                None,
+                dbflux_i18n::t!("settings.general.requires_preview.label"),
+                override_default_caption(&bool_override_caption(global.dangerous_requires_preview)),
+                preview_control,
+                cx,
+            ))
     }
 
     fn render_driver_schema(
@@ -1325,129 +1173,125 @@ impl DriversSection {
         entry: &DriverSettingsEntry,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let header = dbflux_components::composites::section_header(
+            dbflux_i18n::t!("settings.drivers.field.driver_settings"),
+            Some(AppIcon::Database.into()),
+            cx,
+        );
+
         let Some(schema) = &entry.settings_schema else {
-            return div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(FieldLabel::new(dbflux_i18n::t!(
-                    "settings.drivers.field.driver_settings"
-                )))
-                .child(
-                    Body::new(dbflux_i18n::t!("settings.drivers.no_custom_settings"))
-                        .color(cx.theme().muted_foreground),
-                );
+            return div().flex().flex_col().child(header).child(
+                div()
+                    .py(FormMetrics::ROW_PADDING_Y)
+                    .child(layout::help_text(dbflux_i18n::t!(
+                        "settings.drivers.no_custom_settings"
+                    ))),
+            );
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(FieldLabel::new(dbflux_i18n::t!(
-                "settings.drivers.field.driver_settings"
-            )))
-            .children(
-                schema
-                    .tabs
-                    .iter()
-                    .flat_map(|tab| tab.sections.iter())
-                    .map(|section| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(SubSectionLabel::new(section.title.to_uppercase()))
-                            .children(section.fields.iter().filter_map(|field| {
-                                let enabled = form_renderer::is_field_enabled(
-                                    field,
-                                    &self.drv_form_state.checkboxes,
-                                    &form_renderer::select_values(&self.drv_form_state, cx),
-                                );
+        let select_values = form_renderer::select_values(&self.drv_form_state, cx);
 
-                                match &field.kind {
-                                    FormFieldKind::Checkbox => {
-                                        let checked = self
-                                            .drv_form_state
-                                            .checkboxes
-                                            .get(&field.id)
-                                            .copied()
-                                            .unwrap_or(false);
+        div().flex().flex_col().child(header).children(
+            schema
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.sections.iter())
+                .flat_map(|section| section.fields.iter())
+                .filter_map(|field| {
+                    let enabled = form_renderer::is_field_enabled(
+                        field,
+                        &self.drv_form_state.checkboxes,
+                        &select_values,
+                    );
+                    let opacity = if enabled {
+                        1.0
+                    } else {
+                        Fields::DISABLED_OPACITY
+                    };
 
-                                        Some(
-                                            div()
-                                                .px_2()
-                                                .py_1()
-                                                .rounded(Radii::SM)
-                                                .opacity(if enabled { 1.0 } else { 0.6 })
-                                                .child(
-                                                    Checkbox::new(SharedString::from(format!(
-                                                        "drv-schema-{}",
-                                                        field.id
-                                                    )))
-                                                    .checked(checked)
-                                                    .label(field.label.as_str())
-                                                    .on_click(cx.listener({
-                                                        let field_id = field.id.clone();
-                                                        move |this, checked: &bool, _, cx| {
-                                                            if !enabled {
-                                                                return;
-                                                            }
+                    match &field.kind {
+                        FormFieldKind::Checkbox => {
+                            let checked = self
+                                .drv_form_state
+                                .checkboxes
+                                .get(&field.id)
+                                .copied()
+                                .unwrap_or(false);
 
-                                                            this.drv_form_state
-                                                                .checkboxes
-                                                                .insert(field_id.clone(), *checked);
-                                                            this.drv_editor_dirty = true;
-                                                            cx.notify();
-                                                        }
-                                                    })),
-                                                )
-                                                .into_any_element(),
-                                        )
-                                    }
-                                    FormFieldKind::Select { .. } => {
-                                        let dropdown =
-                                            self.drv_form_state.dropdowns.get(&field.id)?.clone();
-                                        Some(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1()
-                                                .opacity(if enabled { 1.0 } else { 0.6 })
-                                                .child(Label::new(field.label.clone()))
-                                                .child(
-                                                    div()
-                                                        .w(Widths::CM_FORM_DROPDOWN)
-                                                        .child(dropdown),
-                                                )
-                                                .into_any_element(),
-                                        )
-                                    }
-                                    _ => {
-                                        let input =
-                                            self.drv_form_state.inputs.get(&field.id)?.clone();
-                                        Some(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1()
-                                                .child(Label::new(field.label.clone()))
-                                                .child(
-                                                    Input::new(&input)
-                                                        .small()
-                                                        .disabled(!enabled)
-                                                        .secret(form_renderer::is_secret_field(
-                                                            &field.kind,
-                                                        )),
-                                                )
-                                                .into_any_element(),
-                                        )
-                                    }
-                                }
-                            }))
-                    }),
-            )
+                            Some(
+                                layout::check_row(
+                                    Checkbox::new(SharedString::from(format!(
+                                        "drv-schema-{}",
+                                        field.id
+                                    )))
+                                    .checked(checked)
+                                    .disabled(!enabled)
+                                    .label(field.label.as_str())
+                                    .on_click(cx.listener({
+                                        let field_id = field.id.clone();
+                                        move |this, checked: &bool, _, cx| {
+                                            this.drv_form_state
+                                                .checkboxes
+                                                .insert(field_id.clone(), *checked);
+                                            this.drv_editor_dirty = true;
+                                            cx.notify();
+                                        }
+                                    })),
+                                    field.help.clone().map(SharedString::from),
+                                )
+                                .into_any_element(),
+                            )
+                        }
+                        FormFieldKind::Select { .. } => {
+                            let dropdown = self.drv_form_state.dropdowns.get(&field.id)?.clone();
+
+                            Some(
+                                layout::form_row(
+                                    field.label.clone(),
+                                    div()
+                                        .w(SettingsMetrics::SELECT_WIDTH)
+                                        .opacity(opacity)
+                                        .child(dropdown),
+                                    field.help.clone().map(SharedString::from),
+                                )
+                                .into_any_element(),
+                            )
+                        }
+                        _ => {
+                            let input = self.drv_form_state.inputs.get(&field.id)?.clone();
+
+                            Some(
+                                layout::form_row(
+                                    field.label.clone(),
+                                    div().w(SettingsMetrics::SELECT_WIDTH).child(
+                                        Input::new(&input)
+                                            .id(SharedString::from(format!(
+                                                "drv-schema-{}",
+                                                field.id
+                                            )))
+                                            .aria_label(field.label.clone())
+                                            .disabled(!enabled)
+                                            .secret(form_renderer::is_secret_field(&field.kind)),
+                                    ),
+                                    field.help.clone().map(SharedString::from),
+                                )
+                                .into_any_element(),
+                            )
+                        }
+                    }
+                }),
+        )
     }
 }
+
+/// Driver logo in the detail header. (28 px)
+const DRIVER_LOGO_SIZE: Pixels = px(28.0);
+
+/// Width of the "global: ..." caption column of the override rows. (160 px)
+const OVERRIDE_CAPTION_WIDTH: Pixels = px(160.0);
+
+/// Width of the value column of the override rows. (160 px)
+const OVERRIDE_CONTROL_WIDTH: Pixels = px(160.0);
 
 #[cfg(test)]
 mod tests {
@@ -1455,8 +1299,8 @@ mod tests {
         CAPABILITY_IDS, bool_override_caption, capability_catalog, driver_entry_key_text,
         driver_entry_name_text, policy_label,
     };
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::{AppFonts, MonoColorSelection, MonoDefaultColor};
+    use dbflux_components::primitives::{TextColorSelection, TextDefaultColor};
+    use dbflux_components::typography::AppFonts;
     use dbflux_core::{DriverCapabilities, RefreshPolicySetting};
 
     const CHROME_KEYS: &[&str] = &[
@@ -1504,11 +1348,11 @@ mod tests {
 
         assert_eq!(
             english,
-            "Configure per-driver overrides and driver-defined settings"
+            "Per-driver overrides and settings the driver declares."
         );
         assert_eq!(
             spanish,
-            "Configura anulaciones por driver y ajustes definidos por el driver"
+            "Reemplazos por driver y ajustes que declara el driver."
         );
         assert_ne!(english, spanish);
     }
@@ -1584,22 +1428,22 @@ mod tests {
         let name = driver_entry_name_text("PostgreSQL").inspect();
         let key = driver_entry_key_text("postgres").inspect();
 
-        assert_eq!(name.family, Some(AppFonts::MONO));
-        assert_eq!(name.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(name.size_override, Some(FontSizes::BASE));
+        assert_eq!(name.family, AppFonts::INTERFACE);
+        assert!(name.fallbacks.is_empty());
+        assert_eq!(name.size_override, None);
         assert_eq!(name.weight_override, None);
         assert_eq!(
             name.color_selection,
-            MonoColorSelection::RoleDefault(MonoDefaultColor::Foreground)
+            TextColorSelection::RoleDefault(TextDefaultColor::Foreground)
         );
         assert!(name.uses_role_default_color);
         assert!(!name.has_custom_color_override);
 
-        assert_eq!(key.family, Some(AppFonts::MONO));
+        assert_eq!(key.family, AppFonts::MONO);
         assert_eq!(key.fallbacks, &[AppFonts::MONO_FALLBACK]);
-        assert_eq!(key.size_override, Some(FontSizes::SM));
+        assert_eq!(key.size_override, None);
         assert_eq!(key.weight_override, None);
-        assert_eq!(key.color_selection, MonoColorSelection::MutedForeground);
+        assert_eq!(key.color_selection, TextColorSelection::MutedForeground);
         assert!(key.uses_muted_foreground_override);
         assert!(!key.has_custom_color_override);
     }

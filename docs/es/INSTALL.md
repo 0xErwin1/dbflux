@@ -199,7 +199,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ## Próximos pasos
 
-- [Guía de uso](USAGE.md) — primer inicio, creación de una conexión y tu primera
+- [Primeros pasos](GETTING_STARTED.md) — primer inicio, creación de una conexión y tu primera
   consulta
 - [Conectar — Configuración avanzada](CONNECTIONS.md) — túneles SSH, proxies,
   AWS SSO y fuentes de valores

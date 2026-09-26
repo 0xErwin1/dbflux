@@ -1,0 +1,123 @@
+---
+import Glyph from '../Glyph.astro';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing.rules;
+
+const RULES = [
+  { n: '01', icon: 'keyboard', title: strings.r1_title, body: strings.r1_body },
+  { n: '02', icon: 'layers', title: strings.r2_title, body: strings.r2_body },
+  { n: '03', icon: 'table', title: strings.r3_title, body: strings.r3_body },
+  { n: '04', icon: 'scroll-text', title: strings.r4_title, body: strings.r4_body },
+] as const;
+---
+
+<section class="rules shell">
+  <p class="eyebrow reveal">{strings.eyebrow}</p>
+  <ol class="rules__grid reveal-group">
+    {
+      RULES.map((rule) => (
+        <li class="rules__card c14 lift">
+          <div class="rules__top">
+            <span class="rules__n x">{rule.n}</span>
+            <Glyph name={rule.icon} size={26} class="rules__icon" />
+          </div>
+          <h3>{rule.title}</h3>
+          <p>{rule.body}</p>
+        </li>
+      ))
+    }
+  </ol>
+</section>
+
+<style>
+  .rules {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    padding-top: 72px;
+    padding-bottom: 72px;
+  }
+
+  .rules__grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    align-items: start;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .rules__card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 364px;
+    padding: 30px 26px 34px;
+    background: var(--panel);
+  }
+
+  .rules__card:nth-child(2) {
+    margin-top: 60px;
+  }
+
+  .rules__card:nth-child(3) {
+    margin-top: 120px;
+  }
+
+  .rules__card:nth-child(4) {
+    margin-top: 180px;
+  }
+
+  .rules__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .rules__n {
+    font-weight: 900;
+    font-size: 72px;
+    line-height: 0.8;
+    color: var(--accent);
+  }
+
+  .rules__top :global(.rules__icon) {
+    color: var(--text-muted);
+  }
+
+  .rules__card h3 {
+    font-size: 20px;
+  }
+
+  .rules__card p {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+
+  @media (max-width: 1180px) {
+    .rules__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .rules__card:nth-child(n) {
+      margin-top: 0;
+      min-height: 0;
+    }
+  }
+
+  /* The phone layout drops this section, as the board does. */
+  @media (max-width: 640px) {
+    .rules {
+      display: none;
+    }
+  }
+</style>

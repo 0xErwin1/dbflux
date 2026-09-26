@@ -45,6 +45,7 @@ pub mod test_host {
         build: impl FnOnce(&mut Window, &mut Context<M>) -> M,
     ) -> (Entity<M>, FocusHandle, &mut VisualTestContext) {
         cx.update(gpui_component::init);
+        cx.update(crate::keymap::init_keymap);
 
         let (host, window) = cx.add_window_view(|window, cx| Host {
             outside: cx.focus_handle(),

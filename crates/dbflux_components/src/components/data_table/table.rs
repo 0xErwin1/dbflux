@@ -2,26 +2,26 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::controls::{GpuiInput as Input, InputState};
-use crate::primitives::Text;
-use crate::tokens::{FontSizes, RowColors};
+use crate::icons::AppIcon;
+use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::tokens::{ChromeColors, CollectionMetrics, GridMetrics, RowColors};
+use crate::typography::AppFonts;
 use gpui::ElementId;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, KeyBinding,
-    ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, actions, canvas, div, px, uniform_list,
+    Action, AnyElement, App, ClickEvent, Context, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, Keystroke, ListSizingBehavior, MouseButton, MouseDownEvent, ParentElement, Pixels,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, px,
+    uniform_list,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_component::{ActiveTheme, Sizable};
 
-use super::events::{DataTableEvent, Direction, Edge};
+use super::events::{ContextMenuAction, DataTableEvent, Direction, Edge};
 use super::model::TableModel;
 use super::selection::{CellCoord, SelectionState};
 use super::state::DataTableState;
-use super::theme::{
-    CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, SCROLLBAR_WIDTH, SORT_INDICATOR_ASC,
-    SORT_INDICATOR_DESC,
-};
+use super::theme::{CELL_PADDING_X, HEADER_HEIGHT, ROW_HEIGHT, ROW_NUMBER_WIDTH, SCROLLBAR_WIDTH};
 use dbflux_core::SortDirection;
 
 /// Cached scroll state to prevent unnecessary syncs
@@ -40,110 +40,83 @@ impl Default for ScrollSyncState {
     }
 }
 
-actions!(
-    data_table,
-    [
-        MoveUp,
-        MoveDown,
-        MoveLeft,
-        MoveRight,
-        SelectUp,
-        SelectDown,
-        SelectLeft,
-        SelectRight,
-        MoveToLineStart,
-        MoveToLineEnd,
-        MoveToTop,
-        MoveToBottom,
-        SelectToLineStart,
-        SelectToLineEnd,
-        SelectToTop,
-        SelectToBottom,
-        SelectAll,
-        ClearSelection,
-        Copy,
-        CopyRow,
-        StartEdit,
-        ConfirmEdit,
-        CancelEdit,
-        SaveRow,
-        // Row operations (vim-style)
-        DeleteRow,
-        AddRow,
-        DuplicateRow,
-        SetNull,
-        // Undo/Redo
-        Undo,
-        Redo,
-    ]
-);
-
-/// Key context for DataTable - matches ContextId::Results.as_gpui_context().
-const CONTEXT: &str = "Results";
-/// Key binding context for DataTable actions when no nested input is focused.
-const CONTEXT_WITHOUT_INPUT: &str = "Results && !Input";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        // Navigation
-        KeyBinding::new("up", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("down", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("left", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("right", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("k", MoveUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("j", MoveDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("h", MoveLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("l", MoveRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-up", SelectUp, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-down", SelectDown, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-left", SelectLeft, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-right", SelectRight, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("home", MoveToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("end", MoveToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-home", MoveToTop, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-end", MoveToBottom, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-home", SelectToLineStart, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-end", SelectToLineEnd, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-shift-home", SelectToTop, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new(
-            "ctrl-shift-end",
+/// Actions of the data table. The keymap binds them in the table's
+/// [`CONTEXT`] (see `dbflux_ui_base::keymap`).
+pub mod actions {
+    gpui::actions!(
+        data_table,
+        [
+            MoveUp,
+            MoveDown,
+            MoveLeft,
+            MoveRight,
+            SelectUp,
+            SelectDown,
+            SelectLeft,
+            SelectRight,
+            MoveToLineStart,
+            MoveToLineEnd,
+            MoveToTop,
+            MoveToBottom,
+            SelectToLineStart,
+            SelectToLineEnd,
+            SelectToTop,
             SelectToBottom,
-            Some(CONTEXT_WITHOUT_INPUT),
-        ),
-        // `secondary-*` is GPUI's platform-aware modifier: Cmd on macOS,
-        // Ctrl elsewhere. Use it for the system-standard commands so macOS
-        // gets the expected Cmd shortcut without binding the literal Ctrl
-        // chord too (which would shadow editor interrupt semantics on Mac).
-        //
-        // Scope this to "table without an active Input" so that ctrl-a /
-        // cmd-a inside an inline cell editor (or any other Input nested in
-        // the table) selects the input's text instead of all rows.
-        KeyBinding::new("secondary-a", SelectAll, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("escape", ClearSelection, Some(CONTEXT_WITHOUT_INPUT)),
-        // Copy
-        KeyBinding::new("secondary-c", Copy, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("y y", Copy, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-y shift-y", CopyRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // Edit mode
-        KeyBinding::new("enter", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("f2", StartEdit, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-enter", SaveRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // Row operations (vim-style)
-        KeyBinding::new("d d", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("delete", DeleteRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("a a", AddRow, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("shift-a shift-a", DuplicateRow, Some(CONTEXT_WITHOUT_INPUT)),
-        // SetNull — local mnemonic ("N" for NULL). Kept as literal Ctrl on
-        // every platform; this isn't a system-standard shortcut and reusing
-        // Cmd+N on macOS would clash with NewQueryTab.
-        KeyBinding::new("ctrl-n", SetNull, Some(CONTEXT_WITHOUT_INPUT)),
-        // Undo/Redo: standard Cmd/Ctrl variants via `secondary-`, plus
-        // vim-style `u` / `ctrl-r` kept literal as familiar editor aliases.
-        KeyBinding::new("u", Undo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-z", Undo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("ctrl-r", Redo, Some(CONTEXT_WITHOUT_INPUT)),
-        KeyBinding::new("secondary-shift-z", Redo, Some(CONTEXT_WITHOUT_INPUT)),
-    ]);
+            SelectAll,
+            ClearSelection,
+            Copy,
+            CopyRow,
+            StartEdit,
+            ConfirmEdit,
+            CancelEdit,
+            SaveRow,
+            // Row operations (vim-style)
+            DeleteRow,
+            AddRow,
+            DuplicateRow,
+            SetNull,
+            // Undo/Redo
+            Undo,
+            Redo,
+            // Document grids
+            ToggleColumnGroup,
+            StepOut,
+        ]
+    );
+}
+
+use actions::*;
+
+/// Key context of the data table element. It is its own identifier rather
+/// than the `Results` context a window root sets, so the table's keys never
+/// match on the window root and a root binding never matches on the table.
+pub const CONTEXT: &str = "DataTable";
+
+/// The single-keystroke binding of the table action behind a context-menu
+/// action, shown as the shortcut on that menu row.
+///
+/// Multi-keystroke vim sequences (`y y`, `d d`) are skipped, so an action
+/// bound only to a sequence has no shortcut. Among single keystrokes the
+/// first binding registered wins.
+pub fn context_menu_keystroke(action: ContextMenuAction, cx: &App) -> Option<Keystroke> {
+    let table_action: Box<dyn Action> = match action {
+        ContextMenuAction::Copy => Box::new(Copy),
+        ContextMenuAction::Edit => Box::new(StartEdit),
+        ContextMenuAction::DeleteRow => Box::new(DeleteRow),
+        ContextMenuAction::SetNull => Box::new(SetNull),
+        ContextMenuAction::AddRow => Box::new(AddRow),
+        ContextMenuAction::DuplicateRow => Box::new(DuplicateRow),
+        _ => return None,
+    };
+
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+
+    keymap
+        .bindings_for_action(table_action.as_ref())
+        .find(|binding| binding.keystrokes().len() == 1)
+        .and_then(|binding| binding.keystrokes().first())
+        .map(|keystroke| keystroke.inner().clone())
 }
 
 #[derive(Clone)]
@@ -452,6 +425,29 @@ impl gpui::Render for DataTable {
             });
         };
 
+        let s = self.state.clone();
+        let on_toggle_column_group = move |_: &ToggleColumnGroup, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if state.document_presentation().is_none() || state.is_editing() {
+                    return;
+                }
+                if let Some(coord) = state.selection().active {
+                    cx.emit(DataTableEvent::ToggleColumnGroupRequested { col: coord.col });
+                }
+            });
+        };
+
+        let s = self.state.clone();
+        let on_step_out = move |_: &StepOut, _: &mut Window, cx: &mut App| {
+            s.update(cx, |state, cx| {
+                if state.document_presentation().is_some() && !state.is_editing() {
+                    cx.emit(DataTableEvent::StepOutRequested);
+                }
+            });
+        };
+
+        let header_height = state.header_height();
+
         // Main layout: vertical flex with header and scrollable body.
         // Both header and body share the same horizontal scroll handle.
         let state_for_empty_context = self.state.clone();
@@ -509,7 +505,14 @@ impl gpui::Render for DataTable {
                 .child(super::record::render_record(&self.state, state, cx))
         } else {
             // Build header
-            let header = self.render_header(state, total_width, theme, cx);
+            let header = match state.document_presentation() {
+                Some(document) => self
+                    .render_document_header(state, document, total_width, theme)
+                    .into_any_element(),
+                None => self
+                    .render_header(state, total_width, theme, cx)
+                    .into_any_element(),
+            };
 
             // Build body using uniform_list for virtualization
             let body = self.render_body(row_count, total_width, cx);
@@ -555,9 +558,8 @@ impl gpui::Render for DataTable {
             .relative()
             .size_full()
             .overflow_hidden()
+            .font_family(AppFonts::MONO)
             .bg(theme.table)
-            .border_1()
-            .border_color(theme.border)
             // Navigation actions
             .on_action(on_move_up)
             .on_action(on_move_down)
@@ -591,6 +593,8 @@ impl gpui::Render for DataTable {
             // Undo/Redo
             .on_action(on_undo)
             .on_action(on_redo)
+            .on_action(on_toggle_column_group)
+            .on_action(on_step_out)
             // Column resize: move and up handlers on the root div so the drag
             // continues even when the cursor leaves the 6px handle area.
             .on_mouse_move(move |event, _window, cx| {
@@ -684,7 +688,7 @@ impl gpui::Render for DataTable {
                     .child(
                         div()
                             .absolute()
-                            .top(HEADER_HEIGHT)
+                            .top(header_height)
                             .right_0()
                             .bottom_0()
                             .w(SCROLLBAR_WIDTH)
@@ -696,16 +700,22 @@ impl gpui::Render for DataTable {
                     // scroller that owns the handle is 1px tall and never captures the wheel,
                     // so the bar would otherwise stay transparent until the user navigates
                     // off-screen with the keyboard.
+                    //
+                    // The scrollbar lays itself out over its handle's viewport by default,
+                    // which here is the 1px phantom, so the bar would be clipped to a
+                    // single pixel. It takes this overlay strip as its viewport instead;
+                    // the strip spans the phantom's width, so the thumb math matches.
                     .child(
                         div()
                             .absolute()
                             .left_0()
-                            .right_0()
+                            .right(SCROLLBAR_WIDTH)
                             .bottom_0()
                             .h(SCROLLBAR_WIDTH)
                             .child(
                                 Scrollbar::horizontal(&horizontal_scroll_handle)
-                                    .mode(ScrollbarMode::Always),
+                                    .mode(ScrollbarMode::Always)
+                                    .viewport_from_layout(),
                             ),
                     )
             })
@@ -736,18 +746,20 @@ impl DataTable {
             .enumerate()
             .map(|(col_ix, col_spec)| {
                 let width = column_widths.get(col_ix).copied().unwrap_or(120.0);
-                let is_sorted = sort.map(|s| s.column_ix == col_ix).unwrap_or(false);
-                let sort_indicator = if is_sorted {
-                    match sort.unwrap().direction {
-                        SortDirection::Ascending => SORT_INDICATOR_ASC,
-                        SortDirection::Descending => SORT_INDICATOR_DESC,
-                    }
-                } else {
-                    ""
-                };
+                let sort_direction = sort
+                    .filter(|sort| sort.column_ix == col_ix)
+                    .map(|sort| sort.direction);
 
                 let is_pk = pk_cols.contains(&col_ix);
                 let is_fk = fk_cols.contains(&col_ix);
+
+                let key_icon = if is_pk {
+                    Some((AppIcon::KeyRound, theme.warning))
+                } else if is_fk {
+                    Some((AppIcon::Cable, theme.info))
+                } else {
+                    None
+                };
 
                 let type_label: SharedString = col_spec.type_name.clone().into();
 
@@ -760,14 +772,13 @@ impl DataTable {
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .justify_between()
-                    .h(HEADER_HEIGHT)
+                    .gap(GridMetrics::HEADER_GAP)
+                    .h_full()
                     .w(px(width))
                     .px(CELL_PADDING_X)
                     .overflow_hidden()
                     .border_r_1()
                     .border_color(theme.border)
-                    .bg(theme.table_head)
                     .hover(|s| s.bg(theme.table_hover))
                     .cursor_pointer()
                     .on_click(move |_event: &ClickEvent, _window, cx| {
@@ -795,77 +806,55 @@ impl DataTable {
                             });
                         }
                     })
+                    // PK / FK key icon: amber key for a primary key, blue
+                    // cable for a foreign key.
+                    .when_some(key_icon, |d, (icon, color)| {
+                        d.child(Icon::new(icon).size(GridMetrics::HEADER_ICON).color(color))
+                    })
+                    // Column name — primary affordance, never shrinks. It
+                    // pushes the (secondary) type label out of the cell before
+                    // its own characters get truncated.
                     .child(
                         div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1()
-                            .min_w_0()
-                            .flex_1()
-                            .overflow_hidden()
-                            // PK / FK badges — secondary metadata, same dim styling
-                            // as the type label so they sit clearly below the name
-                            // in the visual hierarchy.
-                            .when(is_pk, |d| {
-                                d.child(
-                                    div().flex_shrink_0().child(
-                                        Text::body("PK")
-                                            .font_size(FontSizes::XS)
-                                            .color(theme.muted_foreground.opacity(0.6)),
-                                    ),
-                                )
-                            })
-                            .when(is_fk, |d| {
-                                d.child(
-                                    div().flex_shrink_0().child(
-                                        Text::body("FK")
-                                            .font_size(FontSizes::XS)
-                                            .color(theme.muted_foreground.opacity(0.6)),
-                                    ),
-                                )
-                            })
-                            // Column name — primary affordance, never shrinks.
-                            // It pushes the (secondary) type label out of the cell
-                            // before its own characters get truncated.
-                            .child(div().flex_shrink_0().whitespace_nowrap().child(
-                                Text::label_sm(col_spec.title.clone()).color(if is_sorted {
-                                    theme.primary
-                                } else {
-                                    theme.foreground
-                                }),
-                            ))
-                            // Type label — dimmed metadata. Shrinks and truncates
-                            // first when the cell runs out of horizontal space.
-                            .when_some(
-                                (!type_label.is_empty()).then_some(type_label),
-                                |d, label| {
-                                    d.child(
-                                        div()
-                                            .flex()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .child(
-                                                Text::body(label)
-                                                    .font_size(FontSizes::XS)
-                                                    .color(theme.muted_foreground.opacity(0.6)),
-                                            ),
-                                    )
-                                },
-                            ),
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .text_size(GridMetrics::FONT)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ChromeColors::strong(theme))
+                            .child(SharedString::from(col_spec.title.clone())),
                     )
-                    .child(div().child(if is_sorted {
-                        Text::body(sort_indicator)
-                            .font_size(FontSizes::SM)
-                            .color(theme.primary)
-                    } else {
-                        Text::body(sort_indicator)
-                            .font_size(FontSizes::SM)
-                            .color(theme.muted_foreground)
-                    }))
+                    // Type label — muted metadata. Shrinks and truncates first
+                    // when the cell runs out of horizontal space.
+                    .when_some(
+                        (!type_label.is_empty()).then_some(type_label),
+                        |d, label| {
+                            d.child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .text_size(GridMetrics::TYPE_FONT)
+                                    .text_color(theme.muted_foreground)
+                                    .child(label),
+                            )
+                        },
+                    )
+                    .when_some(sort_direction, |d, direction| {
+                        let arrow = match direction {
+                            SortDirection::Ascending => AppIcon::ArrowUp,
+                            SortDirection::Descending => AppIcon::ArrowDown,
+                        };
+
+                        d.child(
+                            div().flex_shrink_0().ml_auto().child(
+                                Icon::new(arrow)
+                                    .size(GridMetrics::HEADER_ICON)
+                                    .color(ChromeColors::tint(theme)),
+                            ),
+                        )
+                    })
                     // Resize handle: mouse-down starts the drag; move/up are
                     // handled on the DataTable root div so the drag survives
                     // the cursor leaving this 6px strip.
@@ -878,7 +867,7 @@ impl DataTable {
                             .bottom_0()
                             .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
                             .cursor_col_resize()
-                            .hover(|s| s.bg(theme.primary.opacity(0.3)))
+                            .hover(|s| s.bg(ChromeColors::tint(theme).opacity(0.3)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 move |event: &MouseDownEvent, _window, cx| {
@@ -901,15 +890,265 @@ impl DataTable {
             .flex_shrink_0()
             .h(HEADER_HEIGHT)
             .overflow_hidden()
+            .bg(theme.table_head)
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(theme.input)
+            .font_family(AppFonts::MONO)
             .child(
                 div()
                     .flex()
+                    .h_full()
                     .min_w(px(total_width))
                     .ml(-h_offset)
-                    .bg(theme.table_head)
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
                     .children(header_cells),
+            )
+    }
+
+    /// Header of a document grid: an optional row of column-group labels over
+    /// the name row, and a presence bar under each name when the host knows
+    /// how often each field appears.
+    fn render_document_header(
+        &self,
+        state: &DataTableState,
+        document: &super::document::DocumentPresentation,
+        total_width: f32,
+        theme: &gpui_component::theme::Theme,
+    ) -> impl IntoElement {
+        let model = state.model();
+        let column_widths = state.column_widths();
+        let h_offset = state.horizontal_offset();
+        let sort = state.sort();
+        let tint = ChromeColors::tint(theme);
+        let strong = ChromeColors::strong(theme);
+        let muted = theme.muted_foreground;
+        let has_presence = document.has_presence();
+        let name_row_height = document.name_row_height();
+        let col_count = model.col_count();
+
+        let width_of = |col: usize| column_widths.get(col).copied().unwrap_or(120.0);
+
+        let group_row = document.has_groups().then(|| {
+            let cells = document
+                .group_spans(col_count)
+                .into_iter()
+                .map(|span| {
+                    let width: f32 = span.columns.clone().map(width_of).sum();
+
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(GridMetrics::HEADER_GAP)
+                        .w(px(width))
+                        .h_full()
+                        .border_r_1()
+                        .border_color(theme.border)
+                        .when_some(span.group, |cell, group| {
+                            cell.px(CELL_PADDING_X)
+                                .bg(tint.opacity(CollectionMetrics::GROUP_HEADER_ALPHA))
+                                .text_color(strong)
+                                .child(
+                                    Icon::new(AppIcon::ChevronDown)
+                                        .size(GridMetrics::HEADER_ICON)
+                                        .color(muted),
+                                )
+                                .child(SharedString::from(group.label.to_string()))
+                                .child(
+                                    div()
+                                        .text_size(CollectionMetrics::HEADER_META_FONT)
+                                        .text_color(muted)
+                                        .child(SharedString::from(group.type_label.to_string())),
+                                )
+                        })
+                })
+                .collect::<Vec<_>>();
+
+            div()
+                .flex()
+                .flex_shrink_0()
+                .h(CollectionMetrics::GROUP_ROW_HEIGHT)
+                .min_w(px(total_width))
+                .ml(-h_offset)
+                .border_b_1()
+                .border_color(theme.border)
+                .text_size(CollectionMetrics::GROUP_FONT)
+                .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
+                .children(cells)
+        });
+
+        let name_cells = model
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(col_ix, col_spec)| {
+                let width = width_of(col_ix);
+                let header = document.header(col_ix);
+                let is_child = header.is_some_and(|header| header.group.is_some());
+                let presence = header.and_then(|header| header.presence);
+                let sort_direction = sort
+                    .filter(|sort| sort.column_ix == col_ix)
+                    .map(|sort| sort.direction);
+                let state_for_click = self.state.clone();
+                let state_for_menu = self.state.clone();
+                let resize_drag_for_down = self.resize_drag.clone();
+
+                let name_line = div()
+                    .flex()
+                    .items_center()
+                    .gap(GridMetrics::HEADER_GAP)
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .text_size(GridMetrics::FONT)
+                            .when(!is_child, |name| name.font_weight(FontWeight::SEMIBOLD))
+                            .text_color(strong)
+                            .child(SharedString::from(col_spec.title.to_string())),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_size(CollectionMetrics::HEADER_META_FONT)
+                            .text_color(muted)
+                            .child(SharedString::from(col_spec.type_name.to_string())),
+                    )
+                    .when_some(sort_direction, |line, direction| {
+                        let arrow = match direction {
+                            SortDirection::Ascending => AppIcon::ArrowUp,
+                            SortDirection::Descending => AppIcon::ArrowDown,
+                        };
+                        line.child(
+                            div()
+                                .flex_shrink_0()
+                                .ml_auto()
+                                .child(Icon::new(arrow).size(GridMetrics::HEADER_ICON).color(tint)),
+                        )
+                    });
+
+                let presence_line = presence.map(|ratio| {
+                    let clamped = ratio.clamp(0.0, 1.0);
+                    let bar_color = if clamped >= 0.999 {
+                        theme.success
+                    } else {
+                        theme.warning
+                    };
+                    let bar_width: f32 = f32::from(CollectionMetrics::PRESENCE_BAR_WIDTH) * clamped;
+
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(GridMetrics::HEADER_GAP)
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .w(CollectionMetrics::PRESENCE_BAR_WIDTH)
+                                .h(CollectionMetrics::PRESENCE_BAR_HEIGHT)
+                                .bg(theme.secondary)
+                                .child(
+                                    div()
+                                        .w(px(bar_width))
+                                        .h(CollectionMetrics::PRESENCE_BAR_HEIGHT)
+                                        .bg(bar_color),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(CollectionMetrics::HEADER_META_FONT)
+                                .text_color(muted)
+                                .child(format!("{}%", (clamped * 100.0).round() as u32)),
+                        )
+                });
+
+                div()
+                    .id(("header-col", col_ix))
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .justify_center()
+                    .gap(CollectionMetrics::HEADER_LINE_GAP)
+                    .h_full()
+                    .w(px(width))
+                    .px(CELL_PADDING_X)
+                    .overflow_hidden()
+                    .border_r_1()
+                    .border_color(theme.border)
+                    .when(is_child, |cell| {
+                        cell.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_HEADER_ALPHA))
+                    })
+                    .hover(|cell| cell.bg(theme.table_hover))
+                    .cursor_pointer()
+                    .on_click(move |_event: &ClickEvent, _window, cx| {
+                        state_for_click.update(cx, |state, cx| state.cycle_sort(col_ix, cx));
+                    })
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        move |event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            state_for_menu.update(cx, |state, cx| {
+                                state.focus(window, cx);
+                                let row = state.selection().active.map(|c| c.row).unwrap_or(0);
+                                cx.emit(DataTableEvent::ContextMenuRequested {
+                                    row,
+                                    col: col_ix,
+                                    position: event.position,
+                                    is_column_header: true,
+                                });
+                            });
+                        },
+                    )
+                    .child(name_line)
+                    .when_some(presence_line, |cell, line| cell.child(line))
+                    .child(
+                        div()
+                            .id(("resize-handle", col_ix))
+                            .absolute()
+                            .right_0()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(6.0)) // guardrail-allow: resize handle width, not spacing
+                            .cursor_col_resize()
+                            .hover(|handle| handle.bg(tint.opacity(0.3)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |event: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    if let Ok(mut drag) = resize_drag_for_down.lock() {
+                                        drag.col = Some(col_ix);
+                                        drag.start_x = event.position.x;
+                                        drag.original_width = width;
+                                    }
+                                },
+                            ),
+                    )
+            })
+            .collect::<Vec<_>>();
+
+        div()
+            .id("table-header")
+            .flex()
+            .flex_col()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .bg(theme.table_head)
+            .font_family(AppFonts::MONO)
+            .when_some(group_row, |header, row| header.child(row))
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .h(name_row_height)
+                    .min_w(px(total_width))
+                    .ml(-h_offset)
+                    .border_b_1()
+                    .border_color(theme.input)
+                    .when(!has_presence, |row| row.items_center())
+                    .child(div().flex_shrink_0().w(ROW_NUMBER_WIDTH))
+                    .children(name_cells),
             )
     }
 
@@ -928,6 +1167,7 @@ impl DataTable {
             "table-rows",
             row_count,
             move |visible_range: Range<usize>, _window: &mut Window, cx: &mut App| {
+                let null_color = crate::tokens::SyntaxColors::for_current(cx).number;
                 let theme = cx.theme();
                 // Read state INSIDE closure - only when actually rendering
                 let state = state_entity.read(cx);
@@ -947,7 +1187,9 @@ impl DataTable {
                     cell_input.as_ref(),
                     enum_dropdown.as_ref(),
                     edit_buffer,
+                    state.document_presentation(),
                     total_width,
+                    null_color,
                     theme,
                 )
             },
@@ -988,7 +1230,9 @@ fn render_rows(
     cell_input: Option<&Entity<InputState>>,
     enum_dropdown: Option<&Entity<crate::controls::Dropdown>>,
     edit_buffer: &super::model::EditBuffer,
+    document: Option<&super::document::DocumentPresentation>,
     total_width: f32,
+    null_color: Hsla,
     theme: &gpui_component::theme::Theme,
 ) -> Vec<AnyElement> {
     use super::model::VisualRowSource;
@@ -1039,6 +1283,9 @@ fn render_rows(
             };
 
             let is_pending_delete = row_state.is_pending_delete();
+            let is_active_row = selection.active.is_some_and(|active| active.row == row_ix);
+            let tint = ChromeColors::tint(theme);
+            let cell_wash = tint.opacity(GridMetrics::CELL_SELECTED_ALPHA);
 
             let cells: Vec<AnyElement> = (0..model.col_count())
                 .map(|col_ix| {
@@ -1061,10 +1308,9 @@ fn render_rows(
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
-                                .h(ROW_HEIGHT)
+                                .h_full()
                                 .w(px(width))
                                 .overflow_hidden()
-                                .border_r_1()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
@@ -1078,10 +1324,9 @@ fn render_rows(
                                 .flex()
                                 .flex_shrink_0()
                                 .items_center()
-                                .h(ROW_HEIGHT)
+                                .h_full()
                                 .w(px(width))
                                 .overflow_hidden()
-                                .border_r_1()
                                 .border_1()
                                 .border_color(theme.ring)
                                 .bg(theme.background)
@@ -1103,39 +1348,83 @@ fn render_rows(
                     } else {
                         edit_buffer.get_cell(data_row_ix, col_ix, base_value)
                     };
-                    let display_text = display_value.display_text();
+                    let is_document = document.is_some();
+                    let shows_transition = is_document && is_cell_dirty;
+                    let display_text: Arc<str> = if shows_transition {
+                        format!(
+                            "{} \u{2192} {}",
+                            base_value.display_text(),
+                            display_value.display_text()
+                        )
+                        .into()
+                    } else {
+                        display_value.display_text()
+                    };
                     let is_null = display_value.is_null();
                     let is_auto_generated = display_value.is_auto_generated();
+                    let is_missing = display_value.is_missing();
+                    let nested_kind = match display_value.kind {
+                        super::model::CellKind::Nested { is_array, .. } => Some(is_array),
+                        _ => None,
+                    };
+                    let is_group_child =
+                        document.is_some_and(|document| document.is_group_child(col_ix));
 
                     let state_for_click = state_entity.clone();
                     let state_for_context = state_entity.clone();
 
+                    let text_color = if shows_transition {
+                        theme.warning
+                    } else if is_missing {
+                        theme.input
+                    } else if nested_kind.is_some() {
+                        theme.info
+                    } else if is_pending_delete || is_auto_generated {
+                        theme.muted_foreground
+                    } else if is_null {
+                        null_color
+                    } else if is_active {
+                        ChromeColors::strong(theme)
+                    } else {
+                        theme.foreground
+                    };
+
                     div()
                         .id(("cell", row_ix * 10000 + col_ix))
+                        .relative()
                         .flex()
                         .flex_shrink_0()
                         .items_center()
-                        .h(ROW_HEIGHT)
+                        .h_full()
                         .w(px(width))
                         .px(CELL_PADDING_X)
                         .overflow_hidden()
-                        .border_r_1()
-                        .border_color(theme.border)
                         .cursor_pointer()
                         // Highlight individual dirty cells (like DBeaver).
                         // Uses RowColors::dirty for the background and the
                         // theme warning for the 2px left accent stroke.
-                        .when(is_cell_dirty, |d| {
+                        .when(is_group_child, |d| {
+                            d.bg(tint.opacity(CollectionMetrics::GROUP_CHILD_CELL_ALPHA))
+                        })
+                        .when(is_cell_dirty && !is_document, |d| {
                             d.bg(RowColors::dirty(theme))
                                 .border_l_2()
                                 .border_color(theme.warning)
                         })
-                        .when(is_selected, |d| {
-                            d.bg(theme.table_active)
-                                .border_color(theme.table_active_border)
+                        .when(is_selected || is_active, |d| d.bg(cell_wash))
+                        .when(shows_transition, |d| {
+                            d.bg(theme.warning.opacity(CollectionMetrics::EDITED_CELL_ALPHA))
+                                .child(
+                                    Chamfer::new(Pixels::ZERO)
+                                        .ring(ChamferRing::focus(theme.warning)),
+                                )
                         })
-                        .when(is_active, |d| d.border_1().border_color(theme.ring))
-                        .when(is_null || is_auto_generated, |d| d.italic())
+                        // Focused cell: 1.5 px tint ring inside the cell. No
+                        // cut: cells hold data.
+                        .when(is_active, |d| {
+                            d.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
+                        })
+                        .when(is_null || is_auto_generated || is_missing, |d| d.italic())
                         .when(is_pending_delete, |d| d.line_through())
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
@@ -1170,15 +1459,28 @@ fn render_rows(
                                 });
                             },
                         )
+                        .when_some(nested_kind, |d, _| {
+                            d.gap(GridMetrics::HEADER_GAP).child(
+                                Icon::new(AppIcon::Braces)
+                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .color(text_color),
+                            )
+                        })
                         .child(
-                            Text::body(display_text.to_string())
-                                .font_size(FontSizes::SM)
-                                .color(if is_pending_delete || is_null || is_auto_generated {
-                                    theme.muted_foreground
-                                } else {
-                                    theme.foreground
-                                }),
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(GridMetrics::FONT)
+                                .text_color(text_color)
+                                .child(display_text.to_string()),
                         )
+                        .when(nested_kind == Some(true), |d| {
+                            d.child(
+                                Icon::new(AppIcon::ChevronRight)
+                                    .size(CollectionMetrics::NESTED_ICON)
+                                    .color(text_color),
+                            )
+                        })
                         .into_any_element()
                 })
                 .collect();
@@ -1194,10 +1496,27 @@ fn render_rows(
                 .border_color(theme.table_row_border)
                 // Row state background (dirty=yellow, error=red)
                 .when_some(row_bg, |d, bg| d.bg(bg))
-                // Alternating row colors only when clean
-                .when(row_bg.is_none() && row_ix % 2 == 1, |d| {
+                // The row holding the focused cell gets the selected-row
+                // wash; clean rows otherwise alternate.
+                .when(row_bg.is_none() && is_active_row, |d| {
+                    d.bg(theme.table_active)
+                })
+                .when(row_bg.is_none() && !is_active_row && row_ix % 2 == 1, |d| {
                     d.bg(theme.table_even)
                 })
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_end()
+                        .w(ROW_NUMBER_WIDTH)
+                        .h_full()
+                        .pr(CELL_PADDING_X)
+                        .text_size(GridMetrics::FONT)
+                        .text_color(if is_active_row { tint } else { theme.input })
+                        .child((row_ix + 1).to_string()),
+                )
                 .children(cells)
                 .into_any_element()
         })

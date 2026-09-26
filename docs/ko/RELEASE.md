@@ -92,13 +92,14 @@ git push origin vX.Y.Z[-suffix.N]
 2. 안정화할 준비가 되면, `main` HEAD에서 `release/v0.7`을 생성합니다.
    - `release/v0.7`에서: 모든 버전 관리 아티팩트를 `0.7.0-rc.0`으로 올립니다. 커밋하고 푸시합니다.
    - `main`에서: 모든 버전 관리 아티팩트를 `0.8.0-dev.0`으로 올립니다. 커밋하고 푸시합니다. `main`은 이제 다음 마이너를 목표로 합니다.
+   - `main`에서: `v0.7`을 current로 표시하지 않고 `web/versions.json`에 추가합니다. 사이트는 계속 `/docs/`에서 `v0.6`을 제공합니다.
    - 릴리스 브랜치에 `v0.7.0-rc.0` 태그를 붙입니다. git-cliff는 미릴리스 범위를 RC 본문으로 자동 렌더링합니다.
 3. RC 중 버그가 발견되면:
    - `main`에서 수정을 커밋합니다.
    - `git cherry-pick -x <sha>`로 `release/v0.7`에 옮깁니다.
    - `v0.7.0-rc.1`로 올리고 태그를 붙입니다.
 4. 깨끗해지면, 릴리스 브랜치를 `v0.7.0-rc.N`에서 `v0.7.0`으로 올리고 같은 커밋에서 `CHANGELOG.md`의 최상위 제목을 `## [0.7.0] - <date>`로 이름 바꿉니다. `v0.7.0` 태그를 붙입니다. git-cliff는 `v0.6.0` 이후 전체 범위를 안정 릴리스 본문으로 렌더링합니다.
-5. `main`은 이미 `0.8.0-dev.0`이므로, 안정 이후 추가 버전 올림은 필요하지 않습니다. 하나의 커밋이 릴리스된 `[Unreleased]` 섹션을 닫고 그 위에 새 섹션을 엽니다.
+5. `main`은 이미 `0.8.0-dev.0`이므로, 안정 이후 추가 버전 올림은 필요하지 않습니다. 하나의 커밋이 릴리스된 `[Unreleased]` 섹션을 닫고 그 위에 새 섹션을 열며, 다른 커밋이 `web/versions.json`의 `"current": true`를 `v0.6`에서 `v0.7`로 옮깁니다.
 6. 패치(`v0.7.1`, `v0.7.2`, …)는 같은 릴리스 브랜치에서 `main`의 cherry-pick으로 만들어지며, 각 패치는 생성된 `## [0.7.N]` 섹션을 `CHANGELOG.md` 앞에 붙입니다.
 
 ## 아티팩트 식별과 서명
@@ -164,7 +165,18 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
    - 커밋: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - 푸시합니다.
 
-6. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
+6. 계속 `main`에서, 웹사이트에 이 마이너를 등록합니다. `release/vX.Y`는 이미 origin에 있어야 합니다(4단계). 이유는 [웹사이트](#웹사이트)를 참조하세요. 항목을 `nightly` 바로 뒤에 `current` 없이 추가합니다 — RC는 현재 릴리스가 아닙니다:
+
+   ```json
+   { "id": "nightly", "ref": "main", "noindex": true },
+   { "id": "vX.Y", "ref": "release/vX.Y" },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
+   ```
+
+   - 커밋: `chore(web): add vX.Y to the site versions`.
+   - 푸시합니다.
+
+7. 릴리스 브랜치에 `vX.Y.0-rc.0` 태그를 붙입니다.
 
 RC 릴리스 본문은 conventional commits에서 자동 생성되므로, RC에는 CHANGELOG 단계가 전혀 필요하지 않습니다.
 
@@ -184,6 +196,15 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 3. 커밋: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. 릴리스 브랜치에 `vX.Y.0` 태그를 붙이고 브랜치 + 태그를 푸시합니다.
 5. CI가 이전 안정 태그 이후의 모든 사용자 대상 커밋에서 안정 릴리스 본문을 생성합니다.
+6. `main`에서, 새 마이너를 사이트의 현재 릴리스로 만듭니다: `web/versions.json`에서 `"current": true`를 `vX.(Y-1)`에서 `vX.Y`로 옮깁니다.
+
+   ```json
+   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
+   ```
+
+   - 커밋: `chore(web): make vX.Y the current site version`.
+   - 푸시합니다. 사이트는 `main`에서 배포되므로, 이 커밋이 `/docs/`를 `vX.Y`로 바꾸고 랜딩 페이지와 비교 페이지에 표시되는 제품 버전을 `X.Y.0`으로 바꿉니다.
 
 릴리스 워크플로는 버전에 대응하는 `## [X.Y.Z]` 섹션이 `CHANGELOG.md`에 없는 안정 태그의 게시를 거부하므로, 2단계는 조용히 건너뛸 수 없습니다.
 
@@ -192,6 +213,20 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 `main`은 `release/vX.Y`를 **생성할 때** `X.(Y+1).0-dev.0`으로 올라갑니다(생성 절차, 5단계 참조). 안정 태그 이후 `main`에 추가 올림은 필요하지 않습니다. nightly 빌드는 안정화 기간 내내 `main` HEAD에서 자동으로 계속되어 `X.(Y+1).0-nightly+<sha>`를 만들어냅니다.
 
 안정 태그가 푸시되면, `main`은 릴리스된 섹션을 같은 방식으로 닫는 하나의 커밋(`## [Unreleased]`를 `## [X.Y.0] - <date>`로 이름 바꾸기)을 받고, 그 위에 새 `## [Unreleased]`를 엽니다. 그래서 리포지토리 변경 내역은 릴리스된 이력을 유지합니다. `7a13aceb`이 그런 커밋의 예입니다. 생성 이후 `main`에 반영되었으나 함께 출시되지 않은 작업은 릴리스된 섹션이 아니라 새 `[Unreleased]` 아래에 들어갑니다. 그 구분이 이 모델의 유일한 수작업 구분입니다.
+
+## 웹사이트
+
+사이트는 마이너마다 하나의 문서 세트를 게시하며, 그 목록은 `web/versions.json`에 있습니다(필드 설명은 `web/src/data/versions.ts`에 있습니다). 이 파일은 릴리스마다 올리지 않습니다. 마이너의 수명 중 세 시점에만 바뀌며, 사이트가 `main`에서 배포되므로(`.github/workflows/web.yml`) 항상 `main`의 커밋으로 바꿉니다.
+
+| 이벤트 | `web/versions.json` 변경 | 커밋 |
+|--------|--------------------------|------|
+| 생성(`release/vX.Y` 푸시됨) | `nightly` 바로 뒤에 `{ "id": "vX.Y", "ref": "release/vX.Y" }` 추가 | `chore(web): add vX.Y to the site versions` |
+| 안정(`vX.Y.0` 태그 생성 및 푸시됨) | `"current": true`를 `vX.Y`로 이동 | `chore(web): make vX.Y the current site version` |
+| EOL(`release/vX.Y` 삭제 전) | `vX.Y`의 `ref`를 마지막 태그(예: `vX.Y.Z`)로 변경 | `chore(web): pin vX.Y site docs to vX.Y.Z` |
+
+- **ref가 먼저 origin에 있어야 합니다.** `web/scripts/fetch-docs.ts`는 각 항목을 해당 git ref에서 읽고, 클론에 그 ref가 없으면 `origin`에서 가져옵니다. 읽을 수 없는 ref는 경고만 남기고 건너뛰지만, 그 뒤 빌드가 해당 버전의 페이지를 렌더링하다 실패합니다(`No materialised documentation for version "vX.Y"`). 브랜치가 푸시되기 전에 반영된 항목이나 삭제된 브랜치를 여전히 가리키는 항목은 `main`에서의 모든 사이트 배포를 깨뜨립니다.
+- **제품 버전은 어디에도 직접 적지 않습니다.** 사이트는 각 ref의 `Cargo.toml`에서 이를 읽으므로, 사이트를 바꾸지 않아도 릴리스 브랜치의 버전 올림(`X.Y.0-rc.N`, 그다음 `X.Y.0`, 그다음 패치)을 따라갑니다.
+- **새 마이너에 대한 사이트 문구는 안정 릴리스를 기다립니다.** `vX.Y`의 기능을 설명하는 랜딩 페이지나 비교 페이지 문구는 `vX.Y`를 current로 만드는 커밋보다 먼저 `main`에 들어가면 안 됩니다. 그때까지 사이트는 `vX.(Y-1)`을 설명합니다.
 
 ## 수정해야 할 파일
 
@@ -205,6 +240,8 @@ RC가 깨끗할 때 `release/vX.Y`에서 수행합니다:
 태그의 GitHub Release 아티팩트가 게시된 뒤에는 다음도 업데이트합니다:
 
 - `nix/release-info.nix` — `version`과 두 prebuilt-tarball `url`과 `hash`(아래 [Nix](#nix-이-리포지토리의-flake) 참조). 이는 브랜치별 채널 포인터입니다. 게시된 아티팩트가 필요하므로, 릴리스 워크플로가 끝나면 후속 커밋으로 반영됩니다.
+
+`web/versions.json`은 릴리스마다 하는 버전 올림에 포함되지 않습니다. 마이너의 생성, 안정 승격, EOL 때 바뀝니다([웹사이트](#웹사이트) 참조).
 
 AUR `PKGBUILD`는 이 리포지토리가 아닌 **외부 AUR 리포지토리**에 있습니다. 안정 태그에만 올립니다.
 ## 나이틀리 동작 방식
@@ -324,6 +361,8 @@ nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 - `pkgver`에 하이픈이 들어간 채 AUR 갱신을 푸시하는 것.
 - `release.yml`의 `Classify release` 잡을 담고 있지 않은 `main` HEAD에서 `release/vX.Y`를 생성하는 것.
 - 새 `-dev.N` 태그를 만드는 것(이 채널은 폐기되었으니 대신 나이틀리를 사용합니다).
+- `web/versions.json`에서 RC 단계의 마이너를 `"current": true`로 표시하거나, `vX.Y.0` 게시 후에도 이전 마이너를 current로 두는 것.
+- ref가 아직 origin에 없는 항목을 `web/versions.json`에 추가하거나, 항목이 여전히 가리키는 `release/vX.Y` 브랜치를 삭제하는 것.
 
 ## 태깅 전 로컬 검증
 
@@ -343,4 +382,5 @@ cargo test --workspace
 - `.github/workflows/build.yml` — 재사용 가능한 빌드 잡(릴리스와 나이틀리가 호출)
 - `.github/release-template.md` — 모든 릴리스 본문에 덧붙는 설치 섹션
 - `cliff.toml` — 변경 내역 생성을 위한 git-cliff 설정
+- `web/versions.json` — 사이트가 게시하는 문서 버전과 그중 현재 버전
 - `skills/dbflux-release/SKILL.md` — 이 과정을 자동화하는 에이전트용 스킬

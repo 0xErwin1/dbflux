@@ -34,6 +34,7 @@ pub mod governance_settings;
 pub mod hook_commands;
 pub mod hook_definitions;
 pub mod hook_environment;
+pub mod keybinding_overrides;
 pub mod proxy_auth;
 pub mod proxy_profiles;
 pub mod service_args;
@@ -42,6 +43,7 @@ pub mod services;
 pub mod settings;
 pub mod ssh_tunnel_auth;
 pub mod ssh_tunnel_profiles;
+pub mod update_settings;
 
 pub mod state;
 

@@ -111,6 +111,7 @@ mod tests {
                 label: "Main".to_string(),
                 sections: vec![FormSection {
                     title: "Session".to_string(),
+                    icon: None,
                     fields: vec![FormFieldDef {
                         id: consumer_field_id.to_string(),
                         label: "Session".to_string(),
@@ -249,6 +250,7 @@ mod tests {
                 label: "Main".to_string(),
                 sections: vec![FormSection {
                     title: "Section".to_string(),
+                    icon: None,
                     fields: vec![FormFieldDef {
                         id: "some_text_field".to_string(),
                         label: "Text".to_string(),

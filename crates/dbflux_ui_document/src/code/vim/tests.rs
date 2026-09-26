@@ -2,34 +2,34 @@
 //!
 //! Keys go through the real dispatch path (`simulate_keystrokes` /
 //! `simulate_input`): key bindings, key listeners and then the platform input
-//! handler, in the same order as on a desktop platform. The harness view stands in
-//! for the workspace: its bubble-phase key listener resolves chords against the
-//! default `KeymapStack`, which is how app shortcuts reach documents.
+//! handler, in the same order as on a desktop platform. The app keymap is
+//! registered as it is at startup, and the harness view stands in for the
+//! workspace: its root carries the key context the workspace reports for the
+//! document and records every keymap command that reaches it.
 
 use super::VimMode;
 use crate::code::CodeDocument;
 use dbflux_app::keymap::Command;
-use dbflux_components::controls::register_input_overrides;
 use dbflux_components::controls::{GpuiInput, InputState};
 use dbflux_components::theme;
 use dbflux_core::{ConnectionProfile, DbConfig, DbKind, QueryLanguage, WritePrivilege};
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_test_support::fake_driver::FakeDriver;
-use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
+use dbflux_ui_base::keymap::{
+    RunCommand, WORKSPACE_KEY_CONTEXT, init_keymap, root_key_context, run_command,
+};
 use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::{
     AppContext as _, ClipboardItem, Context, Entity, EntityInputHandler, Focusable as _,
-    InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, ParentElement as _, Render,
-    Styled as _, TestAppContext, VisualTestContext, Window, actions, div,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, TestAppContext,
+    VisualTestContext, Window, div,
 };
 use gpui_base::input::InputCursorShape;
 use gpui_component::Root;
 use gpui_component::input::Paste;
 use std::cell::RefCell;
 use std::rc::Rc;
-
-actions!(vim_mode_test, [HarnessRunQuery]);
 
 struct Harness {
     document: Entity<CodeDocument>,
@@ -43,19 +43,25 @@ struct Harness {
 
 impl Render for Harness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let document = self.document.read(cx);
+        let key_context = root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            document.active_context(cx),
+            &document.key_context_entries(),
+        );
+
         div()
             .size_full()
-            .on_action(cx.listener(|this, _: &HarnessRunQuery, window, cx| {
-                this.run_query_actions += 1;
-                this.document
-                    .update(cx, |document, cx| document.run_query(window, cx));
-            }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
-                let context = this.document.read(cx).active_context(cx);
-                let chord = key_chord_from_gpui(&event.keystroke);
-
-                if let Some(command) = default_keymap().resolve(context, &chord) {
-                    this.commands.push(command);
+            .key_context(key_context)
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                match run_command(action) {
+                    Some(Command::RunQuery) => {
+                        this.run_query_actions += 1;
+                        this.document
+                            .update(cx, |document, cx| document.run_query(window, cx));
+                    }
+                    Some(command) => this.commands.push(command),
+                    None => {}
                 }
             }))
             .child(self.document.clone())
@@ -71,12 +77,7 @@ fn init_runtime(cx: &mut TestAppContext) {
         let host = cx.new(|_cx| ToastHost::new());
         cx.set_global(ToastGlobal { host });
 
-        register_input_overrides(cx);
-        cx.bind_keys([KeyBinding::new(
-            "ctrl-enter",
-            HarnessRunQuery,
-            Some("Input"),
-        )]);
+        init_keymap(cx);
     });
 }
 
@@ -3270,6 +3271,7 @@ fn escape_with_an_open_completion_menu_closes_it_and_stays_in_insert(cx: &mut Te
 }
 
 #[gpui::test]
+#[allow(clippy::too_many_arguments)]
 fn app_shortcuts_dispatch_the_same_in_every_mode(
     disabled_cx: &mut TestAppContext,
     normal_cx: &mut TestAppContext,

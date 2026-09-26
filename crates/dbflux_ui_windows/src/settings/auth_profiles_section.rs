@@ -4,15 +4,15 @@ use super::form_section::{FormSection, create_blur_subscription};
 use super::layout;
 use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use crate::connection_manager::ExportTarget;
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::components::form_renderer;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::focus_frame;
-use dbflux_components::primitives::{Icon as FluxIcon, Label, Text};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::primitives::{Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Text};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, Fields};
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AccessKind, AuthEditCapabilities, AuthEditSnapshot, AuthProfile, AuthSaveOutcome,
@@ -23,14 +23,17 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
+use gpui_component::ActiveTheme;
 use gpui_component::dialog::{Dialog, DialogButtonProps};
-use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
+
+/// Width of the text fields and selects of the auth profile form. (300 px)
+const AUTH_SELECT_WIDTH: Pixels = px(300.0);
 
 /// Cached dropdown options for a `DynamicSelect` field.
 ///
@@ -962,16 +965,21 @@ impl AuthProfilesSection {
         }
 
         let login_hint = self.field_login_hint.get(&field_id).cloned();
+        let help = field.help.clone();
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(dbflux_components::primitives::Label::new(label))
-            .child(dropdown)
-            .when_some(login_hint, |container, hint| {
-                container.child(Text::caption(hint).warning())
-            })
+        layout::form_row(
+            label,
+            div()
+                .flex()
+                .flex_col()
+                .gap(FormMetrics::HELP_GAP)
+                .child(div().w(AUTH_SELECT_WIDTH).child(dropdown))
+                .when_some(help, |column, help| column.child(layout::help_text(help)))
+                .when_some(login_hint, |column, hint| {
+                    column.child(Text::body(hint).font_size(FormMetrics::HELP_FONT).warning())
+                }),
+            None,
+        )
     }
 
     /// Render an `AuthProfileRef` field as a dropdown of existing auth
@@ -990,7 +998,7 @@ impl AuthProfilesSection {
             provider_id: Some(ref_provider_id),
         } = &field.kind
         else {
-            return div();
+            return div().into_any_element();
         };
 
         if !self.dynamic_dropdowns.contains_key(&field_id) {
@@ -1036,15 +1044,12 @@ impl AuthProfilesSection {
             d.set_selected_index(selected_index, cx);
         });
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(dbflux_components::primitives::Label::new(label))
-            .child(dropdown)
-            .when_some(help, |container, hint_text| {
-                container.child(Text::caption(hint_text))
-            })
+        layout::form_row(
+            label,
+            div().w(AUTH_SELECT_WIDTH).child(dropdown),
+            help.map(SharedString::from),
+        )
+        .into_any_element()
     }
 
     fn clear_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1921,87 +1926,66 @@ impl AuthProfilesSection {
     /// Open Browser, Copy URL, and Cancel buttons. Used while an interactive
     /// SSO login is in flight from the Settings window.
     fn render_login_url_panel(&self, url: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let url_for_open = url.clone();
         let url_for_copy = url.clone();
 
-        div()
-            .mt_2()
-            .p(Spacing::SM)
-            .rounded(Radii::SM)
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.secondary)
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(Text::caption(dbflux_i18n::t!(
-                "settings.auth_profiles.login_url_panel_description"
-            )))
+        let actions = layout::inline_controls()
             .child(
-                div()
-                    .p(Spacing::SM)
-                    .rounded(Radii::SM)
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.background)
-                    .child(Text::body(url.clone())),
+                Button::new(
+                    "auth-login-open-browser",
+                    dbflux_i18n::t!("settings.auth_profiles.open_browser"),
+                )
+                .primary()
+                .icon(AppIcon::ExternalLink)
+                .on_click(cx.listener(move |_this, _, _, cx| {
+                    cx.open_url(&url_for_open);
+                })),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Button::new(
-                            "auth-login-open-url",
-                            dbflux_i18n::t!("settings.auth_profiles.open_browser"),
-                        )
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(move |_this, _, _, cx| {
-                            cx.open_url(&url_for_open);
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "auth-login-copy-url",
-                            dbflux_i18n::t!("settings.auth_profiles.copy_url"),
-                        )
-                        .small()
-                        .on_click(cx.listener(move |_this, _, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                url_for_copy.clone(),
-                            ));
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "auth-login-cancel",
-                            dbflux_i18n::t!("settings.auth_profiles.cancel"),
-                        )
-                        .small()
-                        .danger()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            // Ask the active provider to abort whatever
-                            // in-flight login it has for the profile
-                            // being edited. The provider's login future
-                            // will then return an error and the spawned
-                            // login task will clean up final status.
-                            if let Some(profile) = this.current_form_profile(cx)
-                                && let Some(provider) = this.selected_provider(cx)
-                            {
-                                let _aborted = provider.abort_login(&profile);
-                            }
-                            this.active_login_url = None;
-                            this.provider_login_status = Some((
-                                dbflux_i18n::t!("settings.auth_profiles.login_cancelled"),
-                                false,
-                            ));
-                            cx.notify();
-                        })),
-                    ),
+                Button::new(
+                    "auth-login-copy-url",
+                    dbflux_i18n::t!("settings.auth_profiles.copy_url"),
+                )
+                .secondary()
+                .icon(AppIcon::Copy)
+                .on_click(cx.listener(move |_this, _, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(url_for_copy.clone()));
+                })),
             )
+            .child(
+                Button::new(
+                    "auth-login-cancel",
+                    dbflux_i18n::t!("settings.auth_profiles.cancel"),
+                )
+                .danger()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    // Ask the active provider to abort whatever
+                    // in-flight login it has for the profile
+                    // being edited. The provider's login future
+                    // will then return an error and the spawned
+                    // login task will clean up final status.
+                    if let Some(profile) = this.current_form_profile(cx)
+                        && let Some(provider) = this.selected_provider(cx)
+                    {
+                        let _aborted = provider.abort_login(&profile);
+                    }
+                    this.active_login_url = None;
+                    this.provider_login_status = Some((
+                        dbflux_i18n::t!("settings.auth_profiles.login_cancelled"),
+                        false,
+                    ));
+                    cx.notify();
+                })),
+            );
+
+        div().mt(FormMetrics::ROW_GAP).child(
+            BannerBlock::new(
+                BannerVariant::Info,
+                dbflux_i18n::t!("settings.auth_profiles.login_url_panel_description"),
+            )
+            .with_pre(url)
+            .with_actions(actions),
+        )
     }
 
     /// Returns the AuthProfile referenced by `trigger_value` (expected to
@@ -2036,10 +2020,9 @@ impl AuthProfilesSection {
         inherited_value: Option<String>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let primary = cx.theme().primary;
         let theme = cx.theme();
 
-        let row = if disabled {
+        let control = if disabled {
             // Render a static, non-interactive text view. gpui_component's
             // Input keeps its key_down handler bound even when `disabled` is
             // true, so an "Input::disabled(true)" widget would still accept
@@ -2053,22 +2036,36 @@ impl AuthProfilesSection {
                 value
             };
 
-            layout::compact_input_shell(
-                div()
-                    .flex()
-                    .items_center()
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .bg(theme.muted)
-                    .text_color(theme.muted_foreground)
-                    .child(Text::body(display)),
-            )
+            div()
+                .relative()
+                .flex()
+                .items_center()
+                .w(AUTH_SELECT_WIDTH)
+                .h(Fields::HEIGHT)
+                .px(Fields::PADDING_X)
+                .text_size(Fields::TEXT)
+                .text_color(theme.muted_foreground)
+                .child(
+                    Chamfer::new(ChamferCut::CONTROL)
+                        .fill(theme.secondary.opacity(Fields::DISABLED_OPACITY))
+                        .border(theme.border),
+                )
+                .child(display)
         } else {
-            focus_frame(
-                is_focused,
-                Some(primary),
-                layout::compact_input_shell(Input::new(input).small().secret(is_secret)),
+            let element_id = match field {
+                AuthFormField::Name => "auth-profile-name".to_string(),
+                AuthFormField::DynamicField(index) => format!("auth-profile-field-{index}"),
+                _ => "auth-profile-control".to_string(),
+            };
+
+            layout::field_frame(
+                is_focused && !self.auth_editing_field,
+                Some(AUTH_SELECT_WIDTH),
+                false,
+                Input::new(input)
+                    .id(SharedString::from(element_id))
+                    .aria_label(label.to_string())
+                    .secret(is_secret),
                 cx,
             )
             .on_mouse_down(
@@ -2083,15 +2080,11 @@ impl AuthProfilesSection {
             )
         };
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(Label::new(label.to_string()))
-            .child(row)
-            .when_some(disabled_hint, |container, hint| {
-                container.child(Text::caption(hint))
-            })
+        layout::form_row(
+            label.to_string(),
+            control,
+            disabled_hint.map(SharedString::from),
+        )
     }
 
     fn render_provider_selector(
@@ -2121,7 +2114,18 @@ impl AuthProfilesSection {
             dropdown.set_selected_index(selected_index, cx);
         });
 
-        self.provider_dropdown.clone()
+        let cursor = self.content_focused
+            && self.auth_focus == AuthFocus::Form
+            && matches!(self.auth_form_field, AuthFormField::Provider(_));
+
+        layout::cursor_ring(
+            cursor,
+            div()
+                .w(AUTH_SELECT_WIDTH)
+                .child(self.provider_dropdown.clone()),
+            cx,
+        )
+        .w(AUTH_SELECT_WIDTH)
     }
 
     fn render_profile_list(
@@ -2129,59 +2133,92 @@ impl AuthProfilesSection {
         profiles: &[AuthProfile],
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let theme = cx.theme();
         let list_focused = self.content_focused && self.auth_focus == AuthFocus::ProfileList;
 
         if let Some(scroll_idx) = self.pending_profile_scroll_idx.take() {
             self.profile_list_scroll_handle.scroll_to_item(scroll_idx);
         }
 
+        let toolbar = layout::master_list_toolbar(vec![
+            Button::new(
+                "new-auth-profile",
+                dbflux_i18n::t!("settings.auth_profiles.new_profile"),
+            )
+            .primary()
+            .icon(AppIcon::Plus)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.auth_focus = AuthFocus::Form;
+                this.begin_create_profile(window, cx);
+            }))
+            .into_any_element(),
+            Button::new(
+                "import-auth-profile",
+                dbflux_i18n::t!("settings.auth_profiles.import"),
+            )
+            .secondary()
+            .icon(AppIcon::Download)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.request_import(cx);
+            }))
+            .into_any_element(),
+        ]);
+
+        let rows: Vec<AnyElement> = profiles
+            .iter()
+            .map(|profile| {
+                let profile_id = profile.id;
+                let is_selected = self.selected_profile_id == Some(profile_id);
+                let is_focused = list_focused && is_selected;
+                let provider_label = self
+                    .app_state
+                    .read(cx)
+                    .auth_provider_by_id(&profile.provider_id)
+                    .map(|provider| provider.display_name().to_string())
+                    .unwrap_or_else(|| profile.provider_id.clone());
+
+                let trailing = (!profile.enabled).then(|| {
+                    Badge::new(
+                        dbflux_i18n::t!("settings.auth_profiles.disabled_badge"),
+                        BadgeTone::Neutral,
+                    )
+                    .into_any_element()
+                });
+
+                layout::master_list_row(
+                    SharedString::from(format!("auth-profile-item-{}", profile_id)),
+                    layout::MasterRow {
+                        icon: Some(AppIcon::KeyRound),
+                        title: profile.name.clone().into(),
+                        detail: Some(provider_label.into()),
+                        trailing,
+                    },
+                    is_selected,
+                    is_focused,
+                    cx,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        this.switching_input = true;
+                        this.load_profile_into_form(profile_id, window, cx);
+                    }),
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        let theme = cx.theme();
+
         div()
-            .w(px(280.0))
+            .w(SettingsMetrics::LIST_WIDTH)
             .h_full()
             .min_h_0()
+            .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .p_3()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(Label::new(dbflux_i18n::t!(
-                        "settings.auth_profiles.profiles_label"
-                    )))
-                    .child(
-                        Button::new(
-                            "new-auth-profile",
-                            dbflux_i18n::t!("settings.auth_profiles.new_profile"),
-                        )
-                        .icon(Icon::new(AppIcon::Plus))
-                        .small()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.auth_focus = AuthFocus::Form;
-                            this.begin_create_profile(window, cx);
-                        })),
-                    )
-                    .child(
-                        Button::new(
-                            "import-auth-profile",
-                            dbflux_i18n::t!("settings.auth_profiles.import"),
-                        )
-                        .icon(Icon::new(AppIcon::Download))
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_import(cx);
-                        })),
-                    ),
-            )
+            .child(toolbar)
             .child(
                 div()
                     .id("auth-profile-list-scroll")
@@ -2189,50 +2226,9 @@ impl AuthProfilesSection {
                     .min_h_0()
                     .overflow_scroll()
                     .track_scroll(&self.profile_list_scroll_handle)
-                    .p_2()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .children(profiles.iter().map(|profile| {
-                        let profile_id = profile.id;
-                        let is_selected = self.selected_profile_id == Some(profile_id);
-                        let is_focused = list_focused && is_selected;
-                        let provider_label = self
-                            .app_state
-                            .read(cx)
-                            .auth_provider_by_id(&profile.provider_id)
-                            .map(|provider| provider.display_name().to_string())
-                            .unwrap_or_else(|| profile.provider_id.clone());
-
-                        div()
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_focused {
-                                theme.primary
-                            } else {
-                                transparent_black()
-                            })
-                            .when(is_selected, |div| div.bg(theme.secondary))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.switching_input = true;
-                                    this.load_profile_into_form(profile_id, window, cx);
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(Label::new(profile.name.clone()))
-                                    .child(Text::caption(provider_label)),
-                            )
-                    })),
+                    .children(rows),
             )
     }
 
@@ -2275,62 +2271,52 @@ impl AuthProfilesSection {
             .and_then(|id| self.app_state.read(cx).auth_provider_by_id(id))
             .and_then(|p| p.capabilities().edit.clone());
 
+        let value_row = |label: String, value: String| {
+            layout::form_row(
+                label,
+                div()
+                    .pt(FormMetrics::LABEL_PADDING_TOP)
+                    .child(Text::body(value).text_color(ChromeColors::strong(&theme))),
+                None,
+            )
+        };
+
         layout::sticky_form_shell(
-            div()
-                .child(Label::new(profile_name))
-                .child(Text::muted(provider_label)),
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.auth_profiles.group.profile"),
+                Some(AppIcon::KeyRound.into()),
+                cx,
+            ),
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
                 .when_some(dangling_origin, |content, origin| {
                     let dangling = resolve_dangling(edit_caps.as_ref(), &origin);
-                    let banner_text = dangling.title;
-                    let hint_text = dangling.body;
 
                     content.child(
-                        div()
-                            .p_3()
-                            .rounded(Radii::SM)
-                            .border_1()
-                            .border_color(theme.warning)
-                            .bg(theme.secondary)
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        FluxIcon::new(AppIcon::TriangleAlert)
-                                            .size(Heights::ICON_SM)
-                                            .color(theme.warning),
-                                    )
-                                    .child(Label::new(banner_text)),
-                            )
-                            .child(Text::caption(hint_text)),
+                        div().py(FormMetrics::ROW_PADDING_Y).child(
+                            BannerBlock::new(BannerVariant::Warning, dangling.title)
+                                .with_body(dangling.body),
+                        ),
                     )
                 })
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(Label::new(dbflux_i18n::t!(
-                            "settings.auth_profiles.source_label"
-                        )))
-                        .child(Text::body(resolve_mirror_label(edit_caps.as_ref()))),
-                )
-                .children(field_rows.into_iter().map(|(label, value)| {
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(Label::new(label))
-                        .child(Text::body(value))
-                })),
+                .child(value_row(
+                    dbflux_i18n::t!("settings.auth_profiles.name_label"),
+                    profile_name,
+                ))
+                .child(value_row(
+                    dbflux_i18n::t!("settings.auth_profiles.provider_label"),
+                    provider_label,
+                ))
+                .child(value_row(
+                    dbflux_i18n::t!("settings.auth_profiles.source_label"),
+                    resolve_mirror_label(edit_caps.as_ref()).to_string(),
+                ))
+                .children(
+                    field_rows
+                        .into_iter()
+                        .map(|(label, value)| value_row(label, value)),
+                ),
             None,
             &theme,
         )
@@ -2344,7 +2330,6 @@ impl AuthProfilesSection {
         }
 
         let theme = cx.theme().clone();
-        let is_editing = self.editing_profile_id.is_some();
 
         let edit_caps: Option<AuthEditCapabilities> = self
             .selected_provider_id
@@ -2493,62 +2478,40 @@ impl AuthProfilesSection {
         let conflict_msg = self.edit_conflict_msg.clone();
 
         layout::sticky_form_shell(
-            div()
-                .child(Label::new(layout::editor_panel_title(
-                    &dbflux_i18n::t!("settings.auth_profiles.auth_profile_label"),
-                    is_editing,
-                )))
-                .child(Text::muted(dbflux_i18n::t!(
-                    "settings.auth_profiles.editor_subtitle"
-                ))),
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.auth_profiles.group.profile"),
+                Some(AppIcon::KeyRound.into()),
+                cx,
+            ),
             div()
                 .flex()
                 .flex_col()
-                .gap_4()
                 .when_some(conflict_msg, |content, (msg, show_reload)| {
-                    let theme = cx.theme().clone();
-                    content.child(
-                        div()
-                            .p_3()
-                            .rounded(Radii::SM)
-                            .border_1()
-                            .border_color(theme.warning)
-                            .bg(theme.secondary)
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        FluxIcon::new(AppIcon::TriangleAlert)
-                                            .size(Heights::ICON_SM)
-                                            .color(theme.warning),
-                                    )
-                                    .child(Label::new(dbflux_i18n::t!(
-                                        "settings.auth_profiles.changed_on_disk"
-                                    ))),
-                            )
-                            .child(Text::caption(msg))
-                            .when(show_reload, |panel| {
-                                panel.child(
-                                    Button::new(
-                                        "edit-reload-profile",
-                                        dbflux_i18n::t!("settings.auth_profiles.reload"),
-                                    )
-                                    .small()
-                                    .on_click(cx.listener(
-                                        |this, _, window, cx| {
-                                            if let Some(id) = this.selected_profile_id {
-                                                this.load_profile_into_form(id, window, cx);
-                                            }
-                                        },
-                                    )),
-                                )
-                            }),
+                    let mut banner = BannerBlock::new(
+                        BannerVariant::Warning,
+                        dbflux_i18n::t!("settings.auth_profiles.changed_on_disk"),
                     )
+                    .with_body(msg);
+
+                    if show_reload {
+                        banner = banner.with_actions(
+                            Button::new(
+                                "edit-reload-profile",
+                                dbflux_i18n::t!("settings.auth_profiles.reload"),
+                            )
+                            .secondary()
+                            .icon(AppIcon::RefreshCcw)
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    if let Some(id) = this.selected_profile_id {
+                                        this.load_profile_into_form(id, window, cx);
+                                    }
+                                },
+                            )),
+                        );
+                    }
+
+                    content.child(div().py(FormMetrics::ROW_PADDING_Y).child(banner))
                 })
                 .child({
                     let is_focused = self.auth_form_field == AuthFormField::Name
@@ -2581,96 +2544,109 @@ impl AuthProfilesSection {
                         cx,
                     )
                 })
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(Label::new(dbflux_i18n::t!(
-                            "settings.auth_profiles.provider_label"
-                        )))
-                        .when(self.edit_snapshot.is_none(), |row| {
-                            row.child(self.render_provider_selector(window, cx))
-                        })
-                        .when(self.edit_snapshot.is_some(), |row| {
-                            // Reflected profiles: provider is fixed by the file section type.
-                            let provider_label = self
-                                .selected_provider_id
-                                .as_deref()
-                                .and_then(|id| {
-                                    self.app_state
-                                        .read(cx)
-                                        .auth_provider_by_id(id)
-                                        .map(|p| p.display_name().to_string())
-                                })
-                                .or_else(|| self.selected_provider_id.clone())
-                                .unwrap_or_default();
-                            row.child(Text::body(provider_label))
-                        }),
-                )
-                .children(dynamic_fields)
-                .when(self.selected_provider_supports_login, |content| {
-                    content
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Button::new(
-                                        "auth-provider-login",
-                                        if self.provider_login_loading {
-                                            dbflux_i18n::t!("settings.auth_profiles.logging_in")
-                                        } else {
-                                            dbflux_i18n::t!("settings.auth_profiles.login_action")
-                                        },
-                                    )
-                                    .small()
-                                    .primary()
-                                    .disabled(self.provider_login_loading)
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| {
-                                            this.login_selected_profile(cx);
-                                        },
-                                    )),
-                                )
-                                .child(Text::caption(dbflux_i18n::t!(
-                                    "settings.auth_profiles.runs_interactive_login_hint"
-                                ))),
-                        )
-                        .when_some(self.provider_login_status.as_ref(), |content, status| {
-                            content.child(if status.1 {
-                                Text::caption(status.0.clone()).success()
-                            } else {
-                                Text::caption(status.0.clone()).warning()
+                .child({
+                    let provider_control = if self.edit_snapshot.is_none() {
+                        self.render_provider_selector(window, cx).into_any_element()
+                    } else {
+                        // Reflected profiles: provider is fixed by the file section type.
+                        let provider_label = self
+                            .selected_provider_id
+                            .as_deref()
+                            .and_then(|id| {
+                                self.app_state
+                                    .read(cx)
+                                    .auth_provider_by_id(id)
+                                    .map(|p| p.display_name().to_string())
                             })
-                        })
-                        .when_some(self.active_login_url.clone(), |content, url| {
-                            content.child(self.render_login_url_panel(url, cx))
-                        })
+                            .or_else(|| self.selected_provider_id.clone())
+                            .unwrap_or_default();
+
+                        div()
+                            .pt(FormMetrics::LABEL_PADDING_TOP)
+                            .child(Text::body(provider_label))
+                            .into_any_element()
+                    };
+
+                    layout::form_row(
+                        dbflux_i18n::t!("settings.auth_profiles.provider_label"),
+                        provider_control,
+                        None,
+                    )
                 })
+                .children(dynamic_fields)
                 .when(self.edit_snapshot.is_none(), |content| {
                     // The enabled toggle only applies to stored (SQLite-backed)
                     // profiles. Reflected (externally-managed) profiles are
                     // always enabled and managed by the provider's config file.
-                    content.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Checkbox::new("auth-profile-enabled")
-                                    .checked(self.profile_enabled)
-                                    .aria_label(dbflux_i18n::t!("settings.auth_profiles.enabled"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.profile_enabled = *checked;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(Text::body(dbflux_i18n::t!(
-                                "settings.auth_profiles.enabled"
-                            ))),
+                    let cursor = self.content_focused
+                        && self.auth_focus == AuthFocus::Form
+                        && self.auth_form_field == AuthFormField::Enabled;
+
+                    content.child(layout::check_row(
+                        layout::cursor_ring(
+                            cursor,
+                            Checkbox::new("auth-profile-enabled")
+                                .checked(self.profile_enabled)
+                                .label(dbflux_i18n::t!("settings.auth_profiles.enabled"))
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.profile_enabled = *checked;
+                                    cx.notify();
+                                })),
+                            cx,
+                        ),
+                        None,
+                    ))
+                })
+                .when(self.selected_provider_supports_login, |content| {
+                    let login_focused = self.content_focused
+                        && self.auth_focus == AuthFocus::Form
+                        && self.auth_form_field == AuthFormField::ProviderLogin;
+
+                    let login_button = Button::new(
+                        "auth-provider-login",
+                        if self.provider_login_loading {
+                            dbflux_i18n::t!("settings.auth_profiles.logging_in")
+                        } else {
+                            dbflux_i18n::t!("settings.auth_profiles.login_action")
+                        },
                     )
+                    .secondary()
+                    .icon(AppIcon::RefreshCcw)
+                    .focused(login_focused)
+                    .disabled(self.provider_login_loading)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.login_selected_profile(cx);
+                    }));
+
+                    let session = match self.provider_login_status.as_ref() {
+                        Some((message, true)) => BannerBlock::new(
+                            BannerVariant::Success,
+                            dbflux_i18n::t!("settings.auth_profiles.session_valid"),
+                        )
+                        .with_body(message.clone()),
+                        Some((message, false)) => BannerBlock::new(
+                            BannerVariant::Warning,
+                            dbflux_i18n::t!("settings.auth_profiles.session_attention"),
+                        )
+                        .with_body(message.clone()),
+                        None => BannerBlock::new(
+                            BannerVariant::Info,
+                            dbflux_i18n::t!("settings.auth_profiles.session_unknown"),
+                        )
+                        .with_body(dbflux_i18n::t!(
+                            "settings.auth_profiles.runs_interactive_login_hint"
+                        )),
+                    };
+
+                    content
+                        .child(
+                            div()
+                                .mt(FormMetrics::ROW_GAP)
+                                .child(session.with_actions(login_button)),
+                        )
+                        .when_some(self.active_login_url.clone(), |content, url| {
+                            content.child(self.render_login_url_panel(url, cx))
+                        })
                 }),
             None,
             &theme,
@@ -2678,57 +2654,59 @@ impl AuthProfilesSection {
         .into_any_element()
     }
 
-    fn render_section_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let is_editing = self.editing_profile_id.is_some();
+    fn is_cursor_on(&self, field: AuthFormField) -> bool {
+        self.content_focused && self.auth_focus == AuthFocus::Form && self.auth_form_field == field
+    }
+
+    /// Export and Delete, on the left of the footer, for a stored profile.
+    fn render_section_footer_leading_actions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         // Reflected profiles are edited in-place via save_edit; they cannot be
         // deleted from DBFlux (the file section is the source of truth).
-        let is_reflected = self.edit_snapshot.is_some();
-        let is_form_focused = self.auth_focus == AuthFocus::Form && self.content_focused;
-        let primary = cx.theme().primary;
+        if self.editing_profile_id.is_none() || self.edit_snapshot.is_some() {
+            return None;
+        }
 
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .when(is_editing && !is_reflected, |root| {
-                root.child(layout::footer_action_frame(
-                    is_form_focused && self.auth_form_field == AuthFormField::ExportButton,
-                    primary,
+        Some(
+            layout::inline_controls()
+                .child(
                     Button::new(
                         "export-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.export"),
                     )
-                    .small()
-                    .ghost()
-                    .w_full()
+                    .secondary()
+                    .icon(AppIcon::ExternalLink)
+                    .focused(self.is_cursor_on(AuthFormField::ExportButton))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.request_export(cx);
                     })),
-                ))
-                .child(layout::footer_action_frame(
-                    is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
-                    primary,
+                )
+                .child(
                     Button::new(
                         "delete-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.delete"),
                     )
-                    .small()
                     .danger()
-                    .w_full()
+                    .icon(AppIcon::Delete)
+                    .focused(self.is_cursor_on(AuthFormField::DeleteButton))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.request_delete_selected_profile(cx);
                     })),
-                ))
-            })
-            .child(layout::footer_action_frame(
-                false,
-                primary,
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_section_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_editing = self.editing_profile_id.is_some();
+        let is_reflected = self.edit_snapshot.is_some();
+
+        layout::inline_controls()
+            .child(
                 Button::new(
                     "cancel-auth-profile",
                     dbflux_i18n::t!("settings.auth_profiles.cancel"),
                 )
-                .small()
-                .w_full()
+                .secondary()
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let Some(selected_id) = this.selected_profile_id {
                         this.load_profile_into_form(selected_id, window, cx);
@@ -2737,10 +2715,8 @@ impl AuthProfilesSection {
                         cx.notify();
                     }
                 })),
-            ))
-            .child(layout::footer_action_frame(
-                is_form_focused && self.auth_form_field == AuthFormField::SaveButton,
-                primary,
+            )
+            .child(
                 Button::new(
                     "save-auth-profile",
                     if is_reflected {
@@ -2751,13 +2727,14 @@ impl AuthProfilesSection {
                         dbflux_i18n::t!("settings.auth_profiles.create")
                     },
                 )
-                .small()
                 .primary()
-                .w_full()
+                .icon(AppIcon::Check)
+                .when_some(crate::settings::save_shortcut(), Button::kbd)
+                .focused(self.is_cursor_on(AuthFormField::SaveButton))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.save_profile(window, cx);
                 })),
-            ))
+            )
             .into_any_element()
     }
 }
@@ -2932,6 +2909,24 @@ impl SettingsSection for AuthProfilesSection {
 
         Some(self.render_section_footer_actions(cx))
     }
+
+    fn render_footer_leading_actions(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.profile_is_read_only {
+            return None;
+        }
+
+        self.render_section_footer_leading_actions(cx)
+    }
+
+    fn save_from_shortcut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.profile_is_read_only {
+            self.save_profile(window, cx);
+        }
+    }
 }
 
 impl Render for AuthProfilesSection {
@@ -2971,7 +2966,8 @@ impl Render for AuthProfilesSection {
 
         layout::section_container(
             layout::split_section_shell(
-                dbflux_components::composites::section_header(
+                cx.theme().border,
+                dbflux_components::composites::page_header(
                     dbflux_i18n::t!("settings.auth_profiles.section_title"),
                     dbflux_i18n::t!("settings.auth_profiles.section_description"),
                     cx,
@@ -3982,7 +3978,7 @@ mod tests {
         let en = dbflux_i18n::t!("settings.auth_profiles.section_title", locale = "en");
         let es = dbflux_i18n::t!("settings.auth_profiles.section_title", locale = "es");
 
-        assert_eq!(en, "Auth Profiles");
+        assert_eq!(en, "Auth profiles");
         assert_eq!(es, "Perfiles de autenticación");
         assert_ne!(en, es);
     }
@@ -3992,7 +3988,7 @@ mod tests {
         let en = dbflux_i18n::t!("settings.auth_profiles.new_profile", locale = "en");
         let es = dbflux_i18n::t!("settings.auth_profiles.new_profile", locale = "es");
 
-        assert_eq!(en, "New Auth Profile");
+        assert_eq!(en, "New profile");
         assert_eq!(es, "Nuevo perfil de autenticación");
     }
 
@@ -4045,7 +4041,7 @@ mod tests {
         let en = dbflux_i18n::t!("settings.auth_profiles.login_action", locale = "en");
         let es = dbflux_i18n::t!("settings.auth_profiles.login_action", locale = "es");
 
-        assert_eq!(en, "Login");
+        assert_eq!(en, "Log in");
         assert_eq!(es, "Iniciar sesión");
         assert_ne!(en, es);
     }

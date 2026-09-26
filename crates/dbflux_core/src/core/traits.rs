@@ -23,6 +23,12 @@ use crate::{
         ListPushRequest, ListRemoveRequest, ListSetRequest, SetAddRequest, SetRemoveRequest,
         StreamAddRequest, StreamDeleteRequest, ZSetAddRequest, ZSetRemoveRequest,
     },
+    data::key_value::{
+        KeyBulkDeleteRequest, KeyMetadata, KeyMetadataRequest, KeyValueFeatures,
+        KeyValuePrefixRequest, StreamClaimRequest, StreamConsumerGroup, StreamGroupsRequest,
+        StreamPendingEntry, StreamPendingRequest, StreamRangePage, StreamRangeRequest,
+        ZSetRangePage, ZSetRangeRequest,
+    },
     query::generator::QueryGenerator,
     query::table_browser::OrderByColumn,
     render_semantic_filter_sql,
@@ -279,6 +285,29 @@ pub trait DbDriver: Send + Sync {
     /// Default implementation uses `metadata().description`.
     fn description(&self) -> &str {
         &self.metadata().description
+    }
+
+    /// Short monospace hint shown under the driver's name in the connection
+    /// manager's driver picker, such as `:5432`, `file` or `AWS`.
+    ///
+    /// Default implementation shows the default port (`:<port>`) and falls
+    /// back to `description()` for drivers without one. Drivers without a
+    /// port override this with a few characters that say where the data
+    /// lives.
+    fn picker_hint(&self) -> String {
+        match self.metadata().default_port {
+            Some(port) => format!(":{port}"),
+            None => self.description().to_string(),
+        }
+    }
+
+    /// Position of the driver among the drivers of its category in the
+    /// driver picker: lower ranks come first, equal ranks sort by name.
+    ///
+    /// Default implementation returns `u16::MAX`, which places the driver
+    /// after every ranked driver of its category.
+    fn picker_rank(&self) -> u16 {
+        u16::MAX
     }
 
     /// Returns the capabilities supported by this driver.
@@ -660,6 +689,79 @@ pub trait KeyValueApi: Send + Sync {
             "Stream DELETE not supported by this driver".to_string(),
         ))
     }
+
+    // -- Optional browsing operations, advertised through `features` --
+
+    /// Optional operations this implementation supports. Each flag names the
+    /// methods below that return something other than `NotSupported`.
+    fn features(&self) -> KeyValueFeatures {
+        KeyValueFeatures::empty()
+    }
+
+    /// Expiry and size of every requested key, in request order, fetched in
+    /// as few round trips as the server allows.
+    fn key_metadata(&self, _request: &KeyMetadataRequest) -> Result<Vec<KeyMetadata>, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value metadata batch not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Deletes every requested key without blocking the server. Returns the
+    /// number of keys that existed and were removed.
+    fn delete_keys(&self, _request: &KeyBulkDeleteRequest) -> Result<u64, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value bulk delete not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The first `max_bytes` of a string value, reported as
+    /// `KeyLoadState::Truncated` when the value is longer.
+    fn get_value_prefix(&self, _request: &KeyValuePrefixRequest) -> Result<KeyGetResult, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value value prefix not supported by this driver".to_string(),
+        ))
+    }
+
+    /// A page of a sorted set by rank, with the set's total size.
+    fn zset_range(&self, _request: &ZSetRangeRequest) -> Result<ZSetRangePage, DbError> {
+        Err(DbError::NotSupported(
+            "Sorted Set RANGE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// A page of stream entries between two IDs, with the stream's length.
+    fn stream_range(&self, _request: &StreamRangeRequest) -> Result<StreamRangePage, DbError> {
+        Err(DbError::NotSupported(
+            "Stream RANGE not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The consumer groups of a stream.
+    fn stream_groups(
+        &self,
+        _request: &StreamGroupsRequest,
+    ) -> Result<Vec<StreamConsumerGroup>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream consumer groups not supported by this driver".to_string(),
+        ))
+    }
+
+    /// The oldest pending entries of one consumer group.
+    fn stream_pending(
+        &self,
+        _request: &StreamPendingRequest,
+    ) -> Result<Vec<StreamPendingEntry>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream pending entries not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Moves pending entries to another consumer. Returns the IDs claimed.
+    fn stream_claim(&self, _request: &StreamClaimRequest) -> Result<Vec<String>, DbError> {
+        Err(DbError::NotSupported(
+            "Stream CLAIM not supported by this driver".to_string(),
+        ))
+    }
 }
 
 /// A single bucket returned by `ObjectStoreConnection::list_buckets`.
@@ -740,14 +842,37 @@ pub enum VersioningStatus {
     Disabled,
 }
 
-/// Cheap, lazily-fetched bucket detail (one `GetBucketLocation` + one
-/// `GetBucketVersioning` call). Never includes object count or total size —
-/// those require walking the bucket and are exposed separately through
-/// `estimate_bucket_size`.
+/// Cheap, lazily-fetched bucket detail (region, versioning and, when the
+/// store reports them, default encryption and public-access blocking). Never
+/// includes object count or total size — those require walking the bucket
+/// and are exposed separately through `estimate_bucket_size`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BucketDetails {
     pub region: String,
     pub versioning: VersioningStatus,
+
+    /// Default encryption of new objects. `None` when the store does not
+    /// report it or the caller may not read it; `Some(BucketEncryption::None)`
+    /// when the bucket has no default encryption.
+    #[serde(default)]
+    pub encryption: Option<BucketEncryption>,
+
+    /// How much of the bucket's public-access blocking is enabled. `None`
+    /// when the store does not report it or the caller may not read it.
+    #[serde(default)]
+    pub public_access: Option<PublicAccessStatus>,
+}
+
+/// Public-access blocking of a bucket, summarized from its individual
+/// block settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PublicAccessStatus {
+    /// Every public-access block setting is on.
+    Blocked,
+    /// Some, but not all, public-access block settings are on.
+    Partial,
+    /// No public-access block setting is on.
+    Open,
 }
 
 /// Paginated, capped estimate of a bucket's (or prefix's) object count and
@@ -1431,6 +1556,54 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Document-collection features this connection offers. The default offers
+    /// none; drivers report the seams they implement.
+    fn document_features(&self) -> crate::DocumentFeatures {
+        crate::DocumentFeatures::empty()
+    }
+
+    /// Count documents matching a filter, allowing the driver to answer from
+    /// collection metadata instead of scanning.
+    ///
+    /// The default counts exactly through [`Connection::count_collection`].
+    /// Drivers with a cheap estimate (collection statistics) override this and
+    /// report `exact: false`, so the UI can label the figure as estimated.
+    fn estimate_collection_count(
+        &self,
+        request: &CollectionCountRequest,
+    ) -> Result<crate::CollectionCountEstimate, DbError> {
+        self.count_collection(request)
+            .map(|count| crate::CollectionCountEstimate { count, exact: true })
+    }
+
+    /// Sample documents of a collection and infer each field's presence, type
+    /// distribution and value summary.
+    ///
+    /// Drivers that implement this report `DocumentFeatures::QUERY_SLOTS`.
+    fn sample_collection_schema(
+        &self,
+        _request: &crate::CollectionSchemaRequest,
+    ) -> Result<crate::CollectionSchemaSample, DbError> {
+        Err(DbError::NotSupported(
+            "Collection schema sampling not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Run an aggregation pipeline over a collection and return its result
+    /// documents in the shape `browse_collection` uses, at most
+    /// `request.limit` of them (the result is marked truncated when the
+    /// pipeline yields more).
+    ///
+    /// Drivers that implement this report `DocumentFeatures::AGGREGATE`.
+    fn aggregate_collection(
+        &self,
+        _request: &crate::CollectionAggregateRequest,
+    ) -> Result<QueryResult, DbError> {
+        Err(DbError::NotSupported(
+            "Aggregation pipelines not supported by this driver".to_string(),
+        ))
+    }
+
     /// Browse a driver-owned event stream source as canonical observability records.
     fn browse_event_stream(
         &self,
@@ -1582,6 +1755,40 @@ pub trait Connection: Send + Sync {
     fn delete_document(&self, _delete: &DocumentDelete) -> Result<CrudResult, DbError> {
         Err(DbError::NotSupported(
             "Document deletes not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Set and remove individual field paths of one document.
+    ///
+    /// Drivers that implement this, [`Connection::replace_document`] and
+    /// [`Connection::fetch_document`] report `DocumentFeatures::FIELD_PATCH`.
+    fn patch_document(
+        &self,
+        _request: &crate::DocumentPatchRequest,
+    ) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document field patches not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Replace one whole document, keeping its identity.
+    fn replace_document(
+        &self,
+        _request: &crate::DocumentReplaceRequest,
+    ) -> Result<CrudResult, DbError> {
+        Err(DbError::NotSupported(
+            "Document replacement not supported by this driver".to_string(),
+        ))
+    }
+
+    /// Read the current server copy of one document, `None` when it no longer
+    /// exists. Used to detect changes made after a page loaded.
+    fn fetch_document(
+        &self,
+        _request: &crate::DocumentFetchRequest,
+    ) -> Result<Option<crate::Value>, DbError> {
+        Err(DbError::NotSupported(
+            "Document reads by identity not supported by this driver".to_string(),
         ))
     }
 
@@ -2122,6 +2329,30 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_collection_default_returns_not_supported() {
+        let conn = StubConnection;
+        let request = crate::CollectionAggregateRequest::new(
+            crate::CollectionRef::new("shop", "orders"),
+            vec![serde_json::json!({ "$match": {} })],
+            100,
+        );
+
+        assert!(
+            matches!(
+                conn.aggregate_collection(&request),
+                Err(DbError::NotSupported(_))
+            ),
+            "default aggregate_collection must return NotSupported"
+        );
+        assert!(
+            !conn
+                .document_features()
+                .contains(crate::DocumentFeatures::AGGREGATE),
+            "a connection without the seam must not report the Aggregate feature"
+        );
+    }
+
+    #[test]
     fn schema_routines_default_returns_empty_vec() {
         let conn = StubConnection;
         let result = conn.schema_routines("mydb", Some("public"));
@@ -2223,6 +2454,7 @@ mod tests {
                 label: "Main".into(),
                 sections: vec![FormSection {
                     title: "Test".into(),
+                    icon: None,
                     fields: vec![field_required(id, id, kind, "")],
                 }],
             }],
@@ -2490,6 +2722,8 @@ mod tests {
             Ok(BucketDetails {
                 region: "us-east-1".to_string(),
                 versioning: VersioningStatus::Disabled,
+                encryption: None,
+                public_access: None,
             })
         }
 

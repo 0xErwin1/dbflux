@@ -193,6 +193,15 @@ impl ObjectBrowserDocument {
             })
         });
 
+        pane.side_panels = Some({
+            let e = entity.clone();
+            Box::new(move |window, cx| {
+                e.update(cx, |d, cx| {
+                    d.preview_side_panel(window, cx).into_iter().collect()
+                })
+            })
+        });
+
         pane
     }
 }

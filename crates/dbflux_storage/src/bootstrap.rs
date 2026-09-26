@@ -19,6 +19,7 @@ use crate::repositories::driver_settings::DriverSettingsRepository;
 use crate::repositories::general_settings::GeneralSettingsRepository;
 use crate::repositories::governance_settings::GovernanceSettingsRepository;
 use crate::repositories::hook_definitions::HookDefinitionRepository;
+use crate::repositories::keybinding_overrides::KeybindingOverridesRepository;
 use crate::repositories::proxy_profiles::ProxyProfileRepository;
 use crate::repositories::saved_filters::SavedFiltersRepository;
 use crate::repositories::services::ServiceRepository;
@@ -28,6 +29,7 @@ use crate::repositories::state::{
     saved_queries::SavedQueriesRepository, sessions::SessionRepository,
     ui_state::UiStateRepository,
 };
+use crate::repositories::update_settings::UpdateSettingsRepository;
 use crate::repositories::viz_dashboard_panels::DashboardPanelsRepository;
 use crate::repositories::viz_dashboards::DashboardsRepository;
 use crate::repositories::viz_saved_charts::SavedChartsRepository;
@@ -208,6 +210,16 @@ impl StorageRuntime {
     /// Creates a general settings repository.
     pub fn general_settings(&self) -> GeneralSettingsRepository {
         GeneralSettingsRepository::new(self.dbflux_db())
+    }
+
+    /// Creates an update settings repository.
+    pub fn update_settings(&self) -> UpdateSettingsRepository {
+        UpdateSettingsRepository::new(self.dbflux_db())
+    }
+
+    /// Creates a keybinding overrides repository.
+    pub fn keybinding_overrides(&self) -> KeybindingOverridesRepository {
+        KeybindingOverridesRepository::new(self.dbflux_db())
     }
 
     /// Creates a governance settings repository.

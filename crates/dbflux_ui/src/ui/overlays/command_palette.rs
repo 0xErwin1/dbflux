@@ -1,34 +1,25 @@
-use crate::keymap::ContextId;
+use crate::keymap::{Command, ContextId};
 use crate::ui::icons::AppIcon;
+use dbflux_app::keymap::default_slots;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
-#[cfg(test)]
-use dbflux_components::helpers::text_color_for_selected;
-use dbflux_components::primitives::{Chord, Icon, overlay_bg, surface_modal_container};
-use dbflux_components::semantic::BannerColors as SemBannerColors;
-use dbflux_components::tokens::{Radii, Spacing};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel};
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::primitives::{
+    Chamfer, Icon, Kbd, SurfaceRole, Text, inspect_surface_role, overlay_bg,
+};
+use dbflux_components::tokens::{ChamferCut, ChromeColors, PaletteMetrics};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{CollectionRef, TableRef};
+use dbflux_ui_base::keymap::{
+    RunCommand, chord_display_parts, default_keymap, effective_keymap, run_command,
+};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::{ActiveTheme, Sizable};
+use gpui_component::ActiveTheme;
+use std::ops::Range;
 use std::path::PathBuf;
 use uuid::Uuid;
-
-actions!(command_palette, [SelectNext, SelectPrev, Close, Execute]);
-
-pub fn command_palette_keybindings() -> Vec<KeyBinding> {
-    let ctx = Some(ContextId::CommandPalette.as_gpui_context());
-    vec![
-        KeyBinding::new("up", SelectPrev, ctx),
-        KeyBinding::new("down", SelectNext, ctx),
-        KeyBinding::new("ctrl-k", SelectPrev, ctx),
-        KeyBinding::new("ctrl-j", SelectNext, ctx),
-        KeyBinding::new("escape", Close, ctx),
-        KeyBinding::new("enter", Execute, ctx),
-    ]
-}
 
 /// A searchable item in the command palette.
 #[derive(Clone)]
@@ -43,6 +34,8 @@ pub enum PaletteItem {
         profile_id: Uuid,
         name: String,
         is_connected: bool,
+        /// The driver's logo and tone, when the driver is registered.
+        icon: Option<(AppIcon, DriverIconTone)>,
     },
     Resource(ResourceItem),
     Script {
@@ -272,10 +265,15 @@ impl PaletteItem {
         }
     }
 
-    /// Optional qualifier text shown after the item name.
+    /// Right-aligned mono qualifier: where a resource lives, a script's
+    /// folder, a chart's connection, or "connected" for an open connection.
+    /// Commands show their shortcut keycaps there instead.
     pub fn qualifier(&self) -> Option<String> {
         match self {
-            Self::Action { shortcut, .. } => shortcut.map(|s| s.to_string()),
+            Self::Action { .. } => None,
+            Self::Connection { is_connected, .. } => {
+                is_connected.then(|| dbflux_i18n::t!("palette.connection.connected"))
+            }
             Self::SavedChart { profile_name, .. } => Some(profile_name.clone()),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
@@ -315,6 +313,66 @@ impl PaletteItem {
             }
             _ => None,
         }
+    }
+}
+
+impl PaletteItem {
+    /// Leading icon and, for a connection, the driver's tone. Rows without a
+    /// tone draw the icon muted, or tinted while selected.
+    fn icon(&self) -> (AppIcon, Option<DriverIconTone>) {
+        match self {
+            Self::Action { id, .. } => (command_icon(id), None),
+            Self::Connection { icon, .. } => match icon {
+                Some((icon, tone)) => (*icon, Some(*tone)),
+                None => (AppIcon::Database, None),
+            },
+            Self::Resource(ResourceItem::Table { .. }) => (AppIcon::Table, None),
+            Self::Resource(ResourceItem::View { .. }) => (AppIcon::Eye, None),
+            Self::Resource(ResourceItem::Collection { .. }) => (AppIcon::Box, None),
+            Self::Resource(ResourceItem::KeyValueDb { .. }) => (AppIcon::KeyRound, None),
+            Self::Script { .. } => (AppIcon::FileCode, None),
+            Self::SavedChart { .. } => (AppIcon::ChartSpline, None),
+            Self::ImportDashboard => (AppIcon::Download, None),
+        }
+    }
+
+    /// Muted qualifier drawn right after a command's name: its category.
+    fn inline_qualifier(&self) -> Option<SharedString> {
+        match self {
+            Self::Action { category, .. } => Some(category.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Icon of a palette command, by command id.
+fn command_icon(id: &str) -> AppIcon {
+    match id {
+        "new_query_tab" => AppIcon::Plus,
+        "run_query" | "run_query_in_new_tab" => AppIcon::Play,
+        "save_query" | "save_file_as" => AppIcon::Save,
+        "open_script_file" => AppIcon::Folder,
+        "toggle_comment" | "focus_editor" => AppIcon::Code,
+        "open_history" => AppIcon::History,
+        "cancel_query" | "close_tab" => AppIcon::CircleX,
+        "next_tab" => AppIcon::ChevronRight,
+        "prev_tab" => AppIcon::ChevronLeft,
+        "export_results" => AppIcon::Download,
+        "open_connection_manager" => AppIcon::Cable,
+        "disconnect" => AppIcon::Unplug,
+        "refresh_schema" => AppIcon::RefreshCcw,
+        "focus_sidebar" | "toggle_sidebar" => AppIcon::Database,
+        "focus_results" | "toggle_results" => AppIcon::Rows3,
+        "focus_tasks" | "toggle_tasks" => AppIcon::Loader,
+        "toggle_editor" => AppIcon::SquareTerminal,
+        "open_settings" => AppIcon::Settings,
+        "open_login_modal" | "open_sso_wizard" => AppIcon::KeyRound,
+        "open_mcp_approvals" | "refresh_mcp_governance" => AppIcon::Bot,
+        "open_audit_viewer" => AppIcon::FingerprintPattern,
+        "open_saved_chart" => AppIcon::ChartSpline,
+        "new_dashboard" => AppIcon::ChartColumnBig,
+        "analyze_dump_file" => AppIcon::FileSpreadsheet,
+        _ => AppIcon::Zap,
     }
 }
 
@@ -365,6 +423,10 @@ struct FilteredItem {
 
 const VISIBLE_ITEMS: usize = 8;
 
+/// Most commands a mixed query (no `>` or `@` prefix) keeps, so the
+/// connections and tables it also matches stay on screen (P1Palette).
+const MIXED_QUERY_COMMAND_LIMIT: usize = 3;
+
 /// Section grouping for the rendered palette list.
 ///
 /// The order here is the visual order in the palette. Sections render only
@@ -372,14 +434,22 @@ const VISIBLE_ITEMS: usize = 8;
 /// themselves are not selectable — they are a render-only concern.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PaletteSection {
-    Connections,
     Commands,
+    Connections,
     Charts,
     Tables,
     Scripts,
 }
 
 impl PaletteSection {
+    const ORDER: [PaletteSection; 5] = [
+        Self::Commands,
+        Self::Connections,
+        Self::Charts,
+        Self::Tables,
+        Self::Scripts,
+    ];
+
     fn label(self) -> String {
         match self {
             Self::Connections => dbflux_i18n::t!("palette.section.connections"),
@@ -400,15 +470,42 @@ impl PaletteSection {
         }
     }
 
-    /// Visual ordering key. Must mirror `section_order` in `render` so that
-    /// keyboard navigation walks the list in the same order the user sees it.
-    fn sort_order(self) -> u8 {
+    /// Visual ordering key, the position in [`Self::ORDER`], so keyboard
+    /// navigation walks the list in the same order the user sees it.
+    fn sort_order(self) -> usize {
+        Self::ORDER
+            .iter()
+            .position(|section| *section == self)
+            .unwrap_or(Self::ORDER.len())
+    }
+}
+
+/// What a query searches, chosen by its first character: `>` keeps only
+/// commands, `@` only tables and collections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaletteScope {
+    All,
+    Commands,
+    Tables,
+}
+
+impl PaletteScope {
+    /// Splits a typed query into its scope and the text to match.
+    fn parse(query: &str) -> (Self, &str) {
+        if let Some(rest) = query.strip_prefix('>') {
+            (Self::Commands, rest.trim_start())
+        } else if let Some(rest) = query.strip_prefix('@') {
+            (Self::Tables, rest.trim_start())
+        } else {
+            (Self::All, query)
+        }
+    }
+
+    fn includes(self, item: &PaletteItem) -> bool {
         match self {
-            Self::Connections => 0,
-            Self::Commands => 1,
-            Self::Charts => 2,
-            Self::Tables => 3,
-            Self::Scripts => 4,
+            Self::All => true,
+            Self::Commands => matches!(item, PaletteItem::Action { .. }),
+            Self::Tables => matches!(item, PaletteItem::Resource(_)),
         }
     }
 }
@@ -426,67 +523,99 @@ enum PaletteRow {
     },
 }
 
-fn palette_item_name(
-    item: &PaletteItem,
-    name: impl Into<SharedString>,
-    is_selected: bool,
-    theme: &gpui_component::theme::Theme,
-) -> AnyElement {
-    // Selected rows use the banner-style amber background, so the row name
-    // mirrors `theme.primary` for visual emphasis. Inactive rows keep the
-    // regular foreground.
-    let color = if is_selected {
-        theme.primary
-    } else {
-        theme.foreground
+/// Byte ranges of `name` that fuzzy-match `query`, merged into runs, for the
+/// tinted match highlight. Empty when the query is empty or only matched
+/// other fields of the item.
+fn match_ranges(matcher: &SkimMatcherV2, name: &str, query: &str) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let Some((_, char_indices)) = matcher.fuzzy_indices(name, query) else {
+        return Vec::new();
     };
 
-    match item {
-        PaletteItem::Resource(_) | PaletteItem::Script { .. } | PaletteItem::SavedChart { .. } => {
-            MonoLabel::new(name).color(color).into_any_element()
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+
+    for (char_index, (byte_index, character)) in name.char_indices().enumerate() {
+        if !char_indices.contains(&char_index) {
+            continue;
         }
-        _ => Body::new(name).color(color).into_any_element(),
+
+        let byte_end = byte_index + character.len_utf8();
+
+        match ranges.last_mut() {
+            Some(last) if last.end == byte_index => last.end = byte_end,
+            _ => ranges.push(byte_index..byte_end),
+        }
+    }
+
+    ranges
+}
+
+/// Contexts searched, in order, for the chord a palette command shows.
+const PALETTE_SHORTCUT_CONTEXTS: [ContextId; 5] = [
+    ContextId::Global,
+    ContextId::Editor,
+    ContextId::Results,
+    ContextId::Sidebar,
+    ContextId::BackgroundTasks,
+];
+
+/// Keycap of the keys that run `command` inside the palette.
+fn palette_shortcut(command: Command) -> Option<SharedString> {
+    dbflux_ui_base::keymap::shortcut_label(ContextId::CommandPalette, command)
+}
+
+/// Keycaps of a palette command.
+///
+/// A command the default keymap binds shows the keys the effective keymap
+/// gives it, so a rebinding shows at once and a removed shortcut shows
+/// none: one keycap per key of a single chord, one keycap per chord of a
+/// key sequence. Any other command shows its explicit `shortcut`, if it has
+/// one.
+fn palette_command_keycaps(id: &str, shortcut: Option<&str>) -> Vec<SharedString> {
+    let command = Command::from_palette_id(id).or_else(|| {
+        Command::all_variants()
+            .into_iter()
+            .find(|command| command.id() == id)
+    });
+
+    let keymap_binds_command = command.is_some_and(|command| {
+        default_slots(default_keymap())
+            .iter()
+            .any(|slot| slot.command == command)
+    });
+
+    match command {
+        Some(command) if keymap_binds_command => {
+            let keymap = effective_keymap();
+
+            PALETTE_SHORTCUT_CONTEXTS
+                .iter()
+                .find_map(|context| keymap.keys_for_command(*context, command))
+                .map(|keys| {
+                    if keys.is_single() {
+                        chord_display_parts(keys.first())
+                    } else {
+                        keys.chords()
+                            .iter()
+                            .map(|chord| chord_display_parts(chord).join(" ").into())
+                            .collect()
+                    }
+                })
+                .unwrap_or_default()
+        }
+        _ => shortcut.map(palette_shortcut_parts).unwrap_or_default(),
     }
 }
 
-fn palette_category_text(
-    label: impl Into<SharedString>,
-    is_selected: bool,
-    theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(label).color(if is_selected {
-        theme.primary.opacity(0.75)
-    } else {
-        theme.muted_foreground
-    })
-}
-
-fn palette_qualifier_text(
-    label: impl Into<SharedString>,
-    is_selected: bool,
-    theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(label).color(if is_selected {
-        theme.primary.opacity(0.65)
-    } else {
-        theme.muted_foreground
-    })
-}
-
-#[cfg(test)]
-fn palette_shortcut_text(
-    shortcut: impl Into<SharedString>,
-    is_selected: bool,
-    theme: &gpui_component::theme::Theme,
-) -> MonoCaption {
-    MonoCaption::new(shortcut).color(text_color_for_selected(is_selected, theme))
-}
-
-/// Split a shortcut string like "ctrl-shift-k" into Chord parts.
+/// Split a shortcut string like "ctrl-shift-k" into one label per keycap.
 ///
 /// Recognizes the canonical modifier tokens used in `KeyBinding` strings
 /// (`ctrl`, `shift`, `alt`, `cmd`) and capitalizes them for display. The
-/// final segment is treated as the key name and uppercased.
+/// final segment is the key name: uppercased after a modifier (`Ctrl E`),
+/// kept as typed on its own (`x`).
 fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
     let tokens: Vec<&str> = shortcut.split('-').collect();
 
@@ -498,7 +627,9 @@ fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
     let last_idx = tokens.len() - 1;
 
     for (idx, token) in tokens.iter().enumerate() {
-        let display = if idx == last_idx {
+        let display = if idx == last_idx && last_idx == 0 {
+            token.to_string()
+        } else if idx == last_idx {
             token.to_uppercase()
         } else {
             match token.to_lowercase().as_str() {
@@ -521,6 +652,73 @@ fn palette_shortcut_parts(shortcut: &str) -> Vec<SharedString> {
     parts
 }
 
+/// The items a typed query keeps, with their fuzzy-match scores. A leading
+/// `>` or `@` narrows the search to commands or to tables and collections.
+fn filter_items(items: &[PaletteItem], matcher: &SkimMatcherV2, query: &str) -> Vec<FilteredItem> {
+    let (scope, text) = PaletteScope::parse(query);
+
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| scope.includes(item))
+        .filter_map(|(index, item)| {
+            if text.is_empty() {
+                return Some(FilteredItem { index, score: 0 });
+            }
+
+            matcher
+                .fuzzy_match(&item.search_text(), text)
+                .map(|score| FilteredItem { index, score })
+        })
+        .collect()
+}
+
+/// Orders `filtered` the way the list shows it: by section, then by score,
+/// then by kind. A mixed query keeps only its best
+/// [`MIXED_QUERY_COMMAND_LIMIT`] commands so every kind it matches shows.
+fn arrange_results(
+    items: &[PaletteItem],
+    mut filtered: Vec<FilteredItem>,
+    query: &str,
+) -> Vec<FilteredItem> {
+    filtered.sort_by(|a, b| {
+        let item_a = &items[a.index];
+        let item_b = &items[b.index];
+        let section_a = PaletteSection::for_item(item_a).sort_order();
+        let section_b = PaletteSection::for_item(item_b).sort_order();
+
+        section_a
+            .cmp(&section_b)
+            .then_with(|| b.score.cmp(&a.score))
+            .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
+    });
+
+    let (scope, text) = PaletteScope::parse(query);
+
+    if scope == PaletteScope::All && !text.trim().is_empty() {
+        let mut commands_kept = 0;
+
+        filtered.retain(|filtered_item| {
+            if !matches!(items[filtered_item.index], PaletteItem::Action { .. }) {
+                return true;
+            }
+
+            commands_kept += 1;
+            commands_kept <= MIXED_QUERY_COMMAND_LIMIT
+        });
+    }
+
+    filtered
+}
+
+/// Where the chosen item opens: `Enter` reuses the tab already showing it,
+/// the new-tab chord (`Ctrl ↵`) always opens another one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenPlacement {
+    ReuseTab,
+    NewTab,
+}
+
 pub struct CommandPalette {
     visible: bool,
     items: Vec<PaletteItem>,
@@ -529,6 +727,8 @@ pub struct CommandPalette {
     scroll_offset: usize,
     input_state: Entity<InputState>,
     matcher: SkimMatcherV2,
+    /// The typed query without its scope prefix, for the match highlight.
+    match_query: String,
 }
 
 /// Event emitted when the user selects a palette item.
@@ -543,14 +743,18 @@ pub enum PaletteSelection {
         profile_id: Uuid,
         table: TableRef,
         database: Option<String>,
+        /// Open another tab even when one already shows this table.
+        new_tab: bool,
     },
     OpenCollection {
         profile_id: Uuid,
         collection: CollectionRef,
+        new_tab: bool,
     },
     OpenKeyValue {
         profile_id: Uuid,
         database: String,
+        new_tab: bool,
     },
     FocusConnection {
         profile_id: Uuid,
@@ -581,8 +785,17 @@ impl CommandPalette {
                     let query = this.input_state.read(cx).value().to_string();
                     this.update_filter(&query, cx);
                 }
-                InputEvent::PressEnter { .. } => {
-                    this.execute_selected(window, cx);
+                // The search input owns Enter and the primary-modifier Enter
+                // while it has focus, so the new-tab chord arrives here as a
+                // secondary Enter rather than through the palette keymap.
+                InputEvent::PressEnter { secondary, .. } => {
+                    let placement = if *secondary {
+                        OpenPlacement::NewTab
+                    } else {
+                        OpenPlacement::ReuseTab
+                    };
+
+                    this.execute_selected(placement, window, cx);
                 }
                 _ => {}
             },
@@ -597,6 +810,7 @@ impl CommandPalette {
             scroll_offset: 0,
             input_state,
             matcher: SkimMatcherV2::default(),
+            match_query: String::new(),
         }
     }
 
@@ -618,6 +832,8 @@ impl CommandPalette {
         self.visible = true;
         self.selected_index = 0;
         self.scroll_offset = 0;
+        self.match_query.clear();
+        self.filtered = arrange_results(&self.items, std::mem::take(&mut self.filtered), "");
 
         self.input_state.update(cx, |state, cx| {
             state.set_value("", window, cx);
@@ -642,13 +858,14 @@ impl CommandPalette {
             });
             self.selected_index = 0;
             self.scroll_offset = 0;
+            self.match_query.clear();
             self.filtered = self
                 .items
                 .iter()
                 .enumerate()
                 .map(|(index, _)| FilteredItem { index, score: 0 })
                 .collect();
-            self.sort_filtered_by_section();
+            self.filtered = arrange_results(&self.items, std::mem::take(&mut self.filtered), "");
         }
 
         cx.notify();
@@ -666,50 +883,13 @@ impl CommandPalette {
     }
 
     fn update_filter(&mut self, query: &str, cx: &mut Context<Self>) {
-        if query.is_empty() {
-            self.filtered = self
-                .items
-                .iter()
-                .enumerate()
-                .map(|(index, _)| FilteredItem { index, score: 0 })
-                .collect();
-        } else {
-            self.filtered = self
-                .items
-                .iter()
-                .enumerate()
-                .filter_map(|(index, item)| {
-                    let search_text = item.search_text();
-                    self.matcher
-                        .fuzzy_match(&search_text, query)
-                        .map(|score| FilteredItem { index, score })
-                })
-                .collect();
-        }
-
-        self.sort_filtered_by_section();
+        let filtered = filter_items(&self.items, &self.matcher, query);
+        self.filtered = arrange_results(&self.items, filtered, query);
+        self.match_query = PaletteScope::parse(query).1.to_string();
 
         self.selected_index = 0;
         self.scroll_offset = 0;
         cx.notify();
-    }
-
-    /// Sort `self.filtered` so its index order matches the visual section
-    /// order produced by the renderer. Within a section, items are ordered by
-    /// fuzzy-match score (desc) and then by `type_priority` as a tiebreaker.
-    /// Keeping these in sync ensures up/down keyboard navigation walks the
-    /// list in the order the user sees it instead of jumping across sections.
-    fn sort_filtered_by_section(&mut self) {
-        self.filtered.sort_by(|a, b| {
-            let item_a = &self.items[a.index];
-            let item_b = &self.items[b.index];
-            let sec_a = PaletteSection::for_item(item_a).sort_order();
-            let sec_b = PaletteSection::for_item(item_b).sort_order();
-            sec_a
-                .cmp(&sec_b)
-                .then_with(|| b.score.cmp(&a.score))
-                .then_with(|| item_a.type_priority().cmp(&item_b.type_priority()))
-        });
     }
 
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
@@ -757,7 +937,14 @@ impl CommandPalette {
         }
     }
 
-    fn execute_selected(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn execute_selected(
+        &mut self,
+        placement: OpenPlacement,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_tab = placement == OpenPlacement::NewTab;
+
         if let Some(filtered) = self.filtered.get(self.selected_index)
             && let Some(item) = self.items.get(filtered.index)
         {
@@ -799,6 +986,7 @@ impl CommandPalette {
                             name: name.clone(),
                         },
                         database: database.clone(),
+                        new_tab,
                     },
                     ResourceItem::Collection {
                         profile_id,
@@ -811,6 +999,7 @@ impl CommandPalette {
                             database: database.clone(),
                             name: name.clone(),
                         },
+                        new_tab,
                     },
                     ResourceItem::KeyValueDb {
                         profile_id,
@@ -819,6 +1008,7 @@ impl CommandPalette {
                     } => PaletteSelection::OpenKeyValue {
                         profile_id: *profile_id,
                         database: database.clone(),
+                        new_tab,
                     },
                 },
                 PaletteItem::Script { path, .. } => {
@@ -837,67 +1027,225 @@ impl CommandPalette {
     }
 
     fn render_palette_item(
-        idx: usize,
+        &self,
+        display_idx: usize,
         item: &PaletteItem,
         is_selected: bool,
-        theme: &gpui_component::theme::Theme,
-        warning_bg: gpui::Hsla,
+        cx: &App,
     ) -> Stateful<Div> {
-        let (category, name) = item.display_label();
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let (_, name) = item.display_label();
 
-        // Right column: action shortcuts use a Chord; resources/scripts/
-        // connections use their qualifier text. Selected rows additionally
-        // surface an `Enter` glyph to reinforce the run affordance.
-        let right_el: Option<AnyElement> = match item {
-            PaletteItem::Action { shortcut, .. } => shortcut.map(|s| {
-                let parts = palette_shortcut_parts(s);
-                Chord::new(parts).into_any_element()
-            }),
-            PaletteItem::Connection { .. }
-            | PaletteItem::Resource(_)
-            | PaletteItem::Script { .. }
-            | PaletteItem::SavedChart { .. }
-            | PaletteItem::ImportDashboard => item
-                .qualifier()
-                .map(|q| palette_qualifier_text(q, is_selected, theme).into_any_element()),
+        let (icon, tone) = item.icon();
+        let icon_color = match tone {
+            Some(tone) => tone.resolve(cx),
+            None if is_selected => tint,
+            None => theme.muted_foreground,
         };
 
-        let right_column = div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .when_some(right_el, |d, el| d.child(el))
-            .when(is_selected, |d| {
-                d.child(Chord::new(vec![SharedString::from("\u{21B5}")]))
-            });
+        let name_color = if is_selected {
+            ChromeColors::strong(theme)
+        } else {
+            theme.foreground
+        };
+
+        let highlights: Vec<(Range<usize>, HighlightStyle)> =
+            match_ranges(&self.matcher, &name, &self.match_query)
+                .into_iter()
+                .map(|range| {
+                    (
+                        range,
+                        HighlightStyle {
+                            color: Some(tint),
+                            font_weight: Some(FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect();
+
+        let keycaps: Vec<AnyElement> = match item {
+            PaletteItem::Action { id, shortcut, .. } => palette_command_keycaps(id, *shortcut)
+                .into_iter()
+                .map(|part| Kbd::new(part).into_any_element())
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let wash = tint.opacity(PaletteMetrics::SELECTED_ALPHA);
 
         div()
-            .id(("cmd", idx))
-            .w_full()
-            .px(Spacing::MD)
-            .py(Spacing::SM)
+            .id(("cmd", display_idx))
+            .relative()
             .flex()
+            .flex_shrink_0()
             .items_center()
-            .justify_between()
-            .rounded(Radii::SM)
+            .gap(PaletteMetrics::ROW_GAP)
+            .h(PaletteMetrics::ROW_HEIGHT)
+            .px(PaletteMetrics::PADDING_X)
             .cursor_pointer()
-            .border_l_2()
-            .when(is_selected, |d| {
-                d.bg(warning_bg).border_color(theme.primary)
+            .when(is_selected, |row| {
+                row.bg(wash).child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(PaletteMetrics::SELECTION_BAR)
+                        .bg(tint),
+                )
             })
-            .when(!is_selected, |d| {
-                d.border_color(gpui::transparent_black())
-                    .hover(|d| d.bg(theme.secondary))
+            .when(!is_selected, |row| {
+                row.hover(|row| row.bg(theme.list_hover))
             })
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(palette_category_text(category, is_selected, theme))
-                    .child(palette_item_name(item, name, is_selected, theme)),
+                Icon::new(icon)
+                    .size(PaletteMetrics::ROW_ICON)
+                    .color(icon_color),
             )
-            .child(right_column)
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(PaletteMetrics::ROW_FONT)
+                    .text_color(name_color)
+                    .child(StyledText::new(name).with_highlights(highlights)),
+            )
+            .when_some(item.inline_qualifier(), |row, qualifier| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(PaletteMetrics::QUALIFIER_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(qualifier),
+                )
+            })
+            .child(div().flex_1())
+            .when_some(item.qualifier(), |row, qualifier| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(AppFonts::MONO)
+                        .text_size(PaletteMetrics::QUALIFIER_FONT)
+                        .text_color(theme.muted_foreground)
+                        .child(qualifier),
+                )
+            })
+            .children(keycaps)
+    }
+
+    fn render_search_row(&self, cx: &App) -> Div {
+        let theme = cx.theme();
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(PaletteMetrics::SEARCH_GAP)
+            .h(PaletteMetrics::SEARCH_HEIGHT)
+            .px(PaletteMetrics::PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Icon::new(AppIcon::Search)
+                    .size(PaletteMetrics::SEARCH_ICON)
+                    .color(ChromeColors::tint(theme)),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.input_state)
+                        .appearance(false)
+                        .text_size(PaletteMetrics::QUERY_FONT)
+                        .text_color(ChromeColors::strong(theme))
+                        .px_0(),
+                ),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(PaletteMetrics::COUNT_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{} / {}", self.filtered.len(), self.items.len())),
+            )
+            .when_some(palette_shortcut(Command::Cancel), |header, label| {
+                header.child(Kbd::new(label))
+            })
+    }
+
+    fn render_footer(cx: &App) -> Div {
+        let theme = cx.theme();
+        let navigate_keys = palette_navigate_label(
+            palette_shortcut(Command::SelectPrev),
+            palette_shortcut(Command::SelectNext),
+        );
+
+        let hint = |label: String| div().flex_shrink_0().child(label);
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(PaletteMetrics::FOOTER_GAP)
+            .h(PaletteMetrics::FOOTER_HEIGHT)
+            .px(PaletteMetrics::PADDING_X)
+            .border_t_1()
+            .border_color(theme.border)
+            .text_size(PaletteMetrics::FOOTER_FONT)
+            .text_color(theme.muted_foreground)
+            .when_some(navigate_keys, |footer, keys| {
+                footer
+                    .child(Kbd::new(keys))
+                    .child(hint(dbflux_i18n::t!("palette.footer.navigate")))
+            })
+            .when_some(palette_shortcut(Command::Execute), |footer, label| {
+                footer
+                    .child(Kbd::new(footer_key_label(&label)))
+                    .child(hint(dbflux_i18n::t!("palette.footer.run")))
+            })
+            .when_some(
+                palette_shortcut(Command::RunQueryInNewTab),
+                |footer, label| {
+                    footer
+                        .child(Kbd::new(label))
+                        .child(hint(dbflux_i18n::t!("palette.footer.open_in_new_tab")))
+                },
+            )
+            .child(div().flex_1())
+            .child(Kbd::new(">"))
+            .child(hint(dbflux_i18n::t!("palette.footer.commands_only")))
+            .child(Kbd::new("@"))
+            .child(hint(dbflux_i18n::t!("palette.footer.tables_only")))
+    }
+}
+
+/// The footer's move keycap: the previous and next keys side by side in one
+/// keycap (`↑↓`), or whichever of them is bound.
+fn palette_navigate_label(
+    previous: Option<SharedString>,
+    next: Option<SharedString>,
+) -> Option<SharedString> {
+    match (previous, next) {
+        (None, None) => None,
+        (previous, next) => Some(
+            previous
+                .into_iter()
+                .chain(next)
+                .map(|label| label.to_string())
+                .collect::<String>()
+                .into(),
+        ),
+    }
+}
+
+/// A lone Enter reads `↵` in the footer, like the new-tab chord next to it
+/// (`Ctrl ↵`).
+fn footer_key_label(label: &str) -> SharedString {
+    if label == "Enter" {
+        "\u{21b5}".into()
+    } else {
+        label.to_string().into()
     }
 }
 
@@ -905,61 +1253,83 @@ impl EventEmitter<PaletteSelection> for CommandPalette {}
 impl EventEmitter<CommandPaletteClosed> for CommandPalette {}
 
 impl Render for CommandPalette {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
 
         let theme = cx.theme();
-        let warning_bg = SemBannerColors::for_current(cx).warning_bg;
-        let input_state = self.input_state.clone();
 
         // Build the windowed list (scroll_offset..+VISIBLE_ITEMS) then group
         // the resulting items by section. Section headers are interleaved
         // before the first item of each section but are NOT counted in the
         // `display_idx` that compares against `selected_index`.
-        let windowed: Vec<(usize, PaletteItem)> = self
+        let windowed: Vec<(usize, usize)> = self
             .filtered
             .iter()
             .enumerate()
             .skip(self.scroll_offset)
             .take(VISIBLE_ITEMS)
-            .map(|(idx, filtered)| (idx, self.items[filtered.index].clone()))
+            .map(|(display_idx, filtered)| (display_idx, filtered.index))
             .collect();
 
-        let section_order = [
-            PaletteSection::Connections,
-            PaletteSection::Commands,
-            PaletteSection::Charts,
-            PaletteSection::Tables,
-            PaletteSection::Scripts,
-        ];
+        let mut rows: Vec<PaletteRow> =
+            Vec::with_capacity(windowed.len() + PaletteSection::ORDER.len());
 
-        let mut rows: Vec<PaletteRow> = Vec::with_capacity(windowed.len() + section_order.len());
-        for section in section_order {
+        for section in PaletteSection::ORDER {
             let mut header_pushed = false;
-            for (display_idx, item) in windowed.iter() {
-                if PaletteSection::for_item(item) != section {
+
+            for &(display_idx, palette_idx) in &windowed {
+                if PaletteSection::for_item(&self.items[palette_idx]) != section {
                     continue;
                 }
+
                 if !header_pushed {
-                    rows.push(PaletteRow::SectionHeader(SharedString::from(
-                        section.label().to_uppercase(),
-                    )));
+                    rows.push(PaletteRow::SectionHeader(section.label().into()));
                     header_pushed = true;
                 }
-                // `palette_idx` is the original index into `self.items` for
-                // click handlers that re-trigger `execute_selected`.
-                let palette_idx = self.filtered[*display_idx].index;
+
                 rows.push(PaletteRow::Item {
-                    display_idx: *display_idx,
+                    display_idx,
                     palette_idx,
                 });
             }
         }
 
-        let total_count = self.items.len();
-        let filtered_count = self.filtered.len();
+        let list_rows: Vec<AnyElement> = rows
+            .into_iter()
+            .map(|row| match row {
+                PaletteRow::SectionHeader(label) => div()
+                    .pt(PaletteMetrics::SECTION_PADDING_TOP)
+                    .pb(PaletteMetrics::SECTION_PADDING_BOTTOM)
+                    .px(PaletteMetrics::PADDING_X)
+                    .child(Text::label(label).font_size(PaletteMetrics::SECTION_FONT))
+                    .into_any_element(),
+                PaletteRow::Item {
+                    display_idx,
+                    palette_idx,
+                } => {
+                    let is_selected = display_idx == self.selected_index;
+
+                    self.render_palette_item(display_idx, &self.items[palette_idx], is_selected, cx)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.selected_index = display_idx;
+                            this.execute_selected(OpenPlacement::ReuseTab, window, cx);
+                        }))
+                        .into_any_element()
+                }
+            })
+            .collect();
+
+        let surface = inspect_surface_role(SurfaceRole::Modal);
+        let card_shape = Chamfer::new(ChamferCut::CARD)
+            .fill(surface.fill.resolve(theme))
+            .border(surface.border.resolve(theme));
+
+        let max_height = window.viewport_size().height - PaletteMetrics::TOP_OFFSET * 2.0;
 
         div()
             .id("command-palette-overlay")
@@ -968,7 +1338,8 @@ impl Render for CommandPalette {
             .inset_0()
             .flex()
             .justify_center()
-            .pt(px(80.0))
+            .items_start()
+            .pt(PaletteMetrics::TOP_OFFSET)
             .bg(overlay_bg(theme))
             .on_mouse_down(
                 MouseButton::Left,
@@ -976,62 +1347,46 @@ impl Render for CommandPalette {
                     this.hide(cx);
                 }),
             )
-            .on_action(cx.listener(|this, _: &SelectPrev, _window, cx| {
-                this.select_prev(cx);
-            }))
-            .on_action(cx.listener(|this, _: &SelectNext, _window, cx| {
-                this.select_next(cx);
-            }))
-            .on_action(cx.listener(|this, _: &Close, _window, cx| {
-                this.hide(cx);
-            }))
-            .on_action(cx.listener(|this, _: &Execute, window, cx| {
-                this.execute_selected(window, cx);
+            // The keymap's CommandPalette layer binds its keys to these
+            // commands; anything else goes on to the workspace.
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                match run_command(action) {
+                    Some(Command::SelectPrev) => this.select_prev(cx),
+                    Some(Command::SelectNext) => this.select_next(cx),
+                    Some(Command::Cancel) => this.hide(cx),
+                    Some(Command::Execute) => {
+                        this.execute_selected(OpenPlacement::ReuseTab, window, cx)
+                    }
+                    Some(Command::RunQueryInNewTab) => {
+                        this.execute_selected(OpenPlacement::NewTab, window, cx)
+                    }
+                    _ => cx.propagate(),
+                }
             }))
             .child(
-                surface_modal_container(cx)
+                div()
                     .id("command-palette-container")
-                    // Force the deepest Ayu Dark background; the default
-                    // ModalContainer surface is a raised popover tone which
-                    // read as too warm / Mirage-like inside this palette.
-                    .bg(theme.background)
-                    .w_full()
-                    .max_w(px(560.0))
-                    .max_h(px(440.0))
-                    .shadow_lg()
+                    .relative()
+                    .w(PaletteMetrics::WIDTH)
+                    .max_w_full()
+                    .max_h(max_height)
                     .flex()
                     .flex_col()
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
-                    .child(
-                        div()
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::SM)
-                            .child(Icon::new(AppIcon::Search).small().muted())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(Input::new(&input_state).small().cleanable(true)),
-                            )
-                            .child(MonoCaption::new(format!(
-                                "{} / {}",
-                                filtered_count, total_count
-                            )))
-                            .child(Chord::new(vec![SharedString::from("Esc")])),
-                    )
+                    .child(card_shape)
+                    .child(self.render_search_row(cx))
                     .child(
                         div()
                             .id("command-palette-list")
+                            .flex()
+                            .flex_col()
                             .flex_1()
+                            .min_h_0()
                             .overflow_y_hidden()
-                            .p(Spacing::XS)
+                            .pb(PaletteMetrics::LIST_PADDING_BOTTOM)
                             .on_scroll_wheel(cx.listener(
                                 |this, event: &ScrollWheelEvent, _window, cx| {
                                     let delta = event.delta.pixel_delta(px(1.0));
@@ -1042,98 +1397,22 @@ impl Render for CommandPalette {
                                     }
                                 },
                             ))
-                            .children(rows.into_iter().map(|row| {
-                                match row {
-                                    PaletteRow::SectionHeader(label) => div()
-                                        .px(Spacing::MD)
-                                        .py(Spacing::XS)
-                                        .child(
-                                            MonoCaption::new(label)
-                                                .color(theme.muted_foreground)
-                                                .into_any_element(),
-                                        )
-                                        .into_any_element(),
-                                    PaletteRow::Item {
-                                        display_idx,
-                                        palette_idx,
-                                    } => {
-                                        let is_selected = display_idx == self.selected_index;
-                                        let item = self.items[palette_idx].clone();
-                                        Self::render_palette_item(
-                                            display_idx,
-                                            &item,
-                                            is_selected,
-                                            theme,
-                                            warning_bg,
-                                        )
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.selected_index = display_idx;
-                                            this.execute_selected(window, cx);
-                                        }))
-                                        .into_any_element()
-                                    }
-                                }
-                            }))
-                            .when(self.filtered.is_empty(), |d| {
-                                d.child(
+                            .children(list_rows)
+                            .when(self.filtered.is_empty(), |list| {
+                                list.child(
                                     div()
-                                        .w_full()
-                                        .py(Spacing::LG)
                                         .flex()
                                         .justify_center()
+                                        .h(PaletteMetrics::SEARCH_HEIGHT)
+                                        .items_center()
                                         .child(
-                                            Body::new(dbflux_i18n::t!("palette.empty")).muted(cx),
+                                            Text::body(dbflux_i18n::t!("palette.empty"))
+                                                .muted_foreground(),
                                         ),
                                 )
                             }),
                     )
-                    .child(
-                        div()
-                            .px(Spacing::MD)
-                            .py(Spacing::SM)
-                            .border_t_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::MD)
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::XS)
-                                            .child(Chord::new(vec![
-                                                SharedString::from("\u{2191}"),
-                                                SharedString::from("\u{2193}"),
-                                            ]))
-                                            .child(
-                                                MonoCaption::new(dbflux_i18n::t!(
-                                                    "palette.footer.navigate"
-                                                ))
-                                                .color(theme.muted_foreground),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::XS)
-                                            .child(Chord::new(vec![SharedString::from("\u{21B5}")]))
-                                            .child(
-                                                MonoCaption::new(dbflux_i18n::t!(
-                                                    "palette.footer.run"
-                                                ))
-                                                .color(theme.muted_foreground),
-                                            ),
-                                    ),
-                            ),
-                    ),
+                    .child(Self::render_footer(cx)),
             )
             .into_any_element()
     }
@@ -1142,13 +1421,11 @@ impl Render for CommandPalette {
 #[cfg(test)]
 mod tests {
     use super::{
-        PaletteCommand, PaletteItem, ResourceItem, palette_qualifier_text, palette_shortcut_text,
+        MIXED_QUERY_COMMAND_LIMIT, PaletteCommand, PaletteItem, PaletteScope, PaletteSection,
+        ResourceItem, arrange_results, filter_items, footer_key_label, match_ranges,
+        palette_navigate_label, palette_shortcut_parts,
     };
-    use dbflux_components::theme;
-    use dbflux_components::tokens::FontSizes;
-    use dbflux_components::typography::AppFonts;
-    use gpui::TestAppContext;
-    use gpui_component::theme::Theme;
+    use fuzzy_matcher::skim::SkimMatcherV2;
     use std::fs;
     use uuid::Uuid;
 
@@ -1172,36 +1449,31 @@ mod tests {
         after_impl[..render_end].to_string()
     }
 
-    fn command_palette_overlay_source() -> String {
-        let source = command_palette_source();
-        let start = source
-            .find(".id(\"command-palette-overlay\")")
-            .expect("command_palette render should define the overlay container");
-
-        let remaining = &source[start..];
-        let end = remaining
-            .find(".child(\n                        div()\n                            .id(\"command-palette-list\")")
-            .unwrap_or(remaining.len());
-
-        remaining[..end].to_string()
+    fn action(id: &'static str, name: &str) -> PaletteItem {
+        PaletteItem::Action {
+            id,
+            name: name.to_string().into(),
+            category: "Results".into(),
+            shortcut: None,
+        }
     }
 
-    #[gpui::test]
-    fn action_shortcuts_use_mono_caption_instead_of_bold_key_hint(cx: &mut TestAppContext) {
-        cx.update(theme::init);
+    fn table(name: &str) -> PaletteItem {
+        PaletteItem::Resource(ResourceItem::Table {
+            profile_id: Uuid::new_v4(),
+            profile_name: "shop-pg".to_string(),
+            database: None,
+            schema: Some("public".to_string()),
+            name: name.to_string(),
+        })
+    }
 
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let shortcut = palette_shortcut_text("ctrl-k", false, &theme).inspect();
-        let selected_shortcut = palette_shortcut_text("enter", true, &theme).inspect();
-
-        for inspection in [shortcut, selected_shortcut] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-            assert!(!inspection.uses_muted_foreground_override);
+    fn connection(name: &str, is_connected: bool) -> PaletteItem {
+        PaletteItem::Connection {
+            profile_id: Uuid::new_v4(),
+            name: name.to_string(),
+            is_connected,
+            icon: None,
         }
     }
 
@@ -1212,32 +1484,150 @@ mod tests {
         assert_eq!(command.shortcut, Some("ctrl-k"));
     }
 
-    #[gpui::test]
-    fn qualifiers_use_mono_caption_role(cx: &mut TestAppContext) {
-        cx.update(theme::init);
-
-        let theme = cx.update(|cx| Theme::global(cx).clone());
-
-        let qualifier = palette_qualifier_text("prod / analytics", false, &theme).inspect();
-        let selected = palette_qualifier_text("scripts/admin", true, &theme).inspect();
-
-        for inspection in [qualifier, selected] {
-            assert_eq!(inspection.family, Some(AppFonts::MONO));
-            assert_eq!(inspection.fallbacks, &[AppFonts::MONO_FALLBACK]);
-            assert_eq!(inspection.size_override, Some(FontSizes::XS));
-            assert_eq!(inspection.weight_override, None);
-            assert!(inspection.has_custom_color_override);
-        }
+    #[test]
+    fn shortcut_parts_give_one_keycap_per_key() {
+        assert_eq!(
+            palette_shortcut_parts("ctrl-shift-2"),
+            vec!["Ctrl", "Shift", "2"]
+        );
+        assert_eq!(palette_shortcut_parts("ctrl-e"), vec!["Ctrl", "E"]);
+        assert_eq!(palette_shortcut_parts("x"), vec!["x"]);
     }
 
     #[test]
-    fn command_palette_overlay_uses_canonical_scrim_and_modal_container_contracts() {
+    fn commands_come_first_then_connections_then_tables() {
+        assert!(PaletteSection::Commands.sort_order() < PaletteSection::Connections.sort_order());
+        assert!(PaletteSection::Connections.sort_order() < PaletteSection::Tables.sort_order());
+        assert!(PaletteSection::Tables.sort_order() < PaletteSection::Scripts.sort_order());
+    }
+
+    #[test]
+    fn scope_prefix_is_split_from_the_query() {
+        assert_eq!(PaletteScope::parse("orders"), (PaletteScope::All, "orders"));
+        assert_eq!(
+            PaletteScope::parse("> export"),
+            (PaletteScope::Commands, "export")
+        );
+        assert_eq!(PaletteScope::parse("@ord"), (PaletteScope::Tables, "ord"));
+    }
+
+    #[test]
+    fn command_scope_keeps_only_commands_and_table_scope_only_tables() {
+        let matcher = SkimMatcherV2::default();
+        let items = vec![
+            action("export_results", "Export results"),
+            connection("orders-db", true),
+            table("orders"),
+        ];
+
+        let commands = filter_items(&items, &matcher, ">");
+        assert_eq!(
+            commands.iter().map(|item| item.index).collect::<Vec<_>>(),
+            vec![0]
+        );
+
+        let tables = filter_items(&items, &matcher, "@or");
+        assert_eq!(
+            tables.iter().map(|item| item.index).collect::<Vec<_>>(),
+            vec![2]
+        );
+
+        let everything = filter_items(&items, &matcher, "");
+        assert_eq!(everything.len(), 3);
+    }
+
+    #[test]
+    fn a_mixed_query_caps_commands_so_connections_and_tables_show() {
+        let matcher = SkimMatcherV2::default();
+        let items = vec![
+            action("export_results", "Export orders"),
+            action("focus_editor", "Focus orders editor"),
+            action("open_history", "Open orders history"),
+            action("close_tab", "Close orders tab"),
+            action("next_tab", "Next orders tab"),
+            connection("orders-db", true),
+            table("orders"),
+            table("order_items"),
+        ];
+
+        let arranged = arrange_results(&items, filter_items(&items, &matcher, "or"), "or");
+        let kinds: Vec<PaletteSection> = arranged
+            .iter()
+            .map(|filtered| PaletteSection::for_item(&items[filtered.index]))
+            .collect();
+
+        let command_count = kinds
+            .iter()
+            .filter(|section| **section == PaletteSection::Commands)
+            .count();
+
+        assert_eq!(command_count, MIXED_QUERY_COMMAND_LIMIT);
+        assert!(kinds.contains(&PaletteSection::Connections));
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|section| **section == PaletteSection::Tables)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn prefixed_and_empty_queries_keep_every_command() {
+        let matcher = SkimMatcherV2::default();
+        let items = vec![
+            action("export_results", "Export orders"),
+            action("focus_editor", "Focus orders editor"),
+            action("open_history", "Open orders history"),
+            action("close_tab", "Close orders tab"),
+            table("orders"),
+        ];
+
+        let commands_only = arrange_results(&items, filter_items(&items, &matcher, "> or"), "> or");
+        assert_eq!(commands_only.len(), 4);
+
+        let everything = arrange_results(&items, filter_items(&items, &matcher, ""), "");
+        assert_eq!(everything.len(), 5);
+    }
+
+    #[test]
+    fn footer_shows_arrows_in_one_keycap_and_enter_as_a_glyph() {
+        assert_eq!(
+            palette_navigate_label(Some("↑".into()), Some("↓".into())).as_deref(),
+            Some("↑↓")
+        );
+        assert_eq!(palette_navigate_label(None, None), None);
+        assert_eq!(footer_key_label("Enter").as_ref(), "\u{21b5}");
+        assert_eq!(footer_key_label("Ctrl ↵").as_ref(), "Ctrl ↵");
+    }
+
+    #[test]
+    fn match_ranges_cover_the_matched_characters_of_the_name() {
+        let matcher = SkimMatcherV2::default();
+
+        assert_eq!(match_ranges(&matcher, "orders", "or"), vec![0..2]);
+        assert!(match_ranges(&matcher, "orders", "").is_empty());
+        assert!(match_ranges(&matcher, "orders", "xyz").is_empty());
+    }
+
+    #[test]
+    fn connection_qualifier_says_connected_only_when_connected() {
+        assert_eq!(
+            connection("cache-redis", true).qualifier().as_deref(),
+            Some("connected")
+        );
+        assert_eq!(connection("cache-redis", false).qualifier(), None);
+        assert_eq!(action("export_results", "Export results").qualifier(), None);
+    }
+
+    #[test]
+    fn command_palette_card_uses_the_modal_surface_on_the_shared_scrim() {
         let source = command_palette_source();
 
         assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
-        assert!(!source.contains("surface_panel(cx)"));
+        assert!(source.contains("inspect_surface_role(SurfaceRole::Modal)"));
+        assert!(source.contains("Chamfer::new(ChamferCut::CARD)"));
+        assert!(source.contains(".id(\"command-palette-container\")"));
     }
 
     #[test]
@@ -1247,24 +1637,6 @@ mod tests {
         assert!(source.contains(".id(\"command-palette-overlay\")"));
         assert!(source.contains(".key_context(ContextId::CommandPalette.as_gpui_context())"));
         assert!(source.contains("this.hide(cx);"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_starts_from_the_shared_modal_container() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains("surface_modal_container(cx)"));
-        assert!(source.contains(".id(\"command-palette-container\")"));
-        assert!(!source.contains("surface_panel(cx)"));
-    }
-
-    #[test]
-    fn command_palette_overlay_chain_keeps_the_shared_scrim_close_path() {
-        let source = command_palette_overlay_source();
-
-        assert!(source.contains(".bg(overlay_bg(theme))"));
-        assert!(source.contains("this.hide(cx);"));
-        assert!(!source.contains(".bg(gpui::black().opacity(0.5))"));
     }
 
     // R.1 — Import label cleanup
@@ -1286,7 +1658,7 @@ mod tests {
     #[test]
     fn command_palette_import_label_is_exactly_correct() {
         let (_category, label) = PaletteItem::ImportDashboard.display_label();
-        assert_eq!(label, "Import Dashboard from JSON...");
+        assert_eq!(label, "Import dashboard from JSON…");
     }
 
     // R.2 — New palette entries
@@ -1324,7 +1696,7 @@ mod tests {
             .any(|c| c.name == expected_name && c.category == expected_category);
         assert!(
             found,
-            "Palette must include 'Dashboards: New Dashboard...' entry"
+            "Palette must include 'Dashboards: New dashboard…' entry"
         );
     }
 
@@ -1370,6 +1742,10 @@ mod tests {
         "palette.import_dashboard.name",
         "palette.footer.navigate",
         "palette.footer.run",
+        "palette.footer.open_in_new_tab",
+        "palette.footer.commands_only",
+        "palette.footer.tables_only",
+        "palette.connection.connected",
         "palette.chart.no_saved_charts",
     ];
 
@@ -1489,7 +1865,7 @@ mod tests {
         let english = dbflux_i18n::t!("palette.command.run_query.name", locale = "en");
         let spanish = dbflux_i18n::t!("palette.command.run_query.name", locale = "es");
 
-        assert_eq!(english, "Run Query");
+        assert_eq!(english, "Run query");
         assert_eq!(spanish, "Ejecutar consulta");
         assert_ne!(english, spanish);
     }

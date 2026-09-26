@@ -1,22 +1,34 @@
 use crate::app_state_entity::{AppStateChanged, AppStateEntity, AuthProfileCreated};
-use crate::modal_frame::ModalFrame;
 use crate::platform;
-use dbflux_components::composites::{RailItem, field_row_vertical, render_wizard_rail};
+use dbflux_components::composites::{RailItem, field_row_vertical, render_wizard_stepper};
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Input};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::{Modal, modal_frame};
+#[cfg(feature = "aws")]
+use dbflux_components::primitives::Icon;
 use dbflux_components::primitives::Text;
 #[cfg(feature = "aws")]
-use dbflux_components::tokens::Radii;
-use dbflux_components::tokens::Spacing;
-use dbflux_core::AuthProfile;
+use dbflux_components::tokens::PaletteMetrics;
+use dbflux_components::tokens::{ChromeColors, ModalMetrics};
+use dbflux_components::typography::AppFonts;
+use dbflux_core::keymap_types::ContextId;
+use dbflux_core::{AuthProfile, LogErr};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-#[cfg(feature = "aws")]
 use gpui_component::ActiveTheme;
 #[cfg(feature = "aws")]
 use gpui_component::scroll::ScrollableElement;
 use uuid::Uuid;
+
+/// Width of the SSO wizard dialog (P1Flows).
+const SSO_WIZARD_WIDTH: Pixels = px(560.0);
+
+/// Height of a discovered account or role row, and of a confirm row. (36 px)
+const SSO_LIST_ROW_HEIGHT: Pixels = px(36.0);
+
+/// Width of the field names on the confirm step.
+const SSO_CONFIRM_LABEL_WIDTH: Pixels = px(120.0);
 
 #[cfg(feature = "aws")]
 use dbflux_aws::{
@@ -361,317 +373,426 @@ impl Render for SsoWizard {
     }
 }
 
+/// One discovered account or role in the wizard's framed list: 36 px, the
+/// icon, the strong name and an optional mono detail, with the tint wash and
+/// bar while it is the value in the field above.
+#[cfg(feature = "aws")]
+fn discovered_row(
+    id: impl Into<ElementId>,
+    icon: AppIcon,
+    name: String,
+    detail: Option<String>,
+    selected: bool,
+    cx: &App,
+) -> Stateful<Div> {
+    let theme = cx.theme();
+    let tint = ChromeColors::tint(theme);
+
+    div()
+        .id(id)
+        .relative()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(ModalMetrics::LIST_ROW_GAP)
+        .h(SSO_LIST_ROW_HEIGHT)
+        .px(ModalMetrics::LIST_ROW_PADDING_X)
+        .border_b_1()
+        .border_color(theme.table_row_border)
+        .cursor_pointer()
+        .when(selected, |row| {
+            row.bg(tint.opacity(PaletteMetrics::SELECTED_ALPHA)).child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(PaletteMetrics::SELECTION_BAR)
+                    .bg(tint),
+            )
+        })
+        .when(!selected, |row| row.hover(|row| row.bg(theme.list_hover)))
+        .child(
+            Icon::new(icon)
+                .size(ModalMetrics::LIST_ICON)
+                .color(if selected {
+                    tint
+                } else {
+                    theme.muted_foreground
+                }),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(ChromeColors::strong(theme))
+                .child(name),
+        )
+        .when_some(detail, |row, detail| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .font_family(AppFonts::MONO)
+                    .text_size(ModalMetrics::LIST_DETAIL_FONT)
+                    .text_color(theme.muted_foreground)
+                    .child(detail),
+            )
+        })
+}
+
+/// A 12-digit AWS account id in groups of four (`1234 5678 9012`); any
+/// other value is returned unchanged.
+#[cfg_attr(not(feature = "aws"), allow(dead_code))]
+fn grouped_account_id(account_id: &str) -> String {
+    if account_id.len() != 12 || !account_id.chars().all(|c| c.is_ascii_digit()) {
+        return account_id.to_string();
+    }
+
+    format!(
+        "{} {} {}",
+        &account_id[0..4],
+        &account_id[4..8],
+        &account_id[8..12]
+    )
+}
+
 impl SsoWizard {
+    fn render_step(&self, cx: &mut Context<Self>) -> AnyElement {
+        match self.step {
+            WizardStep::Start => div()
+                .flex()
+                .flex_col()
+                .gap(ModalMetrics::BODY_GAP)
+                .child(labeled_input(
+                    "sso-field-profile-name",
+                    dbflux_i18n::t!("sso_wizard.field.profile_name"),
+                    &self.input_profile_name,
+                    cx,
+                ))
+                .child(labeled_input(
+                    "sso-field-start-url",
+                    dbflux_i18n::t!("sso_wizard.field.start_url"),
+                    &self.input_start_url,
+                    cx,
+                ))
+                .child(labeled_input(
+                    "sso-field-region",
+                    dbflux_i18n::t!("sso_wizard.field.region"),
+                    &self.input_region,
+                    cx,
+                ))
+                .into_any_element(),
+            WizardStep::Account => self.render_account_step(cx),
+            WizardStep::Role => self.render_role_step(cx),
+            WizardStep::Confirm => {
+                let rows = [
+                    (
+                        dbflux_i18n::t!("sso_wizard.field.profile_name"),
+                        &self.input_profile_name,
+                    ),
+                    (
+                        dbflux_i18n::t!("sso_wizard.field.start_url"),
+                        &self.input_start_url,
+                    ),
+                    (
+                        dbflux_i18n::t!("sso_wizard.field.region"),
+                        &self.input_region,
+                    ),
+                    (
+                        dbflux_i18n::t!("sso_wizard.field.account_id"),
+                        &self.input_account_id,
+                    ),
+                    (
+                        dbflux_i18n::t!("sso_wizard.field.role_name"),
+                        &self.input_role_name,
+                    ),
+                ];
+
+                let theme = cx.theme();
+
+                modal_frame(cx)
+                    .children(rows.into_iter().map(|(label, input)| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(ModalMetrics::LIST_ROW_GAP)
+                            .h(SSO_LIST_ROW_HEIGHT)
+                            .px(ModalMetrics::LIST_ROW_PADDING_X)
+                            .border_b_1()
+                            .border_color(theme.table_row_border)
+                            .child(
+                                div()
+                                    .w(SSO_CONFIRM_LABEL_WIDTH)
+                                    .flex_shrink_0()
+                                    .text_color(theme.muted_foreground)
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(AppFonts::MONO)
+                                    .text_size(ModalMetrics::CODE_FONT)
+                                    .text_color(ChromeColors::strong(theme))
+                                    .child(input.read(cx).value().to_string()),
+                            )
+                    }))
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn render_account_step(&self, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg_attr(not(feature = "aws"), allow(unused_mut))]
+        let mut step = div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(labeled_input(
+                "sso-field-account-id",
+                dbflux_i18n::t!("sso_wizard.field.account_id"),
+                &self.input_account_id,
+                cx,
+            ));
+
+        #[cfg(feature = "aws")]
+        {
+            let value = self.input_account_id.read(cx).value().trim().to_string();
+            let query = value.to_lowercase();
+
+            let filtered_accounts = self
+                .discovered_accounts
+                .iter()
+                .filter(|account| {
+                    query.is_empty()
+                        || account.account_id == value
+                        || account.account_id.to_lowercase().contains(&query)
+                        || account.account_name.to_lowercase().contains(&query)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let discover_label = if self.accounts_loading {
+                dbflux_i18n::t!("sso_wizard.account.discovering")
+            } else {
+                dbflux_i18n::t!("sso_wizard.account.discover_button")
+            };
+
+            step = step
+                .child(
+                    div().flex().child(
+                        Button::new("sso-wizard-discover-accounts", discover_label)
+                            .icon(AppIcon::RefreshCcw)
+                            .disabled(self.accounts_loading)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.discover_accounts(cx);
+                            })),
+                    ),
+                )
+                .when(
+                    !self.accounts_loading
+                        && !self.discovered_accounts.is_empty()
+                        && filtered_accounts.is_empty(),
+                    |step| {
+                        step.child(Text::caption(dbflux_i18n::t!(
+                            "sso_wizard.account.no_matches"
+                        )))
+                    },
+                )
+                .when(!filtered_accounts.is_empty(), |step| {
+                    step.child(
+                        modal_frame(cx).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .max_h(DISCOVERED_LIST_MAX_HEIGHT)
+                                .overflow_y_scrollbar()
+                                .id("sso-wizard-account-list")
+                                .children(filtered_accounts.iter().enumerate().map(
+                                    |(index, account)| {
+                                        let account_id = account.account_id.clone();
+                                        let selected = account.account_id == value;
+
+                                        discovered_row(
+                                            ("sso-account", index),
+                                            AppIcon::Server,
+                                            account.account_name.clone(),
+                                            Some(grouped_account_id(&account.account_id)),
+                                            selected,
+                                            cx,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.input_account_id.update(cx, |state, cx| {
+                                                    state.set_value(account_id.clone(), window, cx);
+                                                });
+                                                cx.notify();
+                                            }),
+                                        )
+                                    },
+                                )),
+                        ),
+                    )
+                });
+        }
+
+        step.into_any_element()
+    }
+
+    fn render_role_step(&self, cx: &mut Context<Self>) -> AnyElement {
+        #[cfg_attr(not(feature = "aws"), allow(unused_mut))]
+        let mut step = div()
+            .flex()
+            .flex_col()
+            .gap(ModalMetrics::BODY_GAP)
+            .child(labeled_input(
+                "sso-field-role-name",
+                dbflux_i18n::t!("sso_wizard.field.role_name"),
+                &self.input_role_name,
+                cx,
+            ));
+
+        #[cfg(feature = "aws")]
+        {
+            let value = self.input_role_name.read(cx).value().trim().to_string();
+            let query = value.to_lowercase();
+
+            let filtered_roles = self
+                .discovered_roles
+                .iter()
+                .filter(|role| {
+                    query.is_empty() || **role == value || role.to_lowercase().contains(&query)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let discover_label = if self.roles_loading {
+                dbflux_i18n::t!("sso_wizard.role.discovering")
+            } else {
+                dbflux_i18n::t!("sso_wizard.role.discover_button")
+            };
+
+            step = step
+                .child(
+                    div().flex().child(
+                        Button::new("sso-wizard-discover-roles", discover_label)
+                            .icon(AppIcon::RefreshCcw)
+                            .disabled(self.roles_loading)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.discover_roles_for_selected_account(cx);
+                            })),
+                    ),
+                )
+                .when(
+                    !self.roles_loading
+                        && !self.discovered_roles.is_empty()
+                        && filtered_roles.is_empty(),
+                    |step| step.child(Text::caption(dbflux_i18n::t!("sso_wizard.role.no_matches"))),
+                )
+                .when(!filtered_roles.is_empty(), |step| {
+                    step.child(
+                        modal_frame(cx).child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .max_h(DISCOVERED_LIST_MAX_HEIGHT)
+                                .overflow_y_scrollbar()
+                                .id("sso-wizard-role-list")
+                                .children(filtered_roles.iter().enumerate().map(
+                                    |(index, role)| {
+                                        let role_name = role.clone();
+                                        let selected = *role == value;
+
+                                        discovered_row(
+                                            ("sso-role", index),
+                                            AppIcon::KeyRound,
+                                            role.clone(),
+                                            None,
+                                            selected,
+                                            cx,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.input_role_name.update(cx, |state, cx| {
+                                                    state.set_value(role_name.clone(), window, cx);
+                                                });
+                                                cx.notify();
+                                            }),
+                                        )
+                                    },
+                                )),
+                        ),
+                    )
+                });
+        }
+
+        step.into_any_element()
+    }
+
     fn render_visible(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let close_entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
-            let _ = close_entity.update(cx, |this, cx| this.close(cx));
+            close_entity.update(cx, |this, cx| this.close(cx)).log_err();
         };
 
-        let mut frame = ModalFrame::new("sso-wizard", &self.focus_handle, close)
-            .title(dbflux_i18n::t!("sso_wizard.title"))
-            .icon(AppIcon::Lock)
-            .width(px(680.0));
+        let is_confirm = matches!(self.step, WizardStep::Confirm);
 
         let body = div()
             .flex()
             .flex_col()
-            .flex_1()
-            .min_w(px(0.0))
-            .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(match self.step {
-                WizardStep::Start => div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::SM)
-                    .child(labeled_input(
-                        "sso-field-profile-name",
-                        dbflux_i18n::t!("sso_wizard.field.profile_name"),
-                        &self.input_profile_name,
-                        cx,
-                    ))
-                    .child(labeled_input(
-                        "sso-field-start-url",
-                        dbflux_i18n::t!("sso_wizard.field.start_url"),
-                        &self.input_start_url,
-                        cx,
-                    ))
-                    .child(labeled_input(
-                        "sso-field-region",
-                        dbflux_i18n::t!("sso_wizard.field.region"),
-                        &self.input_region,
-                        cx,
-                    ))
-                    .into_any_element(),
-                WizardStep::Account => {
-                    #[cfg_attr(not(feature = "aws"), allow(unused_mut))]
-                    let mut account_step = div()
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::SM)
-                        .child(labeled_input(
-                            "sso-field-account-id",
-                            dbflux_i18n::t!("sso_wizard.field.account_id"),
-                            &self.input_account_id,
-                            cx,
-                        ))
-                        .child(Text::caption(dbflux_i18n::t!("sso_wizard.account.hint")));
+            .gap(ModalMetrics::BODY_GAP)
+            .child(render_wizard_stepper(&sso_rail_items(self.step), cx))
+            .child(self.render_step(cx))
+            .when_some(self.status.clone(), |body, status| {
+                body.child(Text::caption(status))
+            });
 
-                    #[cfg(feature = "aws")]
-                    {
-                        let query = self.input_account_id.read(cx).value().trim().to_lowercase();
-
-                        let filtered_accounts = self
-                            .discovered_accounts
-                            .iter()
-                            .filter(|account| {
-                                if query.is_empty() {
-                                    return true;
-                                }
-
-                                account.account_id.to_lowercase().contains(&query)
-                                    || account.account_name.to_lowercase().contains(&query)
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        let discover_label = if self.accounts_loading {
-                            dbflux_i18n::t!("sso_wizard.account.discovering")
-                        } else {
-                            dbflux_i18n::t!("sso_wizard.account.discover_button")
-                        };
-
-                        account_step = account_step
-                            .child(
-                                Button::new("sso-wizard-discover-accounts", discover_label)
-                                    .ghost()
-                                    .disabled(self.accounts_loading)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.discover_accounts(cx);
-                                    })),
-                            )
-                            .when(
-                                !self.accounts_loading
-                                    && !self.discovered_accounts.is_empty()
-                                    && filtered_accounts.is_empty(),
-                                |d| {
-                                    d.child(Text::caption(dbflux_i18n::t!(
-                                        "sso_wizard.account.no_matches"
-                                    )))
-                                },
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .max_h(DISCOVERED_LIST_MAX_HEIGHT)
-                                    .overflow_y_scrollbar()
-                                    .id("sso-wizard-account-list")
-                                    .children(filtered_accounts.iter().map(|account| {
-                                        let label = format!(
-                                            "{} ({})",
-                                            account.account_name, account.account_id
-                                        );
-                                        let account_id = account.account_id.clone();
-
-                                        div()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(Radii::SM)
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.input_account_id.update(
-                                                        cx,
-                                                        |state, cx| {
-                                                            state.set_value(
-                                                                account_id.clone(),
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        },
-                                                    );
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            .child(label)
-                                    })),
-                            );
-                    }
-
-                    account_step.into_any_element()
-                }
-                WizardStep::Role => {
-                    #[cfg_attr(not(feature = "aws"), allow(unused_mut))]
-                    let mut role_step = div()
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::SM)
-                        .child(labeled_input(
-                            "sso-field-role-name",
-                            dbflux_i18n::t!("sso_wizard.field.role_name"),
-                            &self.input_role_name,
-                            cx,
-                        ))
-                        .child(Text::caption(dbflux_i18n::t!("sso_wizard.role.hint")));
-
-                    #[cfg(feature = "aws")]
-                    {
-                        let query = self.input_role_name.read(cx).value().trim().to_lowercase();
-
-                        let filtered_roles = self
-                            .discovered_roles
-                            .iter()
-                            .filter(|role| {
-                                if query.is_empty() {
-                                    return true;
-                                }
-
-                                role.to_lowercase().contains(&query)
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        let discover_label = if self.roles_loading {
-                            dbflux_i18n::t!("sso_wizard.role.discovering")
-                        } else {
-                            dbflux_i18n::t!("sso_wizard.role.discover_button")
-                        };
-
-                        role_step = role_step
-                            .child(
-                                Button::new("sso-wizard-discover-roles", discover_label)
-                                    .ghost()
-                                    .disabled(self.roles_loading)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.discover_roles_for_selected_account(cx);
-                                    })),
-                            )
-                            .when(
-                                !self.roles_loading
-                                    && !self.discovered_roles.is_empty()
-                                    && filtered_roles.is_empty(),
-                                |d| {
-                                    d.child(Text::caption(dbflux_i18n::t!(
-                                        "sso_wizard.role.no_matches"
-                                    )))
-                                },
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .max_h(DISCOVERED_LIST_MAX_HEIGHT)
-                                    .overflow_y_scrollbar()
-                                    .id("sso-wizard-role-list")
-                                    .children(filtered_roles.iter().map(|role| {
-                                        let role_name = role.clone();
-
-                                        div()
-                                            .px(Spacing::SM)
-                                            .py(Spacing::XS)
-                                            .rounded(Radii::SM)
-                                            .border_1()
-                                            .border_color(cx.theme().border)
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(move |this, _, window, cx| {
-                                                    this.input_role_name.update(cx, |state, cx| {
-                                                        state.set_value(
-                                                            role_name.clone(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            .child(role.clone())
-                                    })),
-                            );
-                    }
-
-                    role_step.into_any_element()
-                }
-                WizardStep::Confirm => div()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XS)
-                    .child(Text::body(dbflux_i18n::t!(
-                        "sso_wizard.confirm.profile",
-                        value = self.input_profile_name.read(cx).value()
-                    )))
-                    .child(Text::body(dbflux_i18n::t!(
-                        "sso_wizard.confirm.start_url",
-                        value = self.input_start_url.read(cx).value()
-                    )))
-                    .child(Text::body(dbflux_i18n::t!(
-                        "sso_wizard.confirm.region",
-                        value = self.input_region.read(cx).value()
-                    )))
-                    .child(Text::body(dbflux_i18n::t!(
-                        "sso_wizard.confirm.account",
-                        value = self.input_account_id.read(cx).value()
-                    )))
-                    .child(Text::body(dbflux_i18n::t!(
-                        "sso_wizard.confirm.role",
-                        value = self.input_role_name.read(cx).value()
-                    )))
-                    .into_any_element(),
-            })
-            .when_some(self.status.clone(), |d, status| {
-                d.child(Text::caption(status))
-            })
+        let footer = div()
+            .flex()
+            .items_center()
+            .gap(ModalMetrics::FOOTER_GAP)
             .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(Spacing::SM)
-                    .child(
-                        Button::new("sso-wizard-back", dbflux_i18n::t!("sso_wizard.back"))
-                            .ghost()
-                            .disabled(matches!(self.step, WizardStep::Start))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.back(cx);
-                            })),
-                    )
-                    .child({
-                        let next_label = if matches!(self.step, WizardStep::Confirm) {
-                            dbflux_i18n::t!("sso_wizard.save")
-                        } else {
-                            dbflux_i18n::t!("sso_wizard.next")
-                        };
-                        Button::new("sso-wizard-next", next_label)
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if matches!(this.step, WizardStep::Confirm) {
-                                    this.save_profile(cx);
-                                } else {
-                                    this.next(cx);
-                                }
-                            }))
-                    }),
+                Button::new("sso-wizard-back", dbflux_i18n::t!("sso_wizard.back"))
+                    .icon(AppIcon::ChevronLeft)
+                    .disabled(matches!(self.step, WizardStep::Start))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.back(cx);
+                    })),
+            )
+            .child(
+                Button::new(
+                    "sso-wizard-next",
+                    if is_confirm {
+                        dbflux_i18n::t!("sso_wizard.save")
+                    } else {
+                        dbflux_i18n::t!("sso_wizard.next")
+                    },
+                )
+                .primary()
+                .icon(if is_confirm {
+                    AppIcon::Save
+                } else {
+                    AppIcon::ChevronRight
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if matches!(this.step, WizardStep::Confirm) {
+                        this.save_profile(cx);
+                    } else {
+                        this.next(cx);
+                    }
+                })),
             );
 
-        frame = frame.child(
-            div()
-                .flex()
-                .flex_row()
-                .child(render_wizard_rail(
-                    &sso_rail_items(self.step),
-                    None::<fn(usize, &mut Window, &mut App)>,
-                    cx,
-                ))
-                .child(body),
-        );
-        frame.render(cx)
+        Modal::new(dbflux_i18n::t!("sso_wizard.title"))
+            .id("sso-wizard")
+            .focus_handle(&self.focus_handle)
+            .on_close(close)
+            .key_context(ContextId::SqlPreviewModal.as_gpui_context())
+            .icon(AppIcon::Cable)
+            .width(SSO_WIZARD_WIDTH)
+            .body(body)
+            .footer(footer)
+            .into_any_element()
     }
 }
 
@@ -679,7 +800,7 @@ impl SsoWizard {
 mod tests {
     #[cfg(feature = "aws")]
     use super::{AwsSsoAccount, DISCOVERED_LIST_MAX_HEIGHT};
-    use super::{SsoWizard, WizardStep, sso_rail_items};
+    use super::{SsoWizard, WizardStep, grouped_account_id, sso_rail_items};
     #[cfg(feature = "aws")]
     use gpui::FrameAction;
     use gpui::{AccessibilityFrame, FrameObserver, Role, TestAppContext};
@@ -810,23 +931,30 @@ mod tests {
     }
 
     #[gpui::test]
-    fn steps_render_in_the_shared_wizard_rail(cx: &mut TestAppContext) {
+    fn steps_render_in_the_shared_wizard_stepper(cx: &mut TestAppContext) {
         let frame = render_wizard(WizardStep::Role, |_| {}, cx);
 
         for (index, step) in WizardStep::ALL.iter().enumerate() {
-            let rail_id = format!("wizard-rail-{index}");
+            let step_id = format!("wizard-step-{index}");
             let entry = frame
                 .nodes()
-                .find(|(_, node)| node.id() == rail_id)
+                .find(|(_, node)| node.id() == step_id)
                 .map(|(_, node)| node)
-                .unwrap_or_else(|| panic!("rail entry {rail_id} is rendered"));
+                .unwrap_or_else(|| panic!("stepper entry {step_id} is rendered"));
 
             assert!(
                 entry.content_text().contains(step.label().as_str()),
-                "rail entry {rail_id} shows {}",
+                "stepper entry {step_id} shows {}",
                 step.label()
             );
         }
+    }
+
+    #[test]
+    fn twelve_digit_account_ids_are_grouped_by_four() {
+        assert_eq!(grouped_account_id("123456789012"), "1234 5678 9012");
+        assert_eq!(grouped_account_id("12345"), "12345");
+        assert_eq!(grouped_account_id("abcdefghijkl"), "abcdefghijkl");
     }
 
     #[test]
@@ -916,19 +1044,12 @@ mod tests {
         "sso_wizard.field.region",
         "sso_wizard.field.account_id",
         "sso_wizard.field.role_name",
-        "sso_wizard.account.hint",
         "sso_wizard.account.discovering",
         "sso_wizard.account.discover_button",
         "sso_wizard.account.no_matches",
-        "sso_wizard.role.hint",
         "sso_wizard.role.discovering",
         "sso_wizard.role.discover_button",
         "sso_wizard.role.no_matches",
-        "sso_wizard.confirm.profile",
-        "sso_wizard.confirm.start_url",
-        "sso_wizard.confirm.region",
-        "sso_wizard.confirm.account",
-        "sso_wizard.confirm.role",
         "sso_wizard.back",
         "sso_wizard.next",
         "sso_wizard.save",

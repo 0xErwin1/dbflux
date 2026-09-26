@@ -9,14 +9,15 @@ use dbflux_components::primitives::{Icon, Text};
 #[cfg(target_os = "linux")]
 use dbflux_components::tokens::ChromeColors;
 #[cfg(target_os = "linux")]
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::{Heights, IslandMetrics, Spacing};
 use gpui::{
     App, IntoElement, SharedString, Stateful, Window, WindowDecorations, WindowKind, WindowOptions,
     div, px,
 };
 // Only the CSD title bar uses these, and it is compiled on Linux alone.
+use gpui::InteractiveElement;
 #[cfg(target_os = "linux")]
-use gpui::{ClickEvent, Decorations, InteractiveElement, ParentElement, Styled};
+use gpui::{ClickEvent, Decorations, ParentElement, Styled};
 #[cfg(target_os = "linux")]
 use gpui_component::ActiveTheme;
 #[cfg(target_os = "linux")]
@@ -133,74 +134,37 @@ pub fn render_csd_title_bar_with_crumbs(
     crumbs: &[TitleCrumb],
     on_close: Option<TitleBarHandler>,
 ) -> Option<Stateful<gpui::Div>> {
+    if !prepare_client_decorations(window) {
+        return None;
+    }
+
     // Only the Linux CSD branch reads these; the signature stays uniform so
     // callers do not need their own cfg.
     #[cfg(not(target_os = "linux"))]
     let _ = (cx, title, crumbs, on_close);
 
-    if !should_render_csd(window) {
-        #[cfg(target_os = "linux")]
-        window.set_client_inset(px(0.0));
-        return None;
-    }
-
-    window.set_client_inset(TITLE_BAR_HEIGHT);
-
     #[cfg(target_os = "linux")]
     {
-        let controls = window.window_controls();
         let theme = cx.theme();
-        let title_text = title.to_string();
-
-        let make_button = |icon: AppIcon, handler: TitleBarHandler| {
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(px(46.0))
-                .h_full()
-                .cursor_pointer()
-                .hover(move |d| d.bg(theme.secondary))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                    handler(window, cx);
-                })
-                .child(Icon::new(icon).size(Heights::ICON_SM).muted())
-        };
-
-        let mut title_bar = div()
+        let sep_color = ChromeColors::ghost_border(theme);
+        // The row sits on the window's desk frame: no fill and no line.
+        let title_bar = div()
             .id("linux-csd-title-bar")
             .flex()
             .flex_row()
+            .flex_shrink_0()
             .items_center()
-            .h(TITLE_BAR_HEIGHT)
-            .bg(theme.tab_bar)
-            .border_b_1()
-            .border_color(theme.border)
-            .on_double_click(|_: &ClickEvent, window: &mut Window, _cx: &mut App| {
-                window.zoom_window();
-            })
-            .on_mouse_down(
-                gpui::MouseButton::Right,
-                |event: &gpui::MouseDownEvent, window: &mut Window, _cx: &mut App| {
-                    window.show_window_menu(event.position);
-                },
-            );
+            .h(IslandMetrics::WINDOW_TITLE_HEIGHT);
 
-        let sep_color = ChromeColors::ghost_border();
-
-        let mut drag_area = div()
+        let mut drag_area = csd_drag_area("linux-csd-drag-area")
             .flex()
             .flex_row()
             .items_center()
             .flex_1()
             .h_full()
-            .pl_3()
+            .pl(IslandMetrics::WINDOW_TITLE_PADDING_X)
             .gap_2()
-            .cursor_pointer()
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
-                window.start_window_move();
-            })
-            .child(Text::label_sm(title_text));
+            .child(Text::body_sm(title.to_string()));
 
         for crumb in crumbs {
             drag_area = drag_area
@@ -218,21 +182,118 @@ pub fn render_csd_title_bar_with_crumbs(
                         crumb_el = crumb_el.child(Icon::new(icon).size(Spacing::MD).muted());
                     }
 
-                    crumb_el.child(Text::label_sm(crumb.label.clone()))
+                    crumb_el.child(Text::body_sm(crumb.label.clone()))
                 });
         }
 
-        title_bar = title_bar.child(drag_area);
+        Some(
+            title_bar
+                .child(drag_area)
+                .child(render_csd_window_controls(window, cx, on_close)),
+        )
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Reports whether the app draws its own title bar this frame and sets the
+/// client inset to match.
+///
+/// Call once per render of a top-level window that embeds its own title bar
+/// row. When CSD is active the inset is set to `TITLE_BAR_HEIGHT`; otherwise,
+/// on Linux, it is reset to zero so a window that left CSD mode does not keep
+/// a stale inset.
+pub fn prepare_client_decorations(window: &mut Window) -> bool {
+    if !should_render_csd(window) {
+        #[cfg(target_os = "linux")]
+        window.set_client_inset(px(0.0));
+        return false;
+    }
+
+    window.set_client_inset(TITLE_BAR_HEIGHT);
+    true
+}
+
+/// The window-management area of a CSD title bar: dragging moves the window,
+/// a double click maximizes or restores it, and a right click opens the
+/// window menu. Elsewhere it is a plain element.
+pub fn csd_drag_area(id: impl Into<gpui::ElementId>) -> Stateful<gpui::Div> {
+    let area = div().id(id);
+
+    #[cfg(target_os = "linux")]
+    let area = area
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
+            window.start_window_move();
+        })
+        .on_double_click(|_: &ClickEvent, window: &mut Window, _cx: &mut App| {
+            window.zoom_window();
+        })
+        .on_mouse_down(
+            gpui::MouseButton::Right,
+            |event: &gpui::MouseDownEvent, window: &mut Window, _cx: &mut App| {
+                window.show_window_menu(event.position);
+            },
+        );
+
+    area
+}
+
+/// Minimize, maximize and close buttons of a CSD title bar, as the compositor
+/// allows them, each 46 px wide and filling the bar's height.
+///
+/// `on_close` replaces the close button's action; `None` keeps the default of
+/// removing the window. Returns an empty element off Linux.
+pub fn render_csd_window_controls(
+    window: &mut Window,
+    cx: &mut App,
+    on_close: Option<TitleBarHandler>,
+) -> gpui::AnyElement {
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, cx, on_close);
+
+    #[cfg(target_os = "linux")]
+    {
+        let controls = window.window_controls();
+        let hover = cx.theme().secondary;
+
+        let make_button = |id: &'static str, icon: AppIcon, handler: TitleBarHandler| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(px(46.0))
+                .h_full()
+                .cursor_pointer()
+                .hover(move |d| d.bg(hover))
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    handler(window, cx);
+                })
+                .child(Icon::new(icon).size(Heights::ICON_SM).muted())
+        };
+
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .items_center()
+            .h_full();
 
         if controls.minimize {
-            title_bar = title_bar.child(make_button(
+            row = row.child(make_button(
+                "csd-minimize",
                 AppIcon::Minimize2,
                 Box::new(|window, _cx| window.minimize_window()),
             ));
         }
 
         if controls.maximize {
-            title_bar = title_bar.child(make_button(
+            row = row.child(make_button(
+                "csd-maximize",
                 AppIcon::Maximize2,
                 Box::new(|window, _cx| window.zoom_window()),
             ));
@@ -240,14 +301,14 @@ pub fn render_csd_title_bar_with_crumbs(
 
         let close_handler =
             on_close.unwrap_or_else(|| Box::new(|window, _cx| window.remove_window()));
-        title_bar = title_bar.child(make_button(AppIcon::X, close_handler));
+        row = row.child(make_button("csd-close", AppIcon::X, close_handler));
 
-        Some(title_bar)
+        row.into_any_element()
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        None
+        div().into_any_element()
     }
 }
 
@@ -261,10 +322,6 @@ pub fn render_linux_title_bar(window: &mut Window, cx: &mut App) -> impl IntoEle
 }
 
 /// Returns true if running on X11 (not Wayland, macOS, or Windows).
-///
-/// X11 has issues with `WindowKind::Floating` where it treats floating
-/// windows as transient dialogs, which can cause rendering problems in
-/// some compositors. On X11, we avoid using `WindowKind::Floating`.
 ///
 /// Detection is based on environment variables:
 /// - `WAYLAND_DISPLAY` indicates Wayland
@@ -288,36 +345,102 @@ pub fn is_x11() -> bool {
     }
 }
 
-/// Returns the appropriate window kind for floating windows based on the platform.
+/// Returns the window kind for secondary windows (Settings, Connection Manager, etc.).
 ///
-/// - On X11: returns `None` (use default window kind to avoid transient dialog issues)
-/// - On other platforms (Wayland, macOS, Windows): returns `Some(WindowKind::Floating)`
-///
-/// Use this when creating secondary windows (Settings, Connection Manager, etc.)
-/// that should float on supported platforms but work correctly on X11.
-pub fn floating_window_kind() -> Option<WindowKind> {
-    if is_x11() {
-        None
-    } else {
-        Some(WindowKind::Floating)
+/// `WindowKind::Floating` on every platform. On Linux, gpui parents a floating
+/// window to the window that holds keyboard focus when it opens: Wayland sets
+/// the `xdg_toplevel` parent and X11 sets `WM_TRANSIENT_FOR`. Tiling
+/// compositors such as Hyprland float a window with a parent at its requested
+/// size instead of tiling it. The window is not modal: `WindowKind::Dialog`
+/// would block input to its parent.
+pub fn floating_window_kind() -> WindowKind {
+    WindowKind::Floating
+}
+
+/// Space kept free between a secondary window and each edge of the display's
+/// visible area when the requested size does not fit. (24 px)
+const WINDOW_SCREEN_MARGIN: f32 = 24.0;
+
+/// Shrinks `requested` so it fits inside `available` minus the screen margin
+/// on every side. A dimension that already fits is kept.
+pub fn fit_window_size(
+    requested: gpui::Size<gpui::Pixels>,
+    available: gpui::Size<gpui::Pixels>,
+) -> gpui::Size<gpui::Pixels> {
+    let margin = px(WINDOW_SCREEN_MARGIN * 2.0);
+    let max_width = (available.width - margin).max(px(0.0));
+    let max_height = (available.height - margin).max(px(0.0));
+
+    gpui::Size {
+        width: requested.width.min(max_width),
+        height: requested.height.min(max_height),
+    }
+}
+
+/// Bounds for a new secondary window of `width` by `height`, shrunk to fit
+/// the primary display's visible area (see [`fit_window_size`]) and centered
+/// in it. Without a known display the requested size is centered as-is.
+pub fn fitted_window_bounds(width: f32, height: f32, cx: &App) -> gpui::Bounds<gpui::Pixels> {
+    let requested = gpui::size(px(width), px(height));
+
+    match cx.primary_display() {
+        Some(display) => {
+            let visible = display.visible_bounds();
+            let fitted = fit_window_size(requested, visible.size);
+
+            gpui::Bounds::centered_at(visible.center(), fitted)
+        }
+        None => gpui::Bounds::centered(None, requested, cx),
     }
 }
 
 /// Applies standard DBFlux window options for secondary windows (Settings, Connection
-/// Manager, SSO Wizard, etc.): floating kind (where supported), min size so X11 window
+/// Manager, SSO Wizard, etc.): floating kind, min size so X11 window
 /// managers emit `WM_NORMAL_HINTS`, and platform-appropriate decorations.
 ///
 /// On Linux, requests CSD so secondary windows match the main window behavior and
 /// render their own title bars. On other platforms, requests server-side decorations.
 pub fn apply_window_options(options: &mut WindowOptions, min_width: f32, min_height: f32) {
-    if let Some(kind) = floating_window_kind() {
-        options.kind = kind;
-    }
+    options.kind = floating_window_kind();
+
+    // A minimum larger than the window it applies to would force the window
+    // past the display, so it never exceeds the fitted initial size.
+    let initial_size = match options.window_bounds {
+        Some(gpui::WindowBounds::Windowed(bounds)) => Some(bounds.size),
+        _ => None,
+    };
 
     options.window_min_size = Some(gpui::Size {
-        width: px(min_width),
-        height: px(min_height),
+        width: initial_size.map_or(px(min_width), |size| px(min_width).min(size.width)),
+        height: initial_size.map_or(px(min_height), |size| px(min_height).min(size.height)),
     });
 
     options.window_decorations = decoration_request();
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::fit_window_size;
+    use gpui::{px, size};
+
+    #[test]
+    fn a_size_that_fits_the_display_is_kept() {
+        let fitted = fit_window_size(size(px(1320.0), px(900.0)), size(px(2560.0), px(1400.0)));
+
+        assert_eq!(fitted, size(px(1320.0), px(900.0)));
+    }
+
+    #[test]
+    fn a_size_larger_than_the_display_shrinks_to_it_minus_the_margin() {
+        let fitted = fit_window_size(size(px(1320.0), px(900.0)), size(px(1280.0), px(720.0)));
+
+        assert_eq!(fitted, size(px(1232.0), px(672.0)));
+    }
+
+    #[test]
+    fn each_dimension_is_fitted_on_its_own() {
+        let fitted = fit_window_size(size(px(1180.0), px(1000.0)), size(px(1920.0), px(1000.0)));
+
+        assert_eq!(fitted, size(px(1180.0), px(952.0)));
+    }
 }

@@ -19,8 +19,10 @@ use super::types::{DocumentId, DocumentState};
 use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
-use dbflux_components::modals::shell::ModalFocus;
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged, InputState,
+};
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::toast::Toast;
@@ -505,7 +507,7 @@ impl DashboardDocument {
             Dropdown::new("dashboard-refresh")
                 .items(items)
                 .selected_index(Some(refresh_policy_index(shared_refresh_policy)))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_dropdown_sub = cx.subscribe(
@@ -688,7 +690,13 @@ impl DashboardDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         if let Command::Cancel = cmd {
-            if self.editing_dashboard_name {
+            if self.panel_context_menu.is_some() {
+                self.close_panel_context_menu(cx);
+                return true;
+            } else if self.pending_configure_panel_index.is_some() {
+                self.close_configure_panel(cx);
+                return true;
+            } else if self.editing_dashboard_name {
                 self.cancel_dashboard_name_edit(cx);
                 return true;
             } else if self.editing_title_panel_index.is_some() {
@@ -3073,6 +3081,45 @@ mod tests {
         assert_eq!(
             pending, None,
             "close_configure_panel must clear pending_configure_panel_index"
+        );
+    }
+
+    /// Escape runs the keymap's Cancel, which the dashboard answers by
+    /// closing its configure popover; a second Escape has nothing to close.
+    #[gpui::test]
+    fn escape_closes_the_configure_popover_through_the_keymap(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_app::keymap::Command;
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| make_empty_dashboard(app_state, window, cx),
+            |dashboard, _| dashboard.active_context(),
+            DashboardDocument::dispatch_command,
+        );
+        let dashboard = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            dashboard.update(cx, |doc, cx| {
+                doc.focus(window, cx);
+                doc.start_configure_panel(0, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(
+            window.update(|_, cx| dashboard.read(cx).pending_configure_panel_index()),
+            None,
+            "Escape closes the popover"
+        );
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).commands.clone()),
+            vec![Command::Cancel]
         );
     }
 

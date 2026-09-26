@@ -776,6 +776,8 @@ pub(in crate::buckets_table) mod tests {
         let details = BucketDetails {
             region: "us-east-1".to_string(),
             versioning: VersioningStatus::Enabled,
+            encryption: None,
+            public_access: None,
         };
 
         cx.update(|cx| {
@@ -1011,12 +1013,12 @@ pub(in crate::buckets_table) mod tests {
         });
     }
 
-    /// The empty-state hint names a key that, in the table's own keymap
+    /// The refresh keycap names a key that, in the table's own keymap
     /// context, resolves to the refresh command this document handles, and
     /// `r` keeps meaning Rename there.
     #[gpui::test]
-    fn refresh_hint_names_the_key_that_refreshes_the_table(cx: &mut gpui::TestAppContext) {
-        use crate::buckets_table::render::{refresh_hint, refresh_shortcut};
+    fn refresh_shortcut_names_the_key_that_refreshes_the_table(cx: &mut gpui::TestAppContext) {
+        use crate::buckets_table::render::refresh_shortcut;
         use dbflux_app::keymap::{Command, ContextId, KeyChord};
 
         let doc = new_test_entity(cx);
@@ -1036,10 +1038,48 @@ pub(in crate::buckets_table) mod tests {
             keymap.resolve(context, &KeyChord::parse("r").expect("plain letter chord")),
             Some(Command::Rename)
         );
+    }
 
-        let hint = refresh_hint().expect("a bound refresh key produces a hint");
-        assert!(hint.starts_with(&format!("{key} ")), "hint was {hint:?}");
-        assert!(!hint.contains("%{"), "hint was {hint:?}");
+    /// Space on a bucket row toggles the details strip for that row.
+    #[gpui::test]
+    fn space_toggles_the_details_strip(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| BucketsTableDocument::new(uuid::Uuid::new_v4(), app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            BucketsTableDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            document.update(cx, |doc, cx| {
+                doc.set_buckets_for_test(vec![bucket_row("exports")]);
+                doc.select_bucket("exports".to_string(), cx);
+                doc.focus_handle.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space");
+        assert!(window.update(|_, cx| document.read(cx).show_details));
+
+        window.simulate_keystrokes("space");
+        assert!(!window.update(|_, cx| document.read(cx).show_details));
     }
 
     pub(in crate::buckets_table) fn new_test_entity(

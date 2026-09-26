@@ -1,0 +1,611 @@
+---
+import Glyph from '../Glyph.astro';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing.governance;
+
+type Tone = 'ok' | 'wait' | 'stop';
+
+/**
+ * Four MCP tool calls followed through the governance pipeline, under an
+ * example policy for an "analyst" role.
+ *
+ * Tool names and their execution classes come from the tool table in
+ * `docs/MCP_AI_INTEGRATION.md`. Policy decisions are the three the policy
+ * engine returns (Allow, Ask, Deny), and the audit values are real
+ * `EventOutcome` values. `stop` is the stage where the call halts; a call that
+ * runs to the end has no stop.
+ */
+const OPERATIONS: readonly {
+  tool: string;
+  icon: string;
+  hint: keyof typeof strings.hint;
+  values: readonly [string, string, string, string, string];
+  verdict: keyof typeof strings.verdict;
+  detail: keyof typeof strings.detail;
+  tone: Tone;
+  stop: number;
+}[] = [
+  {
+    tool: 'list_tables',
+    icon: 'table',
+    hint: 'schema',
+    values: ['Metadata', 'allow', 'not needed', 'ran', 'success'],
+    verdict: 'allowed',
+    detail: 'metadata',
+    tone: 'ok',
+    stop: 5,
+  },
+  {
+    tool: 'select_data',
+    icon: 'search',
+    hint: 'read',
+    values: ['Read', 'allow', 'not needed', 'ran', 'success'],
+    verdict: 'allowed',
+    detail: 'read',
+    tone: 'ok',
+    stop: 5,
+  },
+  {
+    tool: 'update_records',
+    icon: 'square-function',
+    hint: 'write',
+    values: ['Write', 'ask', 'pending', 'after approval', 'pending'],
+    verdict: 'waits',
+    detail: 'write',
+    tone: 'wait',
+    stop: 3,
+  },
+  {
+    tool: 'drop_table',
+    icon: 'x',
+    hint: 'destructive',
+    values: ['AdminDestructive', 'deny', 'skipped', 'never', 'failure'],
+    verdict: 'denied',
+    detail: 'destructive',
+    tone: 'stop',
+    stop: 2,
+  },
+];
+
+const DEFAULT_OPERATION = 2;
+
+const STAGES = [
+  { key: 'agent', icon: 'bot' },
+  { key: 'classify', icon: 'tags' },
+  { key: 'policy', icon: 'scale' },
+  { key: 'approval', icon: 'clock-check' },
+  { key: 'execute', icon: 'play' },
+  { key: 'audit', icon: 'scroll-text' },
+] as const;
+
+const stageState = (stop: number, index: number) => {
+  if (index === stop && stop < 5) return 'stop';
+  return index <= stop || index === 5 ? 'reached' : 'idle';
+};
+---
+
+<section id="governance" class="gov" data-gov>
+  <div class="gov__inner shell">
+    <div class="gov__head reveal">
+      <div class="gov__title">
+        <p class="eyebrow eyebrow--link">{strings.eyebrow}</p>
+        <h2 class="display display--section">{strings.title}</h2>
+      </div>
+      <p class="gov__body">{strings.body}</p>
+    </div>
+
+    <div class="gov__ops reveal-group" role="radiogroup" aria-label={strings.eyebrow}>
+      {
+        OPERATIONS.map((operation, index) => (
+          <button
+            type="button"
+            role="radio"
+            class="gov__op c10"
+            aria-checked={index === DEFAULT_OPERATION ? 'true' : 'false'}
+            data-gov-pick={index}
+          >
+            <span class="gov__op-tool">
+              <Glyph name={operation.icon} size={16} />
+              <span class="mono">{operation.tool}</span>
+            </span>
+            <span class="gov__op-hint">{strings.hint[operation.hint]}</span>
+          </button>
+        ))
+      }
+    </div>
+
+    {
+      OPERATIONS.map((operation, index) => (
+        <div
+          class="gov__run reveal"
+          data-gov-item={index}
+          data-tone={operation.tone}
+          hidden={index !== DEFAULT_OPERATION}
+        >
+          <div class="gov__pipeline" style={`--stop: ${Math.min(operation.stop, 5)}`}>
+            <div class="gov__track" aria-hidden="true" />
+            <div class="gov__progress" aria-hidden="true">
+              <span class="gov__travel" />
+            </div>
+            {STAGES.map((stage, stageIndex) => (
+              <div
+                class:list={['gov__stage', { 'gov__stage--execute': stage.key === 'execute' }]}
+                data-state={stageState(operation.stop, stageIndex)}
+              >
+                <div class="gov__node c14">
+                  <Glyph name={stage.icon} size={22} />
+                  <span class="gov__node-name x">{strings.stage[stage.key]}</span>
+                </div>
+                <div class="gov__text">
+                  <span class="gov__phone-name">{strings.stage[stage.key]}</span>
+                  {stageIndex === 0 ? (
+                    <span class="gov__value mono">
+                      <span class="gov__value-wide">MCP client</span>
+                      <span class="gov__value-phone">{operation.tool}</span>
+                    </span>
+                  ) : (
+                    <span class="gov__value mono">{operation.values[stageIndex - 1]}</span>
+                  )}
+                  <span class="gov__note">{strings.note[stage.key]}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div class="gov__verdict c18">
+            <div class="gov__verdict-label">
+              <span class="x gov__outcome">{strings.outcome}</span>
+              <span class="x gov__verdict-text">{strings.verdict[operation.verdict]}</span>
+            </div>
+            <p>{strings.detail[operation.detail]}</p>
+            <span class="gov__grow" />
+            <span class="gov__example">
+              <Glyph name="scale" size={14} />
+              <span class="mono">{strings.example}</span>
+            </span>
+          </div>
+        </div>
+      ))
+    }
+  </div>
+</section>
+
+<script>
+  const section = document.querySelector<HTMLElement>('[data-gov]');
+
+  if (section) {
+    const picks = Array.from(section.querySelectorAll<HTMLButtonElement>('[data-gov-pick]'));
+
+    picks.forEach((pick) => {
+      pick.addEventListener('click', () => {
+        const index = pick.dataset.govPick;
+
+        picks.forEach((other) => {
+          other.setAttribute('aria-checked', String(other === pick));
+        });
+        section.querySelectorAll<HTMLElement>('[data-gov-item]').forEach((element) => {
+          element.hidden = element.dataset.govItem !== index;
+        });
+      });
+    });
+  }
+</script>
+
+<style>
+  .gov {
+    background: var(--band);
+    border-top: var(--bw) solid var(--border);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  .gov__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+    padding-top: 96px;
+    padding-bottom: 96px;
+  }
+
+  .gov__head {
+    display: flex;
+    align-items: flex-end;
+    gap: 64px;
+  }
+
+  .gov__title {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    width: 700px;
+    flex-shrink: 0;
+  }
+
+  .gov__body {
+    max-width: 440px;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .gov__ops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .gov__op {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 190px;
+    padding: 14px 20px;
+    border: 0;
+    background: var(--raised);
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+  }
+
+  .gov__op:hover {
+    background: var(--raised-hover);
+  }
+
+  .gov__op[aria-checked='true'] {
+    background: var(--text-strong);
+    color: var(--bg);
+  }
+
+  .gov__op-tool {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .gov__op-hint {
+    font-size: 12.5px;
+    opacity: 0.75;
+  }
+
+  .gov__run {
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  .gov__run[data-tone='ok'] {
+    --tone: var(--success);
+  }
+
+  .gov__run[data-tone='wait'] {
+    --tone: var(--accent-fill);
+  }
+
+  .gov__run[data-tone='stop'] {
+    --tone: var(--danger);
+  }
+
+  .gov__pipeline {
+    --column: calc((100% - 70px) / 6);
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .gov__track,
+  .gov__progress {
+    position: absolute;
+    top: 50px;
+    left: calc(var(--column) / 2);
+    height: 2px;
+  }
+
+  .gov__track {
+    right: calc(var(--column) / 2);
+    background: var(--border);
+  }
+
+  .gov__progress {
+    width: calc(var(--stop) * (var(--column) + 14px));
+    background: var(--tone);
+  }
+
+  .gov__travel {
+    position: absolute;
+    top: -8px;
+    width: 18px;
+    height: 18px;
+    background: var(--accent-fill);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    animation: travel 1.6s cubic-bezier(0.5, 0, 0.2, 1) both;
+  }
+
+  .gov__stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    text-align: center;
+  }
+
+  .gov__node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 150px;
+    max-width: 100%;
+    height: 100px;
+    background: var(--panel);
+    color: var(--text-faint);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .gov__node-name {
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .gov__stage[data-state='reached'] .gov__node {
+    background: var(--raised);
+    color: var(--text-strong);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .gov__stage[data-state='stop'] .gov__node {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  /*
+   * A denial is marked with a red edge rather than a red fill: white type on
+   * the red fails contrast, the rule the verdict card already follows.
+   */
+  .gov__run[data-tone='stop'] .gov__stage[data-state='stop'] .gov__node {
+    background: var(--raised);
+    color: var(--danger);
+    box-shadow: inset 0 0 0 2px var(--danger);
+  }
+
+  .gov__text {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .gov__phone-name,
+  .gov__value-phone {
+    display: none;
+  }
+
+  .gov__value {
+    font-size: 13px;
+    color: var(--text-faint);
+  }
+
+  .gov__stage[data-state='reached'] .gov__value {
+    color: var(--text-strong);
+  }
+
+  .gov__stage[data-state='stop'] .gov__value {
+    color: var(--accent);
+  }
+
+  .gov__run[data-tone='stop'] .gov__stage[data-state='stop'] .gov__value {
+    color: var(--danger);
+  }
+
+  .gov__note {
+    max-width: 170px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .gov__verdict {
+    display: flex;
+    align-items: center;
+    gap: 40px;
+    padding: 30px 36px;
+    background: var(--panel);
+    color: var(--text-strong);
+    box-shadow:
+      inset 8px 0 0 var(--tone),
+      inset 0 0 0 1px var(--border);
+  }
+
+  .gov__verdict-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 260px;
+    flex-shrink: 0;
+  }
+
+  .gov__outcome {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .gov__verdict-text {
+    font-weight: 900;
+    font-size: 34px;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .gov__verdict p {
+    max-width: 640px;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .gov__grow {
+    flex-grow: 1;
+  }
+
+  .gov__example {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: flex-end;
+    opacity: 0.7;
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1180px) {
+    .gov__head {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .gov__title {
+      width: auto;
+    }
+
+    .gov__pipeline {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      row-gap: 32px;
+    }
+
+    .gov__track,
+    .gov__progress {
+      display: none;
+    }
+
+    .gov__verdict {
+      flex-wrap: wrap;
+      gap: 20px 40px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .gov__inner {
+      gap: 14px;
+      padding-top: 56px;
+      padding-bottom: 0;
+    }
+
+    .gov {
+      background: none;
+      border: 0;
+    }
+
+    .gov__head,
+    .gov__title {
+      gap: 14px;
+    }
+
+    .gov__title .display {
+      font-size: 34px;
+    }
+
+    .gov__body,
+    .gov__ops,
+    .gov__verdict,
+    .gov__stage--execute,
+    .gov__note,
+    .gov__node-name {
+      display: none;
+    }
+
+    .gov__pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .gov__stage {
+      flex-direction: row;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 0;
+      border-bottom: var(--bw) solid var(--row-line);
+      text-align: left;
+    }
+
+    .gov__node {
+      width: 44px;
+      height: 44px;
+      flex-shrink: 0;
+      clip-path: polygon(
+        10px 0,
+        100% 0,
+        100% calc(100% - 10px),
+        calc(100% - 10px) 100%,
+        0 100%,
+        0 10px
+      );
+    }
+
+    .gov__node :global(svg) {
+      width: 20px;
+      height: 20px;
+    }
+
+    .gov__stage .gov__node,
+    .gov__stage[data-state='reached'] .gov__node {
+      background: var(--raised);
+      color: var(--text-strong);
+      box-shadow: none;
+    }
+
+    .gov__stage[data-state='stop'] .gov__node {
+      background: var(--accent-fill);
+      color: var(--accent-on);
+    }
+
+    .gov__text {
+      align-items: flex-start;
+      gap: 2px;
+    }
+
+    .gov__value-wide {
+      display: none;
+    }
+
+    .gov__value-phone {
+      display: inline;
+    }
+
+    .gov__phone-name {
+      display: block;
+      color: var(--text-strong);
+      font-weight: 700;
+    }
+
+    .gov__value,
+    .gov__stage[data-state='reached'] .gov__value {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+  }
+</style>

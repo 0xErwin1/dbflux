@@ -3,23 +3,25 @@
 A reference for every Settings section and for connection hooks — the commands,
 scripts, or Lua snippets DBFlux runs around a connection's lifecycle.
 
-Open Settings from the command palette (**Open Settings**) or the sidebar. The
+Open Settings from the command palette (**Open settings**) or the sidebar. The
 window is organized into sections down the left side.
 
 | Section | Covers |
 |---------|--------|
 | [General](#general) | App-wide behavior: theme, startup, refresh, query safety. |
 | [Audit](#audit) | What the audit log captures and how long it's kept. |
-| [Keybindings](#keybindings) | Browse the keymap (read-only). |
+| [Keybindings](#keybindings) | Browse and change the keymap. |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | AWS SSO / shared-credentials profiles. |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels) | SOCKS5 / HTTP proxy profiles. |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels) | Reusable SSH tunnel profiles. |
 | [Services](#services-rpc) | External RPC drivers and auth providers. |
 | [Hooks](#connection-hooks) | Reusable connection-hook definitions. |
 | [Drivers](#drivers) | Per-driver overrides and settings. |
+| About | Version and build information. |
 
 MCP-related sections (Clients, Roles, Policies) appear only when the binary is
-built with the `mcp` feature; see [AI + MCP Integration](MCP_AI_INTEGRATION.md).
+built with the `mcp` feature, which is the default; see [AI + MCP
+Integration](MCP_AI_INTEGRATION.md).
 
 ---
 
@@ -46,7 +48,7 @@ converted crate by crate and stays in English for now.
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See the Vim mode section of the [Usage Guide](USAGE.md) keyboard reference. |
+| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
 
 ### Startup & session
 
@@ -104,7 +106,7 @@ Lua, Python, or Bash scripts, connection hooks, or metrics.
 |---------|---------|--------------|
 | **Use the stable database** | Off | Make a Nightly build share the stable `dbflux.db` instead of `dbflux-nightly.db`. Applies on next launch. |
 
-See [Data & Privacy](DATA_AND_PRIVACY.md#data-locations) for how the Nightly and
+See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
 
 ---
@@ -118,19 +120,84 @@ takes effect without a restart.
 
 Retention (how long events are kept) drives a periodic background purge when
 configured. For the day-to-day audit experience — opening the viewer, filtering,
-exporting — see [Dashboards & Audit](DASHBOARDS_AND_AUDIT.md#audit-viewer). For
+exporting — see [Audit → Audit viewer](AUDIT.md#audit-viewer). For
 the full event schema and redaction behavior see [Audit](AUDIT.md) and
-[Data & Privacy](DATA_AND_PRIVACY.md#audit-and-privacy).
+[Data & Privacy](../PRIVACY.md#audit-and-privacy).
 
 ---
 
 ## Keybindings
 
-This section is a **read-only viewer**. It lists the active keymap grouped by
-context, with a text filter and inline warnings when a chord is bound to more
-than one command. It does **not** currently let you rebind or save custom
-shortcuts from the UI. Use it to discover and verify bindings; the full default
-keymap is documented in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+This section lists the active keymap grouped by context. Filter it by command,
+key or context predicate with the text field, or show one context with the
+context filter. A context that inherits from another (the Editor inherits from
+Global) also lists the inherited bindings it does not shadow. The full default
+keymap is documented in [Keyboard Reference](KEYBOARD.md).
+
+**Changing a shortcut.** Press the pencil on a binding, or select it and press
+`Enter`, then press the new keys. A shortcut can be one key with its modifiers
+or a sequence of up to four, such as `g g` or `Ctrl+K Ctrl+S`: press them one
+after the other, and the recording is saved after a one-second pause. `Esc`
+cancels. While recording, **Remove shortcut** leaves the binding with no key.
+Keys the settings window uses itself, such as `Ctrl+S` or `Tab`, can be recorded
+too. A bare `Esc` cannot be recorded because it cancels.
+
+**Contexts.** Every binding applies in a context, written as a predicate in the
+same language Zed uses. Press the layers button on a binding, or select it and
+press `p`, to edit it; `Enter` saves and `Esc` cancels. A predicate combines
+names with `&&`, `||` and `!`, compares a value with `==` or `!=`, and uses
+`A > B` for "B inside A", with parentheses for grouping:
+
+| Predicate | Applies |
+|-----------|---------|
+| `Editor && !Modal` | in a code editor, not while a dialog is open |
+| `Editor && vim_mode == normal` | in a code editor in Vim Normal mode |
+| `Editor && language == mongo` | in a code editor for a MongoDB query |
+| `Results \|\| Audit` | in a result grid or the audit viewer |
+| `SidebarPanel && tab == scripts` | in the Scripts tab of the sidebar |
+| `CodeEditor > Input` | in the code editor's text buffer |
+
+The names are the context names shown by the context filter (`Global`,
+`Sidebar`, `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …), the window
+names `Workspace`, `SettingsWindow` and `ConnectionManagerWindow`, and the
+panel names `ActivityRail`, `CommandSearch`, `SidebarPanel`, `CodeEditor`,
+`ResultPanel`, `RowInspector`, `KeyValueConsole`, `DocumentQueryBar`,
+`DocumentSchema`, `DocumentAggregate`, `DashboardsPanel` and `SettingsSection`. The values are
+`vim_mode` (`normal`, `insert`, `replace`, `visual`, `visual_line`,
+`visual_block`, present only with Vim editing on), `language` (`sql`, `mongo`,
+`redis`, `lua`, `python`, `bash`, …), `tab`, `section` and `focus`. A predicate
+that does not parse is not saved; one that names something DBFlux never sets is
+saved with a warning, because it never matches.
+
+**Which binding wins.** A binding of an element that has focus (a text field,
+a data table, a dialog, the document tree) wins over a binding of the panel
+around it, and a binding you changed wins over a default bound to the same keys
+in the same place. With Vim editing on, a binding you made for a Vim mode, such
+as `space r` in `Editor && vim_mode == normal`, runs before Vim reads the key;
+the default bindings leave Vim's own keys to Vim. A focused button, checkbox or
+list row always takes `Enter` and `Space` itself.
+
+**Warnings and conflicts.** If the new keys are already used by another command
+in a context that can be active at the same time, nothing is saved yet: a
+warning names the other command and its context. **Cancel** keeps everything as
+it was. **Replace** gives the keys to the binding you are editing and removes
+them from the other one, which keeps no shortcut until you reset it. A binding
+that collides with another shows a "conflicts with" badge, and the footer counts
+the conflicts. Two badges warn without blocking: "shares a key sequence" when one
+binding's keys start another's (DBFlux then waits a second after the shorter one
+to see whether the longer one follows), and "takes typed text" when a plain
+letter is bound where text is typed, such as a text field or the code editor
+outside Vim's Normal and Visual modes.
+
+**Resetting.** An overridden binding shows a reset arrow that restores its
+default keys and context (`r` on a selected binding does the same, and `Delete`
+removes its shortcut). **Reset to defaults** in the footer drops every override.
+The footer also shows how many bindings are overridden.
+
+Changes apply at once in every window, without a restart. Only your overrides
+are stored, in the `cfg_keybinding_overrides` table of `dbflux.db`, so bindings
+you did not change follow the defaults of future releases. An override whose
+default binding a later release removes is ignored.
 
 ---
 
@@ -146,7 +213,7 @@ rules, SSH auth methods — in
 - [SSH Tunnels](CONNECTIONS.md#ssh-tunnels)
 
 Credentials entered here are stored in your OS keyring, not the database. See
-[Data & Privacy → Secrets](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+[Data & Privacy → Secrets](../PRIVACY.md#secrets-and-the-os-keyring).
 
 ---
 
@@ -288,7 +355,8 @@ stdout/stderr in the Tasks panel; output is capped at 4 MiB per hook.
 
 ## Related
 
-- [Usage Guide](USAGE.md) — core workflow and keyboard reference.
+- [Getting Started](GETTING_STARTED.md) — the core workflow.
+- [Keyboard Reference](KEYBOARD.md) — the full default keymap.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — SSH, proxy, auth, value sources.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — where settings and secrets are stored.
+- [Data & Privacy](../PRIVACY.md#your-data-on-this-machine) — where settings and secrets are stored.
 - [Lua Scripting](LUA.md) — the embedded Lua runtime for hooks.

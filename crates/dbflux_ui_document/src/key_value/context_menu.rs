@@ -1,6 +1,6 @@
 use dbflux_app::keymap::Command;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::tokens::Heights;
+use dbflux_components::tokens::KeyValueMetrics;
 use gpui::*;
 
 use super::KeyValueFocusMode;
@@ -179,23 +179,32 @@ impl super::KeyValueDocument {
     /// Computes a window-coordinate position for keyboard-triggered menus,
     /// aligned vertically with the selected row in the active panel.
     pub(super) fn keyboard_menu_position(&self, target: KvMenuTarget) -> Point<Pixels> {
-        let left_header = Heights::TOOLBAR + Heights::ROW_COMPACT;
-        let right_header =
-            Heights::TOOLBAR + Heights::ROW_COMPACT + px(30.0) + Heights::ROW_COMPACT;
+        let toolbars = KeyValueMetrics::TOOLBAR_HEIGHT * 2.0;
 
         match target {
             KvMenuTarget::Key => {
-                let row_index = self.selected_index.unwrap_or(0) as f32;
+                let row_index = self.list_cursor.unwrap_or(0) as f32;
                 Point {
-                    x: self.panel_origin.x + px(12.0), // guardrail-allow: positional offset, not a spacing/layout token
-                    y: self.panel_origin.y + left_header + Heights::ROW * row_index,
+                    x: self.panel_origin.x + KeyValueMetrics::LIST_PADDING_LEFT,
+                    y: self.panel_origin.y
+                        + toolbars
+                        + KeyValueMetrics::LIST_HEADER_HEIGHT
+                        + KeyValueMetrics::LIST_ROW_HEIGHT * row_index,
                 }
             }
             KvMenuTarget::Value => {
                 let row_index = self.selected_member_index.unwrap_or(0) as f32;
                 Point {
-                    x: self.panel_origin.x + px(240.0) + px(12.0), // guardrail-allow: positional offset, not a spacing/layout token
-                    y: self.panel_origin.y + right_header + Heights::ROW * row_index,
+                    x: self.panel_origin.x
+                        + KeyValueMetrics::KEY_LIST_WIDTH
+                        + KeyValueMetrics::VALUE_PADDING_X,
+                    y: self.panel_origin.y
+                        + toolbars
+                        + KeyValueMetrics::VALUE_HEADER_HEIGHT
+                        + KeyValueMetrics::META_ROW_HEIGHT
+                        + KeyValueMetrics::VALUE_TOOLBAR_HEIGHT
+                        + KeyValueMetrics::MEMBER_HEADER_HEIGHT
+                        + KeyValueMetrics::MEMBER_ROW_HEIGHT * row_index,
                 }
             }
         }

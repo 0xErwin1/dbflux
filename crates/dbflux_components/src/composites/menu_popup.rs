@@ -14,7 +14,7 @@
 //! same chrome — see AGENTS.md "Generic Deduplication Patterns".
 
 use crate::composites::menu_item::{
-    MenuItem, render_menu_container, render_menu_item, render_separator,
+    MenuItem, render_menu_container, render_menu_header, render_menu_item, render_separator,
 };
 use gpui::prelude::*;
 use gpui::{AnyElement, App, Div, ElementId, MouseButton, MouseDownEvent, Stateful, div};
@@ -69,6 +69,10 @@ pub fn render_menu_items(
                 return render_separator(cx)
                     .debug_selector(move || separator_selector.clone())
                     .into_any_element();
+            }
+
+            if item.is_header {
+                return render_menu_header(item, cx).into_any_element();
             }
 
             let on_click = on_click.clone();

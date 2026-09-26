@@ -66,6 +66,7 @@ pub static CLOUDWATCH_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFor
         label: "Main".into(),
         sections: vec![FormSection {
             title: "AWS".into(),
+            icon: Some(dbflux_core::FormSectionIcon::Cloud),
             fields: vec![
                 field_required("region", "Region", FormFieldKind::Text, "us-east-1"),
                 field(
@@ -145,6 +146,14 @@ impl DbDriver for CloudWatchDriver {
 
     fn metadata(&self) -> &DriverMetadata {
         &CLOUDWATCH_METADATA
+    }
+
+    fn picker_hint(&self) -> String {
+        "AWS".to_string()
+    }
+
+    fn picker_rank(&self) -> u16 {
+        1
     }
 
     fn form_definition(&self) -> &DriverFormDef {
@@ -741,6 +750,8 @@ impl CloudWatchConnection {
             collection: target.collection.clone(),
             filter: (!filter.is_empty()).then_some(serde_json::Value::Object(filter)),
             semantic_filter: None,
+            projection: None,
+            sort: None,
             pagination: dbflux_core::Pagination::Offset {
                 limit: query.limit.unwrap_or(100) as u32,
                 offset: query.offset.unwrap_or(0) as u64,

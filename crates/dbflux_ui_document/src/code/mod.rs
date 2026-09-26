@@ -2,8 +2,8 @@ use super::data_grid_panel::{DataGridEvent, DataGridPanel};
 use super::handle::DocumentEvent;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
-use crate::history_modal::{
-    HistoryModal, HistoryModalCallbacks, HistoryModalClosed, HistoryQuerySelected,
+use crate::history_panel::{
+    HistoryPanel, HistoryPanelCallbacks, HistoryPanelClosed, HistoryQuerySelected,
 };
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::state::TimeRange;
@@ -13,12 +13,14 @@ use dbflux_components::controls::{
     Button, CodeActionProvider, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition,
     InputState, Rope, RopeExt,
 };
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
+use dbflux_components::controls::{
+    ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
+};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::modals::schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
-use dbflux_components::modals::shell::ModalFocus;
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
@@ -70,6 +72,7 @@ mod focus;
 mod live_output;
 pub mod pane;
 mod render;
+mod statements;
 mod vim;
 
 use code_actions::SqlCodeActionProvider;
@@ -77,6 +80,8 @@ use completion::QueryCompletionProvider;
 use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 pub use vim::VimMode;
+
+pub(crate) use execution::evaluate_dangerous_with_effective_settings;
 
 /// A single result tab within the CodeDocument.
 ///
@@ -318,6 +323,15 @@ pub(super) struct EditorState {
     /// `cached_supports_connection_context` whenever the effective language can
     /// change (construction, connection change, query-mode switch).
     pub(super) cached_effective_language: QueryLanguage,
+    /// Byte ranges of the buffer's statements from the language's statement
+    /// splitter, refreshed on every edit. `None` when the language has no
+    /// splitter, which also hides the statement gutter.
+    pub(super) statement_ranges: Option<Vec<std::ops::Range<usize>>>,
+    /// The gutter style installed on the editor, compared against the theme
+    /// on every render so a palette switch repaints the gutter.
+    pub(super) gutter_style: Option<gpui_base::input::GutterStatementStyle>,
+    /// Whether the installed gutter carries statements (false while hidden).
+    pub(super) gutter_shown: bool,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -333,9 +347,9 @@ pub(super) struct SessionPersistence {
     pub(super) shutdown_flush_written: Option<String>,
 }
 
-/// History modal entity and its event subscription.
+/// History panel entity and its event subscriptions.
 pub(super) struct HistoryState {
-    pub(super) history_modal: Entity<HistoryModal>,
+    pub(super) history_panel: Entity<HistoryPanel>,
     pub(super) _history_subscriptions: Vec<Subscription>,
 }
 
@@ -361,6 +375,9 @@ pub(super) struct Execution {
     pub(super) live_output: Option<LiveOutputState>,
     pub(super) _live_output_drain: Option<Task<()>>,
     pub(super) active_query_task: Option<ActiveQueryTask>,
+    /// Byte offset in the buffer where the text of the latest run starts,
+    /// used to name the statement lines behind each result.
+    pub(super) query_origin: Option<usize>,
 }
 
 /// The result-tab collection and its selection cursor.
@@ -497,6 +514,8 @@ struct PendingDangerousQuery {
     query: String,
     kind: DangerousQueryKind,
     in_new_tab: bool,
+    /// The "Don't ask again" checkbox of the confirmation.
+    suppress: bool,
 }
 
 /// Pending confirmation for running a whole multi-statement script.
@@ -649,6 +668,7 @@ impl CodeDocument {
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
                     this.finish_replace_once(_window, cx);
+                    this.refresh_statements(cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
                         std::mem::replace(&mut this.editor.last_change_length, current_length);
@@ -702,13 +722,12 @@ impl CodeDocument {
             },
         );
 
-        // Create history modal — each closure captures a clone of app_state and
-        // reproduces the exact AppStateEntity mutation the modal previously called
-        // directly, preserving behavior byte-for-byte (ADR-6).
-        let history_modal = cx.new(|cx| {
+        // Create the history panel — each closure captures a clone of app_state
+        // and reproduces the exact AppStateEntity mutation the panel calls.
+        let history_panel = cx.new(|cx| {
             let app = app_state.clone();
-            HistoryModal::new(
-                HistoryModalCallbacks {
+            HistoryPanel::new(
+                HistoryPanelCallbacks {
                     history_provider: {
                         let a = app.clone();
                         Box::new(move |cx: &App| a.read(cx).history_entries().to_vec())
@@ -765,7 +784,7 @@ impl CodeDocument {
 
         // Subscribe to history modal events
         let query_selected_sub = cx.subscribe(
-            &history_modal,
+            &history_panel,
             |this, _, event: &HistoryQuerySelected, cx| {
                 this.pending.set_query = Some(event.clone());
                 cx.notify();
@@ -773,7 +792,7 @@ impl CodeDocument {
         );
 
         let history_closed_sub =
-            cx.subscribe(&history_modal, |this, _, _: &HistoryModalClosed, cx| {
+            cx.subscribe(&history_panel, |this, _, _: &HistoryPanelClosed, cx| {
                 this.pending.history_focus_restore = true;
                 cx.notify();
             });
@@ -825,7 +844,7 @@ impl CodeDocument {
             Dropdown::new("sql-auto-refresh")
                 .items(items)
                 .selected_index(Some(default_refresh.index()))
-                .compact_trigger(true)
+                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let refresh_policy_sub = cx.subscribe_in(
@@ -926,7 +945,10 @@ impl CodeDocument {
                     "document.code.context_bar.fallback.sources"
                 ))
         });
-        let vim_search_input = cx.new(|cx| InputState::new(window, cx));
+        let vim_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.code.vim.search.placeholder"))
+        });
         let vim_search_subscription = cx.subscribe_in(
             &vim_search_input,
             window,
@@ -1016,6 +1038,9 @@ impl CodeDocument {
                 cached_effective_language: query_language.clone(),
                 language_binding,
                 query_language,
+                statement_ranges: None,
+                gutter_style: None,
+                gutter_shown: false,
             },
             source: SourceContext {
                 exec_ctx,
@@ -1046,6 +1071,7 @@ impl CodeDocument {
                 live_output: None,
                 _live_output_drain: None,
                 active_query_task: None,
+                query_origin: None,
             },
             execution_session: ExecutionSessionBinding::new(),
             execution_session_context: None,
@@ -1056,7 +1082,7 @@ impl CodeDocument {
                 run_in_new_tab: false,
             },
             history: HistoryState {
-                history_modal,
+                history_panel,
                 _history_subscriptions: vec![query_selected_sub, history_closed_sub],
             },
             layout: SqlQueryLayout::EditorOnly,
@@ -1230,6 +1256,7 @@ impl CodeDocument {
         self.editor.original_content = sql_owned;
         self.editor.is_dirty = false;
         self.refresh_editor_diagnostics(window, cx);
+        self.refresh_statements(cx);
     }
 
     /// Creates document with specific title.
@@ -1624,8 +1651,8 @@ impl CodeDocument {
 
     // === Command Dispatch ===
 
-    /// Route commands to the history modal when it's visible.
-    fn dispatch_to_history_modal(
+    /// Route commands to the history panel while it owns the keyboard.
+    fn dispatch_to_history_panel(
         &mut self,
         cmd: Command,
         window: &mut Window,
@@ -1634,56 +1661,56 @@ impl CodeDocument {
         match cmd {
             Command::Cancel => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.close(cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.cancel(window, cx));
                 true
             }
             Command::SelectNext => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.select_next(cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.select_next(cx));
                 true
             }
             Command::SelectPrev => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.select_prev(cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.select_prev(cx));
                 true
             }
             Command::Execute => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.execute_selected(window, cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.execute_selected(window, cx));
                 true
             }
             Command::Delete => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.delete_selected(cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.delete_selected(cx));
                 true
             }
             Command::ToggleFavorite => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.toggle_favorite_selected(cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.toggle_favorite_selected(cx));
                 true
             }
             Command::Rename => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.start_rename_selected(window, cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.start_rename_selected(window, cx));
                 true
             }
             Command::FocusSearch => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.focus_search(window, cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.focus_search(window, cx));
                 true
             }
             Command::SaveQuery => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.save_selected_history(window, cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.save_selected_history(window, cx));
                 true
             }
             // Other commands are not handled by the modal
@@ -1727,9 +1754,9 @@ impl CodeDocument {
             }
         }
 
-        // When history modal is open, route commands to it first
-        if self.history.history_modal.read(cx).is_visible()
-            && self.dispatch_to_history_modal(cmd, window, cx)
+        // While the history panel owns the keyboard, route commands to it first
+        if self.history.history_panel.read(cx).owns_keyboard()
+            && self.dispatch_to_history_panel(cmd, window, cx)
         {
             return true;
         }
@@ -1813,24 +1840,24 @@ impl CodeDocument {
                 true
             }
 
-            // History modal commands
+            // History panel commands
             Command::ToggleHistoryDropdown => {
-                let is_open = self.history.history_modal.read(cx).is_visible();
+                let is_open = self.history.history_panel.read(cx).is_visible();
                 if is_open {
                     self.history
-                        .history_modal
-                        .update(cx, |modal, cx| modal.close(cx));
+                        .history_panel
+                        .update(cx, |panel, cx| panel.close(cx));
                 } else {
                     self.history
-                        .history_modal
-                        .update(cx, |modal, cx| modal.open(window, cx));
+                        .history_panel
+                        .update(cx, |panel, cx| panel.open(window, cx));
                 }
                 true
             }
             Command::OpenSavedQueries => {
                 self.history
-                    .history_modal
-                    .update(cx, |modal, cx| modal.open_saved_tab(window, cx));
+                    .history_panel
+                    .update(cx, |panel, cx| panel.open_saved_tab(window, cx));
                 true
             }
             Command::SaveQuery => {
@@ -3673,5 +3700,121 @@ mod tests {
             "a refused autosave reports no save event"
         );
         assert!(dirty, "the unsaved edits must keep the buffer dirty");
+    }
+
+    /// A tab restored with a profile that is not connected reads "No
+    /// connection": it must not keep that profile's environment badge or
+    /// production banner, and its selector shows the neutral database icon.
+    #[gpui::test]
+    fn a_disconnected_profile_leaves_the_context_bar_neutral(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "shop-prod",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        profile.environment = Some(dbflux_core::ConnectionEnvironment::Production);
+        let profile_id = profile.id;
+
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| state.inner.profiles_mut().push(profile));
+        });
+
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        let (environment, banner, icon) = window.update(|_, cx| {
+            let doc = doc.read(cx);
+            (
+                doc.connection_environment(cx),
+                doc.render_production_banner(cx).is_some(),
+                doc.connection_driver_icon(cx),
+            )
+        });
+
+        assert_eq!(environment, None);
+        assert!(!banner);
+        assert_eq!(icon.0, dbflux_components::icons::AppIcon::Database);
+    }
+
+    /// An editor's history opens as a side panel for the workspace instead
+    /// of a modal over the document, and leaves the keyboard to the editor
+    /// until focus moves into it.
+    #[gpui::test]
+    fn history_opens_as_a_side_panel_without_taking_the_keyboard(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        let panel_ids = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                doc.update(cx, |doc, cx| {
+                    doc.side_panels(cx)
+                        .into_iter()
+                        .map(|panel| panel.id.to_string())
+                        .collect::<Vec<_>>()
+                })
+            })
+        };
+
+        assert!(panel_ids(window).is_empty());
+
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::ToggleHistoryDropdown, window, cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(panel_ids(window), vec!["query-history".to_string()]);
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context(cx)),
+            dbflux_app::keymap::ContextId::Editor
+        );
+
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                assert!(doc.dispatch_command(Command::ToggleHistoryDropdown, window, cx));
+            });
+        });
+
+        assert!(panel_ids(window).is_empty());
     }
 }

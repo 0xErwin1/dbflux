@@ -2,7 +2,7 @@ use crate::{
     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
     DefiniteLength, Display, ElementTransform, Fill, FlexDirection, FlexWrap, Font, FontFeatures,
     FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent,
-    Length, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
     TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
 };
 pub use gpui_macros::{
@@ -713,6 +713,13 @@ pub trait Styled: Sized {
     /// Sets the font family of this element and its children.
     fn font_family(mut self, family_name: impl Into<SharedString>) -> Self {
         self.text_style().font_family = Some(family_name.into());
+        self
+    }
+
+    /// Sets the extra horizontal space added after every character of this element
+    /// and its children, like CSS `letter-spacing`.
+    fn letter_spacing(mut self, spacing: Pixels) -> Self {
+        self.text_style().letter_spacing = Some(spacing);
         self
     }
 

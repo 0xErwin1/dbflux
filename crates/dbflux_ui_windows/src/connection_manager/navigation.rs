@@ -3,13 +3,43 @@ use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::DropdownItem;
 use dbflux_core::FormFieldKind;
-use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::*;
 
 use super::{
     AccessTabMode, ActiveTab, ConnectionManagerWindow, DismissEvent, DriverFocus, EditState,
     FormFocus, View,
 };
+
+/// The environment chips of the Main tab, in display order; `None` is the
+/// chip that clears the environment.
+pub(super) const ENVIRONMENT_CHIPS: [Option<dbflux_core::ConnectionEnvironment>; 4] = [
+    Some(dbflux_core::ConnectionEnvironment::Production),
+    Some(dbflux_core::ConnectionEnvironment::Staging),
+    Some(dbflux_core::ConnectionEnvironment::Development),
+    None,
+];
+
+/// Index of the chip showing `environment`.
+pub(super) fn environment_chip_index(
+    environment: Option<dbflux_core::ConnectionEnvironment>,
+) -> usize {
+    ENVIRONMENT_CHIPS
+        .iter()
+        .position(|chip| *chip == environment)
+        .unwrap_or(ENVIRONMENT_CHIPS.len() - 1)
+}
+
+/// The chip the roving cursor lands on after one step left or right from
+/// `index`, wrapping at both ends.
+pub(super) fn step_environment_chip(index: usize, forward: bool) -> usize {
+    let count = ENVIRONMENT_CHIPS.len();
+
+    if forward {
+        (index + 1) % count
+    } else {
+        (index + count - 1) % count
+    }
+}
 
 fn next_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
     match current {
@@ -95,7 +125,8 @@ impl FormFocus {
 
         if state.uses_file_form {
             return match self {
-                Name => Database,
+                Name => Environment,
+                Environment => Database,
                 Database | FileBrowse => TestConnection,
                 TestConnection => Save,
                 Save => Name,
@@ -105,7 +136,8 @@ impl FormFocus {
 
         if state.has_uri_option && state.uri_mode_active {
             return match self {
-                Name => UseUri,
+                Name => Environment,
+                Environment => UseUri,
                 UseUri => HostValueSource,
                 HostValueSource | Host | Port => PasswordValueSource,
                 DatabaseValueSource | Database | UserValueSource | User => PasswordValueSource,
@@ -118,7 +150,8 @@ impl FormFocus {
 
         if state.has_uri_option {
             return match self {
-                Name => UseUri,
+                Name => Environment,
+                Environment => UseUri,
                 UseUri => HostValueSource,
                 HostValueSource | Host | Port => DatabaseValueSource,
                 DatabaseValueSource | Database => UserValueSource,
@@ -131,7 +164,8 @@ impl FormFocus {
         }
 
         match self {
-            Name => HostValueSource,
+            Name => Environment,
+            Environment => HostValueSource,
             HostValueSource | Host | Port => DatabaseValueSource,
             DatabaseValueSource | Database => UserValueSource,
             UserValueSource | User => PasswordValueSource,
@@ -148,7 +182,8 @@ impl FormFocus {
         if state.uses_file_form {
             return match self {
                 Name => Save,
-                Database | FileBrowse => Name,
+                Environment => Name,
+                Database | FileBrowse => Environment,
                 TestConnection => Database,
                 Save => TestConnection,
                 _ => Save,
@@ -158,7 +193,8 @@ impl FormFocus {
         if state.has_uri_option && state.uri_mode_active {
             return match self {
                 Name => Save,
-                UseUri => Name,
+                Environment => Name,
+                UseUri => Environment,
                 HostValueSource | Host | Port => UseUri,
                 DatabaseValueSource | Database | UserValueSource | User => HostValueSource,
                 PasswordValueSource | Password | PasswordToggle | PasswordSave => HostValueSource,
@@ -171,7 +207,8 @@ impl FormFocus {
         if state.has_uri_option {
             return match self {
                 Name => Save,
-                UseUri => Name,
+                Environment => Name,
+                UseUri => Environment,
                 HostValueSource | Host | Port => UseUri,
                 DatabaseValueSource | Database => HostValueSource,
                 UserValueSource | User => DatabaseValueSource,
@@ -184,7 +221,8 @@ impl FormFocus {
 
         match self {
             Name => Save,
-            HostValueSource | Host | Port => Name,
+            Environment => Name,
+            HostValueSource | Host | Port => Environment,
             DatabaseValueSource | Database => HostValueSource,
             UserValueSource | User => DatabaseValueSource,
             PasswordValueSource | Password | PasswordToggle | PasswordSave => UserValueSource,
@@ -825,20 +863,9 @@ impl ConnectionManagerWindow {
         ContextId::ConnectionManager
     }
 
-    pub(super) fn handle_key_event(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let chord = key_chord_from_gpui(&event.keystroke);
-        let context = self.active_context();
-
-        if let Some(command) = self.keymap.resolve(context, &chord) {
-            return self.dispatch_command(command, window, cx);
-        }
-
-        false
+    /// Keycap of the keys that run `command` in the connection manager.
+    pub(super) fn shortcut(command: Command) -> Option<gpui::SharedString> {
+        dbflux_ui_base::keymap::shortcut_label(ContextId::ConnectionManager, command)
     }
 
     pub(super) fn dispatch_command(
@@ -849,6 +876,10 @@ impl ConnectionManagerWindow {
     ) -> bool {
         match self.view {
             View::DriverSelect => self.handle_driver_select_command(command, window, cx),
+            View::EditForm if command == Command::SaveQuery => {
+                self.save_profile(window, cx);
+                true
+            }
             View::EditForm => self.handle_form_command(command, window, cx),
             View::Import => self.handle_import_command(command, window, cx),
         }
@@ -880,7 +911,7 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::render_driver_select::{
-            GRID_COLUMNS, GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
+            GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
         };
 
         let query = self.current_driver_filter(cx);
@@ -889,7 +920,8 @@ impl ConnectionManagerWindow {
 
         let section_sizes = visible_section_sizes(&visible);
         let current = self.driver_focus.index();
-        let step = |direction| move_grid_focus(&section_sizes, GRID_COLUMNS, current, direction);
+        let columns = self.driver_grid_columns;
+        let step = |direction| move_grid_focus(&section_sizes, columns, current, direction);
 
         match command {
             Command::FocusSearch => {
@@ -1345,6 +1377,16 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let on_environment_row =
+            self.active_tab == ActiveTab::Main && self.form_focus == FormFocus::Environment;
+
+        if !matches!(
+            command,
+            Command::FocusLeft | Command::FocusRight | Command::Execute
+        ) {
+            self.form.environment_cursor = None;
+        }
+
         match command {
             Command::SelectNext => {
                 self.focus_down(cx);
@@ -1352,6 +1394,21 @@ impl ConnectionManagerWindow {
             }
             Command::SelectPrev => {
                 self.focus_up(cx);
+                true
+            }
+            Command::FocusLeft | Command::FocusRight if on_environment_row => {
+                let forward = command == Command::FocusRight;
+                self.form.environment_cursor = Some(step_environment_chip(
+                    self.environment_cursor_index(),
+                    forward,
+                ));
+                cx.notify();
+                true
+            }
+            Command::FocusLeft | Command::FocusRight
+                if self.step_segmented_field(command == Command::FocusRight, window, cx) =>
+            {
+                cx.notify();
                 true
             }
             Command::FocusLeft => {
@@ -1380,6 +1437,52 @@ impl ConnectionManagerWindow {
                 } else {
                     cx.emit(DismissEvent);
                     window.remove_window();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Left and Right on a segmented field move its choice: "Enter as"
+    /// between Fields and Connection URI, the SSH authentication method
+    /// between private key and password (with the cursor following the
+    /// choice). Returns whether the cursor was on such a field.
+    fn step_segmented_field(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.form_focus {
+            FormFocus::UseUri => {
+                let use_uri = self
+                    .form
+                    .checkbox_states
+                    .get("use_uri")
+                    .copied()
+                    .unwrap_or(false);
+
+                if use_uri != forward {
+                    self.form
+                        .checkbox_states
+                        .insert("use_uri".to_string(), forward);
+
+                    if forward {
+                        self.sync_fields_to_uri(window, cx);
+                    } else {
+                        self.sync_uri_to_fields(window, cx);
+                    }
+                }
+                true
+            }
+            FormFocus::SshAuthPrivateKey | FormFocus::SshAuthPassword => {
+                if forward {
+                    self.form_focus = FormFocus::SshAuthPassword;
+                    self.access.ssh_auth_method = SshAuthSelection::Password;
+                } else {
+                    self.form_focus = FormFocus::SshAuthPrivateKey;
+                    self.access.ssh_auth_method = SshAuthSelection::PrivateKey;
                 }
                 true
             }
@@ -1686,6 +1789,14 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
+    /// Chip under the environment row's roving cursor: the one moved to with
+    /// the arrow keys, or the selected one.
+    pub(super) fn environment_cursor_index(&self) -> usize {
+        self.form
+            .environment_cursor
+            .unwrap_or_else(|| environment_chip_index(self.form.environment))
+    }
+
     fn focus_left(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state(cx)),
@@ -1973,6 +2084,11 @@ impl ConnectionManagerWindow {
                 self.browse_ssh_key(window, cx);
             }
 
+            FormFocus::Environment => {
+                self.form.environment = ENVIRONMENT_CHIPS[self.environment_cursor_index()];
+                self.form.environment_cursor = None;
+            }
+
             FormFocus::UseUri => {
                 let current = self
                     .form
@@ -2157,10 +2273,35 @@ impl ConnectionManagerWindow {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccessTabMode, ActiveTab, FormFocus, MainNavState, ProxyNavState, SshNavState,
-        next_active_tab, prev_active_tab,
+        AccessTabMode, ActiveTab, ENVIRONMENT_CHIPS, FormFocus, MainNavState, ProxyNavState,
+        SshNavState, environment_chip_index, next_active_tab, prev_active_tab,
+        step_environment_chip,
     };
     use crate::ssh_shared::SshAuthSelection;
+    use dbflux_core::ConnectionEnvironment;
+
+    #[test]
+    fn environment_cursor_starts_on_the_selected_chip() {
+        assert_eq!(
+            environment_chip_index(Some(ConnectionEnvironment::Production)),
+            0
+        );
+        assert_eq!(
+            environment_chip_index(Some(ConnectionEnvironment::Development)),
+            2
+        );
+        assert_eq!(environment_chip_index(None), 3);
+    }
+
+    #[test]
+    fn environment_cursor_roves_both_ways_and_wraps() {
+        let last = ENVIRONMENT_CHIPS.len() - 1;
+
+        assert_eq!(step_environment_chip(0, true), 1);
+        assert_eq!(step_environment_chip(1, false), 0);
+        assert_eq!(step_environment_chip(last, true), 0);
+        assert_eq!(step_environment_chip(0, false), last);
+    }
 
     fn ssh_disabled() -> SshNavState {
         SshNavState::new(false, false, false, SshAuthSelection::PrivateKey, false)
@@ -2201,6 +2342,9 @@ mod tests {
 
         let mut focus = FormFocus::Name;
         focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::Environment);
+
+        focus = focus.down_main(state);
         assert_eq!(focus, FormFocus::UseUri);
 
         focus = focus.down_main(state);
@@ -2224,6 +2368,9 @@ mod tests {
         let state = main_state(true, true, true, true);
 
         let mut focus = FormFocus::Name;
+        focus = focus.down_main(state);
+        assert_eq!(focus, FormFocus::Environment);
+
         focus = focus.down_main(state);
         assert_eq!(focus, FormFocus::UseUri);
 

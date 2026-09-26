@@ -80,6 +80,43 @@ impl TreeNav {
         };
     }
 
+    /// Moves the cursor to the next selectable row, wrapping around and
+    /// skipping group labels. Used by navigations whose groups are static
+    /// headers rather than collapsible rows. Leaves the cursor in place when
+    /// no other row is selectable.
+    pub fn move_next_selectable(&mut self) {
+        self.step_to_selectable(true);
+    }
+
+    /// Moves the cursor to the previous selectable row, wrapping around and
+    /// skipping group labels.
+    pub fn move_prev_selectable(&mut self) {
+        self.step_to_selectable(false);
+    }
+
+    fn step_to_selectable(&mut self, forward: bool) {
+        let count = self.rows.len();
+        if count <= 1 {
+            return;
+        }
+
+        let mut candidate = self.cursor;
+        for _ in 0..count - 1 {
+            candidate = if forward {
+                (candidate + 1) % count
+            } else if candidate == 0 {
+                count - 1
+            } else {
+                candidate - 1
+            };
+
+            if self.rows[candidate].selectable {
+                self.cursor = candidate;
+                return;
+            }
+        }
+    }
+
     pub fn activate(&mut self) -> TreeNavAction {
         let Some(row) = self.rows.get(self.cursor) else {
             return TreeNavAction::None;
@@ -511,6 +548,57 @@ mod tests {
         assert_eq!(nav.cursor(), 0);
         nav.move_prev();
         assert_eq!(nav.cursor(), 0);
+    }
+
+    #[test]
+    fn move_next_selectable_skips_group_labels() {
+        let mut nav = TreeNav::new(make_test_tree(), all_expanded());
+        nav.move_next_selectable();
+        assert_eq!(
+            nav.cursor_item().map(|row| row.id.as_ref()),
+            Some("keybindings")
+        );
+
+        nav.move_next_selectable();
+        assert_eq!(
+            nav.cursor_item().map(|row| row.id.as_ref()),
+            Some("ssh-tunnels")
+        );
+    }
+
+    #[test]
+    fn move_prev_selectable_skips_group_labels_and_wraps() {
+        let mut nav = TreeNav::new(make_test_tree(), all_expanded());
+        nav.select_by_id("ssh-tunnels");
+        nav.move_prev_selectable();
+        assert_eq!(
+            nav.cursor_item().map(|row| row.id.as_ref()),
+            Some("keybindings")
+        );
+
+        nav.select_by_id("general");
+        nav.move_prev_selectable();
+        assert_eq!(nav.cursor_item().map(|row| row.id.as_ref()), Some("about"));
+    }
+
+    #[test]
+    fn move_selectable_stays_put_without_other_selectable_rows() {
+        let nodes = vec![TreeNavNode::group(
+            "g",
+            "Group",
+            None,
+            vec![TreeNavNode::leaf("only", "Only", None)],
+        )];
+        let expanded: HashSet<SharedString> = ["g".into()].into_iter().collect();
+        let mut nav = TreeNav::new(nodes, expanded);
+        nav.select_by_id("only");
+        let before = nav.cursor();
+
+        nav.move_next_selectable();
+        assert_eq!(nav.cursor(), before);
+
+        nav.move_prev_selectable();
+        assert_eq!(nav.cursor(), before);
     }
 
     // ── activate ────────────────────────────────────────────────

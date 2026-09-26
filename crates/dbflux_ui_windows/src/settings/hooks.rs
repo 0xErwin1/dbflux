@@ -1,12 +1,14 @@
+use crate::tokens::{FormMetrics, SettingsMetrics};
 use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::InputEvent;
-use dbflux_components::controls::{Button, Checkbox, Input};
-
+use dbflux_components::controls::{Button, Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Label, focus_frame};
-use dbflux_components::tokens::{Heights, Radii, Spacing, Widths};
-use dbflux_components::typography::{Body, MonoCaption, MonoLabel, PanelTitle};
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, Chamfer, SegmentedControl, SegmentedItem, Text, stepped_segment,
+};
+use dbflux_components::tokens::{ChamferCut, ChromeColors};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::{
     ConnectionHook, HookExecutionMode, HookFailureMode, HookKind, ScriptLanguage, ScriptSource,
 };
@@ -586,17 +588,7 @@ impl HooksSection {
             }
         };
 
-        let on_failure = match self
-            .hook_failure_dropdown
-            .read(cx)
-            .selected_value()
-            .map(|value| value.to_string())
-            .as_deref()
-        {
-            Some("warn") => HookFailureMode::Warn,
-            Some("ignore") => HookFailureMode::Ignore,
-            _ => HookFailureMode::Disconnect,
-        };
+        let on_failure = self.selected_failure_mode(cx);
 
         let cwd = if selected_kind == HookKindSelection::Lua || cwd_text.is_empty() {
             None
@@ -1298,7 +1290,8 @@ impl HooksSection {
 
     pub(super) fn render_hooks_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         layout::split_section_shell(
-            dbflux_components::composites::section_header(
+            cx.theme().border,
+            dbflux_components::composites::page_header(
                 dbflux_i18n::t!("settings.hooks.header.title"),
                 dbflux_i18n::t!("settings.hooks.header.subtitle"),
                 cx,
@@ -1309,7 +1302,6 @@ impl HooksSection {
     }
 
     fn render_hooks_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme().clone();
         let hook_ids = self.hook_sorted_ids();
         let list_focused = self.content_focused && self.hook_focus == HookFocus::List;
         let is_new_button_focused = list_focused && self.hook_list_idx.is_none();
@@ -1318,35 +1310,66 @@ impl HooksSection {
             self.hook_list_scroll_handle.scroll_to_item(scroll_idx);
         }
 
+        let toolbar = layout::master_list_toolbar(vec![
+            Button::new("new-hook", dbflux_i18n::t!("settings.hooks.list.new"))
+                .primary()
+                .icon(AppIcon::Plus)
+                .focused(is_new_button_focused)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.hook_focus = HookFocus::Form;
+                    this.clear_hook_form(window, cx);
+                }))
+                .into_any_element(),
+        ]);
+
+        let rows: Vec<AnyElement> = hook_ids
+            .into_iter()
+            .enumerate()
+            .map(|(idx, hook_id)| {
+                let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
+                let focused = list_focused && self.hook_list_idx == Some(idx);
+                let hook = self.hook_definitions.get(&hook_id);
+                let icon = match hook.map(|hook| &hook.kind) {
+                    Some(HookKind::Script { .. }) => AppIcon::FileCode,
+                    Some(HookKind::Lua { .. }) => AppIcon::Code,
+                    _ => AppIcon::SquareTerminal,
+                };
+                let detail = hook.map(|hook| SharedString::from(hook.summary()));
+                let hook_id_for_click = hook_id.clone();
+
+                layout::master_list_row(
+                    SharedString::from(format!("hook-item-{}", hook_id)),
+                    layout::MasterRow {
+                        icon: Some(icon),
+                        title: hook_id.clone().into(),
+                        detail,
+                        trailing: None,
+                    },
+                    selected,
+                    focused,
+                    cx,
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.hook_focus = HookFocus::Form;
+                    this.load_hook_into_form(&hook_id_for_click, window, cx);
+                }))
+                .into_any_element()
+            })
+            .collect();
+
+        let empty = rows.is_empty();
+        let theme = cx.theme();
+
         div()
-            .w(px(280.0))
+            .w(SettingsMetrics::LIST_WIDTH)
             .h_full()
             .min_h_0()
+            .flex_shrink_0()
             .border_r_1()
             .border_color(theme.border)
             .flex()
             .flex_col()
-            .child(
-                div().p_2().border_b_1().border_color(theme.border).child(
-                    div()
-                        .rounded(Radii::SM)
-                        .border_1()
-                        .border_color(if is_new_button_focused {
-                            theme.primary
-                        } else {
-                            gpui::transparent_black()
-                        })
-                        .child(
-                            Button::new("new-hook", dbflux_i18n::t!("settings.hooks.list.new"))
-                                .small()
-                                .w_full()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.hook_focus = HookFocus::Form;
-                                    this.clear_hook_form(window, cx);
-                                })),
-                        ),
-                ),
-            )
+            .child(toolbar)
             .child(
                 div()
                     .id("hooks-list-scroll")
@@ -1354,74 +1377,19 @@ impl HooksSection {
                     .min_h_0()
                     .overflow_scroll()
                     .track_scroll(&self.hook_list_scroll_handle)
-                    .p_2()
                     .flex()
                     .flex_col()
-                    .gap_1()
-                    .when(hook_ids.is_empty(), |container| {
-                        container.child(
-                            Body::new(dbflux_i18n::t!("settings.hooks.list.empty"))
-                                .color(theme.muted_foreground),
-                        )
+                    .when(empty, |list| {
+                        list.child(layout::master_list_empty(dbflux_i18n::t!(
+                            "settings.hooks.list.empty"
+                        )))
                     })
-                    .children(hook_ids.into_iter().enumerate().map(|(idx, hook_id)| {
-                        let selected = self.editing_hook_id.as_deref() == Some(hook_id.as_str());
-                        let focused = list_focused && self.hook_list_idx == Some(idx);
-                        let hook = self.hook_definitions.get(&hook_id).cloned();
-                        let hook_id_for_click = hook_id.clone();
-
-                        div()
-                            .id(SharedString::from(format!("hook-item-{}", hook_id)))
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if focused && !selected {
-                                theme.primary
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .when(selected, |div| div.bg(theme.secondary))
-                            .hover(|div| div.bg(theme.secondary))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.hook_focus = HookFocus::Form;
-                                this.load_hook_into_form(&hook_id_for_click, window, cx);
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(
-                                        div().mt(px(2.0)).child(
-                                            Icon::new(AppIcon::SquareTerminal)
-                                                .size(Heights::ICON_SM)
-                                                .muted(),
-                                        ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(MonoLabel::new(hook_id.clone()))
-                                            .when_some(hook, |container, hook| {
-                                                container.child(
-                                                    Body::new(hook.summary())
-                                                        .color(theme.muted_foreground),
-                                                )
-                                            }),
-                                    ),
-                            )
-                    }))
+                    .children(rows)
                     .child(self.render_protected_hook_rows(cx)),
             )
     }
 
     fn render_protected_hook_rows(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let theme = cx.theme().clone();
         let protected: Vec<(String, String)> = self
             .app_state
             .read(cx)
@@ -1436,91 +1404,69 @@ impl HooksSection {
         div()
             .flex()
             .flex_col()
-            .gap_1()
             .when(!protected.is_empty(), |container| {
                 container
                     .child(
-                        div().mt_2().child(
-                            MonoCaption::new(dbflux_i18n::t!(
+                        div()
+                            .px(SettingsMetrics::LIST_ROW_PADDING_X)
+                            .pt(SettingsMetrics::LIST_ROW_PADDING_Y)
+                            .child(Text::label(dbflux_i18n::t!(
                                 "settings.hooks.list.unreadable.title"
-                            ))
-                            .color(theme.muted_foreground),
-                        ),
+                            ))),
                     )
                     .children(protected.into_iter().map(|(row_id, label)| {
                         let row_id_for_click = row_id.clone();
 
-                        div()
-                            .id(SharedString::from(format!(
-                                "protected-hook-item-{}",
-                                row_id
-                            )))
-                            .px_3()
-                            .py_2()
-                            .rounded(Radii::SM)
-                            .bg(theme.list_even)
-                            .border_1()
-                            .border_color(theme.warning.opacity(0.3))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .child(
-                                        div().mt(px(2.0)).child(
-                                            Icon::new(AppIcon::TriangleAlert)
-                                                .size(Heights::ICON_SM)
-                                                .warning(),
-                                        ),
+                        layout::master_list_row(
+                            SharedString::from(format!("protected-hook-item-{}", row_id)),
+                            layout::MasterRow {
+                                icon: Some(AppIcon::TriangleAlert),
+                                title: label.into(),
+                                detail: Some(
+                                    dbflux_i18n::t!("settings.hooks.list.unreadable.hint").into(),
+                                ),
+                                trailing: Some(
+                                    Button::new(
+                                        SharedString::from(format!("delete-protected-{}", row_id)),
+                                        dbflux_i18n::t!("hooks.action.delete"),
                                     )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(MonoLabel::new(label))
-                                            .child(
-                                                Body::new(dbflux_i18n::t!(
-                                                    "settings.hooks.list.unreadable.hint"
-                                                ))
-                                                .color(theme.muted_foreground),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new(
-                                            SharedString::from(format!(
-                                                "delete-protected-{}",
-                                                row_id
-                                            )),
-                                            dbflux_i18n::t!("hooks.action.delete"),
-                                        )
-                                        .small()
-                                        .danger()
-                                        .on_click(
-                                            cx.listener(move |this, _, _, cx| {
-                                                this.request_delete_protected_row(
-                                                    row_id_for_click.clone(),
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
-                                    ),
-                            )
+                                    .inline()
+                                    .danger()
+                                    .icon(AppIcon::Delete)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_delete_protected_row(
+                                            row_id_for_click.clone(),
+                                            cx,
+                                        );
+                                    }))
+                                    .into_any_element(),
+                                ),
+                            },
+                            false,
+                            false,
+                            cx,
+                        )
                     }))
             })
     }
 
+    fn is_cursor_on(&self, field: HookFormField) -> bool {
+        self.content_focused
+            && self.hook_focus == HookFocus::Form
+            && self.hook_form_field == field
+            && !self.hook_editing_field
+    }
+
+    /// Keyboard cursor frame around a form control; a press moves the cursor
+    /// to `field` and focuses its input when it has one.
     fn hook_field_frame(
         &self,
         field: HookFormField,
-        primary: Hsla,
+        _tint: Hsla,
         child: impl IntoElement,
         cx: &mut Context<Self>,
     ) -> Div {
-        let is_focused = self.hook_focus == HookFocus::Form && self.hook_form_field == field;
-
-        focus_frame(is_focused, Some(primary), child, cx).on_mouse_down(
+        layout::cursor_ring(self.is_cursor_on(field), child, cx).on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _, window, cx| {
                 this.switching_input = true;
@@ -1532,207 +1478,312 @@ impl HooksSection {
         )
     }
 
-    #[cfg(feature = "lua")]
-    fn render_hook_lua_capability_rows(&self, primary: Hsla, cx: &mut Context<Self>) -> Div {
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                self.hook_field_frame(
-                    HookFormField::LuaLogging,
-                    primary,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("hook-lua-logging")
-                                .checked(self.hook_lua_logging)
-                                .aria_label(dbflux_i18n::t!(
-                                    "settings.hooks.form.capability.logging"
-                                ))
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.hook_lua_logging = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Body::new(dbflux_i18n::t!(
-                            "settings.hooks.form.capability.logging"
-                        ))),
-                    cx,
-                ),
-            )
-            .child(
-                self.hook_field_frame(
-                    HookFormField::LuaEnvRead,
-                    primary,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("hook-lua-env-read")
-                                .checked(self.hook_lua_env_read)
-                                .aria_label(dbflux_i18n::t!(
-                                    "settings.hooks.form.capability.env_read"
-                                ))
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.hook_lua_env_read = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Body::new(dbflux_i18n::t!(
-                            "settings.hooks.form.capability.env_read"
-                        ))),
-                    cx,
-                ),
-            )
-            .child(
-                self.hook_field_frame(
-                    HookFormField::LuaConnectionMetadata,
-                    primary,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("hook-lua-connection-metadata")
-                                .checked(self.hook_lua_connection_metadata)
-                                .aria_label(dbflux_i18n::t!(
-                                    "settings.hooks.form.capability.connection_metadata"
-                                ))
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.hook_lua_connection_metadata = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Body::new(dbflux_i18n::t!(
-                            "settings.hooks.form.capability.connection_metadata"
-                        ))),
-                    cx,
-                ),
-            )
-            .child(
-                self.hook_field_frame(
-                    HookFormField::LuaProcessRun,
-                    primary,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("hook-lua-process-run")
-                                .checked(self.hook_lua_process_run)
-                                .aria_label(dbflux_i18n::t!(
-                                    "settings.hooks.form.capability.process_run"
-                                ))
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.hook_lua_process_run = *checked;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(Body::new(dbflux_i18n::t!(
-                            "settings.hooks.form.capability.process_run"
-                        ))),
-                    cx,
-                ),
-            )
+    /// Text input row of the hook form.
+    fn hook_input_row(
+        &self,
+        label: String,
+        input: &Entity<InputState>,
+        field: HookFormField,
+        width: Option<Pixels>,
+        help: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let control = Input::new(input)
+            .id(SharedString::from(format!("hook-{}", hook_field_id(field))))
+            .aria_label(label.clone());
+
+        layout::form_row(
+            label,
+            layout::field_frame(self.is_cursor_on(field), width, true, control, cx).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.switching_input = true;
+                    this.hook_focus = HookFocus::Form;
+                    this.hook_form_field = field;
+                    this.hook_focus_current_field(window, cx);
+                    cx.notify();
+                }),
+            ),
+            help.map(SharedString::from),
+        )
     }
 
-    #[cfg(not(feature = "lua"))]
-    fn render_hook_lua_capability_rows(&self, _primary: Hsla, cx: &mut Context<Self>) -> Div {
+    /// Checkbox row of the hook form, framed for the keyboard cursor.
+    fn hook_checkbox_row(
+        &self,
+        id: &'static str,
+        label: String,
+        checked: bool,
+        field: HookFormField,
+        setter: fn(&mut Self, bool),
+        cx: &mut Context<Self>,
+    ) -> Div {
+        layout::check_row(
+            layout::cursor_ring(
+                self.is_cursor_on(field),
+                Checkbox::new(id)
+                    .checked(checked)
+                    .label(label)
+                    .on_click(cx.listener(move |this, value: &bool, _, cx| {
+                        this.hook_focus = HookFocus::Form;
+                        this.hook_form_field = field;
+                        setter(this, *value);
+                        cx.notify();
+                    })),
+                cx,
+            ),
+            None,
+        )
+    }
+
+    fn render_hook_lua_capability_rows(&self, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
             .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Checkbox::new("hook-lua-logging")
-                            .checked(self.hook_lua_logging)
-                            .aria_label(dbflux_i18n::t!("settings.hooks.form.capability.logging"))
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.hook_lua_logging = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(Body::new(dbflux_i18n::t!(
-                        "settings.hooks.form.capability.logging"
-                    ))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Checkbox::new("hook-lua-env-read")
-                            .checked(self.hook_lua_env_read)
-                            .aria_label(dbflux_i18n::t!("settings.hooks.form.capability.env_read"))
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.hook_lua_env_read = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(Body::new(dbflux_i18n::t!(
-                        "settings.hooks.form.capability.env_read"
-                    ))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Checkbox::new("hook-lua-connection-metadata")
-                            .checked(self.hook_lua_connection_metadata)
-                            .aria_label(dbflux_i18n::t!(
-                                "settings.hooks.form.capability.connection_metadata"
-                            ))
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.hook_lua_connection_metadata = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(Body::new(dbflux_i18n::t!(
-                        "settings.hooks.form.capability.connection_metadata"
-                    ))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Checkbox::new("hook-lua-process-run")
-                            .checked(self.hook_lua_process_run)
-                            .aria_label(dbflux_i18n::t!(
-                                "settings.hooks.form.capability.process_run"
-                            ))
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.hook_lua_process_run = *checked;
-                                cx.notify();
-                            })),
-                    )
-                    .child(Body::new(dbflux_i18n::t!(
-                        "settings.hooks.form.capability.process_run"
-                    ))),
-            )
+            .child(self.hook_checkbox_row(
+                "hook-lua-logging",
+                dbflux_i18n::t!("settings.hooks.form.capability.logging"),
+                self.hook_lua_logging,
+                lua_capability_field(LuaCapabilityRow::Logging),
+                |this, value| this.hook_lua_logging = value,
+                cx,
+            ))
+            .child(self.hook_checkbox_row(
+                "hook-lua-env-read",
+                dbflux_i18n::t!("settings.hooks.form.capability.env_read"),
+                self.hook_lua_env_read,
+                lua_capability_field(LuaCapabilityRow::EnvRead),
+                |this, value| this.hook_lua_env_read = value,
+                cx,
+            ))
+            .child(self.hook_checkbox_row(
+                "hook-lua-connection-metadata",
+                dbflux_i18n::t!("settings.hooks.form.capability.connection_metadata"),
+                self.hook_lua_connection_metadata,
+                lua_capability_field(LuaCapabilityRow::ConnectionMetadata),
+                |this, value| this.hook_lua_connection_metadata = value,
+                cx,
+            ))
+            .child(self.hook_checkbox_row(
+                "hook-lua-process-run",
+                dbflux_i18n::t!("settings.hooks.form.capability.process_run"),
+                self.hook_lua_process_run,
+                lua_capability_field(LuaCapabilityRow::ProcessRun),
+                |this, value| this.hook_lua_process_run = value,
+                cx,
+            ))
+    }
+
+    /// Current failure policy, read from the failure selector's value.
+    fn selected_failure_mode(&self, cx: &App) -> HookFailureMode {
+        match self
+            .hook_failure_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|value| value.to_string())
+            .as_deref()
+        {
+            Some("warn") => HookFailureMode::Warn,
+            Some("ignore") => HookFailureMode::Ignore,
+            _ => HookFailureMode::Disconnect,
+        }
+    }
+
+    /// Left and Right on a segmented field that is one stop of the form
+    /// (execution mode, on failure) move its choice. Returns whether the
+    /// cursor was on such a field.
+    pub(super) fn step_segmented_field(&mut self, step: isize, cx: &mut Context<Self>) -> bool {
+        match self.hook_form_field {
+            HookFormField::ExecutionMode => {
+                let active = match self.hook_execution_mode {
+                    HookExecutionMode::Blocking => "blocking",
+                    HookExecutionMode::Detached => "detached",
+                };
+
+                if let Some(next) = stepped_segment(&["blocking", "detached"], active, step) {
+                    let mode = if next == "detached" {
+                        HookExecutionMode::Detached
+                    } else {
+                        HookExecutionMode::Blocking
+                    };
+                    self.set_hook_execution_mode_dropdown(mode, cx);
+                    self.validate_form_field();
+                }
+                true
+            }
+            HookFormField::OnFailure => {
+                let active = match self.selected_failure_mode(cx) {
+                    HookFailureMode::Disconnect => "disconnect",
+                    HookFailureMode::Warn => "warn",
+                    HookFailureMode::Ignore => "ignore",
+                };
+
+                if let Some(next) = stepped_segment(&["disconnect", "warn", "ignore"], active, step)
+                {
+                    let mode = match next {
+                        "warn" => HookFailureMode::Warn,
+                        "ignore" => HookFailureMode::Ignore,
+                        _ => HookFailureMode::Disconnect,
+                    };
+                    self.set_failure_mode(mode, cx);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_failure_mode(&mut self, mode: HookFailureMode, cx: &mut Context<Self>) {
+        let index = match mode {
+            HookFailureMode::Disconnect => 0,
+            HookFailureMode::Warn => 1,
+            HookFailureMode::Ignore => 2,
+        };
+
+        self.hook_failure_dropdown.update(cx, |dropdown, cx| {
+            dropdown.set_selected_index(Some(index), cx);
+        });
+    }
+
+    fn render_hook_kind_selector(&self, cx: &mut Context<Self>) -> Div {
+        let entity = cx.entity();
+        let active = match self.hook_kind_selection {
+            HookKindSelection::Command => "command",
+            HookKindSelection::Script => "script",
+            HookKindSelection::Lua => "lua",
+        };
+
+        let mut items = vec![
+            SegmentedItem::new("command", dbflux_i18n::t!("hooks.kind.command"))
+                .icon(AppIcon::SquareTerminal),
+            SegmentedItem::new("script", dbflux_i18n::t!("hooks.kind.script"))
+                .icon(AppIcon::FileCode),
+        ];
+
+        if cfg!(feature = "lua") {
+            items.push(
+                SegmentedItem::new("lua", dbflux_i18n::t!("hooks.kind.lua")).icon(AppIcon::Code),
+            );
+        }
+
+        let control = SegmentedControl::new(items, active, move |selected, _window, cx| {
+            let kind = match selected.as_ref() {
+                "script" => HookKindSelection::Script,
+                "lua" => HookKindSelection::Lua,
+                _ => HookKindSelection::Command,
+            };
+
+            entity.update(cx, |this, cx| {
+                this.hook_focus = HookFocus::Form;
+                this.set_hook_kind_dropdown(kind, cx);
+                this.validate_form_field();
+                cx.notify();
+            });
+        });
+
+        let cursor = self.content_focused
+            && self.hook_focus == HookFocus::Form
+            && is_kind_form_field(self.hook_form_field);
+
+        let control = control.focused(cursor).when_some(
+            cursor
+                .then(|| kind_segment_id(self.hook_form_field))
+                .flatten(),
+            |control, id| control.focused_item(id),
+        );
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.hooks.form.kind"),
+            div().flex().child(control),
+            None,
+        )
+    }
+
+    fn render_hook_execution_mode_selector(&self, cx: &mut Context<Self>) -> Div {
+        let entity = cx.entity();
+        let active = match self.hook_execution_mode {
+            HookExecutionMode::Blocking => "blocking",
+            HookExecutionMode::Detached => "detached",
+        };
+
+        let control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new("blocking", dbflux_i18n::t!("hooks.execution.blocking")),
+                SegmentedItem::new("detached", dbflux_i18n::t!("hooks.execution.detached")),
+            ],
+            active,
+            move |selected, _window, cx| {
+                let mode = if selected.as_ref() == "detached" {
+                    HookExecutionMode::Detached
+                } else {
+                    HookExecutionMode::Blocking
+                };
+
+                entity.update(cx, |this, cx| {
+                    this.hook_focus = HookFocus::Form;
+                    this.hook_form_field = HookFormField::ExecutionMode;
+                    this.set_hook_execution_mode_dropdown(mode, cx);
+                    this.validate_form_field();
+                    cx.notify();
+                });
+            },
+        );
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.hooks.form.execution_mode"),
+            div()
+                .flex()
+                .child(control.focused(self.is_cursor_on(HookFormField::ExecutionMode))),
+            Some(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint").into()),
+        )
+    }
+
+    fn render_hook_failure_selector(&self, cx: &mut Context<Self>) -> Div {
+        let entity = cx.entity();
+        let active = match self.selected_failure_mode(cx) {
+            HookFailureMode::Disconnect => "disconnect",
+            HookFailureMode::Warn => "warn",
+            HookFailureMode::Ignore => "ignore",
+        };
+
+        let control = SegmentedControl::new(
+            vec![
+                SegmentedItem::new("disconnect", dbflux_i18n::t!("hooks.failure.disconnect"))
+                    .icon(AppIcon::Unplug),
+                SegmentedItem::new("warn", dbflux_i18n::t!("hooks.failure.warn"))
+                    .icon(AppIcon::TriangleAlert),
+                SegmentedItem::new("ignore", dbflux_i18n::t!("hooks.failure.ignore"))
+                    .icon(AppIcon::CircleX),
+            ],
+            active,
+            move |selected, _window, cx| {
+                let mode = match selected.as_ref() {
+                    "warn" => HookFailureMode::Warn,
+                    "ignore" => HookFailureMode::Ignore,
+                    _ => HookFailureMode::Disconnect,
+                };
+
+                entity.update(cx, |this, cx| {
+                    this.hook_focus = HookFocus::Form;
+                    this.hook_form_field = HookFormField::OnFailure;
+                    this.set_failure_mode(mode, cx);
+                    cx.notify();
+                });
+            },
+        );
+
+        layout::form_row(
+            dbflux_i18n::t!("settings.hooks.form.on_failure"),
+            div()
+                .flex()
+                .child(control.focused(self.is_cursor_on(HookFormField::OnFailure))),
+            None,
+        )
     }
 
     fn render_hook_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
 
-        let editing = self.editing_hook_id.is_some();
-        let title = if editing {
-            dbflux_i18n::t!("settings.hooks.form.title.edit")
-        } else {
-            dbflux_i18n::t!("settings.hooks.form.title.new")
-        };
         let hook_kind = self.selected_hook_kind(cx);
         let is_script = hook_kind == HookKindSelection::Script;
         let is_lua = hook_kind == HookKindSelection::Lua;
@@ -1740,414 +1791,291 @@ impl HooksSection {
         let warnings = self.hook_form_warnings(cx);
         let preview = self.hook_form_preview(cx);
         let default_interpreter = self.default_script_interpreter_label(cx);
-        let primary = theme.primary;
-        let kind_focused =
-            self.hook_focus == HookFocus::Form && is_kind_form_field(self.hook_form_field);
+        let tint = ChromeColors::tint(&theme);
+        let detached =
+            !is_lua && self.selected_hook_execution_mode(cx) == HookExecutionMode::Detached;
 
-        layout::sticky_form_shell(
-            PanelTitle::new(title),
+        let command_rows = (hook_kind == HookKindSelection::Command).then(|| {
             div()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.switching_input = true;
-                }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_4()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.id")))
-                            .child(self.hook_field_frame(
-                                HookFormField::HookId,
-                                primary,
-                                Input::new(&self.input_hook_id).small(),
-                                cx,
-                            )),
+                .flex()
+                .flex_col()
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.command"),
+                    &self.input_hook_command,
+                    HookFormField::Command,
+                    Some(HOOK_FIELD_WIDTH),
+                    None,
+                    cx,
+                ))
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.args"),
+                    &self.input_hook_args,
+                    HookFormField::Arguments,
+                    None,
+                    Some(dbflux_i18n::t!("settings.hooks.form.args_hint")),
+                    cx,
+                ))
+        });
+
+        let script_rows = uses_script_source.then(|| {
+            let open_buttons = layout::inline_controls()
+                .child(
+                    Button::new(
+                        "open-script-app",
+                        dbflux_i18n::t!("settings.hooks.form.open_in_app"),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.kind")))
-                            .child(focus_frame(
-                                kind_focused,
-                                Some(primary),
-                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_kind_dropdown.clone()),
-                                cx,
-                            )),
+                    .secondary()
+                    .icon(AppIcon::FileCode)
+                    .focused(self.is_cursor_on(HookFormField::OpenInApp))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_script_in_app(window, cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        "open-script-editor",
+                        dbflux_i18n::t!("settings.hooks.form.open_in_editor"),
                     )
-                    .when(hook_kind == HookKindSelection::Command, |container| {
-                        container.child(
+                    .secondary()
+                    .icon(AppIcon::ExternalLink)
+                    .focused(self.is_cursor_on(HookFormField::OpenInEditor))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_script_in_default_editor(window, cx);
+                    })),
+                );
+
+            div()
+                .flex()
+                .flex_col()
+                .when(is_script, |rows| {
+                    rows.child(layout::form_row(
+                        dbflux_i18n::t!("settings.hooks.form.language"),
+                        self.hook_field_frame(
+                            HookFormField::ScriptLanguage,
+                            tint,
                             div()
-                                .flex()
-                                .flex_col()
-                                .gap_4()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(Label::new(dbflux_i18n::t!("settings.hooks.form.command")))
-                                        .child(self.hook_field_frame(
-                                            HookFormField::Command,
-                                            primary,
-                                            Input::new(&self.input_hook_command).small(),
-                                            cx,
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(Label::new(dbflux_i18n::t!("settings.hooks.form.args")))
-                                        .child(Body::new(dbflux_i18n::t!("settings.hooks.form.args_hint")).color(
-                                            theme.muted_foreground,
-                                        ))
-                                        .child(self.hook_field_frame(
-                                            HookFormField::Arguments,
-                                            primary,
-                                            Input::new(&self.input_hook_args).small(),
-                                            cx,
-                                        )),
-                                ),
+                                .w(SettingsMetrics::SELECT_WIDTH)
+                                .child(self.script_language_dropdown.clone()),
+                            cx,
                         )
-                    })
-                    .when(uses_script_source, |container| {
-                        container.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_4()
-                                .when(is_script, |container| {
-                                    container.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.language")))
-                                            .child(self.hook_field_frame(
-                                                HookFormField::ScriptLanguage,
-                                                primary,
-                                                div()
-                                                    .w(Widths::SETTINGS_FORM_LABEL)
-                                                    .child(self.script_language_dropdown.clone()),
-                                                cx,
-                                            )),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(Label::new(dbflux_i18n::t!("settings.hooks.form.file_path"))),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(Body::new(dbflux_i18n::t!("settings.hooks.form.file_path_hint")).color(theme.muted_foreground))
-                                        .child(self.hook_field_frame(
-                                            HookFormField::FilePath,
-                                            primary,
-                                            Input::new(&self.input_hook_script_file_path).small(),
-                                            cx,
-                                        ))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .gap_2()
-                                                .child(self.hook_field_frame(
-                                                    HookFormField::OpenInApp,
-                                                    primary,
-                                                    Button::new("open-script-app", dbflux_i18n::t!("settings.hooks.form.open_in_app"))
-                                                        .small()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.open_script_in_app(window, cx);
-                                                        })),
-                                                    cx,
-                                                ))
-                                                .child(self.hook_field_frame(
-                                                    HookFormField::OpenInEditor,
-                                                    primary,
-                                                    Button::new("open-script-editor", dbflux_i18n::t!("settings.hooks.form.open_in_editor"))
-                                                        .small()
-                                                        .on_click(cx.listener(|this, _, window, cx| {
-                                                            this.open_script_in_default_editor(window, cx);
-                                                        })),
-                                                    cx,
-                                                )),
-                                        ),
-                                )
-                                .when(is_script, |container| {
-                                    container.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.interpreter")))
-                                            .child(Body::new(hooks_form_interpreter_hint(&default_interpreter)).color(theme.muted_foreground))
-                                            .child(self.hook_field_frame(
-                                                HookFormField::Interpreter,
-                                                primary,
-                                                Input::new(&self.input_hook_interpreter).small(),
-                                                cx,
-                                            )),
-                                    )
-                                })
-                                .when(is_lua, |container| {
-                                    container.child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_2()
-                                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.capabilities")))
-                                            .child(self.render_hook_lua_capability_rows(primary, cx))
-                                            .child(Body::new(
-                                                dbflux_i18n::t!("settings.hooks.form.capability.process_run_hint"),
-                                            )
-                                            .color(theme.muted_foreground)),
-                                    )
-                                }),
-                        )
-                    })
-                    .when(!is_lua, |container| {
-                        container.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.execution_mode")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint")).color(theme.muted_foreground))
-                            .child(self.hook_field_frame(
-                                HookFormField::ExecutionMode,
-                                primary,
-                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_execution_mode_dropdown.clone()),
-                                cx,
-                            )),
-                    )
-                    })
-                    .when(!is_lua && self.selected_hook_execution_mode(cx) == HookExecutionMode::Detached, |container| {
-                        container.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.ready_signal")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.ready_signal_hint")).color(theme.muted_foreground))
-                            .child(self.hook_field_frame(
-                                HookFormField::ReadySignal,
-                                primary,
-                                Input::new(&self.input_hook_ready_signal).small(),
-                                cx,
-                            )),
-                    )
-                    })
-                    .when(!is_lua, |container| {
-                        container.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.cwd")))
-                            .child(self.hook_field_frame(
-                                HookFormField::WorkingDirectory,
-                                primary,
-                                Input::new(&self.input_hook_cwd).small(),
-                                cx,
-                            )),
-                    )
-                    })
-                    .when(!is_lua, |container| {
-                        container.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_hint")).color(theme.muted_foreground))
-                            .child(self.hook_field_frame(
-                                HookFormField::Environment,
-                                primary,
-                                Input::new(&self.input_hook_env).small(),
-                                cx,
-                            )),
-                    )
-                    })
-                    .when(!is_lua, |container| {
-                        container.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env_denylist")))
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_denylist_hint")).color(theme.muted_foreground))
-                            .child(self.hook_field_frame(
-                                HookFormField::EnvDenylist,
-                                primary,
-                                Input::new(&self.input_hook_env_denylist).small(),
-                                cx,
-                            )),
-                    )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.timeout")))
-                            .child(self.hook_field_frame(
-                                HookFormField::Timeout,
-                                primary,
-                                Input::new(&self.input_hook_timeout).small(),
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.resolved_command")))
-                            .child(MonoCaption::new(preview)),
-                    )
-                    .when(!warnings.is_empty(), |container| {
-                        container.child(
-                            div().flex().flex_col().gap_2().children(warnings.iter().map(|warning| {
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap_2()
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(Spacing::XXS)
-                                    .bg(theme.warning.opacity(0.12))
-                                    .border_1()
-                                    .border_color(theme.warning.opacity(0.3))
-                                    .child(
-                                        div().mt(px(1.0)).child(
-                                            Icon::new(AppIcon::TriangleAlert)
-                                                .size(Heights::ICON_SM)
-                                                .warning(),
-                                        ),
-                                    )
-                                    .child(
-                                        Body::new(warning.clone()).color(theme.warning),
-                                    )
-                            })),
-                        )
-                    })
-                    .child(self.hook_field_frame(
-                        HookFormField::Enabled,
-                        primary,
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                Checkbox::new("hook-enabled")
-                                    .checked(self.hook_enabled)
-                                    .aria_label(dbflux_i18n::t!("settings.hooks.form.enabled"))
-                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                        this.hook_enabled = *checked;
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(Body::new(dbflux_i18n::t!("settings.hooks.form.enabled"))),
+                        .w(SettingsMetrics::SELECT_WIDTH),
+                        None,
+                    ))
+                })
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.file_path"),
+                    &self.input_hook_script_file_path,
+                    HookFormField::FilePath,
+                    None,
+                    Some(dbflux_i18n::t!("settings.hooks.form.file_path_hint")),
+                    cx,
+                ))
+                .child(layout::form_row(String::new(), open_buttons, None))
+                .when(is_script, |rows| {
+                    rows.child(self.hook_input_row(
+                        dbflux_i18n::t!("settings.hooks.form.interpreter"),
+                        &self.input_hook_interpreter,
+                        HookFormField::Interpreter,
+                        Some(HOOK_FIELD_WIDTH),
+                        Some(hooks_form_interpreter_hint(&default_interpreter)),
                         cx,
                     ))
-                    .when(!is_lua, |container| {
-                        container.child(self.hook_field_frame(
-                            HookFormField::InheritEnv,
-                            primary,
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    Checkbox::new("hook-inherit-env")
-                                        .checked(self.hook_inherit_env)
-                                        .aria_label(dbflux_i18n::t!("settings.hooks.form.inherit_env"))
-                                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                            this.hook_inherit_env = *checked;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(Body::new(dbflux_i18n::t!("settings.hooks.form.inherit_env"))),
-                            cx,
-                        ))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(Label::new(dbflux_i18n::t!("settings.hooks.form.on_failure")))
-                            .child(self.hook_field_frame(
-                                HookFormField::OnFailure,
-                                primary,
-                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_failure_dropdown.clone()),
-                                cx,
-                            )),
-                    )),
+                })
+                .when(is_lua, |rows| {
+                    rows.child(layout::form_row(
+                        dbflux_i18n::t!("settings.hooks.form.capabilities"),
+                        self.render_hook_lua_capability_rows(cx),
+                        Some(
+                            dbflux_i18n::t!("settings.hooks.form.capability.process_run_hint")
+                                .into(),
+                        ),
+                    ))
+                })
+        });
+
+        let process_rows = (!is_lua).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .child(self.render_hook_execution_mode_selector(cx))
+                .when(detached, |rows| {
+                    rows.child(self.hook_input_row(
+                        dbflux_i18n::t!("settings.hooks.form.ready_signal"),
+                        &self.input_hook_ready_signal,
+                        HookFormField::ReadySignal,
+                        Some(HOOK_FIELD_WIDTH),
+                        Some(dbflux_i18n::t!("settings.hooks.form.ready_signal_hint")),
+                        cx,
+                    ))
+                })
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.cwd"),
+                    &self.input_hook_cwd,
+                    HookFormField::WorkingDirectory,
+                    None,
+                    None,
+                    cx,
+                ))
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.env"),
+                    &self.input_hook_env,
+                    HookFormField::Environment,
+                    None,
+                    Some(dbflux_i18n::t!("settings.hooks.form.env_hint")),
+                    cx,
+                ))
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.env_denylist"),
+                    &self.input_hook_env_denylist,
+                    HookFormField::EnvDenylist,
+                    None,
+                    Some(dbflux_i18n::t!("settings.hooks.form.env_denylist_hint")),
+                    cx,
+                ))
+        });
+
+        let timeout = layout::form_row(
+            dbflux_i18n::t!("settings.hooks.form.timeout"),
+            layout::field_frame(
+                self.is_cursor_on(HookFormField::Timeout),
+                Some(SettingsMetrics::NUMBER_FIELD_WIDTH),
+                true,
+                Input::new(&self.input_hook_timeout)
+                    .id("hook-timeout")
+                    .aria_label(dbflux_i18n::t!("settings.hooks.form.timeout"))
+                    .suffix(
+                        Text::code(dbflux_i18n::t!("settings.general.unit.milliseconds"))
+                            .muted_foreground(),
+                    ),
+                cx,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.switching_input = true;
+                    this.hook_focus = HookFocus::Form;
+                    this.hook_form_field = HookFormField::Timeout;
+                    this.hook_focus_current_field(window, cx);
+                    cx.notify();
+                }),
+            ),
+            None,
+        );
+
+        let resolved_command = div()
+            .relative()
+            .px(SettingsMetrics::LIST_ROW_PADDING_Y)
+            .py(SettingsMetrics::LIST_ROW_PADDING_Y)
+            .font_family(AppFonts::MONO)
+            .text_color(ChromeColors::strong(&theme))
+            .child(
+                Chamfer::new(ChamferCut::CONTROL)
+                    .fill(theme.background)
+                    .border(theme.border),
+            )
+            .child(format!("$ {preview}"));
+
+        layout::sticky_form_shell(
+            dbflux_components::composites::section_header(
+                dbflux_i18n::t!("settings.hooks.form.group.hook"),
+                Some(AppIcon::SquareTerminal.into()),
+                cx,
+            ),
+            div()
+                .flex()
+                .flex_col()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.switching_input = true;
+                    }),
+                )
+                .child(self.hook_input_row(
+                    dbflux_i18n::t!("settings.hooks.form.id"),
+                    &self.input_hook_id,
+                    HookFormField::HookId,
+                    Some(HOOK_FIELD_WIDTH),
+                    None,
+                    cx,
+                ))
+                .child(self.render_hook_kind_selector(cx))
+                .children(command_rows)
+                .children(script_rows)
+                .children(process_rows)
+                .child(timeout)
+                .child(self.render_hook_failure_selector(cx))
+                .child(self.hook_checkbox_row(
+                    "hook-enabled",
+                    dbflux_i18n::t!("settings.hooks.form.enabled"),
+                    self.hook_enabled,
+                    HookFormField::Enabled,
+                    |this, value| this.hook_enabled = value,
+                    cx,
+                ))
+                .when(!is_lua, |form| {
+                    form.child(self.hook_checkbox_row(
+                        "hook-inherit-env",
+                        dbflux_i18n::t!("settings.hooks.form.inherit_env"),
+                        self.hook_inherit_env,
+                        HookFormField::InheritEnv,
+                        |this, value| this.hook_inherit_env = value,
+                        cx,
+                    ))
+                })
+                .child(dbflux_components::composites::section_header(
+                    dbflux_i18n::t!("settings.hooks.form.resolved_command"),
+                    Some(AppIcon::Code.into()),
+                    cx,
+                ))
+                .child(resolved_command)
+                .children(warnings.into_iter().map(|warning| {
+                    div()
+                        .mt(FormMetrics::INLINE_GAP)
+                        .child(BannerBlock::new(BannerVariant::Warning, warning))
+                })),
             None,
             &theme,
         )
     }
 
+    /// Delete, on the left of the footer, for a saved hook.
+    pub(super) fn render_hook_footer_leading_actions(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let hook_id = self.editing_hook_id.clone()?;
+
+        Some(
+            Button::new("delete-hook", dbflux_i18n::t!("hooks.action.delete"))
+                .danger()
+                .icon(AppIcon::Delete)
+                .focused(self.is_cursor_on(HookFormField::DeleteButton))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.request_delete_hook(hook_id.clone(), cx);
+                }))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_hook_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let is_form_focused = self.content_focused && self.hook_focus == HookFocus::Form;
-        let primary = cx.theme().primary;
         let editing = self.editing_hook_id.is_some();
 
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .when(editing, |container| {
-                let hook_id = self.editing_hook_id.clone().unwrap_or_default();
-
-                container.child(layout::footer_action_frame(
-                    is_form_focused && self.hook_form_field == HookFormField::DeleteButton,
-                    primary,
-                    Button::new("delete-hook", dbflux_i18n::t!("hooks.action.delete"))
-                        .small()
-                        .danger()
-                        .w_full()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_delete_hook(hook_id.clone(), cx);
-                        })),
-                ))
-            })
-            .child(layout::footer_action_frame(
-                is_form_focused && self.hook_form_field == HookFormField::SaveButton,
-                primary,
-                Button::new(
-                    "save-hook",
-                    if editing {
-                        dbflux_i18n::t!("hooks.action.update")
-                    } else {
-                        dbflux_i18n::t!("hooks.action.create")
-                    },
-                )
-                .small()
-                .primary()
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.save_hook(window, cx);
-                })),
-            ))
-            .into_any_element()
+        Button::new(
+            "save-hook",
+            if editing {
+                dbflux_i18n::t!("hooks.action.update")
+            } else {
+                dbflux_i18n::t!("hooks.action.create")
+            },
+        )
+        .primary()
+        .icon(AppIcon::Check)
+        .when_some(crate::settings::save_shortcut(), Button::kbd)
+        .focused(self.is_cursor_on(HookFormField::SaveButton))
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.save_hook(window, cx);
+        }))
+        .into_any_element()
     }
 
     pub(super) fn handle_key_event(
@@ -2238,10 +2166,18 @@ impl HooksSection {
                     cx.notify();
                 }
                 ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_left();
+                    if !self.step_segmented_field(-1, cx) {
+                        self.move_left();
+                    }
                     cx.notify();
                 }
-                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
+                ("right", modifiers) if modifiers == Modifiers::none() => {
+                    if !self.step_segmented_field(1, cx) {
+                        self.move_right();
+                    }
+                    cx.notify();
+                }
+                ("l", modifiers) if modifiers == Modifiers::none() => {
                     self.move_right();
                     cx.notify();
                 }
@@ -2347,6 +2283,14 @@ impl HooksSection {
                 self.set_hook_execution_mode_dropdown(new_mode, cx);
                 self.validate_form_field();
             }
+            HookFormField::OnFailure => {
+                let next = match self.selected_failure_mode(cx) {
+                    HookFailureMode::Disconnect => HookFailureMode::Warn,
+                    HookFailureMode::Warn => HookFailureMode::Ignore,
+                    HookFailureMode::Ignore => HookFailureMode::Disconnect,
+                };
+                self.set_failure_mode(next, cx);
+            }
             HookFormField::Enabled => {
                 self.hook_enabled = !self.hook_enabled;
             }
@@ -2405,6 +2349,63 @@ fn is_kind_form_field(field: HookFormField) -> bool {
         field,
         HookFormField::KindCommand | HookFormField::KindScript
     )
+}
+
+/// Segment of the kind selector that a kind form field stands for.
+fn kind_segment_id(field: HookFormField) -> Option<&'static str> {
+    match field {
+        HookFormField::KindCommand => Some("command"),
+        HookFormField::KindScript => Some("script"),
+        #[cfg(feature = "lua")]
+        HookFormField::KindLua => Some("lua"),
+        _ => None,
+    }
+}
+
+/// Width of the short text fields of the hook form (id, command). (300 px)
+const HOOK_FIELD_WIDTH: Pixels = px(300.0);
+
+/// Element-id suffix of a hook form field.
+fn hook_field_id(field: HookFormField) -> &'static str {
+    match field {
+        HookFormField::HookId => "id",
+        HookFormField::Command => "command",
+        HookFormField::Arguments => "arguments",
+        HookFormField::FilePath => "file-path",
+        HookFormField::Interpreter => "interpreter",
+        HookFormField::ReadySignal => "ready-signal",
+        HookFormField::WorkingDirectory => "cwd",
+        HookFormField::Environment => "env",
+        HookFormField::EnvDenylist => "env-denylist",
+        HookFormField::Timeout => "timeout",
+        _ => "control",
+    }
+}
+
+/// Lua capability checkboxes of the hook form.
+#[derive(Clone, Copy)]
+enum LuaCapabilityRow {
+    Logging,
+    EnvRead,
+    ConnectionMetadata,
+    ProcessRun,
+}
+
+/// Form field of a Lua capability checkbox. Builds without Lua have no
+/// keyboard stops for them, so they map to the Enabled row.
+#[cfg(feature = "lua")]
+fn lua_capability_field(row: LuaCapabilityRow) -> HookFormField {
+    match row {
+        LuaCapabilityRow::Logging => HookFormField::LuaLogging,
+        LuaCapabilityRow::EnvRead => HookFormField::LuaEnvRead,
+        LuaCapabilityRow::ConnectionMetadata => HookFormField::LuaConnectionMetadata,
+        LuaCapabilityRow::ProcessRun => HookFormField::LuaProcessRun,
+    }
+}
+
+#[cfg(not(feature = "lua"))]
+fn lua_capability_field(_row: LuaCapabilityRow) -> HookFormField {
+    HookFormField::Enabled
 }
 
 fn interpreter_exists(program: &str) -> bool {

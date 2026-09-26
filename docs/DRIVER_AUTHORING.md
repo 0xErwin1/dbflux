@@ -82,6 +82,7 @@ Implement these only when the database supports them, and keep capability flags 
 - [ ] SQL dialect, code generator, query generator, or semantic planner behavior as applicable.
 - [ ] Source context, metric catalog, dashboard importer, or dashboard source behavior as applicable.
 - [ ] An instance catalog for metrics or inspectors as applicable.
+- [ ] Document collection seams for a `DatabaseCategory::Document` driver: projection and sort in `browse_collection` plus `sample_collection_schema` (report `DocumentFeatures::QUERY_SLOTS` from `Connection::document_features`), and `patch_document`, `replace_document` and `fetch_document` (report `DocumentFeatures::FIELD_PATCH`), with `QueryGenerator::document_patch_query` / `document_replace_query` for the text shown before a write. `estimate_collection_count` may answer from collection metadata.
 - [ ] Other schema, CRUD, cancellation, transfer, or key-value seams represented by the core traits and capability flags.
 
 ### 6. Feature wiring and registration

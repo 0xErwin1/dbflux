@@ -34,7 +34,7 @@ use dbflux_components::components::tree_nav::{
 };
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
-use dbflux_components::tokens::{Heights, Spacing};
+use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
 use dbflux_core::{TableRef, transfer_compatible};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use dbflux_ui_base::object_tree::{
@@ -1117,15 +1117,7 @@ impl SourceTargetPhase {
             .enumerate()
             .map(|(index, row)| {
                 let is_cursor = active && index == cursor;
-                let gutter = render_gutter(
-                    row.depth,
-                    row.is_last,
-                    &row.ancestors_continue,
-                    INDENT_PX,
-                    ROW_HEIGHT,
-                    line_color,
-                    false,
-                );
+                let gutter = render_gutter(row.depth, INDENT_PX, ROW_HEIGHT, line_color, false);
                 self.render_row(side, row, is_cursor, gutter, theme, cx)
             })
             .collect()
@@ -1167,7 +1159,7 @@ impl SourceTargetPhase {
             theme.foreground
         };
         let icon_color = if is_target_selected || is_checked {
-            theme.primary
+            ChromeColors::tint(theme)
         } else {
             theme.muted_foreground
         };
@@ -1187,9 +1179,11 @@ impl SourceTargetPhase {
             .child(Text::body(row.label.to_string()).color(text_color));
 
         if is_target_selected {
-            content = content
-                .child(div().flex_1())
-                .child(Icon::new(AppIcon::Check).small().color(theme.primary));
+            content = content.child(div().flex_1()).child(
+                Icon::new(AppIcon::Check)
+                    .small()
+                    .color(ChromeColors::tint(theme)),
+            );
         }
 
         div()

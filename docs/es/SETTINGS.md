@@ -4,23 +4,25 @@ Una referencia para cada sección de Settings y para los connection hooks — lo
 comandos, scripts o snippets de Lua que DBFlux ejecuta alrededor del ciclo de
 vida de una conexión.
 
-Abre Settings desde la command palette (**Open Settings**) o desde la barra
+Abre Settings desde la command palette (**Open settings**) o desde la barra
 lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 
 | Sección                                             | Cubre                                                                        |
 | --------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [General](#general)                                 | Comportamiento a nivel de app: theme, inicio, refresh, seguridad de queries. |
 | [Audit](#audit)                                     | Qué captura el audit log y cuánto tiempo se conserva.                        |
-| [Keybindings](#keybindings)                         | Explora el keymap (solo lectura).                                            |
+| [Keybindings](#keybindings)                         | Explora y cambia el keymap.                                                  |
 | [Auth Profiles](#auth-profiles-proxies-ssh-tunnels) | Perfiles AWS SSO / shared-credentials.                                       |
 | [Proxies](#auth-profiles-proxies-ssh-tunnels)       | Perfiles de proxy SOCKS5 / HTTP.                                             |
 | [SSH Tunnels](#auth-profiles-proxies-ssh-tunnels)   | Perfiles reutilizables de túnel SSH.                                         |
 | [Services](#services-rpc)                           | Drivers RPC externos y auth providers.                                       |
 | [Hooks](#connection-hooks)                          | Definiciones reutilizables de connection hooks.                              |
 | [Drivers](#drivers)                                 | Overrides y ajustes por driver.                                              |
+| About                                               | Información de versión y build.                                              |
 
 Las secciones relacionadas con MCP (Clients, Roles, Policies) aparecen solo
-cuando el binario se construye con el feature `mcp`; ver [AI + MCP
+cuando el binario se construye con el feature `mcp`, que es el valor por
+defecto; ver [AI + MCP
 Integration](MCP_AI_INTEGRATION.md).
 
 ---
@@ -49,7 +51,7 @@ y permanece en English por ahora.
 
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
-| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de modo Vim en la referencia de teclado de la [Guía de uso](USAGE.md). |
+| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
 
 ### Inicio y sesión
 
@@ -109,7 +111,7 @@ Lua, Python o Bash, hooks de conexión ni métricas.
 | --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **Use the stable database** | Off     | Hace que un build Nightly comparta el `dbflux.db` stable en lugar de `dbflux-nightly.db`. Aplica en el próximo inicio. |
 
-Ver [Data & Privacy](DATA_AND_PRIVACY.md#data-locations) para cómo se separan
+Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
 
 ---
@@ -123,21 +125,89 @@ trail. Guardar tiene efecto sin reiniciar.
 
 La retention (cuánto tiempo se conservan los eventos) impulsa un purge periódico
 en segundo plano cuando está configurada. Para la experiencia diaria de audit —
-abrir el viewer, filtrar, exportar — ver [Dashboards &
-Audit](DASHBOARDS_AND_AUDIT.md#audit-viewer). Para el schema completo de eventos
+abrir el viewer, filtrar, exportar — ver [Audit → Visor de audit](AUDIT.md#visor-de-audit). Para el schema completo de eventos
 y el comportamiento de redaction ver [Audit](AUDIT.md) y [Data &
-Privacy](DATA_AND_PRIVACY.md#audit-and-privacy).
+Privacy](PRIVACY.md#auditoría-y-privacidad).
 
 ---
 
 ## Keybindings
 
-Esta sección es un **viewer de solo lectura**. Lista el keymap activo agrupado
-por contexto, con un filtro de texto y advertencias inline cuando un chord está
-vinculado a más de un comando. Actualmente **no** te permite rebind ni guardar
-shortcuts personalizados desde la UI. Úsala para descubrir y verificar bindings;
-el keymap por defecto completo está documentado en [Usage → Keyboard
-Reference](USAGE.md#7-keyboard-reference).
+Esta sección lista el keymap activo agrupado por contexto. Fíltralo por comando,
+tecla o predicado de contexto con el campo de texto, o muestra un solo contexto
+con el filtro de contexto. Un contexto que hereda de otro (el Editor hereda de
+Global) también lista los bindings heredados que no sombrea. El keymap por
+defecto completo está documentado en [Referencia de teclado](KEYBOARD.md).
+
+**Cambiar un atajo.** Pulsa el lápiz de un binding, o selecciónalo y pulsa
+`Enter`, y luego pulsa las teclas nuevas. Un atajo puede ser una tecla con sus
+modificadores o una secuencia de hasta cuatro, como `g g` o `Ctrl+K Ctrl+S`:
+púlsalas una tras otra, y la grabación se guarda tras una pausa de un segundo.
+`Esc` cancela. Mientras grabas, **Quitar atajo** deja el binding sin tecla.
+También se pueden grabar teclas que usa la propia ventana de Settings, como
+`Ctrl+S` o `Tab`. Un `Esc` solo no se puede grabar porque cancela.
+
+**Contextos.** Cada binding se aplica en un contexto, escrito como un predicado
+en el mismo lenguaje que usa Zed. Pulsa el botón de capas de un binding, o
+selecciónalo y pulsa `p`, para editarlo; `Enter` guarda y `Esc` cancela. Un
+predicado combina nombres con `&&`, `||` y `!`, compara un valor con `==` o
+`!=`, y usa `A > B` para "B dentro de A", con paréntesis para agrupar:
+
+| Predicado | Se aplica |
+|-----------|-----------|
+| `Editor && !Modal` | en un editor de código, no con un diálogo abierto |
+| `Editor && vim_mode == normal` | en un editor de código en el modo Normal de Vim |
+| `Editor && language == mongo` | en un editor de código de una consulta MongoDB |
+| `Results \|\| Audit` | en una grilla de resultados o en el visor de auditoría |
+| `SidebarPanel && tab == scripts` | en la pestaña Scripts de la barra lateral |
+| `CodeEditor > Input` | en el buffer de texto del editor de código |
+
+Los nombres son los de los contextos que muestra el filtro de contexto
+(`Global`, `Sidebar`, `Editor`, `Results`, `DataTable`, `Input`, `Modal`, …),
+los nombres de ventana `Workspace`, `SettingsWindow` y
+`ConnectionManagerWindow`, y los nombres de panel `ActivityRail`,
+`CommandSearch`, `SidebarPanel`, `CodeEditor`, `ResultPanel`, `RowInspector`,
+`KeyValueConsole`, `DocumentQueryBar`, `DocumentSchema`, `DocumentAggregate`,
+`DashboardsPanel` y
+`SettingsSection`. Los valores son `vim_mode` (`normal`, `insert`, `replace`,
+`visual`, `visual_line`, `visual_block`, presente solo con la edición Vim
+activa), `language` (`sql`, `mongo`, `redis`, `lua`, `python`, `bash`, …),
+`tab`, `section` y `focus`. Un predicado que no se puede analizar no se guarda;
+uno que nombra algo que DBFlux nunca fija se guarda con un aviso, porque nunca
+coincide.
+
+**Qué binding gana.** Un binding de un elemento con foco (un campo de texto, una
+data table, un diálogo, el árbol de documentos) gana sobre un binding del panel
+que lo rodea, y un binding que cambiaste gana sobre uno por defecto asignado a
+las mismas teclas en el mismo lugar. Con la edición Vim activa, un binding que
+creaste para un modo de Vim, como `space r` en `Editor && vim_mode == normal`,
+se ejecuta antes de que Vim lea la tecla; los bindings por defecto dejan a Vim
+sus propias teclas. Un botón, casilla o fila de lista con foco siempre toma
+`Enter` y `Space` para sí.
+
+**Avisos y conflictos.** Si las teclas nuevas ya las usa otro comando en un
+contexto que puede estar activo al mismo tiempo, todavía no se guarda nada: un
+aviso nombra el otro comando y su contexto. **Cancelar** deja todo como estaba.
+**Reemplazar** asigna las teclas al binding que estás editando y se las quita al
+otro, que queda sin atajo hasta que lo restablezcas. Un binding que choca con
+otro muestra una etiqueta "en conflicto con", y el pie cuenta los conflictos.
+Dos etiquetas avisan sin bloquear: "comparte una secuencia de teclas" cuando las
+teclas de un binding empiezan las de otro (DBFlux espera entonces un segundo
+tras el más corto para ver si sigue el más largo), y "captura texto escrito"
+cuando una letra sola se asigna donde se escribe texto, como un campo de texto o
+el editor de código fuera de los modos Normal y Visual de Vim.
+
+**Restablecer.** Un binding modificado muestra una flecha que restablece sus
+teclas y su contexto por defecto (`r` sobre un binding seleccionado hace lo
+mismo, y `Delete` quita su atajo). **Restablecer predeterminados** en el pie
+descarta todas las modificaciones. El pie también muestra cuántos bindings están
+modificados.
+
+Los cambios se aplican al instante en todas las ventanas, sin reiniciar. Solo se
+guardan tus modificaciones, en la tabla `cfg_keybinding_overrides` de
+`dbflux.db`, así que los bindings que no cambiaste siguen los valores por defecto
+de futuras versiones. Una modificación cuyo binding por defecto elimina una
+versión posterior se ignora.
 
 ---
 
@@ -154,7 +224,7 @@ AWS SSO, reglas de no-proxy, métodos de auth SSH — en [Connecting to a Databa
 
 Las credenciales que ingresas aquí se guardan en el keyring de tu sistema
 operativo, no en la base de datos. Ver [Data & Privacy →
-Secrets](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+Secrets](PRIVACY.md#secretos-y-el-keyring-del-sistema-operativo).
 
 ---
 
@@ -300,9 +370,10 @@ tope de 4 MiB por hook.
 
 ## Relacionado
 
-- [Usage Guide](USAGE.md) — flujo principal y referencia de teclado.
+- [Primeros pasos](GETTING_STARTED.md) — flujo principal.
+- [Referencia de teclado](KEYBOARD.md) — el keymap por defecto completo.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — SSH, proxy, auth, fuentes de
   valores.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — dónde se almacenan los settings y
+- [Data & Privacy](PRIVACY.md#tus-datos-en-este-equipo) — dónde se almacenan los settings y
   secrets.
 - [Lua Scripting](LUA.md) — el runtime de Lua embebido para hooks.

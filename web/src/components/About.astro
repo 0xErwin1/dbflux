@@ -1,6 +1,9 @@
 ---
-import { docsUrl } from '../data/site';
-import { DEFAULT_LOCALE, t } from '../i18n';
+import Glyph from './Glyph.astro';
+import BrandMark from './BrandMark.astro';
+import { REPO } from '../data/nav';
+import { docsUrl, siteUrl } from '../data/site';
+import { DEFAULT_LOCALE, dictionary, t } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Props {
@@ -8,271 +11,444 @@ interface Props {
 }
 
 const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).about;
+
+const OPTIONS = [
+  { icon: 'zap', ...strings.option.one, chosen: false },
+  { icon: 'layers', ...strings.option.two, chosen: false },
+  { icon: 'plug', ...strings.option.three, chosen: true },
+] as const;
 
 const PRINCIPLES = [
-  {
-    n: '01',
-    title: t(locale, 'about.principle.p01.title'),
-    body: t(locale, 'about.principle.p01.body'),
-  },
-  {
-    n: '02',
-    title: t(locale, 'about.principle.p02.title'),
-    body: t(locale, 'about.principle.p02.body'),
-  },
-  {
-    n: '03',
-    title: t(locale, 'about.principle.p03.title'),
-    body: t(locale, 'about.principle.p03.body'),
-  },
-  {
-    n: '04',
-    title: t(locale, 'about.principle.p04.title'),
-    body: t(locale, 'about.principle.p04.body'),
-  },
+  { n: '01', icon: 'keyboard', ...strings.principle.p01 },
+  { n: '02', icon: 'layers', ...strings.principle.p02 },
+  { n: '03', icon: 'table', ...strings.principle.p03 },
+  { n: '04', icon: 'scroll-text', ...strings.principle.p04 },
 ] as const;
 
 const LAYERS = [
-  { name: 'UI crates', detail: t(locale, 'about.layer.ui.detail'), key: false },
-  { name: 'App layer', detail: t(locale, 'about.layer.app.detail'), key: false },
-  { name: 'Core contracts', detail: t(locale, 'about.layer.core.detail'), key: true },
-  { name: 'Drivers', detail: t(locale, 'about.layer.drivers.detail'), key: false },
+  { icon: 'layers', ...strings.layer.ui, key: false },
+  { icon: 'server', ...strings.layer.app, key: false },
+  { icon: 'braces', ...strings.layer.core, key: false },
+  { icon: 'plug', ...strings.layer.drivers, key: true },
 ] as const;
 ---
 
-<div class="col">
-  <section class="intro">
-    <p class="eyebrow">About</p>
-    <h1>{t(locale, 'about.h1')}</h1>
-    <p>{t(locale, 'about.intro_p1')}</p>
-    <p>{t(locale, 'about.intro_p2')}</p>
-    <p>{t(locale, 'about.intro_p3')}</p>
+<div class="about">
+  <section class="about__intro shell rise">
+    <div class="about__copy">
+      <p class="eyebrow">{strings.eyebrow}</p>
+      <h1 class="display display--hero">{strings.h1}</h1>
+      <p class="about__lede">{strings.lede}</p>
+      <p>{strings.p1}</p>
+      <p>{strings.p2}</p>
+    </div>
+    <aside class="about__card card c18">
+      <BrandMark size={72} />
+      <p>{strings.card_body}</p>
+      <div class="about__actions">
+        <a class="about__button about__button--source c10" href={REPO} rel="noopener">
+          <Glyph name="github" size={17} />
+          {t(locale, 'nav.source')}
+        </a>
+        <a
+          class="about__button about__button--download x c10"
+          href={`${siteUrl('', locale)}#install`}
+        >
+          <Glyph name="download" size={16} />
+          {t(locale, 'nav.download')}
+        </a>
+      </div>
+    </aside>
   </section>
 
-  <section class="reveal">
-    <p class="eyebrow">{t(locale, 'about.principles_eyebrow')}</p>
-    <ol class="principles">
+  <section class="about__block shell">
+    <p class="eyebrow reveal">{strings.options_eyebrow}</p>
+    <div class="about__grid about__grid--3 reveal-group">
+      {
+        OPTIONS.map((option) => (
+          <div class:list={['about__tile card c14 lift', { 'about__tile--chosen': option.chosen }]}>
+            <span class="about__tile-label">
+              <Glyph name={option.icon} size={18} />
+              <span class="x">{option.label}</span>
+            </span>
+            <h3>{option.title}</h3>
+            <p>{option.body}</p>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="about__block shell">
+    <p class="eyebrow reveal">{strings.principles_eyebrow}</p>
+    <ol class="about__grid about__grid--4 reveal-group">
       {
         PRINCIPLES.map((principle) => (
-          <li>
-            <span class="principles__n">{principle.n}</span>
-            <div>
-              <h2>{principle.title}</h2>
-              <p>{principle.body}</p>
+          <li class="about__tile card c14 lift">
+            <div class="about__principle-top">
+              <span class="about__n x">{principle.n}</span>
+              <Glyph name={principle.icon} size={26} class="about__muted-icon" />
             </div>
+            <h3 class="about__principle-title">{principle.title}</h3>
+            <p class="about__principle-body">{principle.body}</p>
           </li>
         ))
       }
     </ol>
   </section>
 
-  <section class="reveal">
-    <p class="eyebrow">{t(locale, 'about.layers_eyebrow')}</p>
-    <div class="layers">
+  <section class="about__arch shell">
+    <div class="about__arch-copy reveal">
+      <p class="eyebrow">{strings.arch_eyebrow}</p>
+      <h2 class="display display--compact">{strings.arch_title}</h2>
+      <p>{strings.arch_body}</p>
+      <div class="about__links">
+        <a class="go go--plain" href={docsUrl('architecture', '', locale)}>
+          <Glyph name="file-text" size={16} />
+          {strings.arch_link}
+          <Glyph name="chevron-right" size={14} class="go__chev" />
+        </a>
+        <a class="go go--plain" href={docsUrl('driver_authoring', '', locale)}>
+          <Glyph name="plug" size={16} />
+          {strings.authoring_link}
+          <Glyph name="chevron-right" size={14} class="go__chev" />
+        </a>
+      </div>
+    </div>
+    <div class="about__layers reveal-group">
       {
-        LAYERS.map((layer) => (
-          <div class="layers__row">
-            <span class="layers__name">{layer.name}</span>
-            <span class="layers__box" data-key={layer.key ? '' : undefined}>
-              {layer.detail}
-            </span>
+        LAYERS.map((layer, index) => (
+          <div
+            class:list={['about__layer c10', { 'about__layer--key': layer.key }]}
+            style={`--step: ${index}`}
+          >
+            <Glyph name={layer.icon} size={22} class="about__layer-icon" />
+            <span class="about__layer-name x">{layer.name}</span>
+            <span class="about__layer-detail">{layer.detail}</span>
           </div>
         ))
       }
     </div>
-    <p class="muted">
-      {t(locale, 'about.muted_links.prefix')}<a href={docsUrl('architecture', '', locale)}
-        >{t(locale, 'about.muted_links.architecture')}</a
-      >{t(locale, 'about.muted_links.middle')}<a href={docsUrl('driver_authoring', '', locale)}
-        >{t(locale, 'about.muted_links.driver_authoring')}</a
-      >{t(locale, 'about.muted_links.suffix')}
-    </p>
   </section>
 
-  <section class="reveal cards">
-    <article>
-      <p class="cards__title">{t(locale, 'about.maintainer_title')}</p>
-      <p class="muted">{t(locale, 'about.maintainer_body')}</p>
-      <a href="https://github.com/0xErwin1" rel="noopener">@0xErwin1 on GitHub &rarr;</a>
-    </article>
-    <article>
-      <p class="cards__title">{t(locale, 'about.contribute_title')}</p>
-      <p class="muted">{t(locale, 'about.contribute_body')}</p>
-      <a href={docsUrl('contributing', '', locale)}>{t(locale, 'about.contribute_link')}</a>
-    </article>
+  <section class="about__people shell reveal-group">
+    <div class="about__tile card c14 lift">
+      <p class="eyebrow">{strings.maintainer_title}</p>
+      <p class="about__people-body">{strings.maintainer_body}</p>
+      <a class="go go--plain" href="https://github.com/0xErwin1" rel="noopener">
+        <Glyph name="github" size={16} />
+        {strings.maintainer_link}
+        <Glyph name="external-link" size={13} class="go__chev" />
+      </a>
+    </div>
+    <div class="about__tile card c14 lift">
+      <p class="eyebrow">{strings.contribute_title}</p>
+      <p class="about__people-body">{strings.contribute_body}</p>
+      <a class="go go--plain" href={docsUrl('contributing', '', locale)}>
+        <Glyph name="file-text" size={16} />
+        {strings.contribute_link}
+        <Glyph name="chevron-right" size={14} class="go__chev" />
+      </a>
+    </div>
   </section>
 </div>
 
 <style>
-  .col {
-    max-width: 780px;
-    margin-inline: auto;
-    padding: var(--s-9) var(--s-8) 0;
-  }
-
-  section {
-    margin-block-end: var(--s-8);
-  }
-
-  .intro {
+  .about {
     display: flex;
     flex-direction: column;
-    gap: var(--s-5);
+    gap: 88px;
+    padding-top: 88px;
+    padding-bottom: 96px;
   }
 
-  h1 {
-    font-size: var(--fs-h1);
+  .about__intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 420px;
+    gap: 72px;
+    width: 100%;
   }
 
-  .intro p {
-    margin: 0;
-    line-height: 1.85;
-  }
-
-  .eyebrow {
-    margin-block-end: var(--s-5);
-  }
-
-  .principles {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    border: var(--bw) solid var(--border);
-  }
-
-  .principles li {
+  .about__copy {
     display: flex;
-    gap: var(--s-6);
-    padding: var(--s-6);
-    border-bottom: var(--bw) solid var(--border);
-    transition: background 180ms linear;
+    flex-direction: column;
+    gap: 26px;
   }
 
-  .principles li:last-child {
-    border-bottom: 0;
-  }
-
-  .principles li:hover {
-    background: var(--panel);
-  }
-
-  .principles__n {
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-    transition: color 180ms linear;
-  }
-
-  .principles li:hover .principles__n {
-    color: var(--accent);
-  }
-
-  .principles h2 {
-    font-size: 1rem;
-    margin-block-end: var(--s-3);
-  }
-
-  .principles p {
+  .about__copy p:not(.eyebrow) {
     margin: 0;
-    font-size: var(--fs-small);
+    font-size: 16px;
     line-height: 1.7;
   }
 
-  .layers {
-    background: var(--panel);
-    border: var(--bw) solid var(--border);
-    padding: var(--s-7);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-4);
+  .about__copy p.about__lede {
+    font-size: 19px;
+    line-height: 1.65;
   }
 
-  .layers__row {
+  .about__card {
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 30px;
+  }
+
+  .about__card p {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+
+  .about__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .about__button {
     display: flex;
     align-items: center;
-    gap: var(--s-5);
+    gap: 8px;
+    height: 44px;
+    padding: 0 18px;
   }
 
-  .layers__name {
-    width: 140px;
-    flex-shrink: 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
+  .about__button:hover {
+    filter: brightness(1.08);
   }
 
-  .layers__box {
-    flex-grow: 1;
-    background: var(--bg);
-    border: var(--bw) solid var(--border);
-    padding: var(--s-4) var(--s-5);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    transition: transform 200ms var(--ease-out);
+  .about__button--source,
+  .about__button--source:hover {
+    background: var(--raised);
+    color: var(--text-strong);
+    font-weight: 600;
   }
 
-  .layers__box[data-key] {
-    border-color: var(--accent);
+  .about__button--download,
+  .about__button--download:hover {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
-  .layers__row:hover .layers__box {
-    transform: translateX(4px);
-  }
-
-  .muted {
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-  }
-
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--s-5);
-  }
-
-  .cards article {
-    border: var(--bw) solid var(--border);
-    padding: var(--s-6);
+  .about__block {
     display: flex;
     flex-direction: column;
-    gap: var(--s-4);
+    gap: 24px;
+    width: 100%;
   }
 
-  .cards__title {
+  .about__grid {
+    display: grid;
+    gap: 14px;
     margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
+    padding: 0;
+    list-style: none;
+  }
+
+  .about__grid--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .about__grid--4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .about__tile {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 28px;
+  }
+
+  .about__tile h3 {
+    font-size: 22px;
+  }
+
+  .about__tile p:not(.eyebrow) {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .about__tile--chosen {
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent-fill);
+  }
+
+  .about__tile-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     color: var(--text-muted);
   }
 
-  .cards p {
+  .about__tile--chosen .about__tile-label {
+    color: var(--accent);
+  }
+
+  .about__tile-label .x {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .about__principle-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .about__n {
+    font-weight: 900;
+    font-size: 56px;
+    line-height: 0.8;
+    color: var(--accent);
+  }
+
+  .about__principle-top :global(.about__muted-icon) {
+    color: var(--text-muted);
+  }
+
+  .about__tile .about__principle-title {
+    font-size: 19px;
+  }
+
+  .about__tile .about__principle-body {
+    font-size: 14.5px;
+  }
+
+  .about__arch {
+    display: grid;
+    grid-template-columns: 420px minmax(0, 1fr);
+    gap: 64px;
+    width: 100%;
+  }
+
+  .about__arch-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .about__arch-copy > p:not(.eyebrow) {
     margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
   }
 
-  .cards a {
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+  .about__links {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
   }
 
-  @media (max-width: 900px) {
-    .col {
-      padding: var(--s-7) var(--s-6) 0;
+  .about__layers {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .about__layer {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    min-height: 84px;
+    margin-left: calc(var(--step) * 36px);
+    padding: 0 28px;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+    font-size: 15px;
+  }
+
+  .about__layer:nth-child(odd) {
+    background: var(--raised);
+  }
+
+  .about__layer :global(.about__layer-icon) {
+    color: var(--text-muted);
+  }
+
+  .about__layer--key :global(.about__layer-icon) {
+    color: var(--accent);
+  }
+
+  .about__layer-name {
+    width: 200px;
+    flex-shrink: 0;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-strong);
+  }
+
+  .about__layer--key .about__layer-name {
+    color: var(--accent);
+  }
+
+  .about__people {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    width: 100%;
+  }
+
+  .about__tile .about__people-body {
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--text-strong);
+  }
+
+  .about__people .go {
+    align-self: flex-start;
+  }
+
+  @media (max-width: 1180px) {
+    .about__intro,
+    .about__arch {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 40px;
     }
 
-    .layers__row {
-      flex-direction: column;
-      align-items: stretch;
-      gap: var(--s-2);
+    .about__grid--4 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 760px) {
+    .about {
+      gap: 56px;
+      padding-top: 48px;
+      padding-bottom: 56px;
     }
 
-    .layers__name {
+    .about__grid--3,
+    .about__grid--4,
+    .about__people {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .about__layer {
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      margin-left: calc(var(--step) * 12px);
+      padding: 18px 20px;
+    }
+
+    .about__layer-name {
       width: auto;
     }
 
-    .cards {
-      grid-template-columns: 1fr;
+    .about__layer-detail {
+      flex-basis: 100%;
     }
   }
 </style>

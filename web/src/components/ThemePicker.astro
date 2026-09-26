@@ -1,5 +1,4 @@
 ---
-import Icon from './Icon.astro';
 import { t } from '../i18n';
 import type { Locale } from '../i18n';
 
@@ -10,25 +9,22 @@ interface Props {
 const { locale } = Astro.props;
 
 const preferences = [
-  { value: 'system', label: t(locale, 'nav.theme_system'), icon: 'monitor' },
-  { value: 'light', label: t(locale, 'nav.theme_light'), icon: 'sun' },
-  { value: 'dark', label: t(locale, 'nav.theme_dark'), icon: 'moon' },
-  { value: 'mirage', label: t(locale, 'nav.theme_mirage'), icon: 'mirage' },
+  { value: 'system', label: t(locale, 'nav.theme_system') },
+  { value: 'light', label: t(locale, 'nav.theme_light') },
+  { value: 'dark', label: t(locale, 'nav.theme_dark') },
 ] as const;
 ---
 
-<div class="theme-picker" role="group" aria-label={t(locale, 'nav.theme')}>
+<div class="theme-picker c6" role="group" aria-label={t(locale, 'nav.theme')}>
   {
     preferences.map((preference) => (
       <button
         type="button"
-        class="theme-picker__button"
+        class="theme-picker__button c4"
         data-theme-preference={preference.value}
-        aria-label={preference.label}
         aria-pressed="false"
-        data-tooltip={preference.label}
       >
-        <Icon name={preference.icon} size={16} />
+        {preference.label}
       </button>
     ))
   }
@@ -37,85 +33,39 @@ const preferences = [
 <style>
   .theme-picker {
     display: flex;
-    align-items: center;
-    gap: 2px;
+    padding: 2px;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+    font-size: 12.5px;
   }
 
   .theme-picker__button {
-    position: relative;
-    display: grid;
-    width: 32px;
-    height: 32px;
-    place-items: center;
-    padding: 0;
+    display: flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
     background: transparent;
-    border: var(--bw) solid transparent;
+    border: 0;
     color: var(--text-muted);
     cursor: pointer;
+    transition:
+      background var(--t-instant) linear,
+      color var(--t-instant) linear;
   }
 
-  .theme-picker__button:hover,
-  .theme-picker__button[aria-pressed='true'] {
-    border-color: var(--border-interactive);
+  .theme-picker__button:hover {
     color: var(--text-strong);
   }
 
   .theme-picker__button[aria-pressed='true'] {
     background: var(--raised);
-    color: var(--accent);
-  }
-
-  .theme-picker__button::after {
-    position: absolute;
-    z-index: var(--z-tooltip);
-    bottom: calc(100% + var(--s-2));
-    left: 50%;
-    width: max-content;
-    max-width: 12rem;
-    padding: var(--s-2) var(--s-3);
-    background: var(--text-strong);
-    color: var(--bg);
-    content: attr(data-tooltip);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    opacity: 0;
-    pointer-events: none;
-    transform: translate(-50%, 2px);
-    transition:
-      opacity var(--t-instant) linear,
-      transform var(--t-instant) var(--ease-std);
-  }
-
-  .theme-picker__button:hover::after,
-  .theme-picker__button:focus-visible::after {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-
-  @media (max-width: 1050px) {
-    .theme-picker__button {
-      width: var(--tap-min);
-      height: var(--tap-min);
-    }
+    color: var(--text-strong);
   }
 
   @media (max-width: 640px) {
-    .theme-picker__button:first-child::after {
-      left: 0;
-      transform: translate(0, 2px);
-    }
-
-    .theme-picker__button:last-child::after {
-      right: 0;
-      left: auto;
-      transform: translate(0, 2px);
-    }
-
-    .theme-picker__button:first-child:hover::after,
-    .theme-picker__button:first-child:focus-visible::after,
-    .theme-picker__button:last-child:hover::after,
-    .theme-picker__button:last-child:focus-visible::after {
-      transform: translate(0, 0);
+    .theme-picker__button {
+      height: 34px;
+      padding: 0 10px;
     }
   }
 </style>

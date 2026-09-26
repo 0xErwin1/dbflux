@@ -23,7 +23,7 @@ impl KeyValueDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::RedisKeyBrowser,
             // render
@@ -120,6 +120,13 @@ impl KeyValueDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.side_panels = Some({
+            let e = entity.clone();
+            Box::new(move |_window, cx| e.update(cx, |d, cx| d.side_panels(cx)))
+        });
+
+        pane
     }
 }

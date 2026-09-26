@@ -2,15 +2,15 @@ use std::panic::Location;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, FontWeight, GlobalElementId,
-    InspectorElementId, IntoElement, KeyBinding, LayoutId, Pixels, SharedString, StyleRefinement,
-    Window, actions,
+    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, Focusable as _, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, SharedString,
+    StyleRefinement, Window, actions, div,
 };
-use gpui_component::Sizable;
 use gpui_component::input::{Editor as GpuiEditor, EditorState};
+use gpui_component::{ActiveTheme, Sizable};
 
-use crate::tokens::FontSizes;
-use crate::typography::AppFonts;
+use crate::primitives::{Chamfer, ChamferRing};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 
 pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
@@ -29,27 +29,23 @@ actions!(
     ]
 );
 
-/// Key context for `gpui-component`'s `InputState` element.
-const INPUT_CONTEXT: &str = "Input";
+/// Key context of `gpui-component`'s input element. The keymap binds
+/// [`InputMoveDown`], [`InputMoveUp`] and [`TriggerCompletion`] in it (see
+/// `dbflux_ui_base::keymap`).
+pub const INPUT_CONTEXT: &str = "Input";
 
-/// Register DBFlux-specific keybindings that complement the defaults from
-/// `gpui_component::init`. Call this once at app startup, after
-/// `gpui_component::init`.
+/// Text field built on `gpui_component::input::Input`.
 ///
-/// Adds vim-style `ctrl-j` / `ctrl-k` chords as aliases for `MoveDown` /
-/// `MoveUp` inside any focused input. When a completion menu is open on an
-/// `EditorState`, the engine routes these actions to the menu first, so the
-/// chords navigate suggestions too.
-pub fn register_input_overrides(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("ctrl-j", InputMoveDown, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-k", InputMoveUp, Some(INPUT_CONTEXT)),
-        KeyBinding::new("ctrl-space", TriggerCompletion, Some(INPUT_CONTEXT)),
-    ]);
-}
-
-/// Thin wrapper around `gpui_component::input::Input` that pre-applies
-/// DBFlux design token defaults (height, size).
+/// With `appearance` on (the default) the field draws the chamfered shape
+/// itself: the ground fill, a 1 px line on the straight edges and, while the
+/// field holds keyboard focus, an inset tint ring that follows the cut. The
+/// inner `gpui_component` input is borderless and transparent. With
+/// `appearance` off only the bare editable text is drawn, for hosts that
+/// already provide the frame (grid cells, filter fields, shells).
+///
+/// The font family is inherited from the container: forms render in the
+/// interface face, while data surfaces that set the data face on their rows
+/// keep inline edits in that face.
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
@@ -62,6 +58,8 @@ pub struct Input {
     appearance: bool,
     cleanable: bool,
     secret: bool,
+    prefix: Option<AnyElement>,
+    suffix: Option<AnyElement>,
 }
 
 impl Input {
@@ -77,6 +75,8 @@ impl Input {
             appearance: true,
             cleanable: false,
             secret: false,
+            prefix: None,
+            suffix: None,
         }
     }
 
@@ -127,6 +127,19 @@ impl Input {
         self
     }
 
+    /// Draws `prefix` inside the field, before the text (a leading icon).
+    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
+        self.prefix = Some(prefix.into_any_element());
+        self
+    }
+
+    /// Draws `suffix` inside the field, after the text (a unit such as `ms`,
+    /// or a show-password toggle).
+    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+        self.suffix = Some(suffix.into_any_element());
+        self
+    }
+
     /// Marks the input as holding a secret.
     ///
     /// The input gets the password content type, so its value never reaches
@@ -140,17 +153,34 @@ impl Input {
 }
 
 impl RenderOnce for Input {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let chamfered = self.appearance;
+
         let mut input = GpuiInput::new(&self.state)
-            .appearance(self.appearance)
-            .disabled(self.disabled)
-            .font_family(AppFonts::BODY)
-            .font_weight(FontWeight::MEDIUM)
-            .text_size(if self.small {
-                FontSizes::SM
-            } else {
-                FontSizes::BASE
-            });
+            .appearance(false)
+            .disabled(self.disabled);
+
+        input = if chamfered {
+            input
+                .h(if self.small {
+                    Fields::HEIGHT_SMALL
+                } else {
+                    Fields::HEIGHT
+                })
+                .px(Fields::PADDING_X)
+                .gap(Fields::GAP)
+                .font_weight(FontWeight::NORMAL)
+                .text_size(Fields::TEXT)
+                .text_color(cx.theme().accent_foreground)
+        } else {
+            input
+                .font_weight(FontWeight::MEDIUM)
+                .text_size(if self.small {
+                    FontSizes::SM
+                } else {
+                    FontSizes::BASE
+                })
+        };
 
         if self.small {
             input = input.small();
@@ -176,7 +206,57 @@ impl RenderOnce for Input {
             input = input.aria_label(label);
         }
 
-        input
+        if let Some(prefix) = self.prefix {
+            input = input.prefix(prefix);
+        }
+
+        if let Some(suffix) = self.suffix {
+            input = input.suffix(suffix);
+        }
+
+        if !chamfered {
+            return input.into_any_element();
+        }
+
+        let focused = self
+            .state
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx);
+
+        div()
+            .relative()
+            .w_full()
+            .child(field_shape(
+                cx.theme().background,
+                focused && !self.disabled,
+                self.disabled,
+                cx,
+            ))
+            .child(input)
+            .into_any_element()
+    }
+}
+
+/// The chamfered shape behind a text field: `fill` with a 1 px line on the
+/// straight edges, the inset tint focus ring when `focused`, and the rest
+/// fill at `Fields::DISABLED_OPACITY` when `disabled`.
+pub(crate) fn field_shape(fill: Hsla, focused: bool, disabled: bool, cx: &App) -> Chamfer {
+    let theme = cx.theme();
+    let opacity = if disabled {
+        Fields::DISABLED_OPACITY
+    } else {
+        1.0
+    };
+
+    let shape = Chamfer::new(ChamferCut::CONTROL)
+        .fill(fill.opacity(opacity))
+        .border(theme.border.opacity(opacity));
+
+    if focused {
+        shape.ring(ChamferRing::focus(ChromeColors::tint(theme)))
+    } else {
+        shape
     }
 }
 
@@ -303,8 +383,9 @@ mod tests {
 
     use gpui::{
         AccessibilityFrame, AppContext as _, Bounds, Context, Focusable as _, FrameObserver,
-        IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render, Role, Styled as _,
-        TestAppContext, VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
+        InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render,
+        Role, Styled as _, TestAppContext, VisualTestContext, Window, div, point,
+        prelude::FluentBuilder as _, px,
     };
 
     use super::{EditorState, GpuiEditor, GpuiInput, Input, InputState, ReadOnlyEditor};
@@ -339,6 +420,77 @@ mod tests {
 
             div().size_full().child(input)
         }
+    }
+
+    struct FieldPair {
+        first: gpui::Entity<InputState>,
+        second: gpui::Entity<InputState>,
+    }
+
+    impl Render for FieldPair {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .debug_selector(|| "first-field".to_string())
+                        .child(Input::new(&self.first)),
+                )
+                .child(Input::new(&self.second))
+        }
+    }
+
+    #[gpui::test]
+    fn input_rings_after_tab_but_not_after_a_click(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let pair_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, visual) = cx.add_window_view({
+            let pair_slot = pair_slot.clone();
+            move |window, cx| {
+                let first = cx.new(|cx| InputState::new(window, cx));
+                let second = cx.new(|cx| InputState::new(window, cx));
+                let pair = cx.new(|_| FieldPair { first, second });
+                pair_slot.replace(Some(pair.clone()));
+                gpui_component::Root::new(pair, window, cx)
+            }
+        });
+        visual.run_until_parked();
+
+        let pair = pair_slot.borrow().clone().expect("the fields are built");
+        let ring = crate::primitives::FOCUS_RING_SELECTOR;
+
+        let first = visual
+            .debug_bounds("first-field")
+            .expect("the first field is laid out")
+            .center();
+        visual.simulate_click(first, Modifiers::default());
+        settle_frame(visual);
+
+        let first_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).first.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(first_focused, "the click focuses the field");
+        assert!(
+            visual.debug_bounds(ring).is_none(),
+            "a clicked field shows no ring"
+        );
+
+        visual.simulate_keystrokes("tab");
+        settle_frame(visual);
+
+        let second_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).second.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(second_focused, "Tab moves to the next field");
+        assert!(
+            visual.debug_bounds(ring).is_some(),
+            "a field reached with Tab shows its ring"
+        );
     }
 
     /// Open a window holding one input and observe its frames.

@@ -1,8 +1,11 @@
 mod actions;
 mod dispatch;
 pub mod inspector;
+mod notifications;
 pub mod pipeline;
 mod render;
+mod shell;
+use actions::TabPlacement;
 
 pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 
@@ -24,15 +27,11 @@ use dbflux_ui_base::{
 #[cfg(feature = "mcp")]
 use crate::app::McpRuntimeEventRaised;
 
-use crate::keymap::{
-    self, Command, CommandDispatcher, ContextId, FocusTarget, KeymapStack, default_keymap,
-    key_chord_from_gpui,
-};
+use crate::keymap::{self, Command, CommandDispatcher, ContextId, FocusTarget};
 use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
+use dbflux_ui_base::keymap::{RunCommand, run_command};
 
-#[cfg(feature = "mcp")]
-use crate::ui::document::McpApprovalsView;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
@@ -42,9 +41,12 @@ use crate::ui::overlays::login_modal::{LoginModal, LoginModalEvent};
 use crate::ui::overlays::shutdown_overlay::ShutdownOverlay;
 use crate::ui::overlays::sql_preview_modal::SqlPreviewModal;
 use crate::ui::overlays::sso_wizard::{SsoWizard, SsoWizardEvent};
+#[cfg(feature = "mcp")]
+use crate::ui::views::status_bar::OpenApprovalsRequested;
 use crate::ui::views::status_bar::{StatusBar, ToggleTasksPanel};
-use crate::ui::views::tasks_panel::TasksPanel;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use crate::ui::views::tasks_panel::{CollapseTasksPanel, TasksPanel};
+use dbflux_components::icons::DriverIconTone;
+use dbflux_components::tokens::{Heights, Spacing};
 #[cfg(test)]
 use dbflux_core::{CollectionRef, TableRef};
 use dbflux_core::{ExecutionContext, QueryLanguage};
@@ -184,6 +186,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
                     name: name.clone(),
                 },
                 database: database.clone(),
+                new_tab: false,
             }),
             ResourceItem::Collection {
                 profile_id,
@@ -196,6 +199,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
                     database: database.clone(),
                     name: name.clone(),
                 },
+                new_tab: false,
             }),
             ResourceItem::KeyValueDb {
                 profile_id,
@@ -204,6 +208,7 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
             } => Some(PaletteSelection::OpenKeyValue {
                 profile_id: *profile_id,
                 database: database.clone(),
+                new_tab: false,
             }),
         },
         PaletteItem::Script { path, .. } => {
@@ -319,6 +324,8 @@ pub struct Workspace {
     login_modal: Entity<LoginModal>,
     sso_wizard: Entity<SsoWizard>,
     shutdown_overlay: Entity<ShutdownOverlay>,
+    whats_new_dialog: Entity<crate::ui::overlays::updates::WhatsNewDialog>,
+    welcome_dialog: Entity<crate::ui::overlays::updates::WelcomeDialog>,
 
     tab_manager: Entity<TabManager>,
     tab_bar: Entity<TabBar>,
@@ -326,10 +333,7 @@ pub struct Workspace {
     workspace_inspector: Entity<inspector::WorkspaceInspector>,
     _workspace_inspector_subscription: Subscription,
 
-    #[cfg(feature = "mcp")]
-    mcp_approvals_view: Entity<McpApprovalsView>,
-
-    /// S8 modals — rendered as full-screen overlays via `ModalShell`.
+    /// S8 modals — rendered as full-screen overlays via `Modal`.
     modal_delete_connection: Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
     /// "Active query running" prompt shown before a disconnect or quit that
     /// would abandon a running query.
@@ -358,9 +362,6 @@ pub struct Workspace {
     /// Import wizard (folder bundle -> tables), targeting the connection it
     /// was opened from.
     import_wizard: Entity<dbflux_ui_document::import_wizard::ImportWizard>,
-    /// Migrate wizard (table -> table, cross-connection), pre-populated from
-    /// the sidebar's multi-select Migrate action.
-    migrate_wizard: Entity<dbflux_ui_document::migrate_wizard::MigrateWizard>,
     /// Export wizard (table -> file bundle), pre-populated from the
     /// sidebar's multi-select Export action.
     export_wizard: Entity<dbflux_ui_document::export_wizard::ExportWizard>,
@@ -378,11 +379,11 @@ pub struct Workspace {
     _pipeline_subscription: Option<Subscription>,
 
     focus_target: FocusTarget,
-    keymap: &'static KeymapStack,
     focus_handle: FocusHandle,
-
-    #[cfg(feature = "mcp")]
-    active_governance_panel: Option<GovernancePanel>,
+    /// Tab stop of the title bar's command search, which opens the palette.
+    command_search_focus: FocusHandle,
+    /// The notifications popover under the title-bar bell.
+    notifications: notifications::NotificationsPopoverState,
 
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
@@ -393,12 +394,6 @@ pub struct Workspace {
     ///
     /// Fields: `(provider_name, profile_name, url)`.
     pending_login_modal_open: Option<(String, String, Option<String>)>,
-}
-
-#[cfg(feature = "mcp")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum GovernancePanel {
-    Approvals,
 }
 
 /// The operation the active-query prompt interrupted.
@@ -456,15 +451,16 @@ impl Workspace {
         let status_bar =
             cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
-        #[cfg(feature = "mcp")]
-        let mcp_approvals_view = cx.new(|_cx| McpApprovalsView::new(app_state.clone()));
-
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
         let login_modal = cx.new(|cx| LoginModal::new(window, cx));
         let sso_wizard = cx.new(|cx| SsoWizard::new(app_state.clone(), window, cx));
         let shutdown_overlay = cx.new(|cx| ShutdownOverlay::new(app_state.clone(), window, cx));
+        let whats_new_dialog =
+            cx.new(|cx| crate::ui::overlays::updates::WhatsNewDialog::new(app_state.clone(), cx));
+        let welcome_dialog =
+            cx.new(|cx| crate::ui::overlays::updates::WelcomeDialog::new(app_state.clone(), cx));
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
@@ -492,9 +488,6 @@ impl Workspace {
         });
         let import_wizard = cx
             .new(|cx| dbflux_ui_document::import_wizard::ImportWizard::new(app_state.clone(), cx));
-        let migrate_wizard = cx.new(|cx| {
-            dbflux_ui_document::migrate_wizard::MigrateWizard::new(app_state.clone(), cx)
-        });
         let export_wizard = cx.new(|cx| {
             dbflux_ui_document::export_wizard::ExportWizard::new(app_state.clone(), window, cx)
         });
@@ -674,11 +667,36 @@ impl Workspace {
         })
         .detach();
 
+        cx.subscribe(&tasks_panel, |this, _, _: &CollapseTasksPanel, cx| {
+            if this.tasks_state.is_expanded() {
+                this.toggle_tasks_panel(cx);
+            }
+        })
+        .detach();
+
+        #[cfg(feature = "mcp")]
+        cx.subscribe_in(
+            &status_bar,
+            window,
+            |this, _, _: &OpenApprovalsRequested, window, cx| {
+                this.open_mcp_approvals(window, cx);
+            },
+        )
+        .detach();
+
         cx.subscribe_in(
             &app_state,
             window,
             |this, _, event: &OpenAuditRequested, window, cx| {
                 this.open_audit_viewer_with_correlation(event.0, window, cx);
+            },
+        )
+        .detach();
+
+        cx.subscribe(
+            &app_state,
+            |this, _, _: &dbflux_ui_base::updates::UpdateDialogRequested, cx| {
+                this.open_requested_update_dialog(cx);
             },
         )
         .detach();
@@ -710,11 +728,13 @@ impl Workspace {
                     profile_id,
                     table,
                     database,
+                    new_tab,
                 } => {
                     this.open_table_document(
                         *profile_id,
                         table.clone(),
                         database.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
                         window,
                         cx,
                     );
@@ -722,14 +742,28 @@ impl Workspace {
                 PaletteSelection::OpenCollection {
                     profile_id,
                     collection,
+                    new_tab,
                 } => {
-                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
+                    this.open_collection_document(
+                        *profile_id,
+                        collection.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
+                        window,
+                        cx,
+                    );
                 }
                 PaletteSelection::OpenKeyValue {
                     profile_id,
                     database,
+                    new_tab,
                 } => {
-                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                    this.open_key_value_document(
+                        *profile_id,
+                        database.clone(),
+                        TabPlacement::from_new_tab(*new_tab),
+                        window,
+                        cx,
+                    );
                 }
                 PaletteSelection::OpenScript { path } => {
                     this.open_script_from_path(path.clone(), cx);
@@ -935,6 +969,7 @@ impl Workspace {
                         *profile_id,
                         table.clone(),
                         database.clone(),
+                        TabPlacement::ReuseExisting,
                         window,
                         cx,
                     );
@@ -943,7 +978,13 @@ impl Workspace {
                     profile_id,
                     collection,
                 } => {
-                    this.open_collection_document(*profile_id, collection.clone(), window, cx);
+                    this.open_collection_document(
+                        *profile_id,
+                        collection.clone(),
+                        TabPlacement::ReuseExisting,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenCollectionChild {
                     profile_id,
@@ -962,7 +1003,13 @@ impl Workspace {
                     profile_id,
                     database,
                 } => {
-                    this.open_key_value_document(*profile_id, database.clone(), window, cx);
+                    this.open_key_value_document(
+                        *profile_id,
+                        database.clone(),
+                        TabPlacement::ReuseExisting,
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::OpenSchemaViz {
                     profile_id,
@@ -1146,6 +1193,9 @@ impl Workspace {
                 SidebarEvent::OpenSavedChart { chart_id } => {
                     this.open_saved_chart(*chart_id, window, cx);
                 }
+                SidebarEvent::RequestNewDashboard => {
+                    this.create_dashboard_from_palette(window, cx);
+                }
                 SidebarEvent::RequestCreateDashboard { profile_id } => {
                     this.create_dashboard_from_sidebar(*profile_id, window, cx);
                 }
@@ -1225,12 +1275,13 @@ impl Workspace {
                     database,
                     tables,
                 } => {
-                    let profile_id = *profile_id;
-                    let database = database.clone();
-                    let tables = tables.clone();
-                    this.migrate_wizard.update(cx, |wizard, cx| {
-                        wizard.open(profile_id, database, tables, window, cx);
-                    });
+                    this.open_migrate_wizard(
+                        *profile_id,
+                        database.clone(),
+                        tables.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::RequestSchemaDiff {
                     profile_id,
@@ -1269,25 +1320,6 @@ impl Workspace {
         cx.subscribe(
             &sidebar_dock,
             |this, _, event: &SidebarDockEvent, cx| match event {
-                SidebarDockEvent::OpenSettings => {
-                    this.open_settings(cx);
-                }
-                SidebarDockEvent::OpenConnections => {
-                    this.sidebar.update(cx, |s, cx| {
-                        s.set_active_tab(SidebarTab::Connections, cx);
-                    });
-                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
-                SidebarDockEvent::OpenScripts => {
-                    this.sidebar.update(cx, |s, cx| {
-                        s.set_active_tab(SidebarTab::Scripts, cx);
-                    });
-                    this.sidebar_dock.update(cx, |d, cx| d.expand(cx));
-                    this.pending_focus = Some(FocusTarget::Sidebar);
-                    cx.notify();
-                }
                 SidebarDockEvent::Collapsed => {
                     this.pending_focus = Some(FocusTarget::Document);
                     cx.notify();
@@ -1395,9 +1427,13 @@ impl Workspace {
                             modal.open(context.as_ref().clone(), *generation_type, window, cx);
                         });
                     }
-                    TabManagerEvent::OpenInspector { title, content } => {
+                    TabManagerEvent::OpenInspector {
+                        title,
+                        content,
+                        content_has_header,
+                    } => {
                         this.workspace_inspector.update(cx, |insp, cx| {
-                            insp.open_with(content.clone(), title.clone(), cx);
+                            insp.open_with(content.clone(), title.clone(), *content_has_header, cx);
                         });
                     }
                     TabManagerEvent::CloseInspector => {
@@ -1470,6 +1506,10 @@ impl Workspace {
                             cx,
                         );
                     }
+                    TabManagerEvent::RequestOpenApprovals => {
+                        #[cfg(feature = "mcp")]
+                        this.open_mcp_approvals(window, cx);
+                    }
                     TabManagerEvent::OpenEditorWithContent { sql, .. } => {
                         this.new_query_tab_with_content(sql.clone(), window, cx);
                     }
@@ -1506,6 +1546,8 @@ impl Workspace {
         )
         .detach();
 
+        Self::subscribe_notifications(&app_state, cx);
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
@@ -1521,12 +1563,12 @@ impl Workspace {
             login_modal,
             sso_wizard,
             shutdown_overlay,
+            whats_new_dialog,
+            welcome_dialog,
             tab_manager,
             tab_bar,
             workspace_inspector,
             _workspace_inspector_subscription: workspace_inspector_subscription,
-            #[cfg(feature = "mcp")]
-            mcp_approvals_view,
             modal_delete_connection,
             modal_active_query,
             pending_active_query: None,
@@ -1542,7 +1584,6 @@ impl Workspace {
             modal_add_panel,
             export_modal,
             import_wizard,
-            migrate_wizard,
             export_wizard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
@@ -1554,10 +1595,9 @@ impl Workspace {
             pipeline_progress: None,
             _pipeline_subscription: None,
             focus_target: FocusTarget::default(),
-            keymap: default_keymap(),
             focus_handle,
-            #[cfg(feature = "mcp")]
-            active_governance_panel: None,
+            command_search_focus: cx.focus_handle(),
+            notifications: notifications::NotificationsPopoverState::new(cx),
             _background_purge_task: None,
             pending_login_modal_open: None,
         };
@@ -1691,144 +1731,79 @@ impl Workspace {
     }
 
     fn default_commands() -> Vec<PaletteCommand> {
-        // Shortcut labels for the command palette. The strings here are in
-        // the kebab-case form expected by `palette_shortcut_parts` so they
-        // render as a multi-badge `Chord` (e.g. `[Ctrl] + [N]`) rather than a
-        // single collapsed token.
-        //
-        // The primary-modifier bindings in `keymap::defaults` use Cmd on
-        // macOS and Ctrl elsewhere, so the labels below mirror that. Bindings
-        // kept literal on every platform (Ctrl+Tab, Ctrl+Shift+1..4) keep
-        // `ctrl-` here as well.
-        struct ShortcutLabels {
-            new_query_tab: &'static str,
-            run_query: &'static str,
-            run_query_in_new_tab: &'static str,
-            save_query: &'static str,
-            save_file_as: &'static str,
-            open_script_file: &'static str,
-            toggle_comment: &'static str,
-            open_history: &'static str,
-            close_tab: &'static str,
-            export_results: &'static str,
-            toggle_sidebar: &'static str,
-            open_audit_viewer: &'static str,
-        }
-
-        #[cfg(target_os = "macos")]
-        const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "cmd-n",
-            run_query: "cmd-enter",
-            run_query_in_new_tab: "cmd-shift-enter",
-            save_query: "cmd-s",
-            save_file_as: "cmd-shift-s",
-            open_script_file: "cmd-o",
-            toggle_comment: "cmd-/",
-            open_history: "cmd-p",
-            close_tab: "cmd-w",
-            export_results: "cmd-e",
-            toggle_sidebar: "cmd-b",
-            open_audit_viewer: "cmd-shift-a",
-        };
-        #[cfg(not(target_os = "macos"))]
-        const SC: ShortcutLabels = ShortcutLabels {
-            new_query_tab: "ctrl-n",
-            run_query: "ctrl-enter",
-            run_query_in_new_tab: "ctrl-shift-enter",
-            save_query: "ctrl-s",
-            save_file_as: "ctrl-shift-s",
-            open_script_file: "ctrl-o",
-            toggle_comment: "ctrl-/",
-            open_history: "ctrl-p",
-            close_tab: "ctrl-w",
-            export_results: "ctrl-e",
-            toggle_sidebar: "ctrl-b",
-            open_audit_viewer: "ctrl-shift-a",
-        };
-
+        // Keycaps come from the effective keymap for every command it binds
+        // (see `palette_command_keycaps`). An explicit shortcut is only
+        // needed for a command the keymap does not bind itself.
         vec![
             // Editor
             PaletteCommand::new(
                 "new_query_tab",
                 dbflux_i18n::t!("palette.command.new_query_tab.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.new_query_tab),
+            ),
             PaletteCommand::new(
                 "run_query",
                 dbflux_i18n::t!("palette.command.run_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.run_query),
+            ),
             PaletteCommand::new(
                 "run_query_in_new_tab",
                 dbflux_i18n::t!("palette.command.run_query_in_new_tab.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.run_query_in_new_tab),
+            ),
             PaletteCommand::new(
                 "save_query",
                 dbflux_i18n::t!("palette.command.save_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.save_query),
+            ),
             PaletteCommand::new(
                 "save_file_as",
                 dbflux_i18n::t!("palette.command.save_file_as.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.save_file_as),
+            ),
             PaletteCommand::new(
                 "open_script_file",
                 dbflux_i18n::t!("palette.command.open_script_file.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.open_script_file),
+            ),
             PaletteCommand::new(
                 "toggle_comment",
                 dbflux_i18n::t!("palette.command.toggle_comment.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.toggle_comment),
+            ),
             PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),
                 dbflux_i18n::t!("palette.category.editor"),
-            )
-            .with_shortcut(SC.open_history),
+            ),
             PaletteCommand::new(
                 "cancel_query",
                 dbflux_i18n::t!("palette.command.cancel_query.name"),
                 dbflux_i18n::t!("palette.category.editor"),
             )
             .with_shortcut("esc"),
-            // Tabs — Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every
-            // platform (Cmd+Tab is the macOS app switcher).
+            // Tabs
             PaletteCommand::new(
                 "close_tab",
                 dbflux_i18n::t!("palette.command.close_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut(SC.close_tab),
+            ),
             PaletteCommand::new(
                 "next_tab",
                 dbflux_i18n::t!("palette.command.next_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut("ctrl-tab"),
+            ),
             PaletteCommand::new(
                 "prev_tab",
                 dbflux_i18n::t!("palette.command.prev_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
-            )
-            .with_shortcut("ctrl-shift-tab"),
+            ),
             // Results
             PaletteCommand::new(
                 "export_results",
                 dbflux_i18n::t!("palette.command.export_results.name"),
                 dbflux_i18n::t!("palette.category.results"),
-            )
-            .with_shortcut(SC.export_results),
+            ),
             // Connections
             PaletteCommand::new(
                 "open_connection_manager",
@@ -1845,39 +1820,33 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.refresh_schema.name"),
                 dbflux_i18n::t!("palette.category.connections"),
             ),
-            // Focus — Ctrl+Shift+1..4 stay literal Ctrl on every platform
-            // (Cmd+Shift+3/4 are macOS screenshot shortcuts).
+            // Focus
             PaletteCommand::new(
                 "focus_sidebar",
                 dbflux_i18n::t!("palette.command.focus_sidebar.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-1"),
+            ),
             PaletteCommand::new(
                 "focus_editor",
                 dbflux_i18n::t!("palette.command.focus_editor.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-2"),
+            ),
             PaletteCommand::new(
                 "focus_results",
                 dbflux_i18n::t!("palette.command.focus_results.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-3"),
+            ),
             PaletteCommand::new(
                 "focus_tasks",
                 dbflux_i18n::t!("palette.command.focus_tasks.name"),
                 dbflux_i18n::t!("palette.category.focus"),
-            )
-            .with_shortcut("ctrl-shift-4"),
+            ),
             // View
             PaletteCommand::new(
                 "toggle_sidebar",
                 dbflux_i18n::t!("palette.command.toggle_sidebar.name"),
                 dbflux_i18n::t!("palette.category.view"),
-            )
-            .with_shortcut(SC.toggle_sidebar),
+            ),
             PaletteCommand::new(
                 "toggle_editor",
                 dbflux_i18n::t!("palette.command.toggle_editor.name"),
@@ -1924,8 +1893,7 @@ impl Workspace {
                 "open_audit_viewer",
                 dbflux_i18n::t!("palette.command.open_audit_viewer.name"),
                 dbflux_i18n::t!("palette.category.view"),
-            )
-            .with_shortcut(SC.open_audit_viewer),
+            ),
             // Charts / Dashboards
             PaletteCommand::new(
                 "open_saved_chart",
@@ -1947,6 +1915,29 @@ impl Workspace {
     #[cfg(test)]
     pub fn palette_commands_for_test() -> Vec<PaletteCommand> {
         Self::default_commands()
+    }
+
+    /// The key context of the workspace root: `Workspace`, the context that
+    /// owns the keyboard (see [`Workspace::active_context`]) and, while a
+    /// document owns it, the entries the document contributes.
+    fn root_key_context(&self, cx: &Context<Self>) -> gpui::KeyContext {
+        let context = self.active_context(cx);
+
+        let entries = if self.focus_target == FocusTarget::Document {
+            self.tab_manager
+                .read(cx)
+                .active_tab()
+                .map(|tab| tab.key_context_entries(cx))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        dbflux_ui_base::keymap::root_key_context(
+            dbflux_ui_base::keymap::WORKSPACE_KEY_CONTEXT,
+            context,
+            &entries,
+        )
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
@@ -2024,7 +2015,32 @@ impl Workspace {
         self.focus_target.to_context()
     }
 
+    /// Moves keyboard focus to `target`. Focusing the background tasks
+    /// expands their panel first, since a collapsed panel renders nothing
+    /// that could hold focus.
     pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
+        self.mark_focus_target(target, cx);
+
+        if target == FocusTarget::Sidebar {
+            self.focus_handle.focus(window, cx);
+        }
+
+        if target == FocusTarget::Document {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+        }
+
+        cx.notify();
+    }
+
+    /// Records `target` as the focused area and updates the panes that draw
+    /// it, without moving keyboard focus. A click inside a document's side
+    /// island uses this, so a field it focuses keeps the keyboard.
+    pub(crate) fn mark_focus_target(&mut self, target: FocusTarget, cx: &mut Context<Self>) {
+        if target == FocusTarget::BackgroundTasks {
+            self.tasks_state = PanelState::Expanded;
+        }
+
         self.sidebar_dock.update(cx, |dock, cx| {
             dock.set_sidebar_focused(target == FocusTarget::Sidebar, cx);
         });
@@ -2036,14 +2052,9 @@ impl Workspace {
             sidebar.set_connections_focused(target == FocusTarget::Sidebar, cx);
         });
 
-        if target == FocusTarget::Sidebar {
-            self.focus_handle.focus(window, cx);
-        }
-
-        if target == FocusTarget::Document {
-            self.tab_manager
-                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-        }
+        self.tasks_panel.update(cx, |panel, cx| {
+            panel.set_focused(target == FocusTarget::BackgroundTasks, cx);
+        });
 
         cx.notify();
     }
@@ -2098,10 +2109,19 @@ impl Workspace {
 
         for profile in app_state.profiles() {
             let is_connected = connections.contains_key(&profile.id);
+            let icon = app_state.drivers().get(&profile.driver_id()).map(|driver| {
+                let metadata = driver.metadata();
+                (
+                    AppIcon::for_driver(metadata.icon, metadata.category),
+                    DriverIconTone::for_driver(metadata.icon, metadata.category),
+                )
+            });
+
             items.push(PaletteItem::Connection {
                 profile_id: profile.id,
                 name: profile.name.clone(),
                 is_connected,
+                icon,
             });
         }
 
@@ -2185,8 +2205,16 @@ impl Workspace {
         }
     }
 
+    /// Expands or collapses the background tasks panel. Collapsing it while
+    /// it holds focus hands focus back to the document, on the next render,
+    /// because the collapsed panel is not drawn at all.
     pub fn toggle_tasks_panel(&mut self, cx: &mut Context<Self>) {
         self.tasks_state.toggle();
+
+        if !self.tasks_state.is_expanded() && self.focus_target == FocusTarget::BackgroundTasks {
+            self.pending_focus = Some(FocusTarget::Document);
+        }
+
         cx.notify();
     }
 
@@ -2290,12 +2318,28 @@ impl Workspace {
         });
     }
 
+    /// The next area in the Tab cycle, skipping the background tasks while
+    /// their panel is collapsed.
     fn next_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
-        self.focus_target.next()
+        self.skip_collapsed_tasks(self.focus_target.next(), FocusTarget::next)
     }
 
+    /// The previous area in the Tab cycle, skipping the background tasks
+    /// while their panel is collapsed.
     fn prev_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
-        self.focus_target.prev()
+        self.skip_collapsed_tasks(self.focus_target.prev(), FocusTarget::prev)
+    }
+
+    fn skip_collapsed_tasks(
+        &self,
+        candidate: FocusTarget,
+        step: fn(&FocusTarget) -> FocusTarget,
+    ) -> FocusTarget {
+        if candidate == FocusTarget::BackgroundTasks && !self.tasks_state.is_expanded() {
+            step(&candidate)
+        } else {
+            candidate
+        }
     }
 }
 
@@ -2354,6 +2398,7 @@ mod tab_close_request_tests {
     ) {
         cx.update(gpui_component::init);
         cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
 
         let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
         let workspace_ref = holder.clone();
@@ -2588,14 +2633,15 @@ mod tab_close_request_tests {
                 workspace.sidebar_dock.update(cx, |dock, cx| {
                     dock.toggle(cx);
                     dock.reveal_transiently(cx);
+                    let resized = dock.current_width() + gpui::px(70.0);
                     dock.begin_resize(gpui::px(270.0), cx);
                     dock.handle_resize_move(gpui::px(340.0), cx);
-                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    assert_eq!(dock.current_width(), resized);
                     dock.finish_resize(cx);
                     dock.dismiss_transient(cx);
                     assert!(dock.is_collapsed());
                     dock.reveal_transiently(cx);
-                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    assert_eq!(dock.current_width(), resized);
                 });
             });
         });
@@ -3691,6 +3737,7 @@ mod tab_close_request_tests {
                     cx.emit(TabManagerEvent::OpenInspector {
                         title: "Row".into(),
                         content,
+                        content_has_header: false,
                     });
                 });
             });
@@ -3800,6 +3847,7 @@ mod tab_close_request_tests {
                         cx.emit(TabManagerEvent::OpenInspector {
                             title: "Row".into(),
                             content,
+                            content_has_header: false,
                         });
                     });
                 }
@@ -3860,98 +3908,374 @@ mod tab_close_request_tests {
     }
 
     #[cfg(feature = "mcp")]
-    fn open_approvals_overlay(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+    fn open_approvals(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
         window.update(|window, cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.dispatch(Command::OpenMcpApprovals, window, cx);
             });
         });
         window.run_until_parked();
+    }
 
-        assert!(
-            approvals_overlay_is_open(window, workspace),
-            "opening the approvals must show the overlay"
+    fn tabs_of_kind(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        kind: crate::ui::document::DocumentKind,
+    ) -> Vec<DocumentId> {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .filter(|tab| tab.kind() == kind)
+                .map(|tab| tab.id())
+                .collect()
+        })
+    }
+
+    fn active_tab_id(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Option<DocumentId> {
+        window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id())
+    }
+
+    /// The approvals open as a document tab, not as an overlay over the app.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_approvals_open_as_a_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
+
+        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
+        assert_eq!(approvals.len(), 1, "the approvals must open one tab");
+        assert_eq!(
+            active_tab_id(window, &workspace),
+            approvals.first().copied(),
+            "the approvals tab must become the active tab"
+        );
+        assert_eq!(
+            window.update(|_, cx| workspace.read(cx).focus_target),
+            FocusTarget::Document,
+            "the approvals tab must take the keyboard"
         );
     }
 
-    #[cfg(feature = "mcp")]
-    fn approvals_overlay_is_open(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> bool {
-        window.update(|_, cx| workspace.read(cx).active_governance_panel.is_some())
-    }
-
-    /// Regression: Cancel had no handler for the approvals overlay, so the
-    /// only way out was opening the audit viewer.
+    /// Opening the approvals again focuses the tab that is already open
+    /// instead of adding a second one.
     #[cfg(feature = "mcp")]
     #[gpui::test]
-    fn cancel_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals_overlay(window, &workspace);
+    fn opening_the_approvals_again_focuses_the_existing_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
 
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::Cancel, window, cx);
-            });
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
+        let other = open_code_tab(window, &workspace, &app_state);
+        activate_tab(window, &workspace, other);
+
+        open_approvals(window, &workspace);
+
+        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
+        assert_eq!(approvals.len(), 1, "a second open must not add a tab");
+        assert_eq!(
+            active_tab_id(window, &workspace),
+            approvals.first().copied()
+        );
+    }
+
+    /// The status bar's approvals chip opens the same tab.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_status_bar_chip_opens_the_approvals_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+        use crate::ui::views::status_bar::OpenApprovalsRequested;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let status_bar = window.update(|_, cx| workspace.read(cx).status_bar.clone());
+
+        window.update(|_, cx| {
+            status_bar.update(cx, |_, cx| cx.emit(OpenApprovalsRequested));
         });
         window.run_until_parked();
 
-        assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "Cancel must close the approvals overlay"
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
+            1,
+            "the status bar chip must open the approvals tab"
         );
     }
 
-    /// Escape travels the real key path: the workspace keymap resolves it to
-    /// Cancel only if the overlay left keyboard focus inside the workspace.
+    /// Escape inside the approvals tab leaves the tab open: it is a document,
+    /// not an overlay that Cancel dismisses.
     #[cfg(feature = "mcp")]
     #[gpui::test]
-    fn escape_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        open_code_tab(window, &workspace, &app_state);
-        open_approvals_overlay(window, &workspace);
+    fn escape_leaves_the_approvals_tab_open(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
 
         window.simulate_keystrokes("escape");
 
-        assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "Escape must close the approvals overlay"
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
+            1
         );
     }
 
-    /// A click on the dimmed backdrop closes the overlay, while a click inside
-    /// the panel must leave it open.
-    #[cfg(feature = "mcp")]
+    /// The Migrate action opens the wizard as a tab; repeating it for the same
+    /// selection focuses that tab, and a different selection gets its own.
     #[gpui::test]
-    fn backdrop_click_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        use gpui::{Modifiers, point, px};
+    fn the_migrate_wizard_opens_as_a_tab_deduplicated_by_its_selection(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+        use dbflux_core::TableRef;
 
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals_overlay(window, &workspace);
+        let (workspace, app_state, window) = new_workspace(cx);
+        let profile_id = uuid::Uuid::new_v4();
+        let users = vec![TableRef {
+            schema: Some("public".to_string()),
+            name: "users".to_string(),
+        }];
+        let orders = vec![TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        }];
 
-        let viewport = window.update(|window, _| window.viewport_size());
-        assert!(
-            viewport.width > px(1080.0) && viewport.height > px(680.0),
-            "the test window must leave backdrop visible around the panel, got {viewport:?}"
+        let open_migrate = |window: &mut VisualTestContext, tables: Vec<TableRef>| {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.open_migrate_wizard(profile_id, None, tables, window, cx);
+                });
+            });
+            window.run_until_parked();
+        };
+
+        open_migrate(window, users.clone());
+        let first = tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard);
+        assert_eq!(first.len(), 1, "the Migrate action must open one tab");
+
+        let other = open_code_tab(window, &workspace, &app_state);
+        activate_tab(window, &workspace, other);
+
+        open_migrate(window, users);
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard),
+            first,
+            "the same selection must focus the existing wizard tab"
         );
+        assert_eq!(active_tab_id(window, &workspace), first.first().copied());
 
-        let panel_center = point(viewport.width / 2.0, viewport.height / 2.0);
-        window.simulate_click(panel_center, Modifiers::none());
+        open_migrate(window, orders);
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard).len(),
+            2,
+            "a different selection must open its own wizard tab"
+        );
+    }
+
+    /// The panel keys move keyboard focus between the workspace panels:
+    /// Tab and Shift+Tab cycle them, Ctrl+Shift+digit jumps to one.
+    #[gpui::test]
+    fn keyboard_moves_between_the_workspace_panels(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let target =
+            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
         window.run_until_parked();
 
-        assert!(
-            approvals_overlay_is_open(window, &workspace),
-            "a click inside the panel must not close the overlay"
-        );
+        window.simulate_keystrokes("tab");
+        assert_eq!(target(window), FocusTarget::Document);
 
-        window.simulate_click(point(px(4.0), px(4.0)), Modifiers::none());
+        window.simulate_keystrokes("shift-tab");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+
+        window.simulate_keystrokes("ctrl-shift-4");
+        assert_eq!(target(window), FocusTarget::BackgroundTasks);
+
+        window.simulate_keystrokes("shift-tab");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+
+        window.simulate_keystrokes("ctrl-shift-1");
+        assert_eq!(target(window), FocusTarget::Sidebar);
+    }
+
+    fn tasks_panel_rendered(window: &mut VisualTestContext) -> bool {
+        window.run_until_parked();
+        window.debug_bounds("tasks-panel").is_some()
+    }
+
+    fn tasks_expanded(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).tasks_state.is_expanded())
+    }
+
+    /// Collapsed, the background tasks render nothing under the documents:
+    /// no bar and no panel.
+    #[gpui::test]
+    fn collapsed_background_tasks_render_nothing(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+
+        assert!(!tasks_expanded(window, &workspace));
+        assert!(!tasks_panel_rendered(window));
+        assert!(
+            window
+                .debug_bounds("panel-header-Background Tasks")
+                .is_none()
+        );
+    }
+
+    /// The status bar's tasks chip is the way into the collapsed panel.
+    #[gpui::test]
+    fn the_status_tasks_chip_expands_the_tasks_panel(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
         window.run_until_parked();
 
+        let chip = window
+            .debug_bounds("tasks-toggle")
+            .expect("the status bar must draw the tasks chip");
+        window.simulate_click(chip.center(), gpui::Modifiers::none());
+
+        assert!(tasks_expanded(window, &workspace));
+        assert!(tasks_panel_rendered(window));
+    }
+
+    /// Focus Background Tasks expands the collapsed panel so focus lands on
+    /// something drawn.
+    #[gpui::test]
+    fn focusing_the_background_tasks_expands_their_panel(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.run_until_parked();
+
+        window.simulate_keystrokes("ctrl-shift-4");
+
+        window.update(|_, cx| {
+            assert_eq!(
+                workspace.read(cx).focus_target,
+                FocusTarget::BackgroundTasks
+            );
+        });
+        assert!(tasks_expanded(window, &workspace));
+        assert!(tasks_panel_rendered(window));
+    }
+
+    /// Tab and Shift+Tab skip the background tasks while their panel is
+    /// collapsed, and stop on them once it is expanded.
+    #[gpui::test]
+    fn focus_cycling_skips_the_collapsed_background_tasks(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let target =
+            |window: &mut VisualTestContext| window.update(|_, cx| workspace.read(cx).focus_target);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("tab");
+        assert_eq!(target(window), FocusTarget::Document);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Document);
+            })
+        });
+        assert!(!tasks_expanded(window, &workspace));
+
+        window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.toggle_tasks_panel(cx)));
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::BackgroundTasks);
+            })
+        });
+    }
+
+    /// Collapsing the panel while it holds focus returns focus to the
+    /// document instead of leaving it on an element that is no longer drawn.
+    #[gpui::test]
+    fn collapsing_the_focused_tasks_panel_returns_focus_to_the_document(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                workspace.toggle_tasks_panel(cx);
+            })
+        });
+
+        assert!(!tasks_panel_rendered(window));
+        window.update(|_, cx| {
+            assert_eq!(workspace.read(cx).focus_target, FocusTarget::Document);
+        });
+    }
+
+    /// Letters the sidebar binds (`q` switches its tab) are text while its
+    /// filter has focus; `/` is what puts focus there.
+    #[gpui::test]
+    fn the_sidebar_filter_keeps_the_letters_typed_into_it(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let sidebar = window.update(|_, cx| workspace.read(cx).sidebar.clone());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        let tab_before = window.update(|_, cx| sidebar.read(cx).active_tab());
+
+        window.simulate_keystrokes("/");
         assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "a click on the backdrop must close the overlay"
+            window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)),
+            "`/` focuses the sidebar filter"
         );
+
+        window.simulate_keystrokes("q");
+        assert_eq!(
+            window.update(|_, cx| sidebar.read(cx).active_tab()),
+            tab_before,
+            "`q` typed in the filter does not switch the sidebar tab"
+        );
+        assert!(window.update(|window, cx| sidebar.read(cx).search_input_is_focused(window, cx)));
+    }
+
+    /// The palette opens from the keyboard and Escape closes it.
+    #[gpui::test]
+    fn the_command_palette_opens_and_closes_from_the_keyboard(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        let palette = window.update(|_, cx| workspace.read(cx).command_palette.clone());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        #[cfg(target_os = "macos")]
+        window.simulate_keystrokes("cmd-shift-p");
+        #[cfg(not(target_os = "macos"))]
+        window.simulate_keystrokes("ctrl-shift-p");
+        assert!(window.update(|_, cx| palette.read(cx).is_visible()));
+
+        window.simulate_keystrokes("escape");
+        assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
     }
 
     fn toast_count(window: &mut VisualTestContext) -> usize {

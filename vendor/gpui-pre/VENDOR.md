@@ -1,10 +1,12 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus five patches. It exists so the
+This directory is the published `gpui-pre` crate source plus seven patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
 element id. The fifth lets a wrapper report a text input it does not render as read-only.
+The sixth adds letter spacing to text styles. The seventh adjusts key dispatch and focus
+visibility for the app keymap.
 
 ## Why
 
@@ -113,6 +115,61 @@ and `SetValue` and `ReplaceSelectedText` requests to it run no listener. This co
 `Window::set_observed_element_value`, which then returns `false`, and requests from an
 assistive technology through `Window::handle_a11y_action`.
 
+### Letter spacing
+
+The design system sets its uppercase section labels with tracking (about 0.14em), and
+upstream `TextStyle` has no letter spacing. The patch adds `TextStyle::letter_spacing`
+(`Pixels`, zero by default) and the `Styled::letter_spacing` builder, so it cascades like
+any other text style.
+
+The text element passes the value to the new `WindowTextSystem::shape_text_with_letter_spacing`;
+`shape_text` delegates to it with zero, so every existing caller is unchanged. Spacing is
+applied after shaping: the wrapped-line cache copies the shaped line, moves each glyph right
+by the spacing times the number of characters before it and widens the line by the spacing
+times the character count, like CSS. Wrap boundaries are computed from those positions, so
+wrapping accounts for the spacing. The spacing is part of the wrapped-line cache key; the
+unwrapped `layout_line` cache and its entries are untouched, and a zero spacing takes the
+exact code path it took before.
+
+Ellipsis truncation still measures characters without the spacing, so a spaced label that
+has to truncate is cut slightly late and relies on its container's `overflow_hidden`. Text
+shaped directly through `shape_line` or `shape_text` (canvas painting, the input editor)
+ignores the style.
+
+### Keyboard dispatch
+
+The app keymap registers every shortcut as a native GPUI key binding (see
+`crates/dbflux_ui_base/src/keymap/mod.rs`). Three behaviours of upstream dispatch get in the
+way of that, and the patch changes each of them:
+
+- **A focused clickable element answers Enter and Space.** GPUI turns Enter or Space on a
+  focused element with click listeners into a click, but only when the key reaches the
+  element's key listeners, and key bindings run before key listeners. A binding for Enter in
+  an ancestor context (the keymap binds Enter in many panels) would consume the key first,
+  so a focused button could no longer be pressed from the keyboard. The element now marks
+  its dispatch node while it is focused and clickable (`Window::claim_activation_keys`), and
+  `dispatch_key_event` skips key bindings for an unmodified Enter or Space when the focused
+  node carries that mark, the way a focused button behaves in a browser. Keystroke
+  interceptors still run first, and a pending key sequence is left alone.
+- **An interceptor that stops a key stops every key listener.** When a keystroke
+  interceptor calls `stop_propagation`, upstream still calls the first key listener on the
+  focus path before it checks the flag. The workspace used to own that first listener, which
+  hid the problem; without it, the code editor's Vim key listener saw keys its own
+  interceptor had already consumed (Replace mode and a pending `r`). `dispatch_key_down_up_event`
+  now returns at once when propagation is already stopped.
+- **Focus stays visible while the pointer moves.** `Window::last_input_was_keyboard` flips
+  to mouse on every pointer move, which is right for hover suppression but made keyboard
+  focus rings disappear as soon as the mouse moved. `Window::keyboard_focus_visible` is set
+  by a key press and cleared only by a pointer press or a touch, and the window repaints when
+  it changes. `last_input_was_keyboard` and hover behave as before;
+  `dbflux_components::primitives::is_keyboard_modality` reads the new flag.
+
+The vendored crate's own test suite does not build outside Zed's tree (it reads assets from
+the Zed repository), so the behaviour is covered by DBFlux tests instead:
+`controls::button::tests::a_focused_button_takes_enter_before_ancestor_bindings` and
+`primitives::focus_ring::tests::moving_the_pointer_keeps_keyboard_focus_visible` in
+`dbflux_components`, and the Replace-mode tests in `dbflux_ui_document`'s Vim suite.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -140,6 +197,10 @@ delta to this directory.
   patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
 - Patch 5: `read-only-accessibility.patch`, written for DBFlux against this directory with
   patches 1 to 4 applied — three files, 108 diff lines. It has no upstream counterpart.
+- Patch 6: `letter-spacing.patch`, written for DBFlux against this directory with
+  patches 1 to 5 applied — five files, 279 diff lines. It has no upstream counterpart.
+- Patch 7: `keyboard-dispatch.patch`, written for DBFlux against this directory with
+  patches 1 to 6 applied — three files, 164 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
@@ -193,7 +254,7 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
 `element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch`,
-`text-input-automation.patch` and then `read-only-accessibility.patch`.
+`text-input-automation.patch`, `read-only-accessibility.patch` and then `letter-spacing.patch`.
 It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting

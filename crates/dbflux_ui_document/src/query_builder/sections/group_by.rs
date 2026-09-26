@@ -54,7 +54,7 @@ pub fn render_group_by(
         row_div = row_div.child(
             Button::new(element_id("qb-gb-rm", i), "✕")
                 .ghost()
-                .small()
+                .inline()
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.remove_group_by_row(i, cx);
                 })),
@@ -70,7 +70,7 @@ pub fn render_group_by(
             dbflux_i18n::t!("document.query_builder.group_by.add_column"),
         )
         .ghost()
-        .small()
+        .inline()
         .on_click(cx.listener(move |this, _event, _window, cx| {
             this.add_group_by_column(source_alias.clone(), String::new(), cx);
         })),
@@ -142,7 +142,7 @@ pub fn render_group_by(
         row_div = row_div.child(
             Button::new(element_id("qb-agg-rm", i), "✕")
                 .ghost()
-                .small()
+                .inline()
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.remove_aggregate_row(i, cx);
                 })),
@@ -168,7 +168,7 @@ pub fn render_group_by(
                 button_label,
             )
             .ghost()
-            .small()
+            .inline()
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.add_aggregate(function, cx);
             })),

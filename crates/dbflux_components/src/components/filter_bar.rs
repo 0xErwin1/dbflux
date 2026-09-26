@@ -26,8 +26,9 @@
 
 use crate::controls::{Dropdown, InputState};
 use crate::icons::AppIcon;
-use crate::primitives::Icon;
-use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::primitives::{Chamfer, ChamferRing, FOCUS_RING_SELECTOR, Icon, WhenFocusVisible};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Heights, Radii, Spacing};
+use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -366,7 +367,172 @@ impl<'a> FilterBar<'a> {
     }
 }
 
+// ── Filter field ──────────────────────────────────────────────────────────────
+
+/// The filter field of a table toolbar: one chamfered field holding the
+/// filter keyword and its editor, and on its right, past a divider, the limit
+/// keyword and its value.
+///
+/// Layout from the table screen: `Fields::FILTER_HEIGHT` tall, cut
+/// `ChamferCut::INPUT`, ground fill with a 1 px `theme.input` line, the data
+/// face at `FontSizes::BASE`, keywords bold in the tint. The editor and the
+/// limit value are frameless children supplied by the host, which owns their
+/// state and events.
+///
+/// Focus: the field's ring (inset tint) marks the filter part; a ring around
+/// the limit value marks the limit part; an error replaces the field's ring
+/// with a danger one.
+#[derive(IntoElement)]
+pub struct FilterField {
+    id: ElementId,
+    filter: Option<(SharedString, AnyElement)>,
+    trailing: Vec<AnyElement>,
+    limit: Option<(SharedString, AnyElement)>,
+    filter_focused: bool,
+    limit_focused: bool,
+    error: bool,
+}
+
+impl FilterField {
+    pub fn new(id: impl Into<ElementId>) -> Self {
+        Self {
+            id: id.into(),
+            filter: None,
+            trailing: Vec::new(),
+            limit: None,
+            filter_focused: false,
+            limit_focused: false,
+            error: false,
+        }
+    }
+
+    /// The filter part: its keyword (for example `WHERE`) and the frameless
+    /// editor that follows it.
+    pub fn filter(mut self, keyword: impl Into<SharedString>, editor: impl IntoElement) -> Self {
+        self.filter = Some((keyword.into(), editor.into_any_element()));
+        self
+    }
+
+    /// An element drawn after the filter editor, before the limit part
+    /// (clear button, status chips).
+    pub fn trailing(mut self, element: impl IntoElement) -> Self {
+        self.trailing.push(element.into_any_element());
+        self
+    }
+
+    /// The limit part: its keyword (for example `LIMIT`) and the frameless
+    /// value input.
+    pub fn limit(mut self, keyword: impl Into<SharedString>, value: impl IntoElement) -> Self {
+        self.limit = Some((keyword.into(), value.into_any_element()));
+        self
+    }
+
+    pub fn filter_focused(mut self, focused: bool) -> Self {
+        self.filter_focused = focused;
+        self
+    }
+
+    pub fn limit_focused(mut self, focused: bool) -> Self {
+        self.limit_focused = focused;
+        self
+    }
+
+    /// Marks the filter as invalid: the field's ring turns to the danger color.
+    pub fn error(mut self, error: bool) -> Self {
+        self.error = error;
+        self
+    }
+}
+
+impl RenderOnce for FilterField {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
+        let has_filter = self.filter.is_some();
+
+        let mut shape = Chamfer::new(ChamferCut::INPUT)
+            .fill(theme.background)
+            .border(theme.input);
+
+        if self.error {
+            shape = shape.ring(ChamferRing::outline(theme.danger));
+        } else if self.filter_focused {
+            shape = shape.ring(ChamferRing::focus(tint));
+        }
+
+        let keyword = |text: SharedString| {
+            div()
+                .flex_none()
+                .font_weight(FontWeight::BOLD)
+                .text_color(tint)
+                .child(text)
+        };
+
+        div()
+            .id(self.id)
+            .relative()
+            .flex()
+            .items_center()
+            .when(has_filter, |this| this.flex_1().min_w(px(0.0)))
+            .h(Fields::FILTER_HEIGHT)
+            .px(Fields::FILTER_PADDING_X)
+            .gap(Fields::FILTER_GAP)
+            .font_family(AppFonts::MONO)
+            .text_size(FontSizes::BASE)
+            .text_color(theme.accent_foreground)
+            .child(shape)
+            .when_some(self.filter, |this, (filter_keyword, editor)| {
+                this.child(
+                    Icon::new(AppIcon::ListFilter)
+                        .size(Fields::FILTER_ICON)
+                        .color(theme.muted_foreground),
+                )
+                .child(keyword(filter_keyword))
+                .child(div().flex_1().min_w(px(0.0)).child(editor))
+            })
+            .children(self.trailing)
+            .when_some(self.limit, |this, (limit_keyword, value)| {
+                let value_box = div()
+                    .relative()
+                    .flex_none()
+                    .w(Fields::FILTER_LIMIT_WIDTH)
+                    .when(self.limit_focused, |this| {
+                        this.child(Chamfer::new(ChamferCut::KEYCAP).ring(ChamferRing::focus(tint)))
+                    })
+                    .child(value);
+
+                this.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .when(has_filter, |this| {
+                            this.pl(Fields::FILTER_PADDING_X)
+                                .border_l_1()
+                                .border_color(theme.border)
+                        })
+                        .child(keyword(limit_keyword))
+                        .child(value_box),
+                )
+            })
+    }
+}
+
 // ── Private render helpers ────────────────────────────────────────────────────
+
+/// The navigation cursor's frame over a filter item, shown only while focus
+/// is visible.
+fn focus_frame(theme: &gpui_component::theme::Theme) -> WhenFocusVisible {
+    WhenFocusVisible::new(
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(Radii::SM)
+            .border_1()
+            .border_color(theme.ring)
+            .debug_selector(|| FOCUS_RING_SELECTOR.to_string()),
+    )
+}
 
 fn render_item(
     item: &FilterBarItem,
@@ -390,8 +556,9 @@ fn render_item(
                     .h(Heights::CONTROL)
                     .min_w(px(180.0))
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(div().flex_1().child(Input::new(input).small())),
+                    .relative()
+                    .child(div().flex_1().child(Input::new(input).small()))
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
@@ -406,8 +573,9 @@ fn render_item(
                     .items_center()
                     .h(Heights::CONTROL)
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(dropdown.clone()),
+                    .relative()
+                    .child(dropdown.clone())
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
@@ -423,31 +591,30 @@ fn render_item(
                     .h(Heights::CONTROL)
                     .min_w(px(220.0))
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small()),
+                    .relative()
+                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small())
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
-        FilterBarItem::Button { label, icon } => {
-            let border_color = if ring_active { theme.ring } else { theme.input };
-
-            div()
-                .flex()
-                .items_center()
-                .h(Heights::CONTROL)
-                .px(Spacing::SM)
-                .gap_1()
-                .rounded(Radii::SM)
-                .bg(theme.background)
-                .border_1()
-                .border_color(border_color)
-                .cursor_pointer()
-                .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                .when_some(*icon, |d, icon| {
-                    d.child(Icon::new(icon).size(Heights::ICON_SM).muted())
-                })
-                .child(Text::body(label.clone()).font_size(FontSizes::SM))
-                .into_any_element()
-        }
+        FilterBarItem::Button { label, icon } => div()
+            .flex()
+            .items_center()
+            .h(Heights::CONTROL)
+            .px(Spacing::SM)
+            .gap_1()
+            .rounded(Radii::SM)
+            .bg(theme.background)
+            .relative()
+            .border_1()
+            .border_color(theme.input)
+            .cursor_pointer()
+            .hover(|d| d.bg(theme.accent.opacity(0.08)))
+            .when_some(*icon, |d, icon| {
+                d.child(Icon::new(icon).size(Heights::ICON_SM).muted())
+            })
+            .child(Text::body(label.clone()).font_size(FontSizes::SM))
+            .when(ring_active, |d| d.child(focus_frame(theme)))
+            .into_any_element(),
     }
 }

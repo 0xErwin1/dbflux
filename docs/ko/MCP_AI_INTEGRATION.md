@@ -77,8 +77,8 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 1. **신뢰할 수 있는 클라이언트**: 요청자의 신원이 활성 상태이고 등록되어 있어야 합니다.
 2. **연결 MCP 게이트**: 대상 연결에서 MCP가 활성화되어 있어야 합니다.
 3. **정책 할당**: 액터가 해당 연결에 대해 범위가 지정된 할당을 가지고 있어야 합니다.
-4. **도구 + 분류 허용 목록**: 도구 ID와 실행 클래스 둘 다 할당된 정책의 허용 목록에 있어야 합니다.
-5. **승인 경로**: 쓰기/파괴적 흐름은 실행 전에 사람의 승인이 필요할 수 있습니다.
+4. **도구 + 클래스별 결정**: 도구 ID가 할당된 정책에 나열되어 있어야 하며, 그 정책이 호출의 실행 클래스를 Allow, Ask, Deny 중 하나로 결정합니다 (5절 참조).
+5. **승인 경로**: Ask 결정은 호출을 대기 중인 실행으로 큐에 넣습니다. 사람이 DBFlux에서 승인하거나 거부하며, 승인된 호출은 에이전트가 같은 인수로 다시 호출할 때 한 번 실행됩니다.
 6. **감사 기록**: 모든 결정은 통합 SQLite 데이터베이스의 `aud_audit_events`에 추가되며 조회와 내보내기가 가능합니다. 전체 이벤트 스키마는 `docs/AUDIT.md`를 참조하세요.
 
 여섯 계층은 모두 `tools/call` 요청마다 서버 프로세스 내부에서 실행됩니다. 어떤 계층도 클라이언트 쪽에서 우회할 수 없습니다.
@@ -119,11 +119,11 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | 스크립트 | `update_script` | write | 기존 저장 스크립트를 덮어씁니다 |
 | 스크립트 | `delete_script` | admin | 스크립트를 영구적으로 제거합니다 |
 | 스크립트 | `execute_script` | computed | 연결에 대해 저장된 스크립트를 실행합니다. 분류는 스크립트 본문에서 도출됩니다 |
-| 승인 | `request_execution` | admin | 실행 전에 사람의 승인을 받도록 변경을 제출합니다 |
+| 승인 | `request_execution` | admin | 사람의 승인을 받도록 호출을 큐에 넣습니다. 승인되면 같은 인수로 해당 도구를 직접 호출해 한 번 실행합니다 |
 | 승인 | `list_pending_executions` | read | 승인 대기 중인 모든 실행을 봅니다 |
 | 승인 | `get_pending_execution` | read | 특정 대기 중 실행의 세부 정보를 가져옵니다 |
-| 승인 | `approve_execution` | admin | 대기 중인 변경을 승인합니다 (관리자 전용) |
-| 승인 | `reject_execution` | admin | 대기 중인 변경을 거부하고 폐기합니다 (관리자 전용) |
+| 승인 | `approve_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 승인합니다 |
+| 승인 | `reject_execution` | — | MCP로는 항상 거부됩니다. 사람이 DBFlux에서 거부합니다 |
 | 감사 | `query_audit_logs` | read | 감사 기록을 검색하고 필터링합니다 |
 | 감사 | `get_audit_entry` | read | ID로 단일 감사 로그 항목을 가져옵니다 |
 | 감사 | `export_audit_logs` | read | 감사 로그 항목을 CSV 또는 JSON으로 내려받습니다 |
@@ -135,7 +135,13 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 ## 5. 실행 클래스
 
-정책은 두 수준에서 도구를 통제합니다: 도구 ID 자체와 실행 분류입니다. 두 항목이 모두 정책의 허용 목록과 일치할 때만 요청이 허용됩니다.
+정책은 두 수준에서 도구를 통제합니다: 도구 ID 자체와 실행 분류입니다. 정책은 자신이 다루는 도구를 나열하고, 각 실행 클래스에 하나의 결정을 부여합니다:
+
+| 결정 | 해당 클래스의 호출에 일어나는 일 |
+|------|------------------------------|
+| Allow | 즉시 실행됩니다 |
+| Ask | 사람을 기다립니다: 호출은 대기 중인 실행으로 큐에 들어가며 승인된 후에만 실행됩니다 |
+| Deny | 거부됩니다 |
 
 | 클래스 | 포함 범위 |
 |-------|---------------|
@@ -144,8 +150,26 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 | `write` | 데이터를 수정하는 삽입, 업데이트 또는 스크립트 실행 |
 | `destructive` | DELETE, DROP, TRUNCATE 및 기타 되돌릴 수 없는 작업 |
 | `admin_safe` | 추가 스키마 변경, 인덱스 생성 같은 안전한 DDL 작업 |
-| `admin` | 위험한 DDL 작업, 승인, 감사 내보내기, 특권 작업 |
+| `admin` | 위험한 DDL 작업, 감사 내보내기, 특권 작업 |
 | `admin_destructive` | 스키마 개체 삭제나 자르기 같은 되돌릴 수 없는 관리 작업 |
+
+`metadata`와 `read`는 읽기만 합니다. 나머지 다섯 클래스는 데이터나 스키마를 변경하며, 아래에서는 변경 클래스라고 부릅니다.
+
+### 정책이 결합되는 방식
+
+액터는 한 연결에서 직접 또는 역할을 통해 여러 정책을 가질 수 있습니다. 요청된 도구를 나열한 정책만 판단에 참여하며, 그중 가장 관대한 결정이 적용됩니다: Allow가 Ask보다, Ask가 Deny보다 우선합니다. 정책은 권한을 부여하는 것이며, Deny는 거부권이 아니라 권한이 없다는 뜻입니다. 따라서 어떤 정책이 한 클래스에 승인을 요구하더라도, 할당된 다른 정책이 이미 그 클래스를 허용한 액터는 막히지 않습니다. 한 클래스가 승인을 기다리게 하려면 액터에게 할당된 다른 어떤 정책도 그 클래스를 허용하지 않도록 하십시오.
+
+### 승인 흐름
+
+1. 에이전트가 정책이 Ask로 결정한 클래스의 도구를 호출합니다. 서버는 호출을 대기 중인 실행으로 큐에 넣고, outcome이 `pending`인 `mcp_authorize` 감사 이벤트를 기록하며, 데이터가 `{"code": "approval_required", "status": "pending", "pending_id": "..."}`인 JSON-RPC 오류로 응답합니다.
+2. 사람이 DBFlux에서 호출을 승인하거나 거부합니다 (**워크스페이스 → 대기 중인 승인**). 서버와 앱은 `dbflux.db`를 통해 큐를 공유하므로, `dbflux mcp`가 큐에 넣은 호출이 앱에 나타납니다.
+3. 에이전트가 같은 도구를 같은 인수로 다시 호출합니다. 서버는 액터, 연결, 도구, 인수가 일치하는 승인을 찾아 소비하고 호출을 실행합니다. 그 호출의 `mcp_authorize` 이벤트는 outcome이 `success`이며 `details_json.pending_execution_id`에 사용된 승인을 기록합니다.
+
+승인 하나는 호출 하나를 실행합니다. 호출을 다시 반복하면 새 요청이 큐에 들어가며, 인수를 바꿔도 마찬가지입니다. 거부된 호출은 절대 실행되지 않습니다. 승인은 호출이 큐에 들어간 지 24시간 후에 만료됩니다.
+
+`request_execution`은 호출을 명시적으로 큐에 넣으며, Ask 상태에서 도구를 호출한 것과 결과가 같습니다. `request_execution`, `list_pending_executions`, `get_pending_execution`은 큐 항목을 만들거나 읽기만 하므로, Ask 상태에서도 자신은 큐에 들어가지 않고 실행됩니다.
+
+MCP 클라이언트는 절대 승인하거나 거부할 수 없습니다: `approve_execution`과 `reject_execution`은 정책과 관계없이 MCP로는 오류 코드 `self_approval_forbidden`과 함께 거부되며, 모든 시도가 감사됩니다. 대기 중인 실행은 DBFlux UI에서 사람만 처리합니다.
 
 ## 6. 내장 정책과 역할
 
@@ -153,11 +177,19 @@ macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`에 �
 
 ### 내장 정책
 
-| ID | 허용되는 클래스 | 범위 |
-|----|----------------|-------|
-| `builtin/read-only` | metadata, read | 모든 탐색 + 스키마 도구; 읽기 전용 쿼리와 미리보기 도구; 스크립트 나열/가져오기; 감사 읽기 도구 |
-| `builtin/write` | metadata, read, write | 모든 읽기 전용 도구에 더해 쓰기 가능 스크립트와 요청/승인 제출 흐름 |
-| `builtin/admin` | metadata, read, write, destructive, admin_safe, admin, admin_destructive | 이 브랜치에서 노출되는 모든 표준 도구 |
+읽기는 기본으로 허용되며, 내장 정책이 부여하는 모든 변경 클래스는 승인을 요구합니다.
+
+| ID | Allow | Ask | 범위 |
+|----|-------|-----|-------|
+| `builtin/read-only` | metadata, read | — | 모든 탐색 + 스키마 도구; 읽기 전용 쿼리와 미리보기 도구; 스크립트 나열/가져오기; 감사 읽기 도구 |
+| `builtin/write` | metadata, read | write | 모든 읽기 전용 도구에 더해 쓰기 가능 스크립트와 요청/승인 제출 흐름 |
+| `builtin/admin` | metadata, read | write, destructive, admin_safe, admin, admin_destructive | `approve_execution`과 `reject_execution`을 제외한 모든 표준 도구 |
+
+내장 정책이 나열하지 않은 클래스는 거부됩니다.
+
+### Ask 도입 이전에 만든 정책
+
+Ask 결정이 생기기 전에는 정책이 클래스를 허용하는 것만 가능했으므로, 변경 클래스를 허용한 것이 승인 없이 실행하겠다는 명시적인 선택이었던 적은 없습니다. Ask를 도입한 저장소 마이그레이션(`034_cfg_tool_policy_approval_classes`)은 이에 맞춰 기존 사용자 지정 정책을 다시 씁니다: 허용되던 변경 클래스는 Ask가 되고, 허용되던 `metadata`나 `read` 클래스는 Allow로 유지되며, 허용되지 않던 클래스는 Deny로 유지됩니다. 에이전트가 다시 승인 없이 변경 호출을 실행하게 하려면 정책에서 **승인 없이 모두 허용**을 선택하십시오.
 
 ### 내장 역할
 
@@ -181,14 +213,17 @@ MCP 서버를 시작하기 전에 DBFlux GUI에서 거버넌스를 구성합니�
 
 3. **설정 → MCP → 정책 탭**
    - 내장 정책은 목록 맨 위에 나타나며 수정할 수 없습니다.
-   - 도구와 클래스 확인란을 토글해 사용자 지정 정책을 만듭니다.
+   - 도구를 선택하고 각 실행 클래스에 Allow, Ask, Deny 중 하나를 골라 사용자 지정 정책을 만듭니다. 키보드로는 클래스 행에서 `enter`를 누르면 다음 결정으로 바뀝니다.
+   - **승인 없이 모두 허용**은 모든 변경 클래스를 Allow로 설정합니다. 이후 에이전트는 `DROP DATABASE`를 포함한 모든 변경 호출을 묻지 않고 실행할 수 있습니다.
 
 4. **연결 관리자 → MCP 탭**
    - 대상 연결에 대해 MCP를 활성화합니다.
    - 채워진 드롭다운에서 이 연결의 액터(신뢰할 수 있는 클라이언트), 역할, 정책을 선택합니다.
 
 5. **워크스페이스 → 대기 중인 승인**
-   - 승인 경로를 트리거한 쓰기/파괴적 요청을 검토하고 승인하거나 거부합니다.
+   - 정책이 승인으로 보낸 호출을 검토하고 승인하거나 거부합니다. 대기 중인 실행은 이곳에서만 처리됩니다.
+   - 대기 중인 호출은 제목 표시줄 종 아이콘의 알림 센터에도 표시되며, 호출이 대기하는 동안 종에 강조색 배지가 붙습니다. 해당 행의 **검토**는 이 탭에서 그 호출을 엽니다. 팝오버 자체는 승인하거나 거부하지 않습니다.
+   - 승인된 호출은 에이전트가 같은 인수로 다시 호출할 때 실행됩니다. 모든 결정은 감사 로그에 기록됩니다.
 
 6. **워크스페이스 → 감사**
    - 액터/도구/결정/시간 범위로 필터링하고 CSV/JSON을 내보냅니다.
@@ -265,6 +300,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        correlation_id: None,
     },
     now_epoch_ms(),
 )?;
@@ -273,6 +309,8 @@ if !outcome.allowed {
     // deny_code와 deny_reason이 이유를 설명합니다
 }
 ```
+
+`authorize_request`에는 승인 큐가 없습니다: Ask 결정은 `deny_code == Some("approval_required")`와 함께 허용되지 않은 결과로 돌아옵니다. MCP 서버는 대신 `McpRuntime::authorize_with_approval_mut`를 호출하며, 이 함수는 호출 인수를 전달해 Ask 결정을 큐에 넣거나 일치하는 승인을 소비해 호출을 실행시킵니다.
 
 ## 10. 통합 체크리스트
 
@@ -284,7 +322,7 @@ AI 클라이언트를 MCP 서버에 연결하기 전에:
 - [ ] 대상 연결에서 MCP가 활성화되어 있음
 - [ ] 액터가 해당 연결에 대한 정책 할당을 보유함
 - [ ] 정책이 에이전트가 사용할 도구를 포괄함
-- [ ] 쓰기/파괴적 도구에 대한 승인 워크플로를 이해함
+- [ ] 승인이 필요한 클래스를 Ask로 설정했고, 에이전트가 작업하는 동안 누군가 대기 중인 승인을 확인함
 
 ## 11. 테스트 위생
 
@@ -317,13 +355,14 @@ AI 클라이언트를 MCP 서버에 연결하기 전에:
 
 - 액터가 해당 연결 범위에 할당을 보유하는지 확인합니다.
 - 도구 ID가 할당된 정책의 허용 도구에 포함되어 있는지 확인합니다.
-- 실행 클래스가 정책의 허용 클래스에 포함되어 있는지 확인합니다.
+- 정책이 해당 실행 클래스를 Deny가 아닌 Allow 또는 Ask로 결정하는지 확인합니다.
 - `builtin/read-only`를 사용하는 경우 쓰기 도구(`create_script` 등)는 설계상 제외됩니다.
 
-### 승인이 대기 상태에서 멈춤
+### 호출이 `approval_required`로 응답됨
 
-- DBFlux 워크스페이스에서 대기 큐를 확인하고 승인 또는 거부를 명시적으로 수행합니다.
-- `approve_execution`에는 `admin` 클래스가 필요합니다 — 승인자의 정책에 이 클래스가 포함되어 있는지 확인하십시오.
+- 정책이 호출의 클래스를 Ask로 결정했습니다. **워크스페이스 → 대기 중인 승인**에서 `pending_id`가 가리키는 대기 중인 실행을 승인한 다음, 같은 인수로 호출을 반복하십시오.
+- 다른 인수로 호출을 반복하면 승인을 사용하지 않고 새 요청이 큐에 들어갑니다.
+- 에이전트는 자신의 호출을 승인할 수 없습니다: `approve_execution`과 `reject_execution`은 MCP로는 항상 거부됩니다 (`self_approval_forbidden`).
 
 ### 감사 내보내기에 이벤트가 누락됨
 

@@ -25,5 +25,5 @@ pub use actions::*;
 pub use dispatcher::CommandDispatcher;
 
 // Keymap helpers re-exported from dbflux_ui_base
-pub use dbflux_ui_base::keymap::default_keymap;
 pub use dbflux_ui_base::keymap::key_chord_from_gpui;
+pub use dbflux_ui_base::keymap::{default_keymap, effective_keymap};

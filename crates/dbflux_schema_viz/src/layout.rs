@@ -24,8 +24,8 @@ pub enum LayoutFormat {
 // NODE_HEADER_PX / NODE_ROW_PX used both by layout math and by the UI renderer
 // so both sides agree on anchor positions without duplicating magic numbers.
 pub const NODE_HEADER_PX: f32 = 30.0;
-pub const NODE_BODY_TOP_PX: f32 = 2.0;
-pub const NODE_ROW_PX: f32 = 22.0;
+pub const NODE_BODY_TOP_PX: f32 = 0.0;
+pub const NODE_ROW_PX: f32 = 24.0;
 pub const NODE_INDEX_HEADER_PX: f32 = 20.0;
 pub const NODE_INDEX_ROW_PX: f32 = 18.0;
 
@@ -710,6 +710,7 @@ fn build_edges(graph: &SchemaGraph, nodes: &HashMap<NodeIndex, NodeLayout>) -> V
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::graph::SchemaGraph;

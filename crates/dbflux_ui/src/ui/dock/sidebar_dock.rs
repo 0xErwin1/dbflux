@@ -1,6 +1,5 @@
-use crate::ui::icons::AppIcon;
-use dbflux_components::primitives::Icon;
-use dbflux_components::tokens::{Radii, Spacing};
+use dbflux_components::composites::Island;
+use dbflux_components::tokens::{ChromeColors, ShellMetrics};
 use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -8,21 +7,16 @@ use gpui_component::ActiveTheme;
 use std::time::{Duration, Instant};
 
 pub enum SidebarDockEvent {
-    OpenSettings,
-    OpenConnections,
-    OpenScripts,
     Collapsed,
     Expanded,
 }
 
-const COLLAPSED_WIDTH: Pixels = px(48.0);
-const DEFAULT_EXPANDED_WIDTH: Pixels = px(280.0);
+/// A collapsed sidebar leaves no island behind: the activity rail stays on
+/// screen and reopens it.
+const COLLAPSED_WIDTH: Pixels = px(0.0);
+const DEFAULT_EXPANDED_WIDTH: Pixels = ShellMetrics::SIDEBAR_WIDTH;
 const MIN_WIDTH: Pixels = px(200.0);
 const MAX_WIDTH: Pixels = px(800.0);
-const HEADER_HEIGHT: Pixels = px(36.0);
-const HEADER_PADDING: Pixels = px(8.0);
-const BUTTON_SIZE: Pixels = px(32.0);
-const ICON_SIZE: Pixels = px(18.0);
 const GRIP_WIDTH: Pixels = px(7.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -227,6 +221,17 @@ impl SidebarDock {
         cx.notify();
     }
 
+    /// Width of the sidebar when shown: the live width while expanded, the
+    /// width it reopens at while collapsed. The title bar's left block
+    /// follows it.
+    pub fn expanded_width(&self) -> Pixels {
+        if self.state == SidebarState::Collapsed && !self.transient_reveal {
+            self.last_expanded_width
+        } else {
+            self.width
+        }
+    }
+
     pub(crate) fn current_width(&self) -> Pixels {
         if self.is_collapsed() {
             COLLAPSED_WIDTH
@@ -239,11 +244,6 @@ impl SidebarDock {
 impl Render for SidebarDock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_collapsed = self.is_collapsed();
-        let content_width = if is_collapsed {
-            COLLAPSED_WIDTH
-        } else {
-            self.width - GRIP_WIDTH
-        };
 
         let pointer_entity = cx.entity().clone();
         let pointer_listeners = canvas(
@@ -313,127 +313,45 @@ impl Render for SidebarDock {
 
         div()
             .id("sidebar-dock")
+            .relative()
             .h_full()
             .w(self.current_width())
             .flex()
             .flex_row()
-            .bg(cx.theme().tab_bar)
-            .border_r_1()
-            .border_color(cx.theme().border)
             .child(pointer_listeners)
             .when_some(resize_listeners, |el, listeners| el.child(listeners))
-            .child(
-                div()
-                    .h_full()
-                    .w(content_width)
-                    .flex()
-                    .flex_col()
-                    .child(self.render_header(window, cx))
-                    .child(div().flex_1().overflow_hidden().child(if is_collapsed {
-                        self.render_collapsed_content(window, cx).into_any_element()
-                    } else {
-                        self.sidebar.clone().into_any_element()
-                    })),
-            )
-            .when(!is_collapsed, |el| el.child(self.render_grip(window, cx)))
+            .when(!is_collapsed, |el| {
+                el.child(
+                    Island::new()
+                        .size_full()
+                        .child(
+                            div()
+                                .h_full()
+                                .w_full()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(self.sidebar.clone()),
+                        )
+                        .child(self.render_grip(window, cx)),
+                )
+            })
     }
 }
 
 impl EventEmitter<SidebarDockEvent> for SidebarDock {}
 
 impl SidebarDock {
-    fn render_header(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_collapsed = self.is_collapsed();
-        let toggle_icon = if is_collapsed {
-            AppIcon::ChevronRight
-        } else {
-            AppIcon::ChevronLeft
-        };
-
-        let toggle_button = self
-            .header_button("sidebar-toggle", toggle_icon, cx)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.toggle(cx);
-            }));
-
-        let base = div()
-            .w_full()
-            .h(HEADER_HEIGHT)
-            .flex()
-            .flex_row()
-            .items_center()
-            .border_b_1()
-            .border_color(cx.theme().border);
-
-        if is_collapsed {
-            base.justify_center().child(toggle_button)
-        } else {
-            base.px(HEADER_PADDING)
-                .child(toggle_button)
-                .child(div().flex_1())
-                .child(div().w(BUTTON_SIZE))
-        }
-    }
-
-    fn render_collapsed_content(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .py(HEADER_PADDING)
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        self.header_button("sidebar-database", AppIcon::Database, cx)
-                            .on_click(cx.listener(|_this, _, _, cx| {
-                                cx.emit(SidebarDockEvent::OpenConnections);
-                            })),
-                    )
-                    .child(
-                        self.header_button("sidebar-scripts", AppIcon::FileCode, cx)
-                            .on_click(cx.listener(|_this, _, _, cx| {
-                                cx.emit(SidebarDockEvent::OpenScripts);
-                            })),
-                    ),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .py(HEADER_PADDING)
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        self.header_button("sidebar-settings", AppIcon::Settings, cx)
-                            .on_click(cx.listener(|_this, _, _, cx| {
-                                cx.emit(SidebarDockEvent::OpenSettings);
-                            })),
-                    ),
-            )
-    }
-
     fn render_grip(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("sidebar-grip")
-            .h_full()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
             .w(GRIP_WIDTH)
             .cursor_col_resize()
             .hover(|el| el.bg(cx.theme().accent.opacity(0.3)))
-            .when(self.is_resizing, |el| el.bg(cx.theme().primary))
+            .when(self.is_resizing, |el| el.bg(ChromeColors::tint(cx.theme())))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
@@ -461,19 +379,5 @@ impl SidebarDock {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.finish_resize(cx)),
             )
-    }
-
-    fn header_button(&self, id: &'static str, icon: AppIcon, cx: &Context<Self>) -> Stateful<Div> {
-        div()
-            .id(id)
-            .w(BUTTON_SIZE)
-            .h(BUTTON_SIZE)
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(Radii::MD)
-            .cursor_pointer()
-            .hover(|el| el.bg(cx.theme().secondary_hover))
-            .child(Icon::new(icon).size(ICON_SIZE).muted())
     }
 }

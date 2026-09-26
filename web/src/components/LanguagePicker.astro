@@ -1,4 +1,5 @@
 ---
+import Glyph from './Glyph.astro';
 import { LOCALES, LOCALE_NAMES, localeFromPathname, t, withLocale } from '../i18n';
 import type { Locale } from '../i18n';
 
@@ -21,40 +22,31 @@ const options = LOCALES.map((target) => ({
 <div class="lang" data-lang-picker data-placement={placement}>
   <button
     type="button"
-    class="lang__button nav__link"
+    class="lang__button c6"
     aria-expanded="false"
     aria-controls="lang-menu"
     aria-label={t(locale, 'nav.language')}
     data-lang-toggle
   >
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.8"
-      stroke-linecap="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="9"></circle>
-      <path d="M3 12h18"></path>
-      <path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"></path>
-    </svg>
+    <Glyph name="globe" size={15} />
     <span>{LOCALE_NAMES[locale]}</span>
+    <Glyph name="chevron-down" size={12} class="lang__chev" />
   </button>
 
-  <ul class="lang__menu" id="lang-menu" hidden>
+  <ul class="lang__menu c12" id="lang-menu" hidden>
     {
       options.map((option) => (
         <li>
           <a
+            class="c4"
             href={option.href}
             hreflang={option.locale}
             lang={option.locale}
             aria-current={option.locale === locale ? 'true' : undefined}
           >
-            {option.label}
+            <span class="lang__name">{option.label}</span>
+            <span class="lang__code">{option.locale}</span>
+            {option.locale === locale && <Glyph name="check" size={13} class="lang__check" />}
           </a>
         </li>
       ))
@@ -68,50 +60,26 @@ const options = LOCALES.map((target) => ({
   }
 
   .lang__button {
-    position: relative;
     display: flex;
     align-items: center;
-    gap: var(--s-2);
-    background: none;
+    gap: 8px;
+    height: 34px;
+    padding: 0 12px;
+    background: var(--raised);
     border: 0;
-    padding-bottom: 3px;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text);
+    color: var(--text-strong);
+    font-size: 13px;
     cursor: pointer;
-    transition: color var(--t-instant) linear;
-  }
-
-  .lang__button::after {
-    content: '';
-    position: absolute;
-    inset-inline: 0;
-    bottom: -1px;
-    height: 1px;
-    background: var(--accent);
-    transform: scaleX(0);
-    transform-origin: left;
-    transition: transform var(--t-quick) var(--ease-std);
+    transition: box-shadow var(--t-instant) linear;
   }
 
   .lang__button:hover,
   .lang__button[aria-expanded='true'] {
-    color: var(--text-strong);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
-  .lang__button:hover::after,
-  .lang__button[aria-expanded='true']::after {
-    transform: scaleX(1);
-  }
-
-  .lang__button svg {
+  .lang__button :global(.lang__chev) {
     color: var(--text-muted);
-    transition: color var(--t-instant) linear;
-  }
-
-  .lang__button:hover svg,
-  .lang__button[aria-expanded='true'] svg {
-    color: currentColor;
   }
 
   .lang__menu {
@@ -119,13 +87,12 @@ const options = LOCALES.map((target) => ({
     top: calc(100% + 8px);
     right: 0;
     z-index: var(--z-dropdown);
-    min-width: 140px;
+    width: 220px;
     list-style: none;
     margin: 0;
-    padding: 0;
+    padding: 6px 0;
     background: var(--raised);
-    border: var(--bw) solid var(--border-interactive);
-    box-shadow: var(--shadow-lg);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 
   .lang[data-placement='up-end'] .lang__menu {
@@ -138,28 +105,47 @@ const options = LOCALES.map((target) => ({
   }
 
   .lang__menu a {
-    display: block;
-    padding: var(--s-3) var(--s-4);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    margin: 0 6px;
+    padding: 0 10px;
+    font-size: 13px;
     color: var(--text);
-    transition:
-      background 120ms linear,
-      color 120ms linear;
+    transition: background 120ms linear;
   }
 
   .lang__menu a:hover {
-    background: var(--panel);
+    background: var(--raised-hover);
     color: var(--text-strong);
-    text-decoration: none;
   }
 
   .lang__menu a[aria-current='true'] {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
     color: var(--text-strong);
-    box-shadow: inset 2px 0 0 0 var(--accent);
   }
 
-  @media (max-width: 900px) {
+  .lang__name {
+    flex-grow: 1;
+  }
+
+  .lang__code {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-muted);
+  }
+
+  .lang__menu :global(.lang__check) {
+    color: var(--accent);
+  }
+
+  @media (max-width: 640px) {
+    .lang__button {
+      height: 40px;
+      font-size: 13.5px;
+    }
+
     .lang[data-placement='up-end'] .lang__menu {
       right: auto;
       left: 0;

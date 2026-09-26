@@ -78,6 +78,11 @@ pub const QUERY_CANCEL: AuditAction = AuditAction::new("query_cancel");
 /// User confirmed a dangerous query despite warning.
 pub const DANGEROUS_QUERY_CONFIRMED: AuditAction = AuditAction::new("dangerous_query_confirmed");
 
+/// Keys matching a pattern were deleted in bulk from a key-value store.
+pub const KEY_BULK_DELETE: AuditAction = AuditAction::new("key_bulk_delete");
+/// A bulk key deletion failed part-way or before it started.
+pub const KEY_BULK_DELETE_FAILED: AuditAction = AuditAction::new("key_bulk_delete_failed");
+
 /// Script executed successfully.
 pub const SCRIPT_EXECUTE: AuditAction = AuditAction::new("script_execute");
 /// Script execution failed.

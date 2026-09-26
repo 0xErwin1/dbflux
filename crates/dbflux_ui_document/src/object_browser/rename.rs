@@ -10,10 +10,12 @@
 use super::ObjectBrowserDocument;
 use super::data::db_error_to_user_facing;
 use super::editor::GuardedNavigation;
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::modals::Modal;
+use dbflux_components::primitives::Text;
+use dbflux_components::tokens::Spacing;
 use dbflux_core::DbError;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
@@ -313,8 +315,6 @@ impl ObjectBrowserDocument {
     /// Small name-input overlay, pre-filled with the current leaf name, or
     /// nothing when it is closed.
     pub(super) fn render_rename_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
         let Some(state) = self.rename_object.as_ref() else {
             return div().into_any_element();
         };
@@ -330,18 +330,7 @@ impl ObjectBrowserDocument {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .p(Spacing::MD)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .child(Icon::new(AppIcon::Pencil).size(Heights::ICON_MD).muted())
-                    .child(Text::heading(dbflux_i18n::t!(
-                        "document.object_browser.rename.title"
-                    ))),
-            )
-            .child(Text::muted(format!("\"{}\"", state.key)))
+            .child(Text::code(format!("\"{}\"", state.key)).muted_foreground())
             .child(
                 div()
                     .flex()
@@ -357,81 +346,47 @@ impl ObjectBrowserDocument {
             body = body.child(Text::caption(error.clone()).danger());
         }
 
-        body = body.child(
-            div()
-                .flex()
-                .justify_end()
-                .gap(Spacing::SM)
-                .child(
-                    div()
-                        .id("object-browser-rename-cancel")
-                        .flex()
-                        .items_center()
-                        .h(Heights::CONTROL)
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .cursor_pointer()
-                        .bg(theme.secondary)
-                        .hover(|d| d.bg(theme.muted))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close_rename_object(cx);
-                        }))
-                        .child(Text::caption(dbflux_i18n::t!(
-                            "document.object_browser.rename.cancel"
-                        ))),
-                )
-                .child(
-                    div()
-                        .id("object-browser-rename-confirm")
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XS)
-                        .h(Heights::CONTROL)
-                        .px(Spacing::SM)
-                        .rounded(Radii::SM)
-                        .bg(theme.primary)
-                        .when(!can_rename, |d| d.opacity(0.5))
-                        .when(can_rename, |d| d.cursor_pointer().hover(|d| d.opacity(0.9)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.submit_rename_object(cx);
-                        }))
-                        .child(
-                            Icon::new(if state.submitting {
-                                AppIcon::Loader
-                            } else {
-                                AppIcon::Pencil
-                            })
-                            .size(Heights::ICON_SM)
-                            .color(theme.primary_foreground),
-                        )
-                        .child({
-                            let key = if state.submitting {
-                                "document.object_browser.rename.confirm_in_progress"
-                            } else {
-                                "document.object_browser.rename.confirm"
-                            };
-                            Text::caption(dbflux_i18n::t!(key)).color(theme.primary_foreground)
-                        }),
-                ),
-        );
+        let confirm_key = if state.submitting {
+            "document.object_browser.rename.confirm_in_progress"
+        } else {
+            "document.object_browser.rename.confirm"
+        };
 
-        div()
-            .id("object-browser-rename-overlay")
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg(theme))
+        let footer = div()
             .flex()
-            .items_center()
-            .justify_center()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
+            .gap(Spacing::SM)
             .child(
-                surface_panel(cx)
-                    .rounded(Radii::MD)
-                    .min_w(px(400.0))
-                    .child(body),
+                Button::new(
+                    "object-browser-rename-cancel",
+                    dbflux_i18n::t!("document.object_browser.rename.cancel"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_rename_object(cx);
+                })),
             )
+            .child(
+                Button::new(
+                    "object-browser-rename-confirm",
+                    dbflux_i18n::t!(confirm_key),
+                )
+                .primary()
+                .icon(if state.submitting {
+                    AppIcon::Loader
+                } else {
+                    AppIcon::Pencil
+                })
+                .disabled(!can_rename)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.submit_rename_object(cx);
+                })),
+            );
+
+        Modal::new(dbflux_i18n::t!("document.object_browser.rename.title"))
+            .id("object-browser-rename-overlay")
+            .icon(AppIcon::Pencil)
+            .width(px(440.0))
+            .body(body)
+            .footer(footer)
             .into_any_element()
     }
 }

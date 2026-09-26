@@ -967,6 +967,27 @@ impl QueryLanguage {
         }
     }
 
+    /// Stable identifier of the language for keymap context predicates
+    /// (`language == mongo`).
+    pub fn context_id(&self) -> &'static str {
+        match self {
+            Self::Sql => "sql",
+            Self::CloudWatchLogsInsightsQl => "cloudwatch_insights",
+            Self::OpenSearchPpl => "opensearch_ppl",
+            Self::OpenSearchSql => "opensearch_sql",
+            Self::MongoQuery => "mongo",
+            Self::RedisCommands => "redis",
+            Self::Cypher => "cypher",
+            Self::InfluxQuery => "influxql",
+            Self::Flux => "flux",
+            Self::Cql => "cql",
+            Self::Lua => "lua",
+            Self::Python => "python",
+            Self::Bash => "bash",
+            Self::Custom(_) => "custom",
+        }
+    }
+
     /// Default file extension for "Save As" dialogs.
     pub fn default_extension(&self) -> &'static str {
         match self {
@@ -1064,7 +1085,7 @@ impl QueryLanguage {
     /// Returns the placeholder text for the query editor.
     pub fn placeholder(&self) -> &'static str {
         match self {
-            QueryLanguage::Sql => "-- Enter SQL here...",
+            QueryLanguage::Sql => "-- Enter SQL here…",
             QueryLanguage::CloudWatchLogsInsightsQl => {
                 "fields @timestamp, @message | sort @timestamp desc | limit 100"
             }
@@ -1075,15 +1096,15 @@ impl QueryLanguage {
                 "SELECT `@timestamp`, `@message` FROM `logGroups(logGroupIdentifier: ['LogGroup'])` LIMIT 100"
             }
             QueryLanguage::MongoQuery => "// db.collection.find({})",
-            QueryLanguage::RedisCommands => "# Enter Redis command...",
-            QueryLanguage::Cypher => "// Enter Cypher query...",
-            QueryLanguage::InfluxQuery => "-- Enter InfluxQL...",
-            QueryLanguage::Flux => "// Enter Flux query...",
-            QueryLanguage::Cql => "-- Enter CQL...",
-            QueryLanguage::Lua => "-- Enter Lua script...",
-            QueryLanguage::Python => "# Enter Python script...",
-            QueryLanguage::Bash => "# Enter Bash script...",
-            QueryLanguage::Custom(_) => "Enter query...",
+            QueryLanguage::RedisCommands => "# Enter Redis command…",
+            QueryLanguage::Cypher => "// Enter Cypher query…",
+            QueryLanguage::InfluxQuery => "-- Enter InfluxQL…",
+            QueryLanguage::Flux => "// Enter Flux query…",
+            QueryLanguage::Cql => "-- Enter CQL…",
+            QueryLanguage::Lua => "-- Enter Lua script…",
+            QueryLanguage::Python => "# Enter Python script…",
+            QueryLanguage::Bash => "# Enter Bash script…",
+            QueryLanguage::Custom(_) => "Enter query…",
         }
     }
 
@@ -1163,6 +1184,33 @@ impl QueryLanguage {
             .into_iter()
             .find(|range| offset <= range.end)
             .unwrap_or(0..text.len())
+    }
+
+    /// Byte ranges of the executable statements in `text`, in buffer order,
+    /// each trimmed of surrounding whitespace: the statements
+    /// [`QueryLanguage::split_statements`] returns, located in the buffer.
+    ///
+    /// `None` for a language whose buffer is not split into statements, so a
+    /// caller can tell a single statement apart from a language without a
+    /// statement splitter.
+    pub fn statement_ranges(&self, text: &str) -> Option<Vec<std::ops::Range<usize>>> {
+        if self.editor_mode() != "sql" {
+            return None;
+        }
+
+        Some(
+            sql_statement_ranges(text)
+                .into_iter()
+                .filter_map(|range| {
+                    let segment = text.get(range.clone())?;
+                    let leading = segment.len() - segment.trim_start().len();
+                    let trailing = segment.len() - segment.trim_end().len();
+                    let trimmed = (range.start + leading)..(range.end - trailing);
+
+                    (trimmed.start < trimmed.end).then_some(trimmed)
+                })
+                .collect(),
+        )
     }
 }
 
@@ -2304,6 +2352,27 @@ mod tests {
         let stmts = QueryLanguage::Sql.split_statements("SELECT 1");
         assert_eq!(stmts, vec!["SELECT 1".to_string()]);
         assert_eq!(QueryLanguage::Sql.statement_count("SELECT 1"), 1);
+    }
+
+    #[test]
+    fn statement_ranges_locate_the_split_statements_in_the_buffer() {
+        let text = "SELECT 1;\n\n  SELECT 'a;b'\n  FROM t;\n   ";
+        let ranges = QueryLanguage::Sql
+            .statement_ranges(text)
+            .expect("SQL splits into statements");
+
+        let located: Vec<&str> = ranges.iter().map(|range| &text[range.clone()]).collect();
+
+        assert_eq!(located, QueryLanguage::Sql.split_statements(text));
+        assert_eq!(located, vec!["SELECT 1", "SELECT 'a;b'\n  FROM t"]);
+    }
+
+    #[test]
+    fn statement_ranges_are_none_without_a_statement_splitter() {
+        assert_eq!(
+            QueryLanguage::MongoQuery.statement_ranges("db.users.find()"),
+            None
+        );
     }
 
     #[test]

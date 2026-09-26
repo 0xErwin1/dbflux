@@ -1,11 +1,13 @@
 ---
 import Base from '../layouts/Base.astro';
 import DocsTree from '../components/DocsTree.astro';
+import Glyph from '../components/Glyph.astro';
 import VersionPicker from '../components/VersionPicker.astro';
+import { localizedDocTitle, sectionsFor } from '../data/docs';
 import type { DocRoutePolicy, DocTitlesByLocale } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, docsHref, versionHome, versionLabel } from '../data/versions';
-import { DEFAULT_LOCALE, localeFromPathname, t } from '../i18n';
+import { DEFAULT_LOCALE, localeFromPathname, sectionTitle, t } from '../i18n';
 import type { Locale } from '../i18n';
 import { searchIndexPath } from '../i18n/locale-registry.ts';
 
@@ -52,6 +54,26 @@ const onThisPage = headings.filter((heading) => heading.depth === 2 || heading.d
 const showsFallback = locale !== DEFAULT_LOCALE && !translated;
 const suffix = version.id === CURRENT.id ? '' : ` (${versionLabel(version)})`;
 const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCALE);
+
+/** The rail order, flattened, so a page knows its section and its neighbours. */
+const sections = sectionsFor(available).sections;
+const readingOrder = sections.flatMap((section) => section.entries);
+const position = currentPath === undefined ? -1 : readingOrder.indexOf(currentPath);
+const section = sections.find((candidate) =>
+  currentPath === undefined ? false : candidate.entries.includes(currentPath),
+);
+const neighbour = (offset: number) => {
+  const path = position === -1 ? undefined : readingOrder[position + offset];
+
+  return path
+    ? {
+        href: docsHref(`${version.id}/${path}`, locale),
+        title: localizedDocTitle(path, locale, titlesByLocale),
+      }
+    : undefined;
+};
+const previous = neighbour(-1);
+const next = neighbour(1);
 ---
 
 <Base
@@ -74,7 +96,7 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
       aria-controls="docs-rail"
     >
       <span>{t(locale, 'docs_tree.rail_toggle')}</span>
-      <span class="docs__railtoggle-mark" aria-hidden="true"></span>
+      <Glyph name="chevron-down" size={14} class="docs__railtoggle-mark" />
     </button>
 
     <aside class="docs__rail" id="docs-rail">
@@ -90,15 +112,24 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
 
     <article class="docs__body">
       <p class="crumbs">
+        <Glyph name="file-text" size={14} />
         <a href={versionHome(version, locale)}>{t(locale, 'docs_tree.crumb_docs')}</a>
-        <span>/</span>
+        {
+          section && (
+            <>
+              <Glyph name="chevron-right" size={12} />
+              <span>{sectionTitle(locale, section.id)}</span>
+            </>
+          )
+        }
+        <Glyph name="chevron-right" size={12} />
         <span class="crumbs__here">
           {currentPath ? title : t(locale, 'docs_tree.crumb_overview')}
         </span>
       </p>
       {
         showsFallback && currentPath && (
-          <p class="docs__fallback-notice" role="status">
+          <p class="docs__fallback-notice c10" role="status">
             {t(locale, 'docs_tree.not_translated')}{' '}
             <a href={docsHref(`${version.id}/${currentPath}`, DEFAULT_LOCALE)}>
               {t(locale, 'docs_tree.view_in_english')}
@@ -107,13 +138,46 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
         )
       }
       <div class="prose"><slot /></div>
+      {
+        (previous || next) && (
+          <nav class="docs__pager" aria-label={t(locale, 'docs_tree.crumb_docs')}>
+            {previous ? (
+              <a class="docs__pager-link c10 lift" href={previous.href} rel="prev">
+                <span class="docs__pager-label">
+                  <Glyph name="chevron-left" size={12} />
+                  {t(locale, 'docs_tree.previous')}
+                </span>
+                <span class="docs__pager-title">{previous.title}</span>
+              </a>
+            ) : (
+              <span />
+            )}
+            {next && (
+              <a
+                class="docs__pager-link docs__pager-link--next c10 lift"
+                href={next.href}
+                rel="next"
+              >
+                <span class="docs__pager-label">
+                  {t(locale, 'docs_tree.next')}
+                  <Glyph name="chevron-right" size={12} />
+                </span>
+                <span class="docs__pager-title">{next.title}</span>
+              </a>
+            )}
+          </nav>
+        )
+      }
     </article>
 
     <aside class="docs__toc">
       {
         onThisPage.length > 0 && (
           <nav aria-label={t(locale, 'docs_tree.on_this_page')} data-toc>
-            <p class="toc__title">{t(locale, 'docs_tree.on_this_page')}</p>
+            <p class="toc__title x">
+              <Glyph name="rows-3" size={13} />
+              {t(locale, 'docs_tree.on_this_page')}
+            </p>
             <div class="toc__links" data-toc-links>
               <svg class="toc__rail" aria-hidden="true" data-toc-rail>
                 <path class="toc__rail-muted" data-toc-rail-muted />
@@ -137,9 +201,11 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
         editPath && (
           <div class="toc__edit">
             <a href={`https://github.com/0xErwin1/dbflux/blob/main/${editPath}`} rel="noopener">
+              <Glyph name="pencil" size={14} />
               {t(locale, 'docs_tree.edit_page')}
             </a>
             <a href="https://github.com/0xErwin1/dbflux/issues/new" rel="noopener">
+              <Glyph name="flag" size={14} />
               {t(locale, 'docs_tree.report_issue')}
             </a>
           </div>
@@ -154,34 +220,40 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     max-width: var(--docs-max);
     margin-inline: auto;
     display: grid;
-    grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--toc-w);
+    grid-template-columns: var(--rail-w) minmax(0, 760px) minmax(0, 1fr);
     align-items: start;
   }
 
   .docs__rail {
     position: sticky;
     top: var(--nav-h);
+    z-index: var(--z-rail);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
     height: calc(100vh - var(--nav-h));
     overflow-y: auto;
+    padding: 28px 0 0 28px;
     border-right: var(--bw) solid var(--border);
-    z-index: var(--z-rail);
   }
 
   .docs__body {
-    padding: var(--s-7) var(--s-8) var(--s-9);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
     min-width: 0;
+    padding: 40px 0 96px 64px;
   }
 
   .docs__toc {
     position: sticky;
     top: var(--nav-h);
-    max-height: calc(100vh - var(--nav-h));
-    overflow-y: auto;
-    padding: var(--s-7) var(--s-5);
-    border-left: var(--bw) solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: var(--s-6);
+    gap: 14px;
+    max-height: calc(100vh - var(--nav-h));
+    overflow-y: auto;
+    padding: 40px 48px 40px 56px;
   }
 
   .docs__railtoggle {
@@ -191,65 +263,102 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     justify-content: space-between;
     gap: var(--s-4);
     min-height: var(--tap-min);
-    padding: var(--s-4) var(--s-6);
+    padding: 0 var(--gutter);
     background: var(--panel);
     border: 0;
     border-bottom: var(--bw) solid var(--border);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    color: var(--text-strong);
+    font-size: 14px;
+    font-weight: 600;
     text-align: left;
     cursor: pointer;
   }
 
-  .docs__railtoggle-mark {
-    width: 9px;
-    height: 9px;
-    border-right: var(--bw-emphasis) solid var(--text-muted);
-    border-bottom: var(--bw-emphasis) solid var(--text-muted);
-    transform: rotate(45deg) translate(-2px, -2px);
+  .docs__railtoggle :global(.docs__railtoggle-mark) {
+    color: var(--text-muted);
     transition: transform var(--t-quick) var(--ease-std);
   }
 
-  .docs__railtoggle[aria-expanded='true'] .docs__railtoggle-mark {
-    transform: rotate(-135deg) translate(-2px, -2px);
+  .docs__railtoggle[aria-expanded='true'] :global(.docs__railtoggle-mark) {
+    transform: rotate(180deg);
   }
 
   .crumbs {
-    margin: 0 0 var(--s-6);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
     color: var(--text-muted);
   }
 
-  .crumbs span {
-    color: var(--border);
-    margin-inline: var(--s-2);
+  .crumbs a {
+    text-decoration: none;
   }
 
   .crumbs__here {
-    color: var(--text) !important;
+    color: var(--text-strong);
   }
 
   .docs__fallback-notice {
-    margin: 0 0 var(--s-6);
-    padding: var(--s-4) var(--s-5);
-    background: var(--panel);
-    border: var(--bw) solid var(--border);
-    border-left: var(--bw-emphasis) solid var(--accent);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-  }
-
-  .docs__fallback-notice a {
+    margin: 0;
+    padding: 14px 18px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    font-size: 14px;
     color: var(--text);
   }
 
+  .docs__pager {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .docs__pager-link {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 18px 20px;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  .docs__pager-link:hover {
+    color: var(--text-muted);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .docs__pager-link--next {
+    grid-column: 2;
+    align-items: flex-end;
+    text-align: right;
+  }
+
+  .docs__pager-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .docs__pager-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
   .toc__title {
-    margin: 0 0 var(--s-3);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    letter-spacing: 0.16em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--text-muted);
   }
@@ -258,44 +367,11 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     position: relative;
   }
 
-  .docs__toc ul {
-    position: relative;
-    z-index: 1;
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-2);
-  }
-
-  .docs__toc li[data-toc-depth='3'] {
-    padding-left: var(--s-3);
-  }
-
-  .docs__toc li a {
-    display: block;
-    padding-left: var(--s-4);
-    font-family: var(--font-sans);
-    font-size: var(--fs-small);
-    line-height: 1.4;
-    color: var(--text-muted);
-    transition: color 140ms linear;
-  }
-
-  .docs__toc li a:hover {
-    color: var(--text);
-    text-decoration: none;
-  }
-
-  .docs__toc li a[data-toc-visible] {
-    color: var(--accent);
-  }
-
-  .docs__toc li a[aria-current='location'] {
-    color: var(--text-strong);
-  }
-
+  /*
+   * The scroll script still measures and animates the SVG rail; the visible
+   * indicator is the 2px edge on each link, so the rail is kept for geometry
+   * only.
+   */
   .toc__rail {
     position: absolute;
     inset: 0;
@@ -303,52 +379,110 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     height: 100%;
     overflow: visible;
     pointer-events: none;
+    visibility: hidden;
   }
 
-  .toc__rail path {
-    fill: none;
-    stroke-width: var(--bw);
-    vector-effect: non-scaling-stroke;
+  .docs__toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
   }
 
-  .toc__rail-muted {
-    stroke: var(--border);
+  .docs__toc li a {
+    display: block;
+    padding: 6px 0 6px 14px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    box-shadow: inset 2px 0 0 var(--border);
+    transition:
+      color 140ms linear,
+      box-shadow 140ms linear;
   }
 
-  .toc__rail-active,
-  .toc__rail-end {
-    stroke: var(--accent);
-    fill: var(--accent);
+  .docs__toc li[data-toc-depth='3'] a {
+    padding-left: 28px;
+  }
+
+  .docs__toc li a:hover {
+    color: var(--text);
+  }
+
+  .docs__toc li a[data-toc-visible] {
+    color: var(--accent);
+    box-shadow: inset 2px 0 0 var(--accent-fill);
+  }
+
+  .docs__toc li a[aria-current='location'] {
+    color: var(--text-strong);
   }
 
   .toc__edit {
     display: flex;
     flex-direction: column;
-    gap: var(--s-3);
-    border: var(--bw) solid var(--border);
-    padding: var(--s-4);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    gap: 10px;
+    margin-top: 18px;
+    font-size: 13px;
+  }
+
+  .toc__edit a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   /* Markdown output. The docs are authored in the repository and rendered as-is:
      their own H1 is the page heading, so the layout never adds a second one. */
+  .prose {
+    font-size: 16px;
+    line-height: 1.7;
+  }
+
   .prose :global(h1) {
-    font-size: var(--fs-h1);
-    margin-block-end: var(--s-6);
+    margin-block-end: 20px;
+    font-family: var(--font-display);
+    font-stretch: var(--stretch-display);
+    font-size: clamp(2rem, 1.4rem + 1.6vw, 3.25rem);
+    font-weight: 900;
+    line-height: 0.95;
+    text-transform: uppercase;
+    overflow-wrap: anywhere;
+  }
+
+  .prose :global(h1 + p) {
+    font-size: 17px;
   }
 
   .prose :global(h2) {
+    margin-block: 46px 20px;
+    padding-top: 26px;
+    border-top: var(--bw) solid var(--border);
     font-size: var(--fs-h2);
-    margin-block: var(--s-8) var(--s-5);
-    padding-block-end: var(--s-4);
-    border-bottom: var(--bw) solid var(--border);
+    font-weight: 800;
   }
 
   .prose :global(h3) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-block: 28px 12px;
     font-size: var(--fs-h3);
-    font-weight: 500;
-    margin-block: var(--s-6) var(--s-4);
+  }
+
+  .prose :global(h3)::before {
+    content: '';
+    flex-shrink: 0;
+    width: 10px;
+    height: 6px;
+    background: var(--accent-fill);
+    transform: skewX(-30deg);
+  }
+
+  .prose :global(h4) {
+    margin-block: 22px 10px;
+    font-size: 16px;
   }
 
   .prose :global(p),
@@ -356,47 +490,71 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     max-width: var(--prose-max);
   }
 
+  .prose :global(p) {
+    margin-block: 0 16px;
+  }
+
   .prose :global(ul),
   .prose :global(ol) {
-    padding-left: var(--s-6);
+    padding-left: 24px;
   }
 
   .prose :global(li) {
-    margin-block: var(--s-2);
+    margin-block: 6px;
   }
 
-  .prose :global(a) {
-    text-decoration: underline;
-    text-underline-offset: 3px;
+  .prose :global(li::marker) {
+    color: var(--text-muted);
   }
 
-  .prose :global(code) {
-    font-size: var(--fs-code);
-    color: var(--accent);
+  .prose :global(strong) {
+    color: var(--text-strong);
+  }
+
+  .prose :global(:not(pre) > code) {
+    padding: 2px 7px;
+    background: var(--raised);
+    color: var(--text-strong);
+    font-size: 0.8em;
+    clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
   }
 
   .prose :global(pre) {
-    background: var(--panel) !important;
-    border: var(--bw) solid var(--border);
-    padding: var(--s-5);
+    margin-block: 8px 20px;
+    padding: 16px 18px;
     overflow-x: auto;
+    background: var(--panel) !important;
+    box-shadow: inset 0 0 0 1px var(--border);
     font-size: var(--fs-code);
     line-height: var(--lh-code);
-  }
-
-  .prose :global(pre code) {
-    color: inherit;
+    clip-path: polygon(
+      14px 0,
+      100% 0,
+      100% calc(100% - 14px),
+      calc(100% - 14px) 100%,
+      0 100%,
+      0 14px
+    );
   }
 
   .prose :global(blockquote) {
-    margin: var(--s-5) 0;
-    padding: var(--s-4) var(--s-5);
-    background: var(--panel);
-    border: var(--bw) solid var(--border);
-    border-left: var(--bw-emphasis) solid var(--accent);
+    margin: 8px 0 20px;
+    padding: 18px 20px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    font-size: 15px;
+    line-height: 1.65;
+    clip-path: polygon(
+      10px 0,
+      100% 0,
+      100% calc(100% - 10px),
+      calc(100% - 10px) 100%,
+      0 100%,
+      0 10px
+    );
   }
 
-  .prose :global(blockquote p) {
+  .prose :global(blockquote p:last-child) {
     margin: 0;
   }
 
@@ -411,42 +569,61 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     width: max-content;
     max-width: 100%;
     overflow-x: auto;
+    margin-block: 8px 20px;
     border-collapse: collapse;
-    border: var(--bw) solid var(--border);
-    margin-block: var(--s-5);
-    font-size: var(--fs-small);
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+    font-size: 14px;
+    clip-path: polygon(
+      14px 0,
+      100% 0,
+      100% calc(100% - 14px),
+      calc(100% - 14px) 100%,
+      0 100%,
+      0 14px
+    );
   }
 
   .prose :global(th) {
+    height: 44px;
+    padding: 0 18px;
+    border-bottom: var(--bw) solid var(--border-strong);
+    color: var(--text-strong);
+    font-weight: 700;
     text-align: left;
-    background: var(--panel);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    font-weight: 400;
   }
 
-  .prose :global(th),
   .prose :global(td) {
-    padding: var(--s-3) var(--s-5);
-    border-bottom: var(--bw) solid var(--border);
+    padding: 10px 18px;
+    border-bottom: var(--bw) solid var(--row-line);
   }
 
-  .prose :global(tbody tr:nth-child(odd)) {
-    background: var(--panel);
+  .prose :global(tbody tr:last-child td) {
+    border-bottom: 0;
   }
 
   .prose :global(hr) {
+    margin-block: 40px;
     border: 0;
     border-top: var(--bw) solid var(--border);
-    margin-block: var(--s-7);
   }
 
-  @media (max-width: 1200px) {
+  .prose :global(img) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  @media (max-width: 1280px) {
     .docs {
-      grid-template-columns: var(--rail-w) minmax(0, 1fr);
+      grid-template-columns: 280px minmax(0, 1fr);
+    }
+
+    .docs__rail {
+      padding-left: 20px;
+    }
+
+    .docs__body {
+      padding-right: var(--gutter);
     }
 
     .docs__toc {
@@ -473,16 +650,33 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
       position: static;
       height: auto;
       overflow: visible;
+      padding: 20px var(--gutter);
       border-right: 0;
       border-bottom: var(--bw) solid var(--border);
+      background: var(--bg);
     }
 
     .docs__rail[data-open] {
-      display: block;
+      display: flex;
+    }
+
+    .docs__rail :global(.picker),
+    .docs__rail :global(.tree__search) {
+      margin-right: 0;
     }
 
     .docs__body {
-      padding: var(--s-6) var(--s-6) var(--s-8);
+      padding: 28px var(--gutter) 64px;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .docs__pager {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .docs__pager-link--next {
+      grid-column: 1;
     }
   }
 </style>

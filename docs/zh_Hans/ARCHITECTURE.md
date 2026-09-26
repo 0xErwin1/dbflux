@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph UI["呈现层 —— 6 个 UI crate"]
         uicomp["dbflux_components<br/>（主题、设计令牌、图标、基础组件、<br/>复合组件、控件、数据表格、<br/>文档树、结果面板、图表、<br/>模态框、已保存图表（saved_chart）<br/>—— 不依赖 dbflux_app）"]
-        uibase["dbflux_ui_base<br/>（AppStateEntity、事件、键位映射辅助、<br/>Toast 提示 + 节流、用户错误上报（user_error）、<br/>模态框架（modal_frame）、平台（platform）、<br/>SQL 预览模态框（sql_preview_modal）、SSO 向导（sso_wizard））"]
+        uibase["dbflux_ui_base<br/>（AppStateEntity、事件、键位映射辅助、<br/>Toast 提示 + 节流、用户错误上报（user_error）、<br/>平台（platform）、<br/>SQL 预览模态框（sql_preview_modal）、SSO 向导（sso_wizard））"]
         uidoc["dbflux_ui_document<br/>（标签页/面板系统、文档、<br/>数据网格面板（data_grid_panel）、治理）"]
         uisidebar["dbflux_ui_sidebar<br/>（连接 + 脚本侧边栏树）"]
         uiwindows["dbflux_ui_windows<br/>（连接管理器 + 设置窗口）"]
@@ -133,7 +133,7 @@ crates/
       icon.rs               # 图标渲染辅助函数
       primitives/           # 底层构建块（徽标、横幅、标签、按钮等）
       controls/             # 输入控件（按钮、复选框、下拉框、输入框、选择器等）
-      composites/           # 组合模式（modal_frame、tab_strip、section_header 等）
+      composites/           # 组合模式（header、tabs、split_button 等）
       components/           # 领域组件
         data_table/         # 自研的虚拟化数据表格
           mod.rs
@@ -159,7 +159,7 @@ crates/
         json_editor_view.rs # 内联 JSON 编辑器组件
         multi_select.rs     # 多选下拉框组件
         value_source_selector.rs # 取值来源下拉框（Env/Secret/Parameter/Auth）
-      modals/               # 可复用的模态框组件（cell_editor、document_preview 等）
+      modals/               # 共享的 `Modal` 及基于它构建的模态框（cell_editor、document_preview 等）
       result_panel/         # ResultPanel + ViewHandle 通用框架宿主
       chart/                # 图表引擎（detect、spec、decimate、axis、legend、engine）
       saved_chart.rs        # SavedChart 与 SavedChartStore 类型别名
@@ -170,12 +170,11 @@ crates/
     src/
       app_state_entity.rs   # AppStateEntity 包装器（Deref + EventEmitter）、AppStateGlobal、
                             # UserErrorReported + OpenAuditRequested 事件、unread_error_count
-      keymap.rs             # default_keymap、key_chord_from_gpui
+      keymap/               # 键位映射引擎：默认层、覆盖设置、原生 GPUI 绑定
       async_ext.rs          # AsyncUpdateResultExt
       toast.rs              # Toast 提示 + ToastHost，带按严重级别区分的令牌桶节流
       user_error/           # 集中式面向用户的错误上报（UserFacingError、
                             # ErrorKind、report_error、report_error_async）+ 节流
-      modal_frame.rs        # 可复用的模态框架
       platform.rs           # X11/Wayland 检测、窗口选项
       sql_preview_modal.rs  # SQL/查询预览模态框（双模式：SQL 与通用）
       sso_wizard.rs         # SSO 账户/角色发现向导 [cfg aws]
@@ -192,8 +191,8 @@ crates/
       data_view.rs          # DataViewMode 抽象（表格与文档）
       data_view_trait.rs    # DataView trait（available_view_modes、focus_handle、active_context）
       chrome.rs             # 共享框架工具
-      governance.rs         # 用于待审批执行的 MCP 审批视图
-      history_modal.rs      # 最近/已保存查询模态框
+      governance/           # McpApprovalsView：用于待审批执行的 MCP 审批文档标签页（mod.rs、pane.rs）
+      history_panel.rs      # 最近/已保存查询侧边面板
       add_member_modal.rs   # 用于添加 Redis set/list/sorted-set 成员的模态框
       new_key_modal.rs      # 用于创建新 Redis 键的模态框
       chart_document/       # ChartDocument：已保存/交互式图表标签页
@@ -323,6 +322,7 @@ crates/
             actions.rs      # 工作区级动作处理函数
             dispatch.rs     # 命令分发逻辑
             render.rs       # 工作区渲染
+            shell.rs        # 标题栏、活动栏、空工作区
           status_bar.rs     # 状态栏渲染
           tasks_panel.rs    # 后台任务面板
         dock/
@@ -334,14 +334,11 @@ crates/
           # 旧浮层路径上的垫片，从 dbflux_ui_base / dbflux_components 重新导出：
           sql_preview_modal.rs     # → dbflux_ui_base::sql_preview_modal
           sso_wizard.rs            # → dbflux_ui_base::sso_wizard
-          cell_editor_modal.rs     # → dbflux_components::modals::cell_editor
-          document_preview_modal.rs # → dbflux_components::modals::document_preview
         document.rs         # 垫片：pub use dbflux_ui_document::*
         icons/mod.rs        # 垫片：重新导出 AppIcon + embedded_bytes（SVG 资源也在这里）
         theme.rs            # 垫片：pub use dbflux_components::theme::*
         tokens.rs           # 垫片：pub use dbflux_components::tokens::*
         components/
-          modal_frame.rs    # 垫片：→ dbflux_ui_base::modal_frame
           toast.rs          # 垫片：→ dbflux_ui_base::toast
         windows/mod.rs      # 垫片：pub use dbflux_ui_windows::*
         views/sidebar/mod.rs # 垫片：pub use dbflux_ui_sidebar::*
@@ -518,7 +515,7 @@ crates/
   dbflux_approval/           # 用于延后执行的审批服务
     src/lib.rs              # ApprovalService 与待处理存储的导出
     src/service.rs          # ApprovalService（批准/驳回生命周期）
-    src/store.rs            # InMemoryPendingExecutionStore 与 ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait、InMemoryPendingExecutionStore（测试用）与 ExecutionPlan
   dbflux_audit/             # 审计日志记录
     src/lib.rs              # AuditService：校验、指纹、脱敏、记录
     src/query.rs            # AuditQueryFilter（执行者、类别、动作、结果、日期范围）
@@ -643,8 +640,8 @@ crates/
 - **文档树**：`crates/dbflux_components/src/components/document_tree/` 面向文档数据库的层级式 JSON/BSON 查看器，支持键盘导航（j/k/h/l）、搜索（Ctrl+F 或 /）、可折叠节点，以及多种视图模式（仅键、键+预览、完整值）。
 - **键值视图**：`crates/dbflux_ui_document/src/key_value/` Redis 专用的文档标签页，按类型渲染（String、Hash、List、Set、SortedSet、Stream），支持分页、变更与右键菜单。通过 `key_value/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
 - **Schema 可视化**：`crates/dbflux_schema_viz/` 提供 `SchemaGraph`（表节点与外键边）、布局算法（LeftRight、Snowflake、Compact）、DBML 导出与 SQL DDL 导出。通过 `crates/dbflux_ui_document/src/schema_viz/mod.rs` 中的 `SchemaVizDocument` 访问，带工具栏下拉菜单（Layout、Export）、Toast 提示、审计事件与可取消的后台任务加载。通过 `schema_viz/pane.rs` 中构造的 `PaneHandle` 与工作区集成。
-- 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。（`dbflux_ui` 中旧浮层路径上留有垫片（Shim）。）
-- 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。（`dbflux_ui` 中旧浮层路径上留有垫片。）
+- 单元格编辑器模态框：`crates/dbflux_components/src/modals/cell_editor.rs` 为 JSON 列与长文本/多行文本提供模态编辑器，带 JSON 校验与格式化。
+- 文档预览模态框：`crates/dbflux_components/src/modals/document_preview.rs` 全屏 JSON 文档预览，带内联 JSON 编辑器。
 - 命令面板：`crates/dbflux_ui/src/ui/overlays/command_palette.rs` 面向全部应用动作的模糊搜索命令面板。
 
 ### 仪表盘与已保存图表
@@ -793,7 +790,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 **执行上下文**：`crates/dbflux_core/src/connection/context.rs` 跟踪按标签页的连接、数据库、schema，以及由驱动程序声明的通用源上下文。当前通用的源窗口形状是 `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`。只有连接/数据库/schema 这几项注解会被序列化进已保存文件的头部。
 
-**历史记录模态框**：`crates/dbflux_ui_document/src/history_modal.rs` 提供一个统一的模态框，用于浏览最近查询与已保存查询，支持搜索、收藏与重命名。
+**历史记录面板**：`crates/dbflux_ui_document/src/history_panel.rs` 在编辑器旁提供一个侧边面板，用于浏览最近查询与已保存查询，支持搜索、收藏与重命名。文档通过 `PaneHandle::side_panels`（`DocumentSidePanel`）把这类面板交给工作区，工作区将每个面板绘制为文档岛旁的一个岛；图表侧栏、表格图表的统计侧栏、对象预览和流的消费者组也使用同一机制。
 
 ### 发布渠道与品牌
 
@@ -803,7 +800,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 - `display_name()` —— 窗口标题与包名（`DBFlux Nightly` 与 `DBFlux`）。
 - `db_file_name()` —— `dbflux-nightly.db` 与 `dbflux.db`，这样一个会在预发布构建上出错的迁移，就不会在两个渠道并行运行时损坏稳定版数据库。nightly 构建可以通过 `set_nightly_shares_stable_db` 标记选择使用稳定版数据库（参见 § 存储与配置）。
 
-**品牌资源**：全彩品牌标识位于 `resources/branding/{stable,nightly}/`（`mark.svg`、`mark-256.png`、`mark-small.svg`、`wordmark.svg`），另有共享的 `resources/branding/glyph.svg`。`crates/dbflux_ui/src/assets.rs` 为 `img(...)` 按渠道提供预渲染的 PNG 标识。平台图标文件提交在 `packaging/icons/` 下（Windows 用 `dbflux.ico` / `dbflux-nightly.ico`，macOS 包用 `dbflux.icns` / `dbflux-nightly.icns`），在美术资源变更时从 SVG 重新生成；`crates/dbflux/build.rs` 把 Windows 图标与 `VERSIONINFO` 嵌入 `dbflux.exe`，并按与 `ReleaseChannel` 相同的版本规则选择渠道。打包元数据（`packaging/*.yaml`、`resources/desktop/dbflux.desktop`、`resources/macos/Info.plist`、`resources/windows/installer.iss`）与 Nix 构建（`nix/binary.nix`、`nix/nightly-info.nix`、`nix/release-info.nix`）会替换渠道占位符，使桌面入口、MIME 关联与启动器图标与正在运行的渠道一致。
+**品牌资源**：全彩品牌标识位于 `resources/branding/{stable,nightly}/`（`mark.svg` 是用于 48 px 及以上的完整应用图标，`mark-small.svg` 是用于 32 px 及以下的字形，`wordmark.svg` 是字形 + DBFLUX 组合标识，另有预渲染的 `mark-256.png` / `mark-small-256.png`），另有共享的单色 `resources/branding/glyph.svg`。`crates/dbflux_ui/src/assets.rs` 为 `img(...)` 按渠道提供预渲染的 PNG：空工作区使用字形，欢迎对话框与“关于”部分使用完整图标。平台图标文件提交在 `packaging/icons/` 下（Windows 用 `dbflux.ico` / `dbflux-nightly.ico`，macOS 包用 `dbflux.icns` / `dbflux-nightly.icns`），在美术资源变更时用 `scripts/branding/generate-icons.sh` 从 SVG 重新生成；`crates/dbflux/build.rs` 把 Windows 图标与 `VERSIONINFO` 嵌入 `dbflux.exe`，并按与 `ReleaseChannel` 相同的版本规则选择渠道。打包元数据（`packaging/*.yaml`、`resources/desktop/dbflux.desktop`、`resources/macos/Info.plist`、`resources/windows/installer.iss`）与 Nix 构建（`nix/binary.nix`、`nix/nightly-info.nix`、`nix/release-info.nix`）会替换渠道占位符，使桌面入口、MIME 关联与启动器图标与正在运行的渠道一致。
 
 渠道/品牌模型是一道运行时接缝：界面与应用代码读取 `ReleaseChannel` 的访问方法；绝不要依据原始版本字符串做分支，也不要硬编码 `dbflux`/`dbflux-nightly` 标识符。发布/nightly 流程本身记录在 `docs/RELEASE.md` 中。
 
@@ -881,9 +878,9 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 **策略引擎**（`dbflux_policy/engine.rs`）：
 - `PolicyEngine::evaluate()` 接收执行者、连接、工具与分类
-- 返回 `PolicyDecision::Allow` 或 `PolicyDecision::Deny(reason)`
+- 返回 `PolicyDecision::Allow`、`PolicyDecision::RequireApproval` 或 `PolicyDecision::Deny(reason)`；在列出该工具的策略中，最宽松的类别决定生效（Allow > Ask > Deny）
 - `PolicyRole` 组合多个工具策略
-- `ToolPolicy` 定义允许的工具与分类级别
+- `ToolPolicy` 定义允许的工具，以及按类别的 `ClassDecision`（Allow / Ask / Deny），存储为 `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` 把执行者/连接绑定到角色与策略
 
 **受信客户端**（`dbflux_policy/trusted_clients.rs`）：
@@ -892,7 +889,8 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 **审批流程**（`dbflux_approval`）：
 - `ApprovalService` 管理延后执行的批准/驳回生命周期
-- `InMemoryPendingExecutionStore` 保存等待人工审批的执行
+- 待审批执行通过 `SqlitePendingExecutionStore`（`crates/dbflux_storage/src/pending_executions.rs`）持久化在 `dbflux.db` 的 `app_pending_executions` 表中，由应用与独立的 `dbflux mcp` 服务器共享；无法打开该存储时以 `InMemoryPendingExecutionStore` 作为后备，测试也使用它
+- 类别为 Ask 的调用会被排队；由人在应用中批准或驳回，重复的相同调用会消耗该批准一次（`PendingStatus::Consumed`）。MCP 客户端永远不能调用 `approve_execution` / `reject_execution`
 - `ExecutionPlan` 捕获延后执行所需的原始请求上下文
 
 **审计**（`dbflux_audit`）：
@@ -920,7 +918,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - `preview_mutation` 严格只读；在 DBFlux 拥有安全的非变更 DDL 预览路径之前，不安全的 `preview_ddl` 有意不对外暴露
 
 **界面集成**：
-- `McpApprovalsView`（`crates/dbflux_ui_document/src/governance.rs`）用于审阅待审批执行
+- `McpApprovalsView`（`crates/dbflux_ui_document/src/governance/`）文档标签页，用于审阅待审批执行
 - 设置中的 `mcp_section.rs`（`crates/dbflux_ui_windows/src/settings/mcp_section.rs`）用于受信客户端、角色与策略
 - `AuditDocument`（`crates/dbflux_ui_document/src/audit/`）作为统一的事件查看器，既展示内部审计记录，也展示通过通用 `EventStreamTarget` 暴露的、由驱动程序支撑的外部事件流（界面中没有针对特定驱动程序的审计文档路径）
 - `LoginModal`（`crates/dbflux_ui/src/ui/overlays/login_modal.rs`）与 `SsoWizard`（`crates/dbflux_ui_base/src/sso_wizard.rs`，旧浮层路径处留有垫片）用于 AWS SSO 认证流程
@@ -936,15 +934,16 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - 查询预览：`SqlPreviewModal`（`crates/dbflux_ui_base/src/sql_preview_modal.rs`，旧浮层路径处留有垫片）把关系型的读取/DML 预览经由 `QueryGenerator` 路由，用于行、表与视图预览，而 DDL 仍走 `CodeGenerator`。非 SQL 语言（MongoDB、Redis）仍使用通用预览模式，配静态文本与语言特有的语法高亮。
 - Schema 刷新：`Workspace::refresh_schema` 在后台执行器上运行 `Connection::schema`，并更新 `AppState`（`crates/dbflux_ui/src/ui/views/workspace/`）。
 - 延迟加载：驱动程序在侧边栏展开条目时才按需获取表/集合的元数据（列、索引），而不是在初始连接时获取（针对大型数据库的性能优化）。
-- 历史记录流程：已完成的查询存入 `HistoryStore`，持久化为 JSON，并可通过历史记录模态框访问（`crates/dbflux_core/src/storage/history.rs`）。历史记录模态框的界面在 `crates/dbflux_ui_document/src/history_modal.rs`。
-- 已保存查询流程：用户可以通过 `SavedQueryStore` 为查询命名并保存；历史记录模态框（Ctrl+P）支持浏览、搜索与加载已保存的查询（`crates/dbflux_core/src/storage/saved_query.rs`）。
+- 历史记录流程：已完成的查询存入 `HistoryStore`，持久化为 JSON，并可通过历史记录面板访问（`crates/dbflux_core/src/storage/history.rs`）。历史记录面板的界面在 `crates/dbflux_ui_document/src/history_panel.rs`。
+- 已保存查询流程：用户可以通过 `SavedQueryStore` 为查询命名并保存；历史记录面板（Ctrl+P）支持浏览、搜索与加载已保存的查询（`crates/dbflux_core/src/storage/saved_query.rs`）。
 
 ## 键盘与焦点架构
 
-- 键位映射系统：`crates/dbflux_ui/src/keymap/`（留在 `dbflux_ui`）定义键位映射胶水层（`actions.rs`、`dispatcher.rs`）。键位映射辅助函数（`default_keymap`、`key_chord_from_gpui`）位于 `crates/dbflux_ui_base/src/keymap.rs`。领域命令类型（`Command`、`ContextId`）定义在 `dbflux_core::keymap_types` 中，并通过 `crates/dbflux_app/src/keymap/` 重新导出。
-- 命令分发：`Workspace` 实现 `CommandDispatcher` trait；`views/workspace/dispatch.rs` 中的 `dispatch()` 依据 `focus_target`（Document、Sidebar、BackgroundTasks）路由命令。
+- 键位映射引擎：`crates/dbflux_ui_base/src/keymap/` 存放默认层（`defaults.rs`，每个 `ContextId` 一层），并把生效的键位映射（默认值加上 `dbflux_app::keymap` 中的用户覆盖设置）转换为原生 GPUI 键绑定。每个绑定都有一个按键序列和一个使用 GPUI 语言的上下文谓词（`Editor && vim_mode == normal`），因此优先级、按键序列及其超时都由 GPUI 处理。领域命令类型（`Command`、`ContextId`）定义在 `dbflux_core::keymap_types` 中，并通过 `crates/dbflux_app/src/keymap/` 重新导出；该模块还包含覆盖模型、其存储以及设置编辑器背后的录制器。
+- 键上下文：每个窗口的根（工作区、设置窗口、连接管理器）设置拥有键盘的上下文的标识符（由其焦点模型计算），当该上下文继承全局绑定时再加上 `Global`，以及活动文档提供的条目（`vim_mode`、`language`）。这些上下文的绑定分发由根处理的 `RunCommand`。元素设置自己的上下文（`DataTable`、`Input`、`Modal`、`DocumentTree`、模态编辑器、`KeyValueView`）；它们的绑定分发元素自身的 action，并因层级更深而优先。容器添加仅供用户谓词使用的描述性标识符（`SidebarPanel`、`CodeEditor`、`ResultPanel`……）。内置的 GPUI 带有引擎所需的分发改动（`vendor/gpui-pre/VENDOR.md`，keyboard dispatch）。
+- 命令分发：`Workspace` 实现 `CommandDispatcher` trait；`views/workspace/dispatch.rs` 中的 `dispatch()` 依据 `focus_target`（Document、Sidebar、BackgroundTasks）路由命令。拥有部分命令的文档会先在自己的根上处理 `RunCommand`，其余的放行。
 - 以文档为中心的设计：FocusTarget 从 Editor/Results/Sidebar/BackgroundTasks 简化为 Document/Sidebar/BackgroundTasks，让文档自行管理其内部焦点状态。
-- 焦点层：每个上下文都有自己的键位映射层，带 vim 风格绑定（j/k/h/l 导航）。
+- 焦点层：每个上下文都有自己的键位映射层，带 vim 风格绑定（j/k/h/l 导航）；继承全局绑定的上下文要求 `!Modal`，因此打开的对话框会接管键盘。
 - 面板焦点模式：数据表格这类复杂面板有内部的焦点状态机（`FocusMode::Table`/`Toolbar`、`EditState::Navigating`/`Editing`），以处理嵌套的键盘导航。
 - 鼠标/键盘同步：鼠标处理函数会更新焦点状态，以保持键盘与鼠标导航一致；`switching_input` 标志用于防止输入框失焦事件期间的竞态。
 

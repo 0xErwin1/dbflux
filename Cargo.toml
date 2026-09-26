@@ -177,6 +177,7 @@ fuzzy-matcher = "0.3"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "gzip", "json"] }
 csv = "1"
+semver = "1"
 chrono = { version = "0.4", features = ["serde"] }
 urlencoding = "2"
 base64 = "0.22"
