@@ -407,8 +407,10 @@ pub fn motion_ease(progress: f32) -> f32 {
 }
 
 /// Color at `elapsed` into a fill transition eased by [`motion_ease`],
-/// interpolated in RGBA so hue does not swing through unrelated colors. A zero
-/// duration returns `to`.
+/// interpolated in premultiplied RGBA. Straight RGBA would drag a fade from a
+/// transparent rest fill (black at alpha 0) through dark grey, and HSLA would
+/// swing the hue; premultiplying keeps the visible color on the line between
+/// both ends. A zero duration returns `to`.
 pub fn transition_color(from: Hsla, to: Hsla, elapsed: Duration, duration: Duration) -> Hsla {
     if duration.is_zero() || elapsed >= duration {
         return to;
@@ -419,11 +421,23 @@ pub fn transition_color(from: Hsla, to: Hsla, elapsed: Duration, duration: Durat
     let to = Rgba::from(to);
     let mix = |start: f32, end: f32| start + (end - start) * progress;
 
+    let alpha = mix(from.a, to.a);
+    if alpha <= f32::EPSILON {
+        return Hsla::from(Rgba {
+            r: to.r,
+            g: to.g,
+            b: to.b,
+            a: 0.0,
+        });
+    }
+
+    let unpremultiply = |start: f32, end: f32| mix(start * from.a, end * to.a) / alpha;
+
     Hsla::from(Rgba {
-        r: mix(from.r, to.r),
-        g: mix(from.g, to.g),
-        b: mix(from.b, to.b),
-        a: mix(from.a, to.a),
+        r: unpremultiply(from.r, to.r),
+        g: unpremultiply(from.g, to.g),
+        b: unpremultiply(from.b, to.b),
+        a: alpha,
     })
 }
 
@@ -1583,6 +1597,48 @@ mod tests {
 
         let halfway = Rgba::from(transition_color(black, white, duration / 2, duration));
         assert!((halfway.r - motion_ease(0.5)).abs() < 1e-3 && (halfway.a - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn fading_in_from_a_transparent_rest_keeps_the_target_color() {
+        let transparent = Hsla::from(Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        });
+        let hover = Hsla::from(Rgba {
+            r: 0.93,
+            g: 0.92,
+            b: 0.94,
+            a: 1.0,
+        });
+        let duration = Duration::from_millis(150);
+
+        for step in 1..10 {
+            let shown = Rgba::from(transition_color(
+                transparent,
+                hover,
+                duration * step / 10,
+                duration,
+            ));
+
+            assert!(
+                (shown.r - 0.93).abs() < 1e-3,
+                "red drifted at step {step}: {}",
+                shown.r
+            );
+            assert!(
+                (shown.g - 0.92).abs() < 1e-3,
+                "green drifted at step {step}: {}",
+                shown.g
+            );
+            assert!(
+                (shown.b - 0.94).abs() < 1e-3,
+                "blue drifted at step {step}: {}",
+                shown.b
+            );
+        }
     }
 
     #[test]
