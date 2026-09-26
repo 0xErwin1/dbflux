@@ -270,6 +270,7 @@ impl CodeDocument {
 
         self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
+        cx.notify();
         self.run_query_text(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -929,6 +930,7 @@ impl CodeDocument {
 
         self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
+        cx.notify();
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -2908,7 +2910,13 @@ mod confirm_keyboard_tests {
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::modals::test_host::{click_backdrop, host_modal};
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-    use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Bounds, Entity, Focusable as _, FrameObserver,
+        Modifiers, Pixels, TestAppContext, VisualTestContext,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     /// Which confirmation a test opens.
     #[derive(Clone, Copy)]
@@ -3058,5 +3066,142 @@ mod confirm_keyboard_tests {
 
         assert!(!is_open(window, &document));
         assert!(!ran_the_query(window, &toasts));
+    }
+
+    /// Keeps the latest frame drawn in the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<Bounds<Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    /// What a dismissal left behind: how often the document asked to be
+    /// redrawn, and the last frame the window drew.
+    struct Redraws {
+        notifications: Rc<Cell<usize>>,
+        frame: Arc<FrameCapture>,
+    }
+
+    /// Starts watching `document` for redraw requests and the window for drawn
+    /// frames, once the open confirmation is on screen.
+    fn watch_redraws(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> Redraws {
+        let notifications = Rc::new(Cell::new(0));
+        let frame = Arc::new(FrameCapture::default());
+
+        window.update(|window, cx| {
+            window.observe_frames(&frame);
+            window.refresh();
+
+            let counter = notifications.clone();
+            cx.observe(document, move |_, _| counter.set(counter.get() + 1))
+                .detach();
+        });
+        window.run_until_parked();
+        notifications.set(0);
+
+        Redraws {
+            notifications,
+            frame,
+        }
+    }
+
+    fn click_element(window: &mut VisualTestContext, redraws: &Redraws, id: &str) {
+        let bounds = redraws
+            .frame
+            .bounds_of(id)
+            .unwrap_or_else(|| panic!("`{id}` is drawn"));
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.run_until_parked();
+    }
+
+    /// The document asked for a redraw and the next frame no longer draws the
+    /// confirmation, so the dialog does not linger on screen after it closed.
+    fn assert_repainted_without(redraws: &Redraws, confirm_button: &str) {
+        assert!(
+            redraws.notifications.get() > 0,
+            "closing the confirmation must notify the document that draws it"
+        );
+        assert!(
+            redraws.frame.bounds_of(confirm_button).is_none(),
+            "the frame drawn after closing must not contain the confirmation"
+        );
+    }
+
+    #[gpui::test]
+    fn escape_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, _toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+        assert!(redraws.frame.bounds_of("dangerous-confirm-btn").is_some());
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn cancel_button_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "dangerous-cancel-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn run_anyway_redraws_without_the_dangerous_query_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "dangerous-confirm-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "dangerous-confirm-btn");
+    }
+
+    #[gpui::test]
+    fn escape_redraws_without_the_script_confirmation(cx: &mut TestAppContext) {
+        let (document, _toasts, window) = open_confirmation(cx, Confirmation::Script);
+        let redraws = watch_redraws(window, &document);
+        assert!(
+            redraws
+                .frame
+                .bounds_of("script-confirm-cancel-btn")
+                .is_some()
+        );
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert_repainted_without(&redraws, "script-confirm-cancel-btn");
+    }
+
+    #[gpui::test]
+    fn cancel_button_redraws_without_the_script_confirmation(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::Script);
+        let redraws = watch_redraws(window, &document);
+
+        click_element(window, &redraws, "script-confirm-cancel-btn");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert_repainted_without(&redraws, "script-confirm-cancel-btn");
     }
 }

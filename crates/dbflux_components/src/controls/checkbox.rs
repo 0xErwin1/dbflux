@@ -6,6 +6,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme;
 
+use crate::density;
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferFillKind, ChamferRing, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, Fields};
@@ -15,7 +16,8 @@ type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 /// A checkbox drawn as a 16 px chamfered box.
 ///
 /// Checked, the box is the byzantine fill with a white check mark; unchecked,
-/// it is an inset 1.5 px line. The label sits to the right. The row is one
+/// it is an inset 1.5 px line. The label sits to the right in the body text
+/// size, whatever the surrounding text size is. The row is one
 /// focusable accessibility node with the checkbox role: Enter and Space
 /// toggle it, a pointer press toggles it without moving focus, and keyboard
 /// focus draws the tint ring around the box (outside the fill when checked,
@@ -140,6 +142,7 @@ impl RenderOnce for Checkbox {
         } else {
             theme.foreground
         };
+        let label_size = density::font_base(cx);
         let on_click = self.on_click.filter(|_| !self.disabled);
 
         div()
@@ -175,6 +178,7 @@ impl RenderOnce for Checkbox {
                         .min_h(Fields::CHECKBOX_SIZE)
                         .flex()
                         .items_center()
+                        .text_size(label_size)
                         .text_color(label_color)
                         .child(label),
                 )
