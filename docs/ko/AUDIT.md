@@ -377,7 +377,7 @@ tracing 이벤트의 모양:
 
 UI에서 감사 문서로 돌아오는 경로는 두 가지입니다:
 
-- **토스트별 "감사에서 보기" 액션** — `OpenAuditRequested(Some(correlation_id))`를 발행합니다. 워크스페이스는 감사 문서를 열거나(또는 포커스하고) 일치하는 상관 관계 필터를 적용하여, 사용자가 토스트에 연결된 그 하나의 이벤트만 보게 합니다.
+- **토스트별 "감사에서 보기" 액션** — `OpenAuditRequested(Some(correlation_id))`를 발행합니다. 워크스페이스는 감사 문서를 열거나(또는 포커스하고) 일치하는 상관 관계 필터를 적용하여, 사용자가 토스트에 연결된 그 하나의 이벤트만 보게 합니다. `report_error`는 오류를 세션의 알림 센터(`AppStateEntity::notifications`)에도 기록하며, 그 행은 같은 이벤트를 통해 같은 작업을 제공합니다.
 - **상태 표시줄 오류 배지 클릭** — `OpenAuditRequested(None)`을 발행합니다. 워크스페이스는 기본 사용자 오류 필터(최근 시간 범위의 `target = dbflux_ui::user_error`)로 감사 문서를 열어, 사용자가 최근의 모든 사용자 대면 실패를 훑어볼 수 있게 합니다.
 
 두 이벤트 모두 `AppStateEntity::request_open_audit`를 통해 흐르므로 워크스페이스는 한 번만 구독합니다.

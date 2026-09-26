@@ -192,7 +192,7 @@ crates/
       data_view_trait.rs    # DataView trait（available_view_modes、focus_handle、active_context）
       chrome.rs             # 共享框架工具
       governance/           # McpApprovalsView：用于待审批执行的 MCP 审批文档标签页（mod.rs、pane.rs）
-      history_modal.rs      # 最近/已保存查询模态框
+      history_panel.rs      # 最近/已保存查询侧边面板
       add_member_modal.rs   # 用于添加 Redis set/list/sorted-set 成员的模态框
       new_key_modal.rs      # 用于创建新 Redis 键的模态框
       chart_document/       # ChartDocument：已保存/交互式图表标签页
@@ -790,7 +790,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 **执行上下文**：`crates/dbflux_core/src/connection/context.rs` 跟踪按标签页的连接、数据库、schema，以及由驱动程序声明的通用源上下文。当前通用的源窗口形状是 `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`。只有连接/数据库/schema 这几项注解会被序列化进已保存文件的头部。
 
-**历史记录模态框**：`crates/dbflux_ui_document/src/history_modal.rs` 提供一个统一的模态框，用于浏览最近查询与已保存查询，支持搜索、收藏与重命名。
+**历史记录面板**：`crates/dbflux_ui_document/src/history_panel.rs` 在编辑器旁提供一个侧边面板，用于浏览最近查询与已保存查询，支持搜索、收藏与重命名。文档通过 `PaneHandle::side_panels`（`DocumentSidePanel`）把这类面板交给工作区，工作区将每个面板绘制为文档岛旁的一个岛；图表侧栏、表格图表的统计侧栏、对象预览和流的消费者组也使用同一机制。
 
 ### 发布渠道与品牌
 
@@ -934,8 +934,8 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - 查询预览：`SqlPreviewModal`（`crates/dbflux_ui_base/src/sql_preview_modal.rs`，旧浮层路径处留有垫片）把关系型的读取/DML 预览经由 `QueryGenerator` 路由，用于行、表与视图预览，而 DDL 仍走 `CodeGenerator`。非 SQL 语言（MongoDB、Redis）仍使用通用预览模式，配静态文本与语言特有的语法高亮。
 - Schema 刷新：`Workspace::refresh_schema` 在后台执行器上运行 `Connection::schema`，并更新 `AppState`（`crates/dbflux_ui/src/ui/views/workspace/`）。
 - 延迟加载：驱动程序在侧边栏展开条目时才按需获取表/集合的元数据（列、索引），而不是在初始连接时获取（针对大型数据库的性能优化）。
-- 历史记录流程：已完成的查询存入 `HistoryStore`，持久化为 JSON，并可通过历史记录模态框访问（`crates/dbflux_core/src/storage/history.rs`）。历史记录模态框的界面在 `crates/dbflux_ui_document/src/history_modal.rs`。
-- 已保存查询流程：用户可以通过 `SavedQueryStore` 为查询命名并保存；历史记录模态框（Ctrl+P）支持浏览、搜索与加载已保存的查询（`crates/dbflux_core/src/storage/saved_query.rs`）。
+- 历史记录流程：已完成的查询存入 `HistoryStore`，持久化为 JSON，并可通过历史记录面板访问（`crates/dbflux_core/src/storage/history.rs`）。历史记录面板的界面在 `crates/dbflux_ui_document/src/history_panel.rs`。
+- 已保存查询流程：用户可以通过 `SavedQueryStore` 为查询命名并保存；历史记录面板（Ctrl+P）支持浏览、搜索与加载已保存的查询（`crates/dbflux_core/src/storage/saved_query.rs`）。
 
 ## 键盘与焦点架构
 

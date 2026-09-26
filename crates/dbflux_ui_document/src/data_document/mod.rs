@@ -86,6 +86,8 @@ impl DataDocument {
         // sources.
         let view_handle = DataGridPanel::into_view_handle(data_grid.clone(), cx);
 
+        data_grid.update(cx, |grid, _| grid.set_side_panels_hosted(true));
+
         let result_panel = cx.new(|cx| ResultPanel::new(view_handle, cx));
 
         // Forward DataGridEvent to DocumentEvent and keep ResultPanel in sync

@@ -192,7 +192,7 @@ crates/
       data_view_trait.rs    # DataView 트레이트 (available_view_modes, focus_handle, active_context)
       chrome.rs             # 공유 크롬 유틸리티
       governance.rs         # 대기 중 실행을 위한 MCP 승인 뷰
-      history_modal.rs      # 최근/저장된 쿼리 모달
+      history_panel.rs      # 최근/저장된 쿼리 사이드 패널
       add_member_modal.rs   # Redis set/list/sorted-set 멤버 추가 모달
       new_key_modal.rs      # 새 Redis 키 생성 모달
       chart_document/       # ChartDocument: 저장된/대화형 차트 탭
@@ -791,7 +791,7 @@ DBFlux는 차트 구성을 **저장된 차트(Saved Charts)**로 영속화하고
 
 **실행 컨텍스트**: `crates/dbflux_core/src/connection/context.rs`는 탭별 연결, 데이터베이스, 스키마와 드라이버가 선언한 일반 소스 컨텍스트를 추적합니다. 현재의 일반 소스 윈도우 형태는 `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`입니다. 연결/데이터베이스/스키마 주석만 저장된 파일 헤더에 직렬화됩니다.
 
-**기록 모달**: `crates/dbflux_ui_document/src/history_modal.rs`는 검색, 즐겨찾기, 이름 바꾸기를 지원하는 최근 쿼리 및 저장된 쿼리 탐색용 통합 모달을 제공합니다.
+**기록 패널**: `crates/dbflux_ui_document/src/history_panel.rs`는 검색, 즐겨찾기, 이름 바꾸기를 지원하는 최근 쿼리 및 저장된 쿼리 탐색용 사이드 패널을 편집기 옆에 제공합니다. 문서는 이런 패널을 `PaneHandle::side_panels`(`DocumentSidePanel`)로 워크스페이스에 넘기고, 워크스페이스는 각각을 문서 아일랜드 옆의 아일랜드로 그립니다. 차트 레일, 그리드 차트의 통계 레일, 객체 미리보기, 스트림 컨슈머 그룹도 같은 방식을 씁니다.
 
 ### 릴리스 채널 및 브랜딩
 
@@ -935,8 +935,8 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 - 쿼리 미리보기: `SqlPreviewModal`(`crates/dbflux_ui_base/src/sql_preview_modal.rs`에 있고 이전 오버레이 경로에 셰임이 있음)은 행, 테이블, 뷰 미리보기를 위해 관계형 읽기/DML 미리보기를 `QueryGenerator`로 라우팅하고, DDL은 `CodeGenerator`에 남아 있습니다. 비 SQL 언어(MongoDB, Redis)는 여전히 정적 텍스트와 언어별 구문 강조가 있는 일반 미리보기 모드를 사용합니다.
 - 스키마 새로고침: `Workspace::refresh_schema`는 백그라운드 실행자에서 `Connection::schema`를 실행하고 `AppState`를 갱신합니다 (`crates/dbflux_ui/src/ui/views/workspace/`).
 - 지연 로딩: 드라이버는 초기 연결 시가 아니라 사이드바에서 항목이 확장될 때 테이블/컬렉션 메타데이터(열, 인덱스)를 필요할 때 가져옵니다 (대규모 데이터베이스를 위한 성능 최적화).
-- 기록 흐름: 완료된 쿼리는 `HistoryStore`에 저장되고 JSON으로 영속화되며, 기록 모달을 통해 접근할 수 있습니다 (`crates/dbflux_core/src/storage/history.rs`). 기록 모달 UI는 `crates/dbflux_ui_document/src/history_modal.rs`에 있습니다.
-- 저장된 쿼리 흐름: 사용자는 `SavedQueryStore`를 통해 쿼리를 이름과 함께 저장할 수 있고, 기록 모달(Ctrl+P)에서 저장된 쿼리를 탐색, 검색, 불러올 수 있습니다 (`crates/dbflux_core/src/storage/saved_query.rs`).
+- 기록 흐름: 완료된 쿼리는 `HistoryStore`에 저장되고 JSON으로 영속화되며, 기록 패널을 통해 접근할 수 있습니다 (`crates/dbflux_core/src/storage/history.rs`). 기록 패널 UI는 `crates/dbflux_ui_document/src/history_panel.rs`에 있습니다.
+- 저장된 쿼리 흐름: 사용자는 `SavedQueryStore`를 통해 쿼리를 이름과 함께 저장할 수 있고, 기록 패널(Ctrl+P)에서 저장된 쿼리를 탐색, 검색, 불러올 수 있습니다 (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## 키보드 및 포커스 아키텍처
 

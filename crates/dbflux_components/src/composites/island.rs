@@ -136,9 +136,11 @@ mod tests {
 
     #[test]
     fn the_desk_and_the_hairline_follow_the_theme_mode() {
-        let mut theme = gpui_component::Theme::default();
+        let mut theme = gpui_component::Theme {
+            mode: gpui_component::ThemeMode::Dark,
+            ..gpui_component::Theme::default()
+        };
 
-        theme.mode = gpui_component::ThemeMode::Dark;
         let dark_desk = ChromeColors::desk(&theme);
         let dark_edge = ChromeColors::island_edge(&theme);
 

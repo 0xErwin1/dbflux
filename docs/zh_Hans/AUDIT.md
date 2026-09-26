@@ -379,7 +379,7 @@ UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
 
 从界面回到审计文档有两条路径：
 
-- **每条 Toast 提示上的「在审计中查看」操作** — 发出 `OpenAuditRequested(Some(correlation_id))`。工作区会打开（或聚焦）审计文档，并应用匹配的关联筛选，使用户看到的正是与该 Toast 提示绑定的那一条事件。
+- **每条 Toast 提示上的「在审计中查看」操作** — 发出 `OpenAuditRequested(Some(correlation_id))`。工作区会打开（或聚焦）审计文档，并应用匹配的关联筛选，使用户看到的正是与该 Toast 提示绑定的那一条事件。`report_error` 还会把该错误记录到本次会话的通知中心（`AppStateEntity::notifications`），其所在行通过同一事件提供相同的操作。
 - **点击状态栏错误徽标** — 发出 `OpenAuditRequested(None)`。工作区会打开审计文档，并应用默认的用户错误筛选（在最近时间窗口内 `target = dbflux_ui::user_error`），便于用户浏览近期所有面向用户的失败。
 
 两个事件都经由 `AppStateEntity::request_open_audit` 流转，因此工作区只需订阅一次。

@@ -179,6 +179,11 @@ impl DataDocument {
             Box::new(move |_w, cx| grid.update(cx, |grid, cx| grid.apply_for_close(cx)))
         });
 
+        handle.side_panels = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |_window, cx| grid.update(cx, |grid, cx| grid.side_panels(cx)))
+        });
+
         handle
     }
 }

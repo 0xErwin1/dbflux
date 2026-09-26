@@ -13,6 +13,7 @@ pub mod file_dialog;
 pub mod hook_phase_runner;
 pub mod keymap;
 pub mod modals;
+pub mod notifications;
 pub mod object_tree;
 pub mod open_external;
 pub mod platform;

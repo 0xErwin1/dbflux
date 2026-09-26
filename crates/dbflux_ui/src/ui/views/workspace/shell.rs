@@ -3,9 +3,7 @@
 
 use super::*;
 use crate::ui::document::DocumentIcon;
-use dbflux_components::composites::{
-    ActivityRail, CommandSearch, ListRow, NotificationBell, RailEntry,
-};
+use dbflux_components::composites::{ActivityRail, CommandSearch, ListRow, RailEntry};
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, Text};
 use dbflux_components::tokens::{ChamferCut, ShellMetrics};
 use dbflux_components::typography::AppFonts;
@@ -220,27 +218,6 @@ fn recent_rows(files: &[dbflux_core::RecentFile], now: i64) -> Vec<RecentRow> {
 }
 
 impl Workspace {
-    /// MCP executions waiting for a decision, or zero when the build has no
-    /// MCP support or the governance service cannot list them.
-    pub(super) fn pending_approvals_count(&self, cx: &App) -> usize {
-        #[cfg(feature = "mcp")]
-        {
-            match self.app_state.read(cx).list_mcp_pending_executions() {
-                Ok(pending) => pending.len(),
-                Err(error) => {
-                    log::debug!("Failed to list pending MCP approvals: {error}");
-                    0
-                }
-            }
-        }
-
-        #[cfg(not(feature = "mcp"))]
-        {
-            let _unused = cx;
-            0
-        }
-    }
-
     fn rail_state(&self, cx: &App) -> RailState {
         let sidebar_view = (!self.sidebar_dock.read(cx).is_collapsed())
             .then(|| self.sidebar.read(cx).active_tab());
@@ -318,7 +295,7 @@ impl Workspace {
     }
 
     /// The 44 px row at the top of the window, on the desk: the command
-    /// search centered, the approvals bell at the right end and, on a
+    /// search centered, the notifications bell at the right end and, on a
     /// client-decorated Linux window, the window controls after it. Empty
     /// space in the row moves the window there.
     pub(super) fn render_title_bar(
@@ -347,20 +324,7 @@ impl Workspace {
             });
         });
 
-        let bell = cfg!(feature = "mcp").then(|| {
-            let workspace = cx.entity().clone();
-
-            NotificationBell::new(
-                "title-bar-approvals",
-                dbflux_i18n::t!("workspace.title_bar.approvals"),
-                self.pending_approvals_count(cx),
-            )
-            .on_click(move |_, window, cx| {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.handle_rail_select(rail_ids::APPROVALS, window, cx);
-                });
-            })
-        });
+        let bell = self.render_notification_bell(cx);
 
         div()
             .id("title-bar")
@@ -393,7 +357,7 @@ impl Workspace {
                             .flex_1()
                             .h_full(),
                     )
-                    .children(bell)
+                    .child(bell)
                     .children(window_controls),
             )
     }
@@ -789,7 +753,6 @@ mod tests {
             "workspace.rail.audit",
             "workspace.rail.settings",
             "workspace.title_bar.command_search",
-            "workspace.title_bar.approvals",
             "workspace.empty.title",
             "workspace.empty.subtitle",
             "workspace.empty.start",

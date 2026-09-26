@@ -553,9 +553,9 @@ mod outcome_tests {
             let (modal, outcomes) = open_modal(cx, ActiveQueryTrigger::Disconnect);
 
             cx.update(|cx| {
-                modal.update(cx, |modal, cx| choice(modal, cx));
+                modal.update(cx, choice);
                 // A second resolution on a closed modal must not emit again.
-                modal.update(cx, |modal, cx| choice(modal, cx));
+                modal.update(cx, choice);
             });
 
             let emitted: Vec<String> = outcomes

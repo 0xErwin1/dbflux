@@ -885,6 +885,9 @@ const EXPORT_MENU_WIDTH: Pixels = px(220.0);
 /// Height of the chart above the grid in the Both view (P2Series). (330 px)
 const BOTH_CHART_HEIGHT: Pixels = px(330.0);
 
+/// Width of the chart stats rail. (320 px)
+const CHART_STATS_RAIL_WIDTH: Pixels = px(320.0);
+
 /// The Builder button beside the filter field (AppByzTable: secondary,
 /// icon and label).
 fn builder_button(
@@ -1896,7 +1899,9 @@ impl DataGridPanel {
             .when(has_chart_view, |d| {
                 d.child(self.render_chart_legend_row(theme, cx))
             })
-            .when(rail_open, |d| d.child(self.render_chart_rail(theme, cx)));
+            .when(rail_open && !self.side_panels_hosted, |d| {
+                d.child(self.render_chart_rail(theme, cx))
+            });
 
         // PointInspector right dock — only visible when the host has a back-link
         // to the source row (DataDocument with track_source_indices=true).
@@ -2661,7 +2666,9 @@ impl DataGridPanel {
         picker.child(apply_btn)
     }
 
-    /// Render the 320px Stats rail shown when `chart_rail_open` is true.
+    /// Render the 320px Stats rail shown when `chart_rail_open` is true,
+    /// docked on the right edge of the chart. Used only when the host does
+    /// not take the rail as a workspace island (`side_panels`).
     ///
     /// The Configure tab was removed in Phase E (replaced by AxisBar pills).
     /// Only the Stats tab remains accessible via the Stats toolbar button.
@@ -2670,21 +2677,64 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
+        let body = self.render_chart_rail_content(theme, cx);
 
         dbflux_components::composites::docked_island_frame(theme)
             .absolute()
             .top_0()
             .right_0()
             .bottom_0()
-            .w(gpui::px(320.0) + dbflux_components::tokens::IslandMetrics::GAP)
+            .w(CHART_STATS_RAIL_WIDTH + dbflux_components::tokens::IslandMetrics::GAP)
             .occlude()
             .child(
                 dbflux_components::composites::Island::new()
                     .flex_1()
                     .min_h_0()
-                    .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body)),
+                    .child(body),
             )
+    }
+
+    fn render_chart_rail_content(
+        &mut self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let body = self.render_rail_stats_tab(theme, cx).into_any_element();
+
+        div()
+            .flex_grow(1.0)
+            .min_h_0()
+            .overflow_hidden()
+            .child(body)
+            .into_any_element()
+    }
+
+    /// The grid's side panels for a host that forwards them to the
+    /// workspace: the chart stats rail while the chart shows and the rail is
+    /// open. Empty unless the host declared `set_side_panels_hosted`.
+    pub fn side_panels(&mut self, cx: &mut Context<Self>) -> Vec<crate::pane::DocumentSidePanel> {
+        if !self.side_panels_hosted || !self.result_view_mode().shows_chart() {
+            return Vec::new();
+        }
+
+        let rail_open = self
+            .chart
+            .chart_shell
+            .as_ref()
+            .is_some_and(|shell| shell.read(cx).chart_rail_open);
+
+        if !rail_open {
+            return Vec::new();
+        }
+
+        let theme = cx.theme().clone();
+        let content = self.render_chart_rail_content(&theme, cx);
+
+        vec![crate::pane::DocumentSidePanel {
+            id: "grid-chart-stats".into(),
+            width: CHART_STATS_RAIL_WIDTH,
+            content,
+        }]
     }
 
     /// Section container helper for the right dock panels.

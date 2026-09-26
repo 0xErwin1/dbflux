@@ -1730,13 +1730,13 @@ mod tests {
     }
 
     /// Opens an editor on `coord` and returns the state entity plus its input.
-    fn editing_state<'a>(
-        cx: &'a mut gpui::TestAppContext,
+    fn editing_state(
+        cx: &mut gpui::TestAppContext,
         coord: super::super::selection::CellCoord,
     ) -> (
         gpui::Entity<super::DataTableState>,
         gpui::Entity<crate::controls::InputState>,
-        &'a mut gpui::VisualTestContext,
+        &mut gpui::VisualTestContext,
     ) {
         use std::collections::HashSet;
 

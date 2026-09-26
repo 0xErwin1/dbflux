@@ -44,13 +44,39 @@ impl CodeDocument {
         entries
     }
 
+    /// The panels this editor hands to the workspace as islands: the active
+    /// result grid's chart stats rail while results show, then the query
+    /// history while it is open.
+    pub(super) fn side_panels(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Vec<crate::pane::DocumentSidePanel> {
+        let mut panels = Vec::new();
+
+        if self.layout != SqlQueryLayout::EditorOnly
+            && let Some(grid) = self.active_result_grid()
+        {
+            panels.extend(grid.update(cx, |grid, cx| grid.side_panels(cx)));
+        }
+
+        if self.history.history_panel.read(cx).is_visible() {
+            panels.push(crate::pane::DocumentSidePanel {
+                id: "query-history".into(),
+                width: dbflux_components::tokens::HistoryPanelMetrics::WIDTH,
+                content: self.history.history_panel.clone().into_any_element(),
+            });
+        }
+
+        panels
+    }
+
     /// Returns the active context for keyboard handling based on internal focus.
     pub fn active_context(&self, cx: &App) -> ContextId {
         if self.pending.dangerous_query.is_some() || self.pending.script_confirm.is_some() {
             return ContextId::ConfirmModal;
         }
 
-        if self.history.history_modal.read(cx).is_visible() {
+        if self.history.history_panel.read(cx).owns_keyboard() {
             return ContextId::HistoryModal;
         }
 

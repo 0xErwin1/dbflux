@@ -977,7 +977,7 @@ mod tests {
         assert_eq!(format_score(4954.0), "4,954");
         assert_eq!(format_score(-1200.0), "-1,200");
         assert_eq!(format_score(0.25), "0.25");
-        assert_eq!(format_score(3.141_592_6), "3.1416");
+        assert_eq!(format_score(2.345_678_9), "2.3457");
     }
 
     #[test]

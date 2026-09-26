@@ -5,6 +5,7 @@ use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{ChromeColors, IslandMetrics, ShellMetrics, TabMetrics};
+use dbflux_ui_document::DocumentSidePanel;
 use gpui_component::resizable::ResizablePanel;
 
 /// Schedules `run` at the end of the current effect cycle instead of running
@@ -44,6 +45,40 @@ impl Workspace {
         self.tab_manager
             .update(cx, |mgr, cx| mgr.render_active(window, cx))
     }
+}
+
+/// A document's side panel as a full-height island after the document
+/// island, `IslandMetrics::GAP` of desk on its left. A click inside makes the
+/// document the focused area again, but leaves keyboard focus where the
+/// panel put it (a search field, the panel itself).
+fn document_side_island(
+    panel: DocumentSidePanel,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement + use<> {
+    let focus_document = |this: &mut Workspace, cx: &mut Context<Workspace>| {
+        if this.focus_target != FocusTarget::Document {
+            this.mark_focus_target(FocusTarget::Document, cx);
+        }
+    };
+
+    div()
+        .id(ElementId::Name(
+            format!("document-side-panel-{}", panel.id).into(),
+        ))
+        .h_full()
+        .w(panel.width + IslandMetrics::GAP)
+        .pl(IslandMetrics::GAP)
+        .flex_shrink_0()
+        .flex()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| focus_document(this, cx)),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, _, _, cx| focus_document(this, cx)),
+        )
+        .child(Island::new().h_full().w(panel.width).child(panel.content))
 }
 
 impl Workspace {
@@ -173,15 +208,21 @@ impl Render for Workspace {
         let status_bar = self.status_bar.clone();
         // Toasts stack at the top right of the document area, never over the
         // sidebar or the status bar. They are deferred so they still paint
-        // above modals, and hidden while the shutdown overlay is up.
-        let toast_layer = (!self.app_state.read(cx).shutdown_phase().is_active())
-            .then(|| deferred(self.toast_host.clone()));
+        // above modals, below the open notifications popover, and hidden
+        // while the shutdown overlay is up.
+        let toast_layer = (!self.app_state.read(cx).shutdown_phase().is_active()).then(|| {
+            deferred(self.toast_host.clone())
+                .with_priority(super::notifications::TOAST_LAYER_PRIORITY)
+        });
         let command_palette = self.command_palette.clone();
         let login_modal = self.login_modal.clone();
         let sso_wizard = self.sso_wizard.clone();
 
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
+        let document_side_panels = self
+            .tab_manager
+            .update(cx, |mgr, cx| mgr.active_side_panels(window, cx));
         let inspector_open = self.workspace_inspector.read(cx).is_open();
         let inspector_resizing = self.workspace_inspector.read(cx).is_resizing();
         let inspector_entity = self.workspace_inspector.clone();
@@ -550,10 +591,16 @@ impl Render for Workspace {
                                     .child(sidebar_dock),
                             )
                             .child(document_island)
+                            .children(
+                                document_side_panels
+                                    .into_iter()
+                                    .map(|panel| document_side_island(panel, cx)),
+                            )
                             .when(inspector_open, |body| body.child(inspector_entity.clone())),
                     )
                     .child(status_bar),
             )
+            .children(self.render_notifications_popover(window, cx))
             .child(command_palette)
             .child(self.sql_preview_modal.clone())
             .child(login_modal)

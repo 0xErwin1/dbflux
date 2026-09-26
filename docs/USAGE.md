@@ -600,15 +600,18 @@ charts for the current profile in a fuzzy overlay.
 
 DBFlux keeps a history of completed queries and lets you save named queries.
 
-- `Alt+h` (in the editor) toggles the query history dropdown.
+- `Alt+h` (in the editor), or the toolbar's History button, opens and closes the
+  query history panel beside the editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** the current query.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save File As**.
 - `Ctrl+p` (`Cmd+p`, in the editor) — open the saved-queries browser.
 
-Inside the history modal you can navigate with `Ctrl+j`/`Ctrl+k` (or arrow keys),
-open an entry with `Enter`, and use the local mnemonics `Ctrl+f` (toggle
-favorite), `Ctrl+r` (rename), and `Ctrl+d` (delete). `/` focuses the modal
-search.
+The history panel lists recent and saved queries and stays open while you edit.
+Clicking an entry or pressing `Enter` loads it into the editor. While the panel
+has focus you can navigate with `Ctrl+j`/`Ctrl+k` (or arrow keys), save a recent
+query with `Ctrl+s`, and use the local mnemonics `Ctrl+f` (toggle favorite),
+`Ctrl+r` (rename), and `Ctrl+d` (delete). `/` or the search button in the panel
+header opens the search field, and `Esc` closes the panel.
 
 ---
 
@@ -888,6 +891,27 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | `g` / `Shift+g` (or `Home` / `End`) | First / last |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `z` | Toggle panel collapse |
+
+### Notifications center
+
+The bell at the right end of the title bar opens the notifications center, a
+popover that floats over the workspace. It lists MCP approvals waiting for a
+decision, errors reported by actions you ran, an available DBFlux update, and
+export, import, migration, and dump-analysis jobs that finished. The bell's
+badge counts unread items and takes the color of the most urgent one: red for
+an error, the accent color for an approval, and neutral for updates and
+finished jobs. With nothing unread the bell has no badge.
+
+Opening the popover marks nothing read. Clicking a row opens its target and
+marks it read: an approval opens the MCP approvals tab on that request, an error
+opens Audit filtered by its correlation id, the update opens its release notes,
+and a finished job opens the background tasks panel. **Mark all read** reads
+everything, and **Clear read** removes read items. The list lasts for the
+session. Updates show here instead of in the status bar.
+
+| Keys | Action |
+|------|--------|
+| `Escape` | Close the popover (a click outside it does the same) |
 
 ### Command palette
 

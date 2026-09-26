@@ -1981,7 +1981,9 @@ mod tests {
             Some(PRIMARY_PASSWORD_SAVE_ERROR.to_string())
         );
 
-        window.update(&mut cx, |_, window, _| window.remove_window());
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
     }
 
     #[::core::prelude::v1::test]
@@ -2017,7 +2019,9 @@ mod tests {
             "one safe failure is reported"
         );
 
-        window.update(&mut cx, |_, window, _| window.remove_window());
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("close the test window");
     }
 
     /// The Save button shows the keymap's Save shortcut, and pressing it
@@ -2163,7 +2167,9 @@ mod tests {
         );
 
         if window.root(&mut cx).is_ok() {
-            window.update(&mut cx, |_, window, _| window.remove_window());
+            window
+                .update(&mut cx, |_, window, _| window.remove_window())
+                .expect("close the test window");
         }
     }
 

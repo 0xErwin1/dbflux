@@ -305,6 +305,10 @@ Configura la governance en la GUI de DBFlux antes de arrancar el servidor MCP.
 5. **Workspace → Pending Approvals**
    - Revisa y aprueba o rechaza las llamadas que una policy envió a aprobación.
      Es el único lugar donde se resuelven las ejecuciones pendientes.
+   - Una llamada en espera también aparece en el centro de notificaciones de la
+     campana de la barra de título, que lleva el badge de acento mientras haya
+     una esperando. **Revisar** en su fila abre esta pestaña en esa llamada; el
+     popover nunca aprueba ni rechaza.
    - `j` / `k` recorren las llamadas pendientes, `a` aprueba la seleccionada y
      `r` la rechaza. Una llamada aprobada se ejecuta cuando el agente la repite
      con los mismos argumentos. Cada decisión se escribe en el audit log.

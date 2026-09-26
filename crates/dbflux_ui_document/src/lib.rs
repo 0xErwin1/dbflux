@@ -26,7 +26,7 @@ mod governance;
 
 pub mod export_wizard;
 mod handle;
-pub mod history_modal;
+pub mod history_panel;
 pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
@@ -70,8 +70,8 @@ pub use key_value::KeyValueDocument;
 pub use object_browser::ObjectBrowserDocument;
 pub use object_editor::ObjectEditorDocument;
 pub use pane::{
-    BoxedDocEventCallback, CodeSessionTabSnapshot, ObjectEditorRequest, ObjectSavedCallback,
-    PaneHandle, StatusSegment,
+    BoxedDocEventCallback, CodeSessionTabSnapshot, DocumentSidePanel, ObjectEditorRequest,
+    ObjectSavedCallback, PaneHandle, StatusSegment,
 };
 pub use result_view::ResultViewMode;
 pub use schema_viz::{SchemaVizDocument, SchemaVizMode};

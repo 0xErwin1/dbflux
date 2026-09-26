@@ -760,6 +760,10 @@ pub struct DataGridPanel {
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
+    /// The hosting document hands this grid's side panels (the chart stats
+    /// rail) to the workspace through `side_panels`, so the grid does not
+    /// dock them inside itself.
+    side_panels_hosted: bool,
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
@@ -1537,6 +1541,7 @@ impl DataGridPanel {
             view_config,
             context_menu: None,
             is_active_tab: true,
+            side_panels_hosted: false,
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
@@ -1839,6 +1844,14 @@ impl DataGridPanel {
 
     pub fn result_view_mode(&self) -> ResultViewMode {
         self.chrome.result_view_mode
+    }
+
+    /// Declares that the hosting document forwards this grid's
+    /// `side_panels` to the workspace. Until then the grid docks its chart
+    /// stats rail inside itself, so a host that does not forward them keeps
+    /// the rail.
+    pub fn set_side_panels_hosted(&mut self, hosted: bool) {
+        self.side_panels_hosted = hosted;
     }
 
     /// The mode currently displayed in the result view. Alias of
@@ -11395,6 +11408,67 @@ mod tests {
                 "a refresh must not flip the Data view back to the chart"
             );
         });
+    }
+
+    /// The chart stats rail leaves the grid for a workspace island only when
+    /// the host forwards the grid's side panels; otherwise it stays docked.
+    #[gpui::test]
+    fn the_stats_rail_is_a_side_panel_only_for_a_forwarding_host(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let shell = panel
+                    .chart
+                    .chart_shell
+                    .clone()
+                    .expect("the chart view builds its shell on render");
+                shell.update(cx, |shell, _| shell.chart_rail_open = true);
+            });
+        });
+
+        let panel_ids = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, app| {
+                panel.update(app, |panel, cx| {
+                    panel
+                        .side_panels(cx)
+                        .into_iter()
+                        .map(|side| (side.id.to_string(), side.width))
+                        .collect::<Vec<_>>()
+                })
+            })
+        };
+
+        assert!(
+            panel_ids(window).is_empty(),
+            "a grid whose host does not forward side panels keeps the rail docked"
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, _| panel.set_side_panels_hosted(true));
+        });
+        assert_eq!(
+            panel_ids(window),
+            vec![("grid-chart-stats".to_string(), gpui::px(320.0))]
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_result_view_mode(super::ResultViewMode::Table, cx);
+            });
+        });
+        assert!(
+            panel_ids(window).is_empty(),
+            "the rail belongs to the chart, so the table view shows none"
+        );
     }
 
     #[gpui::test]

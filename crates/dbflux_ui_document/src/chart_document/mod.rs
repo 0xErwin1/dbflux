@@ -1774,10 +1774,10 @@ mod tests {
         assert_eq!(modes[0], ResultViewMode::Chart);
     }
 
-    /// Header segments must be ordered: title (Left/0), Run (Left/1), Save (Right/0).
-    ///
-    /// Validates the `header_segments` layout contract: after sorting by
-    /// `(position, index)` the order must match construction order.
+    // Header segments must be ordered: title (Left/0), Run (Left/1), Save (Right/0).
+    //
+    // Validates the `header_segments` layout contract: after sorting by
+    // `(position, index)` the order must match construction order.
     // ---- Phase 5: set_data_source ----
 
     /// T-DS-10: `DocumentEvent::DataSourceChanged` variant must exist.
@@ -2632,5 +2632,60 @@ mod tests {
             err,
             dbflux_i18n::t!("document.chart.error.collection_source_unsupported")
         );
+    }
+
+    /// A chart tab hands its open rail to the workspace as a side island; a
+    /// chart embedded in a dashboard panel keeps it docked and hands none.
+    #[gpui::test]
+    fn the_open_rail_is_a_side_panel_unless_embedded(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let window = cx.add_empty_window();
+        let document = window.update(|window, cx| {
+            cx.new(|cx| ChartDocument::new(None, "SELECT 1".to_string(), app_state, window, cx))
+        });
+
+        window.update(|_, cx| {
+            let shell = document.read(cx).chart_shell.clone();
+            shell.update(cx, |shell, _| {
+                shell.chart_rail_open = true;
+                shell.chart_rail_tab = crate::chart::ChartRailTab::Stats;
+            });
+        });
+
+        let panels = |window: &mut gpui::VisualTestContext| {
+            window.update(|window, cx| {
+                document.update(cx, |document, cx| {
+                    document
+                        .side_panels(window, cx)
+                        .into_iter()
+                        .map(|panel| (panel.id.to_string(), panel.width))
+                        .collect::<Vec<_>>()
+                })
+            })
+        };
+
+        assert_eq!(
+            panels(window),
+            vec![(
+                "chart-stats".to_string(),
+                dbflux_components::tokens::ChartDocumentMetrics::RAIL_WIDTH
+            )]
+        );
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.set_embedded(true, cx));
+        });
+        assert!(panels(window).is_empty());
     }
 }

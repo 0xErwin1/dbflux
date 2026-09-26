@@ -287,6 +287,11 @@ impl CodeDocument {
             })
         });
 
+        handle.side_panels = Some({
+            let e = entity.clone();
+            Box::new(move |_window, cx| e.update(cx, |d, cx| d.side_panels(cx)))
+        });
+
         handle
     }
 }

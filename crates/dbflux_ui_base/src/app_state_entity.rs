@@ -16,6 +16,7 @@ use gpui_component::Root;
 use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
+use crate::notifications::NotificationCenter;
 use crate::object_tree::{ObjectTreeCoordinator, ObjectTreeEvent};
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
@@ -217,6 +218,14 @@ pub struct AppStateEntity {
     /// Label of the release whose notice was already shown this session, so
     /// a repeated check does not raise a second toast for the same version.
     pub notified_update_label: Option<String>,
+
+    /// Reported errors, finished tasks and the read state behind the
+    /// title-bar notifications center. Session-scoped.
+    pub notifications: NotificationCenter,
+
+    /// Pending MCP execution the approvals document should select the next
+    /// time it refreshes, set when a notification's "Review" opens it.
+    pub pending_approval_focus: Option<String>,
 }
 
 impl AppStateEntity {
@@ -254,6 +263,8 @@ impl AppStateEntity {
             save_target_override: None,
             pending_update_dialog: None,
             notified_update_label: None,
+            notifications: NotificationCenter::new(),
+            pending_approval_focus: None,
         })
     }
 
@@ -293,6 +304,8 @@ impl AppStateEntity {
             save_target_override: None,
             pending_update_dialog: None,
             notified_update_label: None,
+            notifications: NotificationCenter::new(),
+            pending_approval_focus: None,
         })
     }
 

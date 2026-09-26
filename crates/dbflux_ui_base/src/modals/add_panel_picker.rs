@@ -1217,8 +1217,8 @@ mod tests {
     #[test]
     fn submit_label_updates_live_based_on_selection_count() {
         let ids_0: Vec<Uuid> = vec![];
-        let ids_1 = vec![Uuid::new_v4()];
-        let ids_3 = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let ids_1 = [Uuid::new_v4()];
+        let ids_3 = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
 
         assert_eq!(
             submit_label_for(AddPanelTab::Saved, ids_0.len()),

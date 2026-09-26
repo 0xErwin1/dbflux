@@ -379,7 +379,7 @@ The `correlation_id` field is extracted by `AuditFieldVisitor` into `EventRecord
 
 There are two paths from the UI back into the audit document:
 
-- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast.
+- **Per-toast "View in Audit" action** — emits `OpenAuditRequested(Some(correlation_id))`. The workspace opens (or focuses) the Audit document and applies the matching correlation filter so the user sees exactly the one event tied to the toast. `report_error` also records the error in the session's notifications center (`AppStateEntity::notifications`), whose row offers the same action through the same event.
 - **Status-bar error badge click** — emits `OpenAuditRequested(None)`. The workspace opens the Audit document with the default user-error filter (`target = dbflux_ui::user_error` over a recent time window) so the user can browse every recent user-facing failure.
 
 Both events flow through `AppStateEntity::request_open_audit` so the workspace subscribes once.

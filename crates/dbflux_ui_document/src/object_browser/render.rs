@@ -845,7 +845,6 @@ impl Render for ObjectBrowserDocument {
         .absolute()
         .size_full();
 
-        let preview_key = self.preview_key.clone();
         let pending_navigation = self.pending_navigation.clone();
         let pending_object_delete = self.pending_object_delete.clone();
         let delete_prefix_confirm = self.delete_prefix_confirm().cloned();
@@ -892,10 +891,7 @@ impl Render for ObjectBrowserDocument {
                             .overflow_hidden()
                             .child(self.render_header(cx))
                             .child(listing),
-                    )
-                    .when_some(preview_key, |this, key| {
-                        this.child(self.render_preview_pane(&key, cx))
-                    }),
+                    ),
             )
             .child(self.render_footer(&entry_rows, cx))
             .when_some(pending_navigation, |this, navigation| {

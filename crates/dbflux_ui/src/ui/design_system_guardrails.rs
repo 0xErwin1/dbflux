@@ -1,8 +1,6 @@
 use std::fs;
 
 const UI_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui");
-const UI_BASE_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dbflux_ui_base/src");
-const UI_DOCUMENT_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dbflux_ui_document/src");
 const UI_WINDOWS_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dbflux_ui_windows/src");
 
 fn read_ui_file(relative_path: &str) -> String {
@@ -18,17 +16,6 @@ fn read_ui_source(relative_path: &str) -> String {
         .to_string()
 }
 
-fn read_document_source(relative_path: &str) -> String {
-    fs::read_to_string(format!("{UI_DOCUMENT_SRC}/{relative_path}"))
-        .unwrap_or_else(|error| panic!("failed to read document/{relative_path}: {error}"))
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_else(|| {
-            panic!("document/{relative_path} should contain production code before tests")
-        })
-        .to_string()
-}
-
 fn read_windows_source(relative_path: &str) -> String {
     fs::read_to_string(format!("{UI_WINDOWS_SRC}/{relative_path}"))
         .unwrap_or_else(|error| panic!("failed to read windows/{relative_path}: {error}"))
@@ -36,17 +23,6 @@ fn read_windows_source(relative_path: &str) -> String {
         .next()
         .unwrap_or_else(|| {
             panic!("windows/{relative_path} should contain production code before tests")
-        })
-        .to_string()
-}
-
-fn read_base_source(relative_path: &str) -> String {
-    fs::read_to_string(format!("{UI_BASE_SRC}/{relative_path}"))
-        .unwrap_or_else(|error| panic!("failed to read ui_base/{relative_path}: {error}"))
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or_else(|| {
-            panic!("ui_base/{relative_path} should contain production code before tests")
         })
         .to_string()
 }
@@ -60,13 +36,6 @@ fn ui_mod_wires_the_central_design_system_guardrail_module() {
 
 #[test]
 fn representative_overlays_reject_raw_scrim_regressions() {
-    // history_modal.rs now lives in dbflux_ui_document (moved in Step 3b)
-    let history_source = read_document_source("history_modal.rs");
-    assert!(
-        !history_source.contains(".bg(gpui::black().opacity(0.5))"),
-        "history_modal.rs reintroduced a raw overlay scrim"
-    );
-
     let command_palette_source = read_ui_source("overlays/command_palette.rs");
     assert!(
         !command_palette_source.contains(".bg(gpui::black().opacity(0.5))"),

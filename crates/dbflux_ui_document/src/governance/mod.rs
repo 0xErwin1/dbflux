@@ -93,23 +93,26 @@ impl McpApprovalsView {
         self.focus_handle.focus(window, cx);
     }
 
+    /// Reloads the pending list. A call another view asked to show (a
+    /// notification's "Review") is selected when it is still pending;
+    /// otherwise the current selection is kept, or the first call selected.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        let requested = self
+            .app_state
+            .update(cx, |state, _| state.pending_approval_focus.take());
+
         match self.app_state.read(cx).list_mcp_pending_executions() {
             Ok(mut pending) => {
                 pending.sort_by(|left, right| left.id.cmp(&right.id));
                 self.pending = pending;
                 self.status_message = None;
 
-                let selected_is_pending = self
-                    .selected_id
-                    .as_ref()
-                    .is_some_and(|id| self.pending.iter().any(|entry| &entry.id == id));
+                let is_pending = |id: &String| self.pending.iter().any(|entry| &entry.id == id);
 
-                let next_selection = if selected_is_pending {
-                    self.selected_id.clone()
-                } else {
-                    self.pending.first().map(|entry| entry.id.clone())
-                };
+                let next_selection = requested
+                    .filter(|id| is_pending(id))
+                    .or_else(|| self.selected_id.clone().filter(|id| is_pending(id)))
+                    .or_else(|| self.pending.first().map(|entry| entry.id.clone()));
 
                 match next_selection {
                     Some(selected_id) => self.load_detail(&selected_id, cx),
@@ -177,7 +180,7 @@ impl McpApprovalsView {
     }
 
     /// Translated name of a classification, as its badge shows it.
-    fn classification_display(classification: ExecutionClassification) -> String {
+    pub fn classification_display(classification: ExecutionClassification) -> String {
         match classification {
             ExecutionClassification::Metadata => {
                 dbflux_i18n::t!("document.governance.classification.metadata")
@@ -205,7 +208,7 @@ impl McpApprovalsView {
 
     /// Badge tone of a classification: reads in blue, writes in amber, and
     /// anything that can lose data or change the schema in red.
-    fn classification_tone(classification: ExecutionClassification) -> BadgeTone {
+    pub fn classification_tone(classification: ExecutionClassification) -> BadgeTone {
         match classification {
             ExecutionClassification::Metadata => BadgeTone::Neutral,
             ExecutionClassification::Read => BadgeTone::Info,
@@ -930,6 +933,43 @@ mod tests {
         window.run_until_parked();
 
         (view, app_state, pending.id, window)
+    }
+
+    #[gpui::test]
+    fn refresh_selects_the_call_a_notification_asked_for(cx: &mut gpui::TestAppContext) {
+        let (view, app_state, first_id, window) = approvals_view_with_one_pending_call(cx);
+        assert_eq!(
+            window.update(|_, cx| view.read(cx).selected_id.clone()),
+            Some(first_id)
+        );
+
+        let second = app_state.update(window, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-b".to_string(),
+                    "conn-b".to_string(),
+                    "update_records".to_string(),
+                    ExecutionClassification::Write,
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a second pending execution")
+        });
+
+        window.update(|_, cx| {
+            app_state.update(cx, |state, _| {
+                state.pending_approval_focus = Some(second.id.clone());
+            });
+            view.update(cx, |view, cx| view.refresh(cx));
+        });
+
+        let (selected, request_left) = window.update(|_, cx| {
+            (
+                view.read(cx).selected_id.clone(),
+                app_state.read(cx).pending_approval_focus.clone(),
+            )
+        });
+        assert_eq!(selected, Some(second.id));
+        assert_eq!(request_left, None, "the request is consumed");
     }
 
     #[gpui::test]

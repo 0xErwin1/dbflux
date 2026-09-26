@@ -914,6 +914,15 @@ document:
         connection_not_found: Connection not found or not active
         catalog_unsupported: Connection does not support metric catalog
   code:
+    history:
+      title: History
+      search: Search history
+      age:
+        now: now
+        minutes: "%{count} min ago"
+        hours: "%{count} h ago"
+        days: "%{count} d ago"
+      duration_ms: "%{count} ms"
     toolbar:
       refresh: Refresh
       cancel: Cancel
@@ -1725,7 +1734,6 @@ document:
       scanned: "Scanned"
       of_total: "of %{total}"
       load_more: "Load more"
-      hint_tree: "sorted per level, counts are partial"
       hint_list: "sorted by name"
       hint_pattern: "pattern sent as typed"
     gate:
@@ -1875,10 +1883,6 @@ document:
       empty:
         recent: No history yet
         saved: No saved queries
-      footer:
-        items:
-          one: "%{count} item"
-          many: "%{count} items"
       save:
         name_placeholder: Query name
         name_required: Enter a name for the query
@@ -4341,7 +4345,6 @@ workspace:
     settings: "Settings"
   title_bar:
     command_search: "Search or run a command"
-    approvals: "MCP approvals"
   empty:
     title: "No tab open"
     subtitle: "Open something from the sidebar, or start here."
@@ -4415,9 +4418,6 @@ updates:
     skip: Skip
     skip_version: Skip this version
     skip_error: "Could not skip this version: %{error}"
-  status_bar:
-    available: "%{version} available"
-    tooltip: Open the release notes
   sections:
     added: Added
     changed: Changed
@@ -4448,3 +4448,34 @@ updates:
     change_later: Change these later in Settings › Updates
     get_started: Get started
     full_changelog: Full changelog
+notifications:
+  title: Notifications
+  unread: "%{count} unread"
+  mark_all_read: Mark all read
+  close: Close
+  filter:
+    all: All
+    approvals: Approvals
+    errors: Errors
+    updates: Updates
+  group:
+    needs_you: Needs you
+    updates: Updates
+    earlier: Earlier
+  footer:
+    hint: Click a row to open it
+    clear_read: Clear read
+  empty:
+    title: You are up to date
+    message: Approvals, updates and failed tasks show up here. Read items are kept until you clear them.
+  approval:
+    meta: "%{connection} · %{client} · %{waiting}"
+    review: Review
+  update:
+    meta: "%{channel} · you have %{current} · checked %{ago}"
+    meta_unchecked: "%{channel} · you have %{current}"
+    install: Install
+    whats_new: What is new
+    later: Later
+  task:
+    finished: "%{task} finished"

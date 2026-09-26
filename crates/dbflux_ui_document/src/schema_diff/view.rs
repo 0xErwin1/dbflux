@@ -3150,7 +3150,7 @@ mod tests {
         empty_loaded.constraints = Some(Vec::new());
 
         assert_ne!(
-            super::schema_fingerprint(&[none_loaded.clone()]),
+            super::schema_fingerprint(std::slice::from_ref(&none_loaded)),
             super::schema_fingerprint(&[empty_loaded.clone()]),
             "None and an explicitly loaded empty collection must remain distinct"
         );

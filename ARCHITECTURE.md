@@ -192,7 +192,7 @@ crates/
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
       governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
-      history_modal.rs      # Recent/saved queries modal
+      history_panel.rs      # Recent/saved queries side panel
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
       chart_document/       # ChartDocument: saved/interactive chart tab
@@ -799,7 +799,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 
 **Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, schema, and generic driver-declared source context. The current generic source-window shape is `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Only connection/database/schema annotations are serialized into saved file headers.
 
-**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provides a unified modal for browsing recent queries and saved queries with search, favorites, and rename support.
+**History panel**: `crates/dbflux_ui_document/src/history_panel.rs` provides a side panel beside the editor for browsing recent queries and saved queries with search, favorites, and rename support. A document hands such panels to the workspace through `PaneHandle::side_panels` (`DocumentSidePanel`), and the workspace draws each one as an island beside the document island; the chart rails, the grid's chart stats rail, the object preview, and the stream consumer groups use the same seam.
 
 ### Release Channels & Branding
 
@@ -943,8 +943,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Query preview: `SqlPreviewModal` (in `crates/dbflux_ui_base/src/sql_preview_modal.rs`, shim at the old overlay path) routes relational read/DML previews through `QueryGenerator` for row, table, and view previews, while DDL stays on `CodeGenerator`. Non-SQL languages (MongoDB, Redis) still use generic preview mode with static text and language-specific syntax highlighting.
 - Schema refresh: `Workspace::refresh_schema` runs `Connection::schema` on a background executor and updates `AppState` (`crates/dbflux_ui/src/ui/views/workspace/`).
 - Lazy loading: Drivers fetch table/collection metadata (columns, indexes) on-demand when items are expanded in sidebar, not during initial connection (performance optimization for large databases).
-- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history modal (`crates/dbflux_core/src/storage/history.rs`). The history modal UI is at `crates/dbflux_ui_document/src/history_modal.rs`.
-- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history modal (Ctrl+P) allows browsing, searching, and loading saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
+- History flow: completed queries are stored in `HistoryStore`, persisted to JSON, and accessible via the history panel (`crates/dbflux_core/src/storage/history.rs`). The history panel UI is at `crates/dbflux_ui_document/src/history_panel.rs`.
+- Saved queries flow: users can save queries with names via `SavedQueryStore`; the history panel (Ctrl+P) allows browsing, searching, and loading saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## Keyboard & Focus Architecture
 

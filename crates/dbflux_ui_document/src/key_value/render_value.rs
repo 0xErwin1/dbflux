@@ -14,7 +14,7 @@ use super::metadata::format_size;
 use super::render::{type_badge_element, update_document};
 use super::{KeyValueDocument, KeyValueFocusMode, KvValueViewMode, TtlState};
 use crate::handle::DocumentEvent;
-use dbflux_components::composites::{Island, docked_island_frame};
+use crate::pane::DocumentSidePanel;
 use dbflux_components::controls::{Button, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
@@ -22,8 +22,7 @@ use dbflux_components::primitives::{
     SegmentedItem, Text,
 };
 use dbflux_components::tokens::{
-    ChamferCut, ChromeColors, FontSizes, IslandMetrics, KeyValueMetrics, Shadows, Spacing,
-    SyntaxColors,
+    ChamferCut, ChromeColors, FontSizes, KeyValueMetrics, Shadows, Spacing, SyntaxColors,
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{KeyLoadState, KeyType, KeyValueFeatures, RangeOrder, ValueRepr};
@@ -222,13 +221,18 @@ impl KeyValueDocument {
             _ => dbflux_i18n::t!("document.key_value.value.add_member"),
         };
 
+        // Wraps onto a second row when the value pane is too narrow for every
+        // action, so the last ones are never clipped.
         div()
+            .id("kv-value-header")
             .flex()
             .flex_none()
+            .flex_wrap()
             .items_center()
             .gap(KeyValueMetrics::VALUE_HEADER_GAP)
-            .h(KeyValueMetrics::VALUE_HEADER_HEIGHT)
+            .min_h(KeyValueMetrics::VALUE_HEADER_HEIGHT)
             .px(KeyValueMetrics::VALUE_PADDING_X)
+            .py(Spacing::SM)
             .border_b_1()
             .border_color(theme.border)
             .child(type_badge_element(key_type, cx))
@@ -560,14 +564,18 @@ impl KeyValueDocument {
             .into_any_element()
     }
 
+    /// A value toolbar row. It wraps onto more rows instead of clipping its
+    /// controls when the value pane is narrow.
     fn render_value_toolbar(&self) -> Div {
         div()
             .flex()
             .flex_none()
+            .flex_wrap()
             .items_center()
             .gap(KeyValueMetrics::TOOLBAR_GAP)
-            .h(KeyValueMetrics::VALUE_TOOLBAR_HEIGHT)
+            .min_h(KeyValueMetrics::VALUE_TOOLBAR_HEIGHT)
             .px(KeyValueMetrics::VALUE_PADDING_X)
+            .py(Spacing::XS)
     }
 
     fn render_member_filter(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -1471,6 +1479,9 @@ impl KeyValueDocument {
             .child(div().flex_1())
             .child(
                 div()
+                    .id("kv-stream-loaded-summary")
+                    .flex_none()
+                    .whitespace_nowrap()
                     .text_size(KeyValueMetrics::FOOTER_FONT)
                     .text_color(theme.muted_foreground)
                     .child(dbflux_i18n::t!(
@@ -1550,11 +1561,10 @@ impl KeyValueDocument {
         .flex_1()
         .min_h_0();
 
-        let with_groups = self.key_features.contains(KeyValueFeatures::STREAM_GROUPS);
-
         div()
             .flex_1()
             .min_h_0()
+            .min_w_0()
             .flex()
             .flex_col()
             .child(toolbar)
@@ -1562,21 +1572,41 @@ impl KeyValueDocument {
                 div()
                     .flex_1()
                     .min_h_0()
+                    .min_w_0()
                     .flex()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(header)
-                            .child(list),
-                    )
-                    .when(with_groups, |content| {
-                        content.child(self.render_consumer_groups(cx))
-                    }),
+                    .flex_col()
+                    .child(header)
+                    .child(list),
             )
             .into_any_element()
+    }
+
+    /// Whether the consumer groups of the selected stream are on screen: a
+    /// loaded stream in the entries view, on a connection that reads groups.
+    fn shows_stream_groups(&self) -> bool {
+        let Some(value) = self.selected_value.as_ref() else {
+            return false;
+        };
+
+        !matches!(value.load_state, KeyLoadState::TooLarge { .. })
+            && self.zset_pane.is_none()
+            && self.stream_pane.is_some()
+            && self.value_view_mode != KvValueViewMode::Document
+            && self.key_features.contains(KeyValueFeatures::STREAM_GROUPS)
+    }
+
+    /// The consumer groups panel, for the workspace to draw as a full-height
+    /// island at the far right (IslKvStream).
+    pub(super) fn side_panels(&self, cx: &mut Context<Self>) -> Vec<DocumentSidePanel> {
+        if !self.shows_stream_groups() {
+            return Vec::new();
+        }
+
+        vec![DocumentSidePanel {
+            id: "kv-stream-groups".into(),
+            width: KeyValueMetrics::GROUPS_WIDTH,
+            content: self.render_consumer_groups(cx),
+        }]
     }
 
     fn render_stream_row(
@@ -1929,7 +1959,7 @@ impl KeyValueDocument {
                 }))
         });
 
-        let groups = div()
+        div()
             .id("kv-stream-groups")
             .size_full()
             .flex()
@@ -1948,12 +1978,7 @@ impl KeyValueDocument {
                 )
             })
             .when_some(callout, |panel, callout| panel.child(callout))
-            .when_some(pending_list, |panel, pending| panel.child(pending));
-
-        docked_island_frame(&theme)
-            .w(KeyValueMetrics::GROUPS_WIDTH + IslandMetrics::GAP)
-            .flex_none()
-            .child(Island::new().flex_1().min_h_0().child(groups))
+            .when_some(pending_list, |panel, pending| panel.child(pending))
             .into_any_element()
     }
 

@@ -2624,8 +2624,10 @@ mod tests {
             return;
         }
 
-        let mut settings = GeneralSettings::default();
-        settings.editor_row_limit = usize::MAX;
+        let settings = GeneralSettings {
+            editor_row_limit: usize::MAX,
+            ..GeneralSettings::default()
+        };
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
         assert!(

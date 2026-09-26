@@ -203,6 +203,7 @@ impl CodeDocument {
         is_read_only: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let history_open = self.history.history_panel.read(cx).is_visible();
         let is_db_language = self.supports_connection_context();
 
         div()
@@ -248,16 +249,17 @@ impl CodeDocument {
                     )
                     .icon(AppIcon::History)
                     .icon_only()
+                    .selected(history_open)
                     .on_click(cx.listener(|this, _, window, cx| {
-                        let is_open = this.history.history_modal.read(cx).is_visible();
+                        let is_open = this.history.history_panel.read(cx).is_visible();
                         if is_open {
                             this.history
-                                .history_modal
-                                .update(cx, |modal, cx| modal.close(cx));
+                                .history_panel
+                                .update(cx, |panel, cx| panel.close(cx));
                         } else {
                             this.history
-                                .history_modal
-                                .update(cx, |modal, cx| modal.open(window, cx));
+                                .history_panel
+                                .update(cx, |panel, cx| panel.open(window, cx));
                         }
                     })),
                 )
@@ -1113,7 +1115,6 @@ impl Render for CodeDocument {
             .when(has_collapsed_results, |el| {
                 el.child(self.render_collapsed_results_bar(cx))
             })
-            .child(self.history.history_modal.clone())
             .when(self.pending.dangerous_query.is_some(), |el| {
                 el.child(self.render_dangerous_query_modal(cx))
             })

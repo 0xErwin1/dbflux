@@ -914,6 +914,15 @@ document:
         connection_not_found: Conexión no encontrada o inactiva
         catalog_unsupported: La conexión no admite el catálogo de métricas
   code:
+    history:
+      title: Historial
+      search: Buscar en el historial
+      age:
+        now: ahora
+        minutes: "hace %{count} min"
+        hours: "hace %{count} h"
+        days: "hace %{count} d"
+      duration_ms: "%{count} ms"
     toolbar:
       refresh: Actualizar
       cancel: Cancelar
@@ -1725,7 +1734,6 @@ document:
       scanned: "Escaneadas"
       of_total: "de %{total}"
       load_more: "Cargar más"
-      hint_tree: "ordenado por nivel, recuentos parciales"
       hint_list: "ordenado por nombre"
       hint_pattern: "patrón enviado tal cual"
     gate:
@@ -1875,10 +1883,6 @@ document:
       empty:
         recent: Aún no hay historial
         saved: No hay consultas guardadas
-      footer:
-        items:
-          one: "%{count} elemento"
-          many: "%{count} elementos"
       save:
         name_placeholder: Nombre de la consulta
         name_required: Ingresa un nombre para la consulta
@@ -4341,7 +4345,6 @@ workspace:
     settings: "Configuración"
   title_bar:
     command_search: "Buscar o ejecutar un comando"
-    approvals: "Aprobaciones de MCP"
   empty:
     title: "Ninguna pestaña abierta"
     subtitle: "Abre algo desde la barra lateral o empieza aquí."
@@ -4415,9 +4418,6 @@ updates:
     skip: Omitir
     skip_version: Omitir esta versión
     skip_error: "No se pudo omitir esta versión: %{error}"
-  status_bar:
-    available: "%{version} disponible"
-    tooltip: Abrir las notas de la versión
   sections:
     added: Agregado
     changed: Cambiado
@@ -4448,3 +4448,34 @@ updates:
     change_later: Puedes cambiar esto después en Configuración › Actualizaciones
     get_started: Empezar
     full_changelog: Registro de cambios completo
+notifications:
+  title: Notificaciones
+  unread: "%{count} sin leer"
+  mark_all_read: Marcar todo como leído
+  close: Cerrar
+  filter:
+    all: Todo
+    approvals: Aprobaciones
+    errors: Errores
+    updates: Actualizaciones
+  group:
+    needs_you: Te necesita
+    updates: Actualizaciones
+    earlier: Anteriores
+  footer:
+    hint: Haz clic en una fila para abrirla
+    clear_read: Borrar leídas
+  empty:
+    title: Estás al día
+    message: Aquí aparecen las aprobaciones, las actualizaciones y las tareas fallidas. Las leídas se conservan hasta que las borres.
+  approval:
+    meta: "%{connection} · %{client} · %{waiting}"
+    review: Revisar
+  update:
+    meta: "%{channel} · tienes %{current} · revisado %{ago}"
+    meta_unchecked: "%{channel} · tienes %{current}"
+    install: Instalar
+    whats_new: Novedades
+    later: Más tarde
+  task:
+    finished: "%{task} terminó"

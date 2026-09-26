@@ -914,6 +914,15 @@ document:
         connection_not_found: 连接不存在或未激活
         catalog_unsupported: 连接不支持指标目录
   code:
+    history:
+      title: 历史
+      search: 搜索历史
+      age:
+        now: 刚刚
+        minutes: "%{count} 分钟前"
+        hours: "%{count} 小时前"
+        days: "%{count} 天前"
+      duration_ms: "%{count} ms"
     toolbar:
       refresh: 刷新
       cancel: 取消
@@ -1725,7 +1734,6 @@ document:
       scanned: "已扫描"
       of_total: "/ %{total}"
       load_more: "加载更多"
-      hint_tree: "按层级排序，计数不完整"
       hint_list: "按名称排序"
       hint_pattern: "模式按输入发送"
     gate:
@@ -1875,10 +1883,6 @@ document:
       empty:
         recent: 暂无历史
         saved: 无已保存查询
-      footer:
-        items:
-          one: "%{count} 项"
-          many: "%{count} 项"
       save:
         name_placeholder: 查询名称
         name_required: 请输入查询名称
@@ -4339,7 +4343,6 @@ workspace:
     settings: "设置"
   title_bar:
     command_search: "搜索或运行命令"
-    approvals: "MCP 审批"
   empty:
     title: "没有打开的标签页"
     subtitle: "从侧边栏打开内容，或从这里开始。"
@@ -4413,9 +4416,6 @@ updates:
     skip: 跳过
     skip_version: 跳过此版本
     skip_error: "无法跳过此版本：%{error}"
-  status_bar:
-    available: "%{version} 可用"
-    tooltip: 打开发行说明
   sections:
     added: 新增
     changed: 变更
@@ -4446,3 +4446,34 @@ updates:
     change_later: 稍后可在 设置 › 更新 中更改
     get_started: 开始使用
     full_changelog: 完整更新日志
+notifications:
+  title: 通知
+  unread: "%{count} 条未读"
+  mark_all_read: 全部标为已读
+  close: 关闭
+  filter:
+    all: 全部
+    approvals: 审批
+    errors: 错误
+    updates: 更新
+  group:
+    needs_you: 需要处理
+    updates: 更新
+    earlier: 更早
+  footer:
+    hint: 点击一行即可打开
+    clear_read: 清除已读
+  empty:
+    title: 一切都是最新的
+    message: 审批、更新和失败的任务会显示在这里。已读项目会保留，直到你清除它们。
+  approval:
+    meta: "%{connection} · %{client} · %{waiting}"
+    review: 查看
+  update:
+    meta: "%{channel} · 当前版本 %{current} · %{ago}检查"
+    meta_unchecked: "%{channel} · 当前版本 %{current}"
+    install: 安装
+    whats_new: 新功能
+    later: 稍后
+  task:
+    finished: "%{task} 已完成"

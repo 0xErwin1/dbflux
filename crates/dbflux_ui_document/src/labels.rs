@@ -957,32 +957,14 @@ pub(crate) fn execution_count_state_label(
     }
 }
 
-/// Label for a [`crate::history_modal::HistoryTab`] shown on the history
+/// Label for a [`crate::history_panel::HistoryTab`] shown on the history
 /// modal's tab bar.
-pub(crate) fn history_tab_label(tab: crate::history_modal::HistoryTab) -> String {
-    use crate::history_modal::HistoryTab;
+pub(crate) fn history_tab_label(tab: crate::history_panel::HistoryTab) -> String {
+    use crate::history_panel::HistoryTab;
 
     match tab {
         HistoryTab::Recent => dbflux_i18n::t!("document.key_value.history_modal.tabs.recent"),
         HistoryTab::Saved => dbflux_i18n::t!("document.key_value.history_modal.tabs.saved"),
-    }
-}
-
-/// Label for the history modal footer's visible-item count.
-///
-/// Uses the singular catalog bucket only for exactly one item; every other
-/// count, including zero, uses the plural bucket.
-pub(crate) fn history_items_count_label(count: usize) -> String {
-    if count == 1 {
-        dbflux_i18n::t!(
-            "document.key_value.history_modal.footer.items.one",
-            count = count
-        )
-    } else {
-        dbflux_i18n::t!(
-            "document.key_value.history_modal.footer.items.many",
-            count = count
-        )
     }
 }
 
@@ -2629,24 +2611,24 @@ mod tests {
         dump_analysis_summary_line, dump_analysis_task_label, dump_analysis_title,
         error_with_detail_clipboard, execution_count_state_label, execution_mode_label,
         export_running_position_label, export_running_rows_label, export_summary_label,
-        export_table_status_line, export_wizard_task_label, export_wizard_title,
-        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
-        import_mapping_mode_label, import_rail_labels, import_summary_label,
-        import_table_status_line, import_wizard_task_label, incomplete_aggregate_rows_label,
-        join_kind_label, live_output_lines_label, live_output_truncated_label,
-        metric_picker_custom_dropdown_label, metric_picker_dimensions_error_label,
-        metric_picker_period_error_label, metric_picker_period_not_a_number_error,
-        metric_picker_statistic_error_label, migrate_mapping_unmapped_count_label,
-        migrate_running_position_label, migrate_running_rows_label,
-        migrate_source_target_checked_count_label, migrate_summary_label,
-        migrate_table_status_line, migrate_wizard_target_schema_read_failed_error,
-        migrate_wizard_task_label, mutation_chunk_size_adjusted_toast,
-        mutation_chunk_size_reduced_toast, mutation_chunked_execution_failed_error,
-        mutation_delete_document_task_label, mutation_delete_row_task_label,
-        mutation_delete_task_label, mutation_execution_cancelled_toast,
-        mutation_execution_completed_toast, mutation_execution_failed_error,
-        mutation_insert_document_task_label, mutation_insert_row_task_label,
-        mutation_read_only_error, mutation_save_document_task_label, mutation_save_row_task_label,
+        export_table_status_line, export_wizard_task_label, export_wizard_title, history_tab_label,
+        image_decode_error, image_header_error, import_mapping_mode_label, import_rail_labels,
+        import_summary_label, import_table_status_line, import_wizard_task_label,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, metric_picker_custom_dropdown_label,
+        metric_picker_dimensions_error_label, metric_picker_period_error_label,
+        metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
+        migrate_mapping_unmapped_count_label, migrate_running_position_label,
+        migrate_running_rows_label, migrate_source_target_checked_count_label,
+        migrate_summary_label, migrate_table_status_line,
+        migrate_wizard_target_schema_read_failed_error, migrate_wizard_task_label,
+        mutation_chunk_size_adjusted_toast, mutation_chunk_size_reduced_toast,
+        mutation_chunked_execution_failed_error, mutation_delete_document_task_label,
+        mutation_delete_row_task_label, mutation_delete_task_label,
+        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
+        mutation_execution_failed_error, mutation_insert_document_task_label,
+        mutation_insert_row_task_label, mutation_read_only_error,
+        mutation_save_document_task_label, mutation_save_row_task_label,
         mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
@@ -3677,7 +3659,7 @@ mod tests {
 
     #[test]
     fn history_tab_label_covers_both_variants() {
-        use crate::history_modal::HistoryTab;
+        use crate::history_panel::HistoryTab;
 
         assert_eq!(history_tab_label(HistoryTab::Recent), "Recent");
         assert_eq!(history_tab_label(HistoryTab::Saved), "Saved");
@@ -3688,13 +3670,6 @@ mod tests {
     }
 
     #[test]
-    fn history_items_count_label_one_many() {
-        assert_eq!(history_items_count_label(1), "1 item");
-        assert_eq!(history_items_count_label(2), "2 items");
-        assert_eq!(history_items_count_label(0), "0 items");
-    }
-
-    #[test]
     fn history_modal_keys_resolve_in_both_locales() {
         let keys = [
             "document.key_value.history_modal.search_placeholder",
@@ -3702,8 +3677,6 @@ mod tests {
             "document.key_value.history_modal.tabs.saved",
             "document.key_value.history_modal.empty.recent",
             "document.key_value.history_modal.empty.saved",
-            "document.key_value.history_modal.footer.items.one",
-            "document.key_value.history_modal.footer.items.many",
             "document.key_value.history_modal.save.title",
             "document.key_value.history_modal.save.name_placeholder",
             "document.key_value.history_modal.save.name_required",
@@ -6668,7 +6641,9 @@ mod tests {
     /// list.
     #[test]
     fn mutation_single_item_task_labels_resolve_and_differ() {
-        let cases: &[(fn() -> String, &str)] = &[
+        type LabelCase = (fn() -> String, &'static str);
+
+        let cases: &[LabelCase] = &[
             (
                 mutation_update_document_field_task_label,
                 "document.data.mutation.task.update_document_field",

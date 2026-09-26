@@ -1544,6 +1544,8 @@ impl CodeDocument {
             )
         });
 
+        grid.update(cx, |grid, _| grid.set_side_panels_hosted(true));
+
         if let Some(panel) = self.source.source_time_range_panel.clone() {
             grid.update(cx, |g, cx| {
                 g.set_chart_time_range_panel(Some(panel), cx);

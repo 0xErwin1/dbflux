@@ -3271,6 +3271,7 @@ fn escape_with_an_open_completion_menu_closes_it_and_stays_in_insert(cx: &mut Te
 }
 
 #[gpui::test]
+#[allow(clippy::too_many_arguments)]
 fn app_shortcuts_dispatch_the_same_in_every_mode(
     disabled_cx: &mut TestAppContext,
     normal_cx: &mut TestAppContext,

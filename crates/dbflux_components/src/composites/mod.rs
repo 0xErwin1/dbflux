@@ -9,6 +9,7 @@ mod list_row;
 mod master_detail_list;
 mod menu_item;
 mod menu_popup;
+mod notification_center;
 mod refresh_split_button;
 mod shell_bar;
 mod split_button;
@@ -42,8 +43,12 @@ pub use menu_item::{
     render_separator,
 };
 pub use menu_popup::{render_menu_items, render_menu_overlay};
+pub use notification_center::{
+    NotificationFilterChip, NotificationGroupSection, NotificationIconTone, NotificationPopover,
+    NotificationRow,
+};
 pub use refresh_split_button::{refresh_policy_label, refresh_split_button};
-pub use shell_bar::{CommandSearch, NotificationBell};
+pub use shell_bar::{BellUrgency, CommandSearch, NotificationBell};
 pub use split_button::SplitButton;
 pub use tabs::{
     document_tab, document_tab_bar, document_tab_title, inline_tab, inline_tab_bar, result_tab,

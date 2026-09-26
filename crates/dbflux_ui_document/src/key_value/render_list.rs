@@ -533,18 +533,15 @@ impl KeyValueDocument {
                 ))
             });
 
-        let hint = if filtered {
-            dbflux_i18n::t!("document.key_value.footer.hint_pattern")
-        } else if self.list_layout == KeyListLayout::Tree {
-            dbflux_i18n::t!("document.key_value.footer.hint_tree")
-        } else {
-            dbflux_i18n::t!("document.key_value.footer.hint_list")
-        };
+        let hint = key_list_footer_hint(filtered, self.list_layout);
 
         div()
+            .id("kv-key-list-footer")
             .flex()
             .flex_none()
             .items_center()
+            .min_w_0()
+            .overflow_hidden()
             .gap(KeyValueMetrics::FOOTER_GAP)
             .h(KeyValueMetrics::FOOTER_HEIGHT)
             .px(KeyValueMetrics::FOOTER_PADDING_X)
@@ -598,22 +595,57 @@ impl KeyValueDocument {
                     })),
                 )
             })
-            .child(
-                div().flex_1().min_w_0().flex().justify_end().child(
-                    div()
-                        .min_w_0()
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(hint),
-                ),
-            )
+            .when_some(hint, |footer, hint| {
+                footer.child(
+                    div().flex_1().min_w_0().flex().justify_end().child(
+                        div()
+                            .min_w_0()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(hint),
+                    ),
+                )
+            })
+    }
+}
+
+/// The note at the end of the key list footer: how a pattern is sent, or how
+/// the flat list is sorted. The tree layout shows none, since the 440 px
+/// column has no room left for it beside the load controls (IslKvStream).
+fn key_list_footer_hint(filtered: bool, layout: KeyListLayout) -> Option<String> {
+    if filtered {
+        Some(dbflux_i18n::t!("document.key_value.footer.hint_pattern"))
+    } else if layout == KeyListLayout::Tree {
+        None
+    } else {
+        Some(dbflux_i18n::t!("document.key_value.footer.hint_list"))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::progress_fraction;
+    use super::{key_list_footer_hint, progress_fraction};
+    use crate::key_value::key_tree::KeyListLayout;
+
+    /// The 440 px key column drops the tree note beside the load controls
+    /// (IslKvStream); the pattern and flat-list notes stay.
+    #[test]
+    fn the_tree_layout_footer_carries_no_note() {
+        assert_eq!(key_list_footer_hint(false, KeyListLayout::Tree), None);
+        assert_eq!(
+            key_list_footer_hint(false, KeyListLayout::List).as_deref(),
+            Some("sorted by name")
+        );
+        assert_eq!(
+            key_list_footer_hint(true, KeyListLayout::Tree).as_deref(),
+            Some("pattern sent as typed")
+        );
+        assert_eq!(
+            dbflux_components::tokens::KeyValueMetrics::KEY_LIST_WIDTH,
+            gpui::px(440.0)
+        );
+    }
 
     #[test]
     fn progress_is_the_share_of_the_keyspace() {

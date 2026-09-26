@@ -465,7 +465,10 @@ Hay dos caminos desde la UI de vuelta al audit document:
 - **Acción "View in Audit" por toast** — emite
   `OpenAuditRequested(Some(correlation_id))`. El workspace abre (o enfoca) el
   Audit document y aplica el filtro de correlation coincidente para que el
-  usuario vea exactamente el único evento vinculado al toast.
+  usuario vea exactamente el único evento vinculado al toast. `report_error`
+  también registra el error en el centro de notificaciones de la sesión
+  (`AppStateEntity::notifications`), cuya fila ofrece la misma acción a través
+  del mismo evento.
 - **Clic en el badge de error de la status bar** — emite
   `OpenAuditRequested(None)`. El workspace abre el Audit document con el filtro
   de user-error por defecto (`target = dbflux_ui::user_error` sobre una ventana

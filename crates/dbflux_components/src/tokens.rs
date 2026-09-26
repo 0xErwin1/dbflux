@@ -1191,6 +1191,25 @@ impl EditorMetrics {
     pub const RESULTS_MIN_HEIGHT: Pixels = px(183.0);
 }
 
+/// The query history island beside an editor (IslEditor): 300 px wide, a
+/// 46 px header with 16 px side padding, entries with 10 x 16 px padding and
+/// 4 px between a 12 px mono query line and an 11.5 px meta line; the current
+/// entry is filled with the tint at 10 %.
+pub struct HistoryPanelMetrics;
+
+impl HistoryPanelMetrics {
+    pub const WIDTH: Pixels = px(300.0);
+    pub const HEADER_HEIGHT: Pixels = px(46.0);
+    pub const PADDING_X: Pixels = px(16.0);
+    /// Space under the tab switch and the search field. (10 px)
+    pub const SECTION_GAP: Pixels = px(10.0);
+    pub const ENTRY_PADDING_Y: Pixels = px(10.0);
+    pub const ENTRY_GAP: Pixels = px(4.0);
+    pub const QUERY_FONT: Pixels = px(12.0);
+    pub const META_FONT: Pixels = px(11.5);
+    pub const SELECTED_FILL_ALPHA: f32 = 0.10;
+}
+
 /// Geometry of the row inspector rail (AppByzTable, DSAppPlan "RowInspector").
 pub struct InspectorMetrics;
 
@@ -1252,8 +1271,8 @@ impl KeyValueMetrics {
     /// Narrowest the key pattern field shrinks to before the filter row
     /// wraps its controls onto a second line. (220 px)
     pub const PATTERN_MIN_WIDTH: Pixels = px(220.0);
-    /// Key list column. (540 px)
-    pub const KEY_LIST_WIDTH: Pixels = px(540.0);
+    /// Key list column. (440 px, IslKvStream)
+    pub const KEY_LIST_WIDTH: Pixels = px(440.0);
     /// Key list header: 30 px, 11.5 px text.
     pub const LIST_HEADER_HEIGHT: Pixels = px(30.0);
     pub const LIST_HEADER_FONT: Pixels = px(11.5);
@@ -1581,6 +1600,117 @@ impl ShellMetrics {
     /// Inline status of a tree row ("retry", "connecting"): 11 px, 5 px gap.
     pub const ROW_STATUS_FONT: Pixels = px(11.0);
     pub const ROW_STATUS_GAP: Pixels = px(5.0);
+}
+
+/// Geometry of the notifications center (IslNotifications,
+/// IslNotificationStates).
+pub struct NotificationMetrics;
+
+impl NotificationMetrics {
+    /// Tint wash behind the bell while its popover is open. (26 %)
+    pub const BELL_OPEN_ALPHA: f32 = 0.26;
+
+    /// The popover: 440 px wide, at most 70 % of the window tall, cut 12,
+    /// 2 px under the title bar.
+    pub const POPOVER_WIDTH: Pixels = px(440.0);
+    pub const POPOVER_MAX_HEIGHT_FRACTION: f32 = 0.70;
+    pub const POPOVER_GAP_TOP: Pixels = px(2.0);
+
+    /// Header: 46 px, 14 px left and 10 px right padding, 10 px gaps, a
+    /// 15 px bell and an 11.5 px mono unread count.
+    pub const HEADER_HEIGHT: Pixels = px(46.0);
+    pub const HEADER_PADDING_LEFT: Pixels = px(14.0);
+    pub const HEADER_PADDING_RIGHT: Pixels = px(10.0);
+    pub const HEADER_GAP: Pixels = px(10.0);
+    pub const HEADER_ICON: Pixels = px(15.0);
+    pub const UNREAD_FONT: Pixels = px(11.5);
+
+    /// Filter chips: 26 px tall, cut 4, 10 px side padding, 6 px apart and
+    /// between label and count, 12 px label and 11 px mono count; the row
+    /// is padded 10 px on top, 14 px on the sides and 4 px below.
+    pub const CHIP_HEIGHT: Pixels = px(26.0);
+    pub const CHIP_PADDING_X: Pixels = px(10.0);
+    pub const CHIP_GAP: Pixels = px(6.0);
+    pub const CHIP_FONT: Pixels = px(12.0);
+    pub const COUNT_FONT: Pixels = px(11.0);
+    pub const CHIPS_PADDING_TOP: Pixels = px(10.0);
+    pub const CHIPS_PADDING_X: Pixels = px(14.0);
+    pub const CHIPS_PADDING_BOTTOM: Pixels = px(4.0);
+
+    /// Group label: 12 px above, 6 px below, 12 px left, 14 px right, 8 px
+    /// between the label and its count, 10 px expanded caps.
+    pub const GROUP_PADDING_TOP: Pixels = px(12.0);
+    pub const GROUP_PADDING_BOTTOM: Pixels = px(6.0);
+    pub const GROUP_PADDING_LEFT: Pixels = px(12.0);
+    pub const GROUP_PADDING_RIGHT: Pixels = px(14.0);
+    pub const GROUP_GAP: Pixels = px(8.0);
+    pub const GROUP_FONT: Pixels = px(10.0);
+
+    /// Rows: 10 px vertical padding, 12 px left and 14 px right, 10 px
+    /// between the unread diamond, the icon square and the text; a 7 px
+    /// diamond 7 px from the top; a 28 px raised square, cut 4, with a
+    /// 15 px icon; 4 px between the title, meta and action lines, 8 px
+    /// between the title and its chip, 6 px between actions. Read rows are
+    /// drawn at 72 %.
+    pub const ROW_PADDING_Y: Pixels = px(10.0);
+    pub const ROW_PADDING_LEFT: Pixels = px(12.0);
+    pub const ROW_PADDING_RIGHT: Pixels = px(14.0);
+    pub const ROW_GAP: Pixels = px(10.0);
+    pub const DIAMOND: Pixels = px(7.0);
+    pub const DIAMOND_OFFSET_TOP: Pixels = px(7.0);
+    pub const ICON_BOX: Pixels = px(28.0);
+    pub const ICON: Pixels = px(15.0);
+    pub const TEXT_GAP: Pixels = px(4.0);
+    pub const TITLE_GAP: Pixels = px(8.0);
+    pub const TITLE_FONT: Pixels = px(13.0);
+    pub const META_FONT: Pixels = px(12.0);
+    pub const ACTIONS_GAP: Pixels = px(6.0);
+    pub const ACTIONS_MARGIN_TOP: Pixels = px(4.0);
+    pub const READ_OPACITY: f32 = 0.72;
+
+    /// Footer: 40 px, 14 px side padding, 12 px text.
+    pub const FOOTER_HEIGHT: Pixels = px(40.0);
+    pub const FOOTER_PADDING_X: Pixels = px(14.0);
+    pub const FOOTER_FONT: Pixels = px(12.0);
+
+    /// Empty state: 46 px above, 50 px below, 30 px on the sides, 10 px
+    /// gaps, a 44 px raised square with cut 8 and a 20 px check, and a
+    /// 12.5 px message on a 1.5 line height.
+    pub const EMPTY_PADDING_TOP: Pixels = px(46.0);
+    pub const EMPTY_PADDING_BOTTOM: Pixels = px(50.0);
+    pub const EMPTY_PADDING_X: Pixels = px(30.0);
+    pub const EMPTY_GAP: Pixels = px(10.0);
+    pub const EMPTY_ICON_BOX: Pixels = px(44.0);
+    pub const EMPTY_ICON: Pixels = px(20.0);
+    pub const EMPTY_MESSAGE_FONT: Pixels = px(12.5);
+    pub const EMPTY_MESSAGE_LINE_HEIGHT: Pixels = px(18.75);
+
+    /// Drop shadow under the popover: 28 px down, 70 px blur, black at
+    /// 60 % on dark and 20 % on light.
+    pub const SHADOW_OFFSET_Y: Pixels = px(28.0);
+    pub const SHADOW_BLUR: Pixels = px(70.0);
+    pub const SHADOW_ALPHA_DARK: f32 = 0.60;
+    pub const SHADOW_ALPHA_LIGHT: f32 = 0.20;
+
+    /// The popover's drop shadow for the current theme mode.
+    pub fn shadow(theme: &gpui_component::Theme) -> BoxShadow {
+        let alpha = if theme.mode.is_dark() {
+            Self::SHADOW_ALPHA_DARK
+        } else {
+            Self::SHADOW_ALPHA_LIGHT
+        };
+
+        BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, alpha),
+            offset: Point {
+                x: px(0.0),
+                y: Self::SHADOW_OFFSET_Y,
+            },
+            blur_radius: Self::SHADOW_BLUR,
+            spread_radius: px(0.0),
+            inset: false,
+        }
+    }
 }
 
 /// Geometry of the islands: the chamfered panes that float on the desk

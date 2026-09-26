@@ -217,7 +217,7 @@ crates/
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
       governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
-      history_modal.rs      # Recent/saved queries modal
+      history_panel.rs      # Recent/saved queries side panel
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
       chart_document/       # ChartDocument: saved/interactive chart tab
@@ -1267,9 +1267,13 @@ genérico declarado por el driver. La forma actual del generic source-window es
 las anotaciones de connection/database/schema se serializan en los headers de
 archivo guardados.
 
-**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provee un
-modal unificado para explorar recent queries y saved queries con búsqueda,
-favoritos y soporte de rename.
+**History panel**: `crates/dbflux_ui_document/src/history_panel.rs` provee un
+panel lateral junto al editor para explorar recent queries y saved queries con
+búsqueda, favoritos y soporte de rename. Un documento entrega esos paneles al
+workspace mediante `PaneHandle::side_panels` (`DocumentSidePanel`), y el
+workspace dibuja cada uno como una isla junto a la isla del documento; los rails
+del chart, el rail de estadísticas del chart de la grilla, el preview de objetos
+y los consumer groups de un stream usan el mismo mecanismo.
 
 ### Release Channels y Branding
 
@@ -1612,11 +1616,11 @@ IA con una capa completa de gobernanza:
   indexes) bajo demanda cuando los items se expanden en el sidebar, no durante
   la conexión inicial (optimización de rendimiento para bases de datos grandes).
 - Flujo de history: las queries completadas se almacenan en `HistoryStore`, se
-  persisten a JSON, y son accesibles a través del history modal
-  (`crates/dbflux_core/src/storage/history.rs`). La UI del history modal está en
-  `crates/dbflux_ui_document/src/history_modal.rs`.
+  persisten a JSON, y son accesibles a través del history panel
+  (`crates/dbflux_core/src/storage/history.rs`). La UI del history panel está en
+  `crates/dbflux_ui_document/src/history_panel.rs`.
 - Flujo de saved queries: los usuarios pueden guardar queries con nombres vía
-  `SavedQueryStore`; el history modal (Ctrl+P) permite explorar, buscar y cargar
+  `SavedQueryStore`; el history panel (Ctrl+P) permite explorar, buscar y cargar
   saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## Arquitectura de Teclado y Foco

@@ -914,6 +914,15 @@ document:
         connection_not_found: "연결을 찾을 수 없거나 활성 상태가 아닙니다"
         catalog_unsupported: "이 연결은 메트릭 카탈로그를 지원하지 않습니다"
   code:
+    history:
+      title: 기록
+      search: 기록 검색
+      age:
+        now: 방금
+        minutes: "%{count}분 전"
+        hours: "%{count}시간 전"
+        days: "%{count}일 전"
+      duration_ms: "%{count} ms"
     toolbar:
       refresh: 새로고침
       cancel: 취소
@@ -1725,7 +1734,6 @@ document:
       scanned: "스캔됨"
       of_total: "/ %{total}"
       load_more: "더 불러오기"
-      hint_tree: "수준별 정렬, 개수는 일부"
       hint_list: "이름순 정렬"
       hint_pattern: "패턴을 입력한 그대로 전송"
     gate:
@@ -1875,10 +1883,6 @@ document:
       empty:
         recent: 아직 기록이 없습니다
         saved: 저장된 쿼리가 없습니다
-      footer:
-        items:
-          one: "항목 %{count}개"
-          many: "%{count}개 항목"
       save:
         name_placeholder: 쿼리 이름
         name_required: 쿼리 이름을 입력하세요
@@ -4340,7 +4344,6 @@ workspace:
     settings: "설정"
   title_bar:
     command_search: "명령 검색 또는 실행"
-    approvals: "MCP 승인"
   empty:
     title: "열린 탭 없음"
     subtitle: "사이드바에서 항목을 열거나 여기서 시작하세요."
@@ -4414,9 +4417,6 @@ updates:
     skip: 건너뛰기
     skip_version: 이 버전 건너뛰기
     skip_error: "이 버전을 건너뛸 수 없습니다: %{error}"
-  status_bar:
-    available: "%{version} 사용 가능"
-    tooltip: 릴리스 노트 열기
   sections:
     added: 추가됨
     changed: 변경됨
@@ -4447,3 +4447,34 @@ updates:
     change_later: 나중에 설정 › 업데이트에서 변경할 수 있습니다
     get_started: 시작하기
     full_changelog: 전체 변경 사항
+notifications:
+  title: 알림
+  unread: "읽지 않음 %{count}개"
+  mark_all_read: 모두 읽음으로 표시
+  close: 닫기
+  filter:
+    all: 전체
+    approvals: 승인
+    errors: 오류
+    updates: 업데이트
+  group:
+    needs_you: 확인 필요
+    updates: 업데이트
+    earlier: 이전
+  footer:
+    hint: 행을 클릭하면 열립니다
+    clear_read: 읽은 항목 지우기
+  empty:
+    title: 모두 확인했습니다
+    message: 승인, 업데이트, 실패한 작업이 여기에 표시됩니다. 읽은 항목은 지울 때까지 유지됩니다.
+  approval:
+    meta: "%{connection} · %{client} · %{waiting}"
+    review: 검토
+  update:
+    meta: "%{channel} · 현재 %{current} · %{ago} 확인"
+    meta_unchecked: "%{channel} · 현재 %{current}"
+    install: 설치
+    whats_new: 새로운 기능
+    later: 나중에
+  task:
+    finished: "%{task} 완료"

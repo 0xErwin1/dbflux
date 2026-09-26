@@ -16,9 +16,10 @@ use super::preview_content::{
 };
 use super::render::object_icon_color;
 use super::render::{format_modified, object_icon};
-use super::{ObjectAction, ObjectBrowserDocument};
+use super::{ObjectAction, ObjectBrowserDocument, ObjectBrowserFocusMode};
+use crate::handle::DocumentEvent;
 use crate::labels::object_browser_versions_count_label;
-use dbflux_components::composites::Island;
+use crate::pane::DocumentSidePanel;
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, SegmentedControl, SegmentedItem, Text};
@@ -45,18 +46,17 @@ pub(super) const PREVIEW_EDITOR_WIDTH: Pixels = px(520.0);
 /// window.
 const PREVIEW_MIN_WIDTH: Pixels = px(240.0);
 
-/// Share of the document width the preview pane may claim. The preferred
+/// Share of the window width the preview island may claim. The preferred
 /// widths above are absolute, so on a narrow window they would leave the
-/// listing a sliver; capping the pane relative to the available width keeps
-/// the listing usable at every window size.
-const PREVIEW_MAX_WIDTH_FRACTION: f32 = 0.55;
+/// listing a sliver; capping the island relative to the window keeps the
+/// listing usable at every window size.
+const PREVIEW_MAX_WIDTH_FRACTION: f32 = 0.4;
 
 /// Ceiling for a user-dragged pane width; the relative cap above still
 /// applies, so the listing keeps room even below this.
 const PREVIEW_DRAG_MAX_WIDTH: Pixels = px(1200.0);
 
-/// Hit target of the resize grip on the pane's left edge: the desk gap
-/// between the listing and the preview island.
+/// Hit target of the resize grip over the preview island's left edge.
 const PREVIEW_GRIP_WIDTH: Pixels = IslandMetrics::GAP;
 
 /// Label column of the metadata rows. (110 px)
@@ -67,6 +67,15 @@ const METADATA_LABEL_WIDTH: Pixels = px(110.0);
 const IMAGE_VIEWPORT_HEIGHT: Pixels = px(220.0);
 
 const UNKNOWN: &str = "—";
+
+/// Width of the preview island: the preferred or dragged width, capped at
+/// `PREVIEW_MAX_WIDTH_FRACTION` of the window and never below
+/// `PREVIEW_MIN_WIDTH`.
+fn preview_panel_width(preferred: Pixels, viewport_width: Pixels) -> Pixels {
+    let cap = (viewport_width * PREVIEW_MAX_WIDTH_FRACTION).max(PREVIEW_MIN_WIDTH);
+
+    preferred.clamp(PREVIEW_MIN_WIDTH, cap)
+}
 
 /// Severity of a body notice, which drives the icon and text treatment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,20 +131,29 @@ impl ObjectBrowserDocument {
         )
     }
 
-    pub(super) fn render_preview_pane(
+    /// The preview as a side panel for the workspace, which draws it as a
+    /// full-height island beside the document island (IslObjects). `None`
+    /// while nothing is selected for preview.
+    pub(super) fn preview_side_panel(
         &self,
-        key: &str,
+        window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = cx.theme();
+    ) -> Option<DocumentSidePanel> {
+        let key = self.preview_key.clone()?;
+        let width = preview_panel_width(self.current_preview_width(), window.viewport_size().width);
+
+        Some(DocumentSidePanel {
+            id: "object-preview".into(),
+            width,
+            content: self.render_preview_pane(&key, cx).into_any_element(),
+        })
+    }
+
+    fn render_preview_pane(&self, key: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let grip_hover = cx.theme().accent.opacity(0.3);
+        let grip_active = ChromeColors::tint(cx.theme());
         let editing = self.editor_for(key).is_some();
         let resizing = self.preview_resize_start.is_some();
-
-        let width = self.preview_custom_width.unwrap_or(if editing {
-            PREVIEW_EDITOR_WIDTH
-        } else {
-            PREVIEW_WIDTH
-        });
 
         let resize_listeners = resizing.then(|| {
             let entity = cx.entity().clone();
@@ -171,51 +189,55 @@ impl ObjectBrowserDocument {
             .size_full()
         });
 
-        // The preview is an island of its own inside the document island:
-        // the desk shows above it and in the grip column on its left.
         div()
-            .w(width)
-            .min_w(PREVIEW_MIN_WIDTH)
-            .max_w(relative(PREVIEW_MAX_WIDTH_FRACTION))
+            .id("object-preview")
+            .relative()
+            .size_full()
             .flex()
-            .flex_row()
-            .pt(IslandMetrics::GAP)
-            .bg(ChromeColors::desk(theme))
+            .flex_col()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.focus_mode = ObjectBrowserFocusMode::Listing;
+                    cx.emit(DocumentEvent::RequestFocus);
+                    cx.notify();
+                }),
+            )
+            .when_some(resize_listeners, |el, listeners| el.child(listeners))
+            .child(self.render_preview_header(key, cx))
+            .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
+            .child(self.render_encoding_override_row(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.render_preview_body(key, cx))
+                    .child(self.render_metadata_section(key, cx)),
+            )
+            .child(self.render_preview_actions(key, cx))
+            // The grip lies over the island's left edge, next to the desk gap
+            // that separates it from the listing.
             .child(
                 div()
                     .id("object-preview-grip")
-                    .h_full()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
                     .w(PREVIEW_GRIP_WIDTH)
-                    .flex_shrink_0()
                     .cursor_col_resize()
-                    .hover(|el| el.bg(theme.accent.opacity(0.3)))
-                    .when(resizing, |el| el.bg(ChromeColors::tint(theme)))
+                    .hover(move |el| el.bg(grip_hover))
+                    .when(resizing, |el| el.bg(grip_active))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
                             this.begin_preview_resize(event.position.x, cx);
                         }),
                     ),
-            )
-            .child(
-                Island::new()
-                    .flex_1()
-                    .min_w_0()
-                    .when_some(resize_listeners, |el, listeners| el.child(listeners))
-                    .child(self.render_preview_header(key, cx))
-                    .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
-                    .child(self.render_encoding_override_row(cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child(self.render_preview_body(key, cx))
-                            .child(self.render_metadata_section(key, cx)),
-                    )
-                    .child(self.render_preview_actions(key, cx)),
             )
     }
 
@@ -953,7 +975,28 @@ mod tests {
     // Deliberately narrow imports: `use super::*` would pull in the module's
     // `gpui::*` glob, whose `test` attribute macro would shadow the standard
     // `#[test]` attribute below.
-    use super::{object_display_name, optional_value};
+    use super::{
+        PREVIEW_MIN_WIDTH, PREVIEW_WIDTH, object_display_name, optional_value, preview_panel_width,
+    };
+
+    /// The preview island keeps its preferred width on a wide window, gives
+    /// way on a narrow one so the listing stays usable, and never drops
+    /// below its floor.
+    #[test]
+    fn the_preview_island_width_follows_the_window() {
+        assert_eq!(
+            preview_panel_width(PREVIEW_WIDTH, gpui::px(1920.0)),
+            PREVIEW_WIDTH
+        );
+        assert_eq!(
+            preview_panel_width(PREVIEW_WIDTH, gpui::px(1000.0)),
+            gpui::px(400.0)
+        );
+        assert_eq!(
+            preview_panel_width(PREVIEW_WIDTH, gpui::px(300.0)),
+            PREVIEW_MIN_WIDTH
+        );
+    }
 
     /// T27: the header shows the last path segment, not the full key.
     #[test]

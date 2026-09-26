@@ -244,36 +244,6 @@ impl StatusBar {
         }
     }
 
-    /// "<version> available": shown while a newer, unskipped release exists.
-    /// Clicking it opens that release's notes.
-    fn update_chip(
-        update: dbflux_app::updates::AvailableUpdate,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let tint = dbflux_components::tokens::ChromeColors::tint(cx.theme());
-        let notes_url = update.notes_url.clone();
-        let tooltip: SharedString = dbflux_i18n::t!("updates.status_bar.tooltip").into();
-
-        Self::chip("status-bar-update-available", true, cx)
-            .on_click(move |_, _, cx| cx.open_url(&notes_url))
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .child(
-                Icon::new(AppIcon::ArrowUp)
-                    .size(ShellMetrics::STATUS_ICON)
-                    .color(tint),
-            )
-            .child(
-                div()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(tint)
-                    .whitespace_nowrap()
-                    .child(dbflux_i18n::t!(
-                        "updates.status_bar.available",
-                        version = update.label
-                    )),
-            )
-    }
-
     fn render_connection(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let app_state = self.app_state.read(cx);
@@ -436,7 +406,6 @@ impl Render for StatusBar {
         let counts = Self::task_counts(&app_state.tasks().recent_tasks(usize::MAX));
         let unread = app_state.unread_error_count;
         let approvals = self.pending_approvals_count(cx);
-        let available_update = app_state.visible_update().cloned();
 
         // Segments contributed by the active document (DEC-23) — e.g. engine
         // + region, bucket path, key count, cursor position. Empty for every
@@ -511,9 +480,6 @@ impl Render for StatusBar {
                             cx.emit(OpenApprovalsRequested);
                         })),
                 )
-            })
-            .when_some(available_update, |this, update| {
-                this.child(Self::update_chip(update, cx))
             })
             // Segments contributed by the active document, generically —
             // StatusBar never branches on document or driver type.

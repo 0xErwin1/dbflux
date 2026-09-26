@@ -23,6 +23,7 @@ use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::chart_window_label;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use crate::chrome::{document_bar, document_title};
+use crate::pane::DocumentSidePanel;
 use dbflux_components::chart::{
     ChartDetection, ChartView, MetricSource, axis_bar_element, format_span, format_x_value,
     format_y_value, legend_element,
@@ -507,68 +508,18 @@ impl ChartDocument {
                 None
             };
 
-        // -- Metric picker rail (absolute overlay, right edge) --
-        // Rendered when the Metric tab is active and the shell has picker state.
-        // Uses the same absolute-right-panel layout as the Stats rail in DataGridPanel.
-        let metric_rail: Option<AnyElement> = {
-            let (rail_open, rail_tab) = {
-                let shell = self.chart_shell.read(cx);
-                (shell.chart_rail_open, shell.chart_rail_tab)
-            };
-
-            if rail_open && rail_tab == ChartRailTab::Metric {
-                // Single read+update path: render the picker inside one
-                // `update` closure so a concurrent clear of `metric_picker`
-                // (subscription, pending action) cannot turn the previously
-                // observed `Some` into a `None` between the read and the update.
-                let cache = self.app_state.read(cx).metric_catalog_cache().clone();
-                let rail_element: Option<AnyElement> = self.chart_shell.update(cx, |shell, cx| {
-                    shell.metric_picker.as_mut().map(|picker| {
-                        MetricPickerView {
-                            state: picker,
-                            cache: &cache,
-                        }
-                        .render(window, cx)
-                        .into_any_element()
-                    })
-                });
-
-                rail_element.map(|element| {
-                    docked_island_frame(&theme)
-                        .absolute()
-                        .top_0()
-                        .right_0()
-                        .bottom_0()
-                        .w(ChartDocumentMetrics::PICKER_WIDTH + IslandMetrics::GAP)
-                        .occlude()
-                        .child(
-                            Island::new().flex_1().min_h_0().child(
-                                div()
-                                    .flex_grow(1.0)
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .child(element),
-                            ),
-                        )
-                        .into_any_element()
-                })
-            } else {
-                None
-            }
-        };
-
-        // -- Stats rail (absolute overlay, right edge) --
-        // Rendered when the Stats tab is active and the shell's rail is open.
-        let stats_rail: Option<AnyElement> = {
-            let (rail_open, rail_tab) = {
-                let shell = self.chart_shell.read(cx);
-                (shell.chart_rail_open, shell.chart_rail_tab)
-            };
-            if should_render_stats_rail(rail_open, rail_tab) {
-                self.render_stats_rail(&theme, cx)
-            } else {
-                None
-            }
+        // -- Side rails (metric picker, stats) --
+        // A chart tab hands its rails to the workspace, which draws them as
+        // islands beside the document island (`side_panels`). Embedded in a
+        // dashboard panel there is no workspace slot, so they stay docked
+        // inside the chart.
+        let docked_rails: Vec<AnyElement> = if embedded {
+            self.rail_panels(window, cx)
+                .into_iter()
+                .map(|(_, width, content)| docked_rail(&theme, width, content))
+                .collect()
+        } else {
+            Vec::new()
         };
 
         // When embedded inside a dashboard panel, surface the legend as a
@@ -607,9 +558,93 @@ impl ChartDocument {
                     .child(chart_area),
             )
             .when_some(embedded_legend, |el, legend| el.child(legend))
-            .when_some(metric_rail, |el, rail| el.child(rail))
-            .when_some(stats_rail, |el, rail| el.child(rail))
+            .children(docked_rails)
             .into_any_element()
+    }
+
+    /// The open rail, if any, as `(id, width, content)`: the metric picker
+    /// while the Metric tab is open, the stats rail while the Stats tab is.
+    fn rail_panels(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(&'static str, Pixels, AnyElement)> {
+        let (rail_open, rail_tab) = {
+            let shell = self.chart_shell.read(cx);
+            (shell.chart_rail_open, shell.chart_rail_tab)
+        };
+
+        if rail_open && rail_tab == ChartRailTab::Metric {
+            // Single read+update path: render the picker inside one `update`
+            // closure so a concurrent clear of `metric_picker` (subscription,
+            // pending action) cannot turn the previously observed `Some` into
+            // a `None` between the read and the update.
+            let cache = self.app_state.read(cx).metric_catalog_cache().clone();
+            let picker: Option<AnyElement> = self.chart_shell.update(cx, |shell, cx| {
+                shell.metric_picker.as_mut().map(|picker| {
+                    MetricPickerView {
+                        state: picker,
+                        cache: &cache,
+                    }
+                    .render(window, cx)
+                    .into_any_element()
+                })
+            });
+
+            return picker
+                .map(|element| {
+                    let content = div()
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(element)
+                        .into_any_element();
+
+                    (
+                        "chart-metric-picker",
+                        ChartDocumentMetrics::PICKER_WIDTH,
+                        content,
+                    )
+                })
+                .into_iter()
+                .collect();
+        }
+
+        if should_render_stats_rail(rail_open, rail_tab) {
+            let theme = cx.theme().clone();
+
+            return self
+                .render_stats_rail(&theme, cx)
+                .map(|content| ("chart-stats", ChartDocumentMetrics::RAIL_WIDTH, content))
+                .into_iter()
+                .collect();
+        }
+
+        Vec::new()
+    }
+
+    /// The rails of a chart tab, for the workspace to draw as islands beside
+    /// the document island. An embedded chart keeps its rails docked inside,
+    /// so it hands over none.
+    pub(super) fn side_panels(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<DocumentSidePanel> {
+        if self.embedded {
+            return Vec::new();
+        }
+
+        self.rail_panels(window, cx)
+            .into_iter()
+            .map(|(id, width, content)| DocumentSidePanel {
+                id: id.into(),
+                width,
+                content,
+            })
+            .collect()
     }
 
     /// Build the always-visible legend row used when this chart is embedded in
@@ -881,7 +916,7 @@ impl ChartDocument {
         Some(self.wrap_stats_rail_chrome(body, theme))
     }
 
-    /// Wraps a stats rail body in the absolute-right rail chrome, headed by
+    /// Wraps a stats rail body in the rail's padding, headed by
     /// the "STATS" label and a close button that dismisses the rail by
     /// setting `chart_rail_open = false` on the shell.
     fn wrap_stats_rail_chrome(
@@ -921,22 +956,33 @@ impl ChartDocument {
                     ),
             );
 
-        docked_island_frame(theme)
-            .absolute()
-            .top_0()
-            .right_0()
-            .bottom_0()
-            .w(ChartDocumentMetrics::RAIL_WIDTH + IslandMetrics::GAP)
-            .occlude()
-            .child(
-                Island::new()
-                    .flex_1()
-                    .min_h_0()
-                    .px(ChartDocumentMetrics::RAIL_PADDING_X)
-                    .py(ChartDocumentMetrics::RAIL_PADDING_Y)
-                    .child(header)
-                    .child(body),
-            )
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .px(ChartDocumentMetrics::RAIL_PADDING_X)
+            .py(ChartDocumentMetrics::RAIL_PADDING_Y)
+            .child(header)
+            .child(body)
             .into_any_element()
     }
+}
+
+/// A rail docked inside the chart, for a chart embedded where no workspace
+/// island can take it: an island on the right edge, over the chart area.
+fn docked_rail(
+    theme: &gpui_component::theme::Theme,
+    width: Pixels,
+    content: AnyElement,
+) -> AnyElement {
+    docked_island_frame(theme)
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .w(width + IslandMetrics::GAP)
+        .occlude()
+        .child(Island::new().flex_1().min_h_0().child(content))
+        .into_any_element()
 }

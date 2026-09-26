@@ -2850,9 +2850,8 @@ mod menu_availability_tests {
         assert!(matches!(first_entry.action, ContextMenuAction::Connect));
 
         sidebar.update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
-        assert_eq!(
-            state.read_with(cx, |state, _| state.connect_failure(profile_id).is_some()),
-            false,
+        assert!(
+            !state.read_with(cx, |state, _| state.connect_failure(profile_id).is_some()),
             "starting a retry must clear the failure"
         );
 

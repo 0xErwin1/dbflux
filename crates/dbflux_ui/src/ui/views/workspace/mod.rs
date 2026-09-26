@@ -1,6 +1,7 @@
 mod actions;
 mod dispatch;
 pub mod inspector;
+mod notifications;
 pub mod pipeline;
 mod render;
 mod shell;
@@ -377,6 +378,8 @@ pub struct Workspace {
     focus_handle: FocusHandle,
     /// Tab stop of the title bar's command search, which opens the palette.
     command_search_focus: FocusHandle,
+    /// The notifications popover under the title-bar bell.
+    notifications: notifications::NotificationsPopoverState,
 
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
@@ -1510,6 +1513,8 @@ impl Workspace {
         )
         .detach();
 
+        Self::subscribe_notifications(&app_state, cx);
+
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
@@ -1559,6 +1564,7 @@ impl Workspace {
             focus_target: FocusTarget::default(),
             focus_handle,
             command_search_focus: cx.focus_handle(),
+            notifications: notifications::NotificationsPopoverState::new(cx),
             _background_purge_task: None,
             pending_login_modal_open: None,
         };
@@ -1980,6 +1986,24 @@ impl Workspace {
     /// expands their panel first, since a collapsed panel renders nothing
     /// that could hold focus.
     pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
+        self.mark_focus_target(target, cx);
+
+        if target == FocusTarget::Sidebar {
+            self.focus_handle.focus(window, cx);
+        }
+
+        if target == FocusTarget::Document {
+            self.tab_manager
+                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+        }
+
+        cx.notify();
+    }
+
+    /// Records `target` as the focused area and updates the panes that draw
+    /// it, without moving keyboard focus. A click inside a document's side
+    /// island uses this, so a field it focuses keeps the keyboard.
+    pub(crate) fn mark_focus_target(&mut self, target: FocusTarget, cx: &mut Context<Self>) {
         if target == FocusTarget::BackgroundTasks {
             self.tasks_state = PanelState::Expanded;
         }
@@ -1998,15 +2022,6 @@ impl Workspace {
         self.tasks_panel.update(cx, |panel, cx| {
             panel.set_focused(target == FocusTarget::BackgroundTasks, cx);
         });
-
-        if target == FocusTarget::Sidebar {
-            self.focus_handle.focus(window, cx);
-        }
-
-        if target == FocusTarget::Document {
-            self.tab_manager
-                .update(cx, |mgr, cx| mgr.focus_active(window, cx));
-        }
 
         cx.notify();
     }

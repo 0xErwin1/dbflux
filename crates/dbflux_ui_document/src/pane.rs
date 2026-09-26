@@ -71,6 +71,19 @@ pub struct StatusSegment {
     pub tooltip: Option<gpui::SharedString>,
 }
 
+/// A panel a document hands to the workspace instead of drawing it inside its
+/// own island: a settings rail, a preview, the query history.
+///
+/// The workspace draws each one as a full-height island of `width` beside the
+/// document island, in the order the document returns them. `content` is
+/// built by the document, so its listeners still act on the document.
+pub struct DocumentSidePanel {
+    /// Stable per document; keys the island's element id.
+    pub id: gpui::SharedString,
+    pub width: gpui::Pixels,
+    pub content: AnyElement,
+}
+
 /// Callback a document supplies when it asks for an object editor tab, invoked
 /// with the object's key after every successful save.
 pub type ObjectSavedCallback = std::rc::Rc<dyn Fn(&str, &mut App)>;
@@ -234,6 +247,11 @@ pub struct PaneHandle {
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 
+    /// Returns the side panels the document currently shows, drawn by the
+    /// workspace as islands beside the document island. `None` for documents
+    /// that never show one.
+    pub side_panels: Option<Box<dyn Fn(&mut Window, &mut App) -> Vec<DocumentSidePanel>>>,
+
     /// Runs document-owned asynchronous teardown before the pane is removed.
     pub on_close: Option<Box<dyn Fn(&mut App)>>,
 
@@ -326,6 +344,7 @@ impl PaneHandle {
             tab_tooltip: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            side_panels: None,
             on_close: None,
             save_for_close: None,
             apply_for_close: None,
@@ -529,6 +548,15 @@ impl PaneHandle {
         self.key_context_entries
             .as_ref()
             .map(|entries| entries(cx))
+            .unwrap_or_default()
+    }
+
+    /// The side panels the document shows right now; empty for documents
+    /// that never show one.
+    pub fn side_panels(&self, window: &mut Window, cx: &mut App) -> Vec<DocumentSidePanel> {
+        self.side_panels
+            .as_ref()
+            .map(|panels| panels(window, cx))
             .unwrap_or_default()
     }
 

@@ -197,8 +197,10 @@ event has a correlation id — **Filter by Correlation**.
 
 When something you did fails, DBFlux shows a toast with a **View in Audit** action.
 Clicking it opens the audit viewer filtered to that exact event (matched by a
-correlation id shared between the toast and the audit row). The **error badge** in
-the status bar opens the viewer pre-filtered to recent user-facing failures.
+correlation id shared between the toast and the audit row). The error also stays
+in the notifications center under the title-bar bell, whose row has the same
+**View in Audit** action. The **error badge** in the status bar opens the viewer
+pre-filtered to recent user-facing failures.
 
 ### Export
 

@@ -1352,23 +1352,26 @@ impl CodeDocument {
 
     // === Render the context bar ===
 
-    /// The profile the context bar is bound to, connected or not.
-    fn bound_profile<'a>(&self, cx: &'a App) -> Option<&'a dbflux_core::ConnectionProfile> {
+    /// The profile of the connection the context bar is bound to, only while
+    /// that connection is open. A tab restored with a profile that is not
+    /// connected shows "No connection", so it must not carry that profile's
+    /// driver logo or environment either.
+    fn connected_profile<'a>(&self, cx: &'a App) -> Option<&'a dbflux_core::ConnectionProfile> {
         let connection_id = self.source.exec_ctx.connection_id.or(self.connection_id)?;
 
         self.app_state
             .read(cx)
-            .profiles()
-            .iter()
-            .find(|profile| profile.id == connection_id)
+            .connections()
+            .get(&connection_id)
+            .map(|connected| &connected.profile)
     }
 
     /// Driver logo and tone for the connection selector, or a muted database
-    /// icon while no connection is bound.
-    fn connection_driver_icon(&self, cx: &App) -> (AppIcon, Hsla) {
+    /// icon while no connection is open.
+    pub(super) fn connection_driver_icon(&self, cx: &App) -> (AppIcon, Hsla) {
         let fallback = (AppIcon::Database, cx.theme().muted_foreground);
 
-        let Some(profile) = self.bound_profile(cx) else {
+        let Some(profile) = self.connected_profile(cx) else {
             return fallback;
         };
 
@@ -1383,11 +1386,11 @@ impl CodeDocument {
         )
     }
 
-    /// The bound connection's environment, shown as an EnvTag in the
+    /// The open connection's environment, shown as an EnvTag in the
     /// connection selector; a production environment also raises the
-    /// production banner.
-    fn connection_environment(&self, cx: &App) -> Option<ConnectionEnvironment> {
-        self.bound_profile(cx)?.environment()
+    /// production banner. `None` while no connection is open.
+    pub(super) fn connection_environment(&self, cx: &App) -> Option<ConnectionEnvironment> {
+        self.connected_profile(cx)?.environment()
     }
 
     /// The production banner under the context bar (AppByzEditor): a danger

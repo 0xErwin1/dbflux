@@ -45,8 +45,8 @@ impl AppStateEntity {
         cx.notify();
     }
 
-    /// The newer release the status bar should advertise: the latest check
-    /// found one and the user has not skipped it.
+    /// The newer release the notifications center should advertise: the
+    /// latest check found one and the user has not skipped it.
     pub fn visible_update(&self) -> Option<&AvailableUpdate> {
         let update = self.update_check().available_update()?;
         let skipped = self.update_settings().skipped_update_version.as_deref();
@@ -127,7 +127,8 @@ fn record_outcome(app_state: &Entity<AppStateEntity>, outcome: UpdateCheckOutcom
     }
 }
 
-/// Stores `label` as the skipped release, which hides its notice and chip.
+/// Stores `label` as the skipped release, which hides its notice and its
+/// notification.
 pub fn skip_update(app_state: &Entity<AppStateEntity>, label: &str, cx: &mut App) {
     let result = app_state.update(cx, |state, cx| {
         let settings = updates::UpdateSettings {
@@ -281,8 +282,6 @@ mod tests {
             "updates.toast.skip",
             "updates.toast.skip_version",
             "updates.toast.skip_error",
-            "updates.status_bar.available",
-            "updates.status_bar.tooltip",
         ] {
             for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);

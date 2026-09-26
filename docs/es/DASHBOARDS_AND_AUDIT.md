@@ -213,8 +213,10 @@ cuando el evento tiene un correlation id — **Filter by Correlation**.
 Cuando algo que hiciste falla, DBFlux muestra un toast con una acción **View in
 Audit**. Al hacer clic se abre el visor de audit filtrado a ese evento exacto
 (emparejado por un correlation id compartido entre el toast y la fila de audit).
-El **badge de error** en la status bar abre el visor pre-filtrado a los fallos
-recientes orientados al usuario.
+El error también queda en el centro de notificaciones de la campana de la barra
+de título, cuya fila tiene la misma acción **View in Audit**. El **badge de
+error** en la status bar abre el visor pre-filtrado a los fallos recientes
+orientados al usuario.
 
 ### Exportar
 

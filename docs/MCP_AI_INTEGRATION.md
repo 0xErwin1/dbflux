@@ -224,6 +224,7 @@ Configure governance in the DBFlux GUI before starting the MCP server.
 
 5. **Workspace → Pending Approvals**
    - Review and approve or reject the calls a policy sent to approval. This is the only place pending executions are resolved.
+   - A waiting call also shows in the notifications center under the title-bar bell, which wears the accent badge while one waits. **Review** on its row opens this tab on that call; the popover itself never approves or rejects.
    - `j` / `k` move through the pending calls, `a` approves the selected one, and `r` rejects it. An approved call runs when the agent repeats it with the same arguments. Every decision is written to the audit log.
    - The reason field in the footer is sent back to the agent when you reject. While it has focus, `r` and `a` type text instead of deciding. It is cleared after each decision.
 

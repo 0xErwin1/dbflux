@@ -658,15 +658,19 @@ difusa.
 DBFlux mantiene un historial de las queries completadas y te permite guardar
 queries con nombre.
 
-- `Alt+h` (en el editor) alterna el desplegable de historial de queries.
+- `Alt+h` (en el editor), o el botón History de la barra de herramientas, abre y
+  cierra el panel de historial de queries junto al editor.
 - `Ctrl+s` (`Cmd+s`) — **Save** la query actual.
 - `Ctrl+Shift+s` (`Cmd+Shift+s`) — **Save File As**.
 - `Ctrl+p` (`Cmd+p`, en el editor) — abre el explorador de queries guardadas.
 
-Dentro del modal de historial puedes navegar con `Ctrl+j`/`Ctrl+k` (o las
-flechas), abrir una entrada con `Enter`, y usar los mnemónicos locales `Ctrl+f`
-(marcar como favorito), `Ctrl+r` (renombrar) y `Ctrl+d` (eliminar). `/` enfoca
-la búsqueda del modal.
+El panel de historial lista las queries recientes y guardadas y queda abierto
+mientras editas. Hacer clic en una entrada o pulsar `Enter` la carga en el
+editor. Con el foco en el panel puedes navegar con `Ctrl+j`/`Ctrl+k` (o las
+flechas), guardar una query reciente con `Ctrl+s`, y usar los mnemónicos locales
+`Ctrl+f` (marcar como favorito), `Ctrl+r` (renombrar) y `Ctrl+d` (eliminar). `/`
+o el botón de búsqueda del encabezado del panel abre el campo de búsqueda, y
+`Esc` cierra el panel.
 
 ---
 
@@ -957,6 +961,30 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 | `g` / `Shift+g` (o `Home` / `End`)            | Primero / último                         |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                    |
 | `z`                                           | Alternar colapso del panel               |
+
+### Centro de notificaciones
+
+La campana del extremo derecho de la barra de título abre el centro de
+notificaciones, un popover que flota sobre el espacio de trabajo. Lista las
+aprobaciones de MCP que esperan una decisión, los errores de acciones que
+ejecutaste, una actualización de DBFlux disponible y los trabajos de
+exportación, importación, migración y análisis de volcados que terminaron. El
+badge de la campana cuenta los elementos sin leer y toma el color del más
+urgente: rojo para un error, el color de acento para una aprobación y neutro
+para actualizaciones y trabajos terminados. Sin nada sin leer, la campana no
+tiene badge.
+
+Abrir el popover no marca nada como leído. Hacer clic en una fila abre su
+destino y la marca como leída: una aprobación abre la pestaña de aprobaciones
+de MCP en esa solicitud, un error abre Audit filtrado por su correlation id, la
+actualización abre sus notas de versión y un trabajo terminado abre el panel de
+tareas en segundo plano. **Marcar todo como leído** lee todo y **Borrar leídas**
+quita los elementos leídos. La lista dura lo que dura la sesión. Las
+actualizaciones aparecen aquí en lugar de en la barra de estado.
+
+| Teclas   | Acción                                                 |
+| -------- | ------------------------------------------------------ |
+| `Escape` | Cerrar el popover (un clic fuera de él hace lo mismo) |
 
 ### Command palette
 

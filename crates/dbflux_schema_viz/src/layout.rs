@@ -710,6 +710,7 @@ fn build_edges(graph: &SchemaGraph, nodes: &HashMap<NodeIndex, NodeLayout>) -> V
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::graph::SchemaGraph;
