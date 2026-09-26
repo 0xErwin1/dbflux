@@ -470,6 +470,10 @@ pub struct CodeDocument {
 
     /// Opt-in modal editing state for the editor.
     vim: vim::VimState,
+    vim_search_input: Entity<InputState>,
+    _vim_search_subscription: Subscription,
+    _vim_editor_focus_subscription: Option<Subscription>,
+    _vim_keystroke_interceptor: Option<Subscription>,
 }
 
 struct PendingQueryResult {
@@ -644,6 +648,7 @@ impl CodeDocument {
             window,
             |this, input, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    this.finish_replace_once(_window, cx);
                     let current_length = input.read(cx).text().len();
                     let previous_length =
                         std::mem::replace(&mut this.editor.last_change_length, current_length);
@@ -690,7 +695,10 @@ impl CodeDocument {
                 InputEvent::Focus => {
                     this.enter_editor_mode(cx);
                 }
-                InputEvent::Blur | InputEvent::PressEnter { .. } => {}
+                InputEvent::Blur => {
+                    this.close_change_group_on_blur(cx);
+                }
+                InputEvent::PressEnter { .. } => {}
             },
         );
 
@@ -918,6 +926,17 @@ impl CodeDocument {
                     "document.code.context_bar.fallback.sources"
                 ))
         });
+        let vim_search_input = cx.new(|cx| InputState::new(window, cx));
+        let vim_search_subscription = cx.subscribe_in(
+            &vim_search_input,
+            window,
+            |this, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) && this.vim.search_open {
+                    let query = input.read(cx).value().to_string();
+                    this.accept_vim_search(query, window, cx);
+                }
+            },
+        );
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
         let source_end_input =
@@ -1077,8 +1096,19 @@ impl CodeDocument {
             pending: PendingActions::default(),
             close_after_save: false,
             vim: vim::VimState::default(),
+            vim_search_input,
+            _vim_search_subscription: vim_search_subscription,
+            _vim_editor_focus_subscription: None,
+            _vim_keystroke_interceptor: None,
         };
 
+        let editor_focus = document.editor.input_state.read(cx).focus_handle(cx);
+        document._vim_editor_focus_subscription = Some(cx.on_focus_out(
+            &editor_focus,
+            window,
+            |document, _, _, cx| document.close_change_group_on_blur(cx),
+        ));
+        document._vim_keystroke_interceptor = Some(vim::intercept_vim_keystrokes(cx));
         document.sync_context_dropdowns(cx);
         document.sync_vim_setting(cx);
         document

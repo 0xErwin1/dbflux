@@ -220,6 +220,7 @@ indexing_slicing = "warn"
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }
+gpui-base = { path = "vendor/gpui-base" }
 
 # Development build profile tuned for memory and link speed.
 # Full debug info (debug = 2) is the main driver of peak RAM and disk usage

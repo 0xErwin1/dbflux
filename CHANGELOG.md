@@ -6,6 +6,89 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Vim single-character replace** — Normal `r{char}` replaces the character under the cursor, and `Nr{char}` the next N characters on the line, as one undo step; the cursor stays on the first replaced character. It does nothing when fewer than N characters remain before the line ending, on an empty line, or in read-only editors. `r` with `Enter` replaces the characters with one line break that keeps the line's indentation, and `r` with `Tab` writes tabs. `Escape`, `Backspace`, `Delete`, the arrow keys, and leaving the editor cancel without editing; shortcuts cancel and still run. The character can come from an input method (IME). Live UI and IME validation are not claimed.
+
+* **Vim Replace mode** — `R` enters Replace mode, shown as `REPLACE`. Typed characters overwrite the character under the cursor and are appended at a line ending; `Backspace` restores what the session overwrote; `Escape` returns to Normal. The session is one undo step, and read-only editors ignore `R`. Text that arrives without a key press, such as an IME commit, is inserted rather than overwriting. A count before `R` is ignored.
+
+* **Vim Visual Block change** — Visual Block `c` deletes the block columns on every row that reaches the block's left column and enters Insert on the first of those rows; `Escape` inserts the typed text at the same column of the other rows, all in one undo step. Typed text containing a line break is not copied, and leaving the editor ends Insert without copying. Read-only editors keep the selection.
+
+* **Vim Visual character and line change** — `c` changes inclusive selected characters or logical lines through native editing and enters Insert for replacement. One ordinary undo restores the original text and collapsed anchor. Selected-query bytes remain unchanged. Read-only changes leave the selection intact without entering Insert; an empty character or line selection enters Insert without deleting text. Linewise changes handle a trailing empty logical row after LF or CRLF. The 1000-change undo cap, stale-IME limitation, and lack of live UI validation still apply.
+
+* **Vim Normal-mode change commands** — `c` accepts characterwise `h` / `l`, linewise `j` / `k`, word motions `w` / `W` / `e` / `E` / `b` / `B`, and linewise `gg` / `G`, alongside `cc`. `cw` changes through the next `w` boundary. Prefix and inner counts multiply (`2c3w` spans six motions); absolute targets clamp to 1-based rows (`2c3G` targets row 6, while bare `cG` targets the last row). Linewise changes preserve the separator before the following row; counted `cc` includes existing LF or CRLF terminators. Native deletion and Insert replacement form one undo step in ordinary sessions with the first caret restored; read-only changes do nothing. A Vim redo key remains unsupported. Undo groups cap at 1000 changes, so long sessions may require multiple steps. A late stale IME unmark after the next composition starts may prematurely commit the active native composition and split the Vim undo group; transitioning to read-only or Normal finalizes displayed preedit as-is instead of accepting a later candidate. Full IME safety and live UI validation are not claimed.
+
+* **Vim local marks in code editors** — Normal-mode `m{a-z}` sets or
+  overwrites a per-document lowercase mark; `'{a-z}` jumps to its line's first
+  non-blank character, while backtick followed by the letter jumps to its exact
+  position, clamped to a Normal cursor. Marks work in read-only editors and
+  follow native edits, IME commits, undo, and redo. Insertions at a mark move
+  it after inserted text; deletion or replacement of marked content collapses
+  it to the changed range's start, so undo need not restore the deleted-interior
+  position. Wholesale value replacement, disabling Vim, or closing the document
+  clears marks; they are not shared across tabs or sessions. Desktop IME and
+  rendered UI validation remain pending.
+
+* **Vim literal search in code editors** — In Normal mode, `/` opens a native
+  text prompt; `Enter` searches forward from the cursor with wrap and
+  case-sensitive literal matching. `Escape` cancels without changing the cursor
+  or last query. Counted `n` / `N` repeat forward / backward, including in
+  read-only editors. Each tab retains its own search query; `Tab` / `Shift+Tab`
+  leave focus in the prompt without action. Regex and Vim-style search
+  highlighting are not supported; desktop IME and rendered UI validation remain
+  pending.
+
+* **Vim pending keys in the code-pane strip** — Shows incomplete raw key
+  sequences such as `2`, `2d3`, and `4g`. The sequence clears on completion,
+  interruption, focus loss, `Escape`, or `Tab`; no command history or workspace
+  status-bar display is added.
+
+* **Vim absolute-line motions** — Normal and Visual `gg` / `G` move to the
+  first / last logical line; `Ngg` / `NG` target a clamped 1-based absolute
+  line. Visual selection extends; interrupted or unfocused pending `g` clears.
+  Normal `d` / `y` with `gg` / `G` now deletes / yanks whole lines through
+  the clamped absolute target (bare `gg`: first; bare `G`: last). Prefix or
+  inner counts target a 1-based row; together they multiply (`2d3G`: row 6),
+  so `1dG` differs from bare `dG`. Read-only deletion is a no-op; yank still
+  copies to the clipboard, and deletion is one undo step.
+
+* **Vim Visual selection operators** — Visual character, line, and block
+  selections support `d` / `x` deletion and `y` yank to the system clipboard.
+  Block deletion uses disjoint row ranges in one undo step. An empty selection
+  returns to Normal without editing or changing the clipboard; read-only
+  deletion keeps the selection with no effect, while yank still works. `dd`
+  and `cc` remain Normal-only.
+
+* **Vim horizontal and vertical operators** — Normal-mode `d` and `y`
+  accept `h`/`l` as characterwise motions and `j`/`k` as linewise motions.
+  Operator and motion counts multiply (`2d3j` spans six lines). Yanks use
+  the system clipboard; read-only deletes do nothing, and each delete is
+  one undo step. This is not full Vim compatibility.
+
+* **Vim word-motion operators** — Normal-mode `d` and `y` accept `w`/`W`,
+  `e`/`E`, and `b`/`B`. Operator and motion counts multiply (`2d3w`);
+  `w`/`b` ranges exclude the destination and `e` ranges include it (also
+  for uppercase variants). Yanks use the system clipboard, read-only deletes
+  do nothing, and each delete is one undo step. Normal `c` now supports these
+  word motions and `h`/`j`/`k`/`l`; this is not full Vim compatibility.
+
+* **Whole-line Vim commands** — Normal-mode `dd` deletes and `yy` copies whole
+  logical lines to the system clipboard. Prefix counts and counts between the
+  repeated keys apply, stopping at EOF. Existing line endings are preserved in
+  yanks; deleting the final line removes its preceding separator. Read-only
+  `dd` does nothing, and each counted deletion is one undo step.
+
+* **Expanded Vim editing in code editors** — Normal mode now supports `a`/`A`/`I`
+  insertion positions, `e`/`E`/`w`/`W`/`b`/`B` word motions, motion counts,
+  and counted `x`/`u`. `v` and `V` now select characters or whole lines using
+  real editor ranges; motions and counts extend the selection, `Escape` exits,
+  and `Ctrl+Enter` passes nonempty selected query text to execution. Normal
+  `Ctrl+v` enters genuine multi-range, display-row rectangular Visual Block
+  selection; Insert `Ctrl+v` still pastes. `Ctrl+Enter` joins ordered nonempty
+  row fragments with newlines (as with mouse Alt-drag), falling back to the
+  full buffer for whitespace-only selections. Block columns count Unicode
+  scalars, so tabs, wide characters and combining graphemes may not align to
+  visual cells. Live UI visual validation remains pending; pixel-perfect
+  alignment is not claimed.
+
 * **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
   Vim mode toggle, off by default. Code editors then open in Normal mode,
   where `h`/`j`/`k`/`l` and `Enter` move, `i` enters Insert mode, `x` deletes
@@ -36,6 +119,16 @@ All notable changes to DBFlux will be documented in this file.
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
+
+* **Vim Visual selection caret** — Visual character and line selections retain
+  their selected text while rendering the caret at the active head, including
+  upward motions and lines whose selection includes the next line's start.
+  Native selection, blur, and IME take caret ownership back. Live visual
+  verification remains pending.
+
+* **Vim linewise yank of a trailing empty line** — `yy` and linewise `y` motions
+  copy the existing LF or CRLF separator instead of an empty clipboard value.
+  Unterminated lines and empty buffers do not gain a newline.
 
 * **SQLite cancel is no longer lost at query start** — cancelling a SQLite
   query right after it started, before its first statement began running,

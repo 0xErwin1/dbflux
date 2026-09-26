@@ -266,6 +266,15 @@ impl CodeDocument {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, window, cx| {
+                        if this.vim.search_open
+                            && this
+                                .vim_search_input
+                                .read(cx)
+                                .focus_handle(cx)
+                                .is_focused(window)
+                        {
+                            return;
+                        }
                         this.enter_editor_mode(cx);
                         this.editor
                             .input_state
@@ -275,27 +284,31 @@ impl CodeDocument {
                 )
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::Escape, window, cx| {
-                        if this.handle_vim_escape_action(window, cx) {
+                        this.clear_vim_count_and_notify(cx);
+                        if this.cancel_vim_search(window, cx)
+                            || this.handle_vim_escape_action(window, cx)
+                        {
                             cx.stop_propagation();
                         }
                     },
                 ))
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::IndentInline, _window, cx| {
-                        if this.vim_swallows_indent_action() {
+                        if this.vim_swallows_indent_action(cx) {
                             cx.stop_propagation();
                         }
                     },
                 ))
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::OutdentInline, _window, cx| {
-                        if this.vim_swallows_indent_action() {
+                        if this.vim_swallows_indent_action(cx) {
                             cx.stop_propagation();
                         }
                     },
                 ))
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                        this.clear_vim_count_and_notify(cx);
                         if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
                             cx.stop_propagation();
                         }
@@ -303,6 +316,7 @@ impl CodeDocument {
                 )
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                        this.clear_vim_count_and_notify(cx);
                         if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
                             cx.stop_propagation();
                         }
@@ -334,6 +348,16 @@ impl CodeDocument {
                             .h_full(),
                     ),
                 )
+                .when(self.vim.search_open, |el| {
+                    el.child(
+                        div()
+                            .id("vim-search-prompt")
+                            .flex()
+                            .items_center()
+                            .child("/")
+                            .child(Input::new(&self.vim_search_input).id("vim-search-input")),
+                    )
+                })
                 .when_some(self.vim_mode(), |el, mode| {
                     el.child(self.render_vim_mode_indicator(mode, cx))
                 }),
@@ -356,6 +380,14 @@ impl CodeDocument {
             .border_color(theme.border)
             .bg(theme.tab_bar)
             .child(Text::caption(crate::labels::vim_mode_label(mode)))
+            .when(!self.vim.pending_keys.is_empty(), |el| {
+                el.child(
+                    div()
+                        .id("vim-pending-command")
+                        .ml(Spacing::SM)
+                        .child(self.vim.pending_keys.clone()),
+                )
+            })
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

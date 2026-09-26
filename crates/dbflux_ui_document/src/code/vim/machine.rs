@@ -16,6 +16,17 @@ pub enum VimMode {
     #[default]
     Normal,
     Insert,
+    Replace,
+    Visual,
+    VisualLine,
+    VisualBlock,
+}
+
+impl VimMode {
+    /// Insert and Replace let the native input edit text; the other modes lock it.
+    pub(crate) fn accepts_text(self) -> bool {
+        matches!(self, VimMode::Insert | VimMode::Replace)
+    }
 }
 
 /// What a key does in the current mode.
@@ -25,12 +36,35 @@ pub(crate) enum VimCommand {
     MoveRight,
     MoveUp,
     MoveDown,
+    PendingG,
+    PendingMark(char),
+    FirstLine,
+    LastLine,
     EnterInsert,
+    EnterVisual,
+    EnterVisualLine,
+    EnterVisualBlock,
+    LeaveVisual,
+    Append,
+    AppendLine,
+    InsertLine,
+    WordEnd(bool),
+    WordForward(bool),
+    WordBackward(bool),
+    Digit(u8),
     LeaveInsert,
     DeleteChar,
+    ReplaceOnce,
+    VisualDelete,
+    VisualChange,
+    VisualYank,
+    Operator(char),
     Undo,
+    OpenSearch,
+    RepeatSearch(bool),
     /// Consumed without effect, so the key neither edits nor reaches other handlers.
     Swallow,
+    EnterReplace,
 }
 
 /// The parts of a keystroke the machine needs.
@@ -52,36 +86,123 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
     }
 
     match mode {
-        VimMode::Insert => (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert),
-        VimMode::Normal => {
+        VimMode::Insert | VimMode::Replace => {
+            (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert)
+        }
+        VimMode::Normal | VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => {
+            let visual = matches!(
+                mode,
+                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+            );
+            if key.key == "escape" && visual {
+                return Some(VimCommand::LeaveVisual);
+            }
+            if key.key == "v" && !key.shift {
+                return Some(if mode == VimMode::Visual {
+                    VimCommand::LeaveVisual
+                } else {
+                    VimCommand::EnterVisual
+                });
+            }
+            if key.key == "v" && key.shift {
+                return Some(if mode == VimMode::VisualLine {
+                    VimCommand::LeaveVisual
+                } else {
+                    VimCommand::EnterVisualLine
+                });
+            }
             // Tab and Shift+Tab would otherwise indent or move focus out of the editor.
             if key.key == "tab" {
                 return Some(VimCommand::Swallow);
             }
 
             if key.shift {
-                return None;
+                return match key.key {
+                    "a" if !visual => Some(VimCommand::AppendLine),
+                    "i" if !visual => Some(VimCommand::InsertLine),
+                    "r" if !visual => Some(VimCommand::EnterReplace),
+                    "e" => Some(VimCommand::WordEnd(true)),
+                    "w" => Some(VimCommand::WordForward(true)),
+                    "b" => Some(VimCommand::WordBackward(true)),
+                    "g" => Some(VimCommand::LastLine),
+                    "n" if !visual => Some(VimCommand::RepeatSearch(true)),
+                    _ => None,
+                };
             }
 
             match key.key {
+                "g" => Some(VimCommand::PendingG),
+                "m" | "'" | "`" if !visual => {
+                    Some(VimCommand::PendingMark(key.key.chars().next()?))
+                }
+                "/" if !visual => Some(VimCommand::OpenSearch),
+                "n" if !visual => Some(VimCommand::RepeatSearch(false)),
                 "h" => Some(VimCommand::MoveLeft),
                 "l" => Some(VimCommand::MoveRight),
                 "j" | "enter" => Some(VimCommand::MoveDown),
                 "k" => Some(VimCommand::MoveUp),
-                "i" => Some(VimCommand::EnterInsert),
-                "x" => Some(VimCommand::DeleteChar),
-                "u" => Some(VimCommand::Undo),
+                "i" if !visual => Some(VimCommand::EnterInsert),
+                "a" if !visual => Some(VimCommand::Append),
+                "e" => Some(VimCommand::WordEnd(false)),
+                "w" => Some(VimCommand::WordForward(false)),
+                "b" => Some(VimCommand::WordBackward(false)),
+                "0" => Some(VimCommand::Digit(0)),
+                digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => {
+                    Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
+                }
+                "x" | "d" if visual => Some(VimCommand::VisualDelete),
+                "c" if visual => Some(VimCommand::VisualChange),
+                "y" if visual => Some(VimCommand::VisualYank),
+                "x" if !visual => Some(VimCommand::DeleteChar),
+                "r" if !visual => Some(VimCommand::ReplaceOnce),
+                "d" if !visual => Some(VimCommand::Operator('d')),
+                "c" if !visual => Some(VimCommand::Operator('c')),
+                "y" if !visual => Some(VimCommand::Operator('y')),
+                "u" if !visual => Some(VimCommand::Undo),
                 _ => None,
             }
         }
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+/// Selects a literal match by its UTF-8 byte start, excluding the cursor's start.
+/// Ranges must be sorted and nonoverlapping.
+pub(crate) fn cursor_relative_match(
+    matches: &[Range<usize>],
+    cursor: usize,
+    direction: SearchDirection,
+) -> Option<Range<usize>> {
+    if matches.is_empty() {
+        return None;
+    }
+
+    let index = match direction {
+        SearchDirection::Forward => {
+            matches.partition_point(|range| range.start <= cursor) % matches.len()
+        }
+        SearchDirection::Backward => matches
+            .partition_point(|range| range.start < cursor)
+            .checked_sub(1)
+            .unwrap_or(matches.len() - 1),
+    };
+    Some(matches[index].clone())
+}
+
 /// The mode a command leaves the editor in.
 pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
         VimCommand::EnterInsert => VimMode::Insert,
-        VimCommand::LeaveInsert => VimMode::Normal,
+        VimCommand::EnterReplace => VimMode::Replace,
+        VimCommand::LeaveInsert | VimCommand::LeaveVisual => VimMode::Normal,
+        VimCommand::EnterVisual => VimMode::Visual,
+        VimCommand::EnterVisualLine => VimMode::VisualLine,
+        VimCommand::EnterVisualBlock => VimMode::VisualBlock,
         _ => mode,
     }
 }
@@ -177,6 +298,373 @@ pub(crate) fn step_right(text: &Rope, offset: usize) -> usize {
     line.start + target.min(line.last_column())
 }
 
+/// Absolute logical line motion, using Vim's first nonblank column.
+pub(crate) fn absolute_line(text: &Rope, row: usize) -> usize {
+    let line = Line::at_row(text, row.min(text.lines_len().saturating_sub(1)));
+    line.start
+        + line
+            .content
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map_or(0, |(column, _)| column)
+}
+
+pub(crate) fn line_start(text: &Rope, offset: usize) -> usize {
+    Line::containing(text, offset).start
+}
+
+pub(crate) fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    line.start
+        + line
+            .content
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map_or(0, |(column, _)| column)
+}
+
+pub(crate) fn line_end(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    line.start + line.content.len()
+}
+
+/// Keys that edit or move the cursor through editor actions instead of
+/// delivering text.
+pub(crate) fn is_editing_key(key: &str) -> bool {
+    matches!(
+        key,
+        "backspace"
+            | "delete"
+            | "enter"
+            | "tab"
+            | "left"
+            | "right"
+            | "up"
+            | "down"
+            | "home"
+            | "end"
+            | "pageup"
+            | "pagedown"
+            | "insert"
+    )
+}
+
+/// The line break `r<CR>` inserts: the line's own terminator (on an unterminated
+/// last line, the buffer's first CRLF or else LF), then the line's leading
+/// whitespace, as Vim's autoindent keeps it.
+pub(crate) fn line_break_with_indent(text: &Rope, offset: usize) -> String {
+    let line = Line::containing(text, offset);
+    let content = text.to_string();
+    let after = content
+        .get(line.start + line.content.len()..)
+        .unwrap_or_default();
+    let crlf = if after.is_empty() {
+        content.contains("\r\n")
+    } else {
+        after.starts_with("\r\n")
+    };
+    let indent: String = line
+        .content
+        .chars()
+        .take_while(|character| matches!(character, ' ' | '\t'))
+        .collect();
+
+    format!("{}{indent}", if crlf { "\r\n" } else { "\n" })
+}
+
+pub(crate) fn append_after(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset);
+    line.start
+        + column
+        + line.content[column..]
+            .chars()
+            .next()
+            .map_or(0, char::len_utf8)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordClass {
+    Space,
+    Keyword,
+    Punctuation,
+}
+
+fn word_class(character: char, big: bool) -> WordClass {
+    if character.is_whitespace() {
+        WordClass::Space
+    } else if big || character.is_alphanumeric() || character == '_' {
+        WordClass::Keyword
+    } else {
+        WordClass::Punctuation
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WordMotion {
+    End,
+    Forward,
+    Backward,
+}
+
+pub(crate) fn change_word_range_with_class(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+    big: bool,
+) -> Option<Range<usize>> {
+    let content = text.to_string();
+    let chars = word_offsets(text);
+    let mut index = chars.partition_point(|(start, _)| *start < offset);
+    let first_class = word_class(chars.get(index)?.1, big);
+    let mut remaining = count.max(1);
+    while index < chars.len() && remaining > 0 {
+        let class = word_class(chars[index].1, big);
+        if matches!(chars[index].1, '\r' | '\n') {
+            break;
+        }
+        while index < chars.len()
+            && !matches!(chars[index].1, '\r' | '\n')
+            && word_class(chars[index].1, big) == class
+        {
+            index += 1;
+        }
+        remaining -= 1;
+        if class != WordClass::Space && remaining > 0 {
+            while index < chars.len()
+                && chars[index].1.is_whitespace()
+                && !matches!(chars[index].1, '\r' | '\n')
+            {
+                index += 1;
+            }
+        }
+    }
+    let end = chars.get(index).map_or(content.len(), |(at, _)| *at);
+    let end = if first_class == WordClass::Space {
+        end
+    } else {
+        content[..end].trim_end_matches([' ', '\t']).len()
+    };
+    (end > offset).then_some(offset..end)
+}
+
+pub(crate) fn word_offsets(text: &Rope) -> Vec<(usize, char)> {
+    text.to_string().char_indices().collect()
+}
+
+pub(crate) fn step_word(
+    text: &Rope,
+    chars: &[(usize, char)],
+    offset: usize,
+    motion: WordMotion,
+    big: bool,
+) -> usize {
+    if chars.is_empty() {
+        return 0;
+    }
+    let mut index = chars.partition_point(|(start, _)| *start < offset);
+    if index == chars.len() || chars[index].0 != offset {
+        index = index.saturating_sub(1);
+    }
+    let class = |at: usize| word_class(chars[at].1, big);
+    match motion {
+        WordMotion::Forward => {
+            let current = class(index);
+            if current != WordClass::Space {
+                while index < chars.len() && class(index) == current {
+                    index += 1;
+                }
+            }
+            while index < chars.len() && class(index) == WordClass::Space {
+                index += 1;
+            }
+            chars
+                .get(index)
+                .map_or_else(|| clamp_to_character(text, text.len()), |item| item.0)
+        }
+        WordMotion::Backward => {
+            index = index.saturating_sub(1);
+            while index > 0 && class(index) == WordClass::Space {
+                index -= 1;
+            }
+            let current = class(index);
+            while index > 0 && class(index - 1) == current {
+                index -= 1;
+            }
+            chars[index].0
+        }
+        WordMotion::End => {
+            if class(index) != WordClass::Space {
+                let current = class(index);
+                if index + 1 < chars.len() && class(index + 1) == current {
+                    index += 1;
+                } else {
+                    index += 1;
+                    while index < chars.len() && class(index) == WordClass::Space {
+                        index += 1;
+                    }
+                }
+            } else {
+                while index < chars.len() && class(index) == WordClass::Space {
+                    index += 1;
+                }
+            }
+            if index >= chars.len() {
+                return clamp_to_character(text, text.len());
+            }
+            let current = class(index);
+            while index + 1 < chars.len() && class(index + 1) == current {
+                index += 1;
+            }
+            clamp_to_character(text, chars[index].0)
+        }
+    }
+}
+
+/// Characterwise operator range. Word starts are exclusive; word ends include
+/// the entire character under the destination cursor.
+pub(crate) fn word_operator_range(
+    text: &Rope,
+    offset: usize,
+    motion: WordMotion,
+    big: bool,
+    count: usize,
+) -> Option<Range<usize>> {
+    let chars = word_offsets(text);
+    let mut target = offset;
+    for _ in 0..count.min(chars.len().saturating_add(1)) {
+        let next = step_word(text, &chars, target, motion, big);
+        if next == target {
+            break;
+        }
+        target = next;
+    }
+    let range = match motion {
+        WordMotion::End => {
+            let end = counted_character_range(text, target, 1)
+                .map(|range| range.end)
+                .or_else(|| {
+                    let content = text.to_string();
+                    let before_eof = content.trim_end_matches(['\r', '\n']);
+                    (target == content.len() && before_eof.len() > offset)
+                        .then_some(before_eof.len())
+                })?;
+            offset..end
+        }
+        WordMotion::Forward
+            if target == clamp_to_character(text, text.len()) && !chars.is_empty() =>
+        {
+            let content = text.to_string();
+            offset..content.trim_end_matches(['\r', '\n']).len()
+        }
+        WordMotion::Forward => offset..target,
+        WordMotion::Backward => target..offset,
+    };
+    (!range.is_empty()).then_some(range)
+}
+
+/// Horizontal operator motions exclude the destination for `h` and include it
+/// for `l`, without crossing a logical line or including its separator.
+pub(crate) fn horizontal_operator_range(
+    text: &Rope,
+    offset: usize,
+    right: bool,
+    count: usize,
+) -> Option<Range<usize>> {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset).min(line.last_column());
+    if line.content.is_empty() {
+        return None;
+    }
+    let index = line.char_count_before(column);
+    let columns: Vec<usize> = line.content.char_indices().map(|(at, _)| at).collect();
+    let (start, end) = if right {
+        let last = index.saturating_add(count).min(columns.len() - 1);
+        (
+            column,
+            columns[last] + line.content[columns[last]..].chars().next()?.len_utf8(),
+        )
+    } else {
+        (columns[index.saturating_sub(count)], column)
+    };
+    (start < end).then_some(line.start + start..line.start + end)
+}
+
+/// Change to the right removes the requested characters, not the destination.
+pub(crate) fn change_horizontal_right_range(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+) -> Option<Range<usize>> {
+    let range = horizontal_operator_range(text, offset, true, count)?;
+    let line = Line::containing(text, offset);
+    let length: usize = line.content[range.start - line.start..]
+        .chars()
+        .take(count)
+        .map(char::len_utf8)
+        .sum();
+    Some(range.start..range.start + length)
+}
+
+/// Whole current and destination logical lines, clamping at either edge.
+pub(crate) fn vertical_operator_range(
+    text: &Rope,
+    offset: usize,
+    down: bool,
+    count: usize,
+) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let last = text.lines_len().saturating_sub(1);
+    let target = if down {
+        row.saturating_add(count).min(last)
+    } else {
+        row.saturating_sub(count)
+    };
+    let first = row.min(target);
+    let end = row.max(target).saturating_add(1);
+    text.line_start_offset(first)..if end < text.lines_len() {
+        text.line_start_offset(end)
+    } else {
+        text.len()
+    }
+}
+
+/// Inclusive logical lines between the cursor and an absolute, clamped row.
+pub(crate) fn absolute_operator_range(
+    text: &Rope,
+    offset: usize,
+    target_row: usize,
+) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let target = target_row.min(text.lines_len().saturating_sub(1));
+    let first = row.min(target);
+    let end = row.max(target).saturating_add(1);
+    text.line_start_offset(first)..if end < text.lines_len() {
+        text.line_start_offset(end)
+    } else {
+        text.len()
+    }
+}
+
+/// Keep the separator after changed rows when later rows remain; consume it
+/// entirely (leaving no dangling empty line) when the range reaches EOF.
+pub(crate) fn change_line_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+    let content = text.to_string();
+    let selected = content.get(range.clone()).unwrap_or_default();
+    let separator = if selected.ends_with("\r\n") {
+        2
+    } else if selected.ends_with('\n') {
+        1
+    } else {
+        0
+    };
+    if range.end == content.len() && separator > 0 {
+        range
+    } else {
+        range.start..range.end.saturating_sub(separator).max(range.start)
+    }
+}
+
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerticalStep {
@@ -212,13 +700,122 @@ pub(crate) fn step_vertical(
 
 /// Byte range of the character under the cursor, or `None` on an empty line.
 /// Never includes a line terminator, so `x` cannot join lines.
+pub(crate) fn visual_range(
+    text: &Rope,
+    anchor: usize,
+    cursor: usize,
+    linewise: bool,
+) -> Range<usize> {
+    if linewise {
+        let start = line_start(text, anchor.min(cursor));
+        let end_line = Line::containing(text, anchor.max(cursor));
+        let end = if end_line.row + 1 < text.lines_len() {
+            text.line_start_offset(end_line.row + 1)
+        } else {
+            text.len()
+        };
+        start..end
+    } else {
+        let start = anchor.min(cursor);
+        let end = anchor.max(cursor);
+        let width = counted_character_range(text, end, 1).map_or(0, |range| range.len());
+        start..end + width
+    }
+}
+
+/// Rows of a Visual Block that reach its left column, each with the byte range
+/// of its block columns. Columns count Unicode scalars, as the native columnar
+/// selection does; rows shorter than the left column are skipped, like Vim.
+pub(crate) fn block_rows(text: &Rope, anchor: usize, cursor: usize) -> Vec<(usize, Range<usize>)> {
+    let column = |offset: usize| {
+        let line = Line::containing(text, offset);
+        (line.row, line.char_count_before(line.column_of(offset)))
+    };
+    let (anchor_row, anchor_column) = column(anchor);
+    let (cursor_row, cursor_column) = column(cursor);
+    let left = anchor_column.min(cursor_column);
+    let right = anchor_column.max(cursor_column);
+
+    (anchor_row.min(cursor_row)..=anchor_row.max(cursor_row))
+        .filter_map(|row| {
+            let line = Line::at_row(text, row);
+            let columns: Vec<usize> = line.content.char_indices().map(|(at, _)| at).collect();
+            if columns.len() < left {
+                return None;
+            }
+            let start = columns.get(left).copied().unwrap_or(line.content.len());
+            let end = columns
+                .get(right.saturating_add(1))
+                .copied()
+                .unwrap_or(line.content.len());
+            Some((row, line.start + start..line.start + end))
+        })
+        .collect()
+}
+
+/// Byte length of a logical line, without its terminator.
+pub(crate) fn line_content_len(text: &Rope, row: usize) -> usize {
+    Line::at_row(text, row).content.len()
+}
+
+/// Whole logical lines, including their terminators when present. The final
+/// unterminated line has no invented newline in the returned range.
+pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Range<usize> {
+    let row = text.offset_to_point(offset).row;
+    let end_row = row.saturating_add(count).min(text.lines_len());
+    text.line_start_offset(row)..if end_row < text.lines_len() {
+        text.line_start_offset(end_row)
+    } else {
+        text.len()
+    }
+}
+
+/// An empty trailing logical line yanks the separator that created it.
+/// Other line selections retain their original bytes, including an unterminated EOF.
+pub(crate) fn line_yank_text(content: &str, range: Range<usize>) -> Option<&str> {
+    if range.is_empty() && range.start == content.len() {
+        let prefix = &content[..range.start];
+        if prefix.ends_with("\r\n") {
+            return Some(&prefix[prefix.len() - 2..]);
+        }
+        if prefix.ends_with('\n') {
+            return Some(&prefix[prefix.len() - 1..]);
+        }
+    }
+    content.get(range)
+}
+
+/// Deleting the last logical line also removes the separator before it.
+pub(crate) fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+    if range.end != text.len() || range.start == 0 {
+        return range;
+    }
+    let content = text.to_string();
+    let before = &content[..range.start];
+    let separator_len = if before.ends_with("\r\n") { 2 } else { 1 };
+    range.start.saturating_sub(separator_len)..range.end
+}
+
+#[cfg(test)]
 pub(crate) fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
+    counted_character_range(text, offset, 1)
+}
+
+/// Selects at most `count` characters from one line without copying the line
+/// again for each character. A zero count selects nothing.
+pub(crate) fn counted_character_range(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+) -> Option<Range<usize>> {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
-    let character = line.content[column..].chars().next()?;
-    let start = line.start + column;
-
-    Some(start..start + character.len_utf8())
+    let width: usize = line.content[column..]
+        .chars()
+        .take(count)
+        .map(char::len_utf8)
+        .sum();
+    (width > 0).then_some(line.start + column..line.start + column + width)
 }
 
 #[cfg(test)]
@@ -248,6 +845,74 @@ mod tests {
     }
 
     #[test]
+    fn search_selects_strictly_by_start_and_wraps() {
+        let matches = [0..2, 5..7, 10..12];
+        for (cursor, forward, backward) in [
+            (0, 5..7, 10..12),
+            (6, 10..12, 5..7),
+            (10, 0..2, 5..7),
+            (12, 0..2, 10..12),
+        ] {
+            assert_eq!(
+                cursor_relative_match(&matches, cursor, SearchDirection::Forward),
+                Some(forward)
+            );
+            assert_eq!(
+                cursor_relative_match(&matches, cursor, SearchDirection::Backward),
+                Some(backward)
+            );
+        }
+    }
+
+    #[test]
+    fn search_uses_utf8_byte_offsets_without_splitting_matches() {
+        let content = "é中é中";
+        let matches = [0..2, 5..7];
+        assert!(content.is_char_boundary(matches[1].start));
+        assert_eq!(
+            cursor_relative_match(&matches, 2, SearchDirection::Forward),
+            Some(5..7)
+        );
+        assert_eq!(
+            cursor_relative_match(&matches, 6, SearchDirection::Backward),
+            Some(5..7)
+        );
+        for direction in [SearchDirection::Forward, SearchDirection::Backward] {
+            assert_eq!(cursor_relative_match(&[], 0, direction), None);
+        }
+    }
+
+    #[test]
+    fn absolute_lines_use_logical_rows_and_first_nonblank() {
+        for content in ["", "  é\n\t中\n", "  é\r\n\t中\r\n"] {
+            let text = Rope::from(content);
+            assert_eq!(
+                absolute_line(&text, 0),
+                if content.is_empty() { 0 } else { 2 }
+            );
+            assert_eq!(
+                absolute_line(&text, 1),
+                if content.is_empty() {
+                    0
+                } else {
+                    content.find('中').unwrap()
+                }
+            );
+            assert_eq!(absolute_line(&text, usize::MAX), text.len());
+        }
+        for mode in [
+            VimMode::Normal,
+            VimMode::Visual,
+            VimMode::VisualLine,
+            VimMode::VisualBlock,
+        ] {
+            assert_eq!(command_for(mode, key("g")), Some(VimCommand::PendingG));
+            assert_eq!(command_for(mode, shifted("g")), Some(VimCommand::LastLine));
+            assert_eq!(command_for(mode, with_command_modifier("g")), None);
+        }
+    }
+
+    #[test]
     fn normal_mode_binds_only_the_supported_commands() {
         let expected = [
             ("h", VimCommand::MoveLeft),
@@ -258,6 +923,8 @@ mod tests {
             ("i", VimCommand::EnterInsert),
             ("x", VimCommand::DeleteChar),
             ("u", VimCommand::Undo),
+            ("/", VimCommand::OpenSearch),
+            ("n", VimCommand::RepeatSearch(false)),
             ("tab", VimCommand::Swallow),
         ];
 
@@ -269,25 +936,14 @@ mod tests {
             );
         }
 
-        for name in [
-            "a",
-            "o",
-            "p",
-            "d",
-            "0",
-            "1",
-            "/",
-            "escape",
-            "backspace",
-            "space",
-        ] {
+        for name in ["o", "p", "escape", "backspace", "space"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
     }
 
     #[test]
     fn shifted_keys_are_not_their_lowercase_commands() {
-        for name in ["h", "j", "k", "l", "i", "x", "u", "enter"] {
+        for name in ["h", "j", "k", "l", "x", "u", "enter"] {
             assert_eq!(command_for(VimMode::Normal, shifted(name)), None, "{name}");
         }
 
@@ -299,7 +955,14 @@ mod tests {
 
     #[test]
     fn keys_with_command_modifiers_always_pass_through() {
-        for mode in [VimMode::Normal, VimMode::Insert] {
+        for mode in [
+            VimMode::Normal,
+            VimMode::Insert,
+            VimMode::Replace,
+            VimMode::Visual,
+            VimMode::VisualLine,
+            VimMode::VisualBlock,
+        ] {
             for name in ["h", "j", "k", "l", "x", "u", "enter", "tab", "escape", "s"] {
                 assert_eq!(
                     command_for(mode, with_command_modifier(name)),
@@ -311,17 +974,31 @@ mod tests {
     }
 
     #[test]
-    fn insert_mode_only_claims_escape() {
-        assert_eq!(
-            command_for(VimMode::Insert, key("escape")),
-            Some(VimCommand::LeaveInsert)
-        );
+    fn insert_and_replace_modes_only_claim_escape() {
+        for mode in [VimMode::Insert, VimMode::Replace] {
+            assert_eq!(
+                command_for(mode, key("escape")),
+                Some(VimCommand::LeaveInsert)
+            );
 
-        for name in ["h", "j", "x", "u", "i", "enter", "tab"] {
-            assert_eq!(command_for(VimMode::Insert, key(name)), None, "{name}");
+            for name in ["h", "j", "x", "u", "i", "r", "enter", "tab", "backspace"] {
+                assert_eq!(command_for(mode, key(name)), None, "{mode:?} {name}");
+            }
+
+            assert_eq!(command_for(mode, shifted("escape")), None);
+            assert_eq!(command_for(mode, shifted("r")), None);
+            assert!(mode.accepts_text());
         }
 
-        assert_eq!(command_for(VimMode::Insert, shifted("escape")), None);
+        assert_eq!(
+            command_for(VimMode::Normal, shifted("r")),
+            Some(VimCommand::EnterReplace)
+        );
+        assert_eq!(command_for(VimMode::Visual, shifted("r")), None);
+        assert_eq!(
+            mode_after(VimMode::Replace, VimCommand::LeaveInsert),
+            VimMode::Normal
+        );
     }
 
     #[test]
@@ -344,6 +1021,126 @@ mod tests {
         ] {
             assert_eq!(mode_after(VimMode::Normal, command), VimMode::Normal);
         }
+    }
+
+    #[test]
+    fn words_on_empty_and_crlf_lines_remain_on_character_boundaries() {
+        let empty = Rope::from("");
+        let chars = word_offsets(&empty);
+        assert_eq!(step_word(&empty, &chars, 0, WordMotion::Forward, false), 0);
+        let text = Rope::from("é!\r\n\r\n中 x");
+        let chars = word_offsets(&text);
+        assert_eq!(step_word(&text, &chars, 0, WordMotion::Forward, false), 2);
+        assert_eq!(step_word(&text, &chars, 2, WordMotion::Forward, false), 7);
+        assert_eq!(step_word(&text, &chars, 7, WordMotion::Backward, false), 2);
+        assert_eq!(step_word(&text, &chars, 7, WordMotion::End, false), 11);
+    }
+
+    #[test]
+    fn forward_word_operator_covers_terminal_scalar_without_terminal_newline() {
+        for big in [false, true] {
+            for (content, expected) in [
+                ("abc", Some(0..3)),
+                ("ab中", Some(0..5)),
+                ("abc   ", Some(0..6)),
+                ("abc\r\n", Some(0..3)),
+                ("", None),
+            ] {
+                let text = Rope::from(content);
+                assert_eq!(
+                    word_operator_range(&text, 0, WordMotion::Forward, big, 1),
+                    expected
+                );
+            }
+            let text = Rope::from("abc");
+            assert_eq!(
+                word_operator_range(&text, 0, WordMotion::Forward, big, 20),
+                Some(0..3)
+            );
+            assert_eq!(
+                word_operator_range(&text, 2, WordMotion::Forward, big, 1),
+                Some(2..3)
+            );
+        }
+        let text = Rope::from("one two");
+        assert_eq!(
+            word_operator_range(&text, 4, WordMotion::Backward, false, 1),
+            Some(0..4)
+        );
+        assert_eq!(
+            word_operator_range(&text, 4, WordMotion::Backward, true, 1),
+            Some(0..4)
+        );
+    }
+
+    #[test]
+    fn terminal_word_end_operator_excludes_line_terminators() {
+        for content in ["abc\n", "abc\r\n", "ab中\n", "ab中\r\n"] {
+            let text = Rope::from(content);
+            let end = content.trim_end_matches(['\r', '\n']).len();
+            let last = content[..end].char_indices().last().unwrap().0;
+            for big in [false, true] {
+                for count in [1, 2, 20] {
+                    assert_eq!(
+                        word_operator_range(&text, last, WordMotion::End, big, count),
+                        Some(last..end)
+                    );
+                    assert_eq!(
+                        word_operator_range(&text, 0, WordMotion::End, big, count),
+                        Some(0..end)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn operator_motions_respect_unicode_and_line_boundaries() {
+        let text = Rope::from("é中x\r\nlast");
+        assert_eq!(horizontal_operator_range(&text, 0, true, 2), Some(0..6));
+        assert_eq!(horizontal_operator_range(&text, 5, false, 2), Some(0..5));
+        assert_eq!(horizontal_operator_range(&text, 0, false, 1), None);
+        assert_eq!(horizontal_operator_range(&text, 5, true, 50), Some(5..6));
+        assert_eq!(vertical_operator_range(&text, 0, true, 1), 0..12);
+        assert_eq!(vertical_operator_range(&text, 9, false, 1), 0..12);
+        assert_eq!(line_delete_range(&text, 0..12), 0..12);
+        let empty = Rope::from("");
+        assert_eq!(horizontal_operator_range(&empty, 0, true, 1), None);
+        assert_eq!(vertical_operator_range(&empty, 0, true, 1), 0..0);
+    }
+
+    #[test]
+    fn absolute_operator_ranges_include_both_logical_lines() {
+        for separator in ["\n", "\r\n"] {
+            let content = format!("é{separator}中{separator}last");
+            let text = Rope::from(content.as_str());
+            let second = text.line_start_offset(1);
+            assert_eq!(
+                absolute_operator_range(&text, second, 0),
+                0..text.line_start_offset(2)
+            );
+            assert_eq!(absolute_operator_range(&text, 0, usize::MAX), 0..text.len());
+            assert_eq!(
+                absolute_operator_range(&text, second, 1),
+                second..text.line_start_offset(2)
+            );
+        }
+        let empty = Rope::from("");
+        assert_eq!(absolute_operator_range(&empty, 0, usize::MAX), 0..0);
+    }
+
+    #[test]
+    fn counted_lines_preserve_terminators_and_eof() {
+        let text = Rope::from("é\r\n\r\n中");
+        assert_eq!(counted_line_range(&text, 0, 2), 0..6);
+        assert_eq!(counted_line_range(&text, 4, 20), 4..9);
+        assert_eq!(counted_line_range(&text, 6, 1), 6..9);
+        let terminated = Rope::from("a\n");
+        assert_eq!(counted_line_range(&terminated, 2, 1), 2..2);
+        assert_eq!(line_delete_range(&terminated, 2..2), 1..2);
+        assert_eq!(line_delete_range(&text, 6..9), 4..9);
+        assert_eq!(line_delete_range(&Rope::from("a\nb"), 2..3), 1..3);
+        assert_eq!(line_delete_range(&Rope::from("a"), 0..1), 0..1);
     }
 
     #[test]
@@ -467,6 +1264,35 @@ mod tests {
         assert_eq!(character_range(&text, 1), Some(1..4));
         assert_eq!(character_range(&text, 4), Some(4..5));
         assert_eq!(character_range(&text, 5), None, "past the last character");
+    }
+
+    #[test]
+    fn block_rows_skip_short_rows_and_use_scalar_columns() {
+        let text = Rope::from("abcdef\r\nab\r\n\r\na中cdef");
+        let rows = block_rows(&text, 2, 19);
+        assert_eq!(rows, vec![(0, 2..4), (1, 10..10), (3, 18..20)]);
+        assert_eq!(block_rows(&text, 19, 2), rows);
+        assert_eq!(line_content_len(&text, 0), 6);
+        assert_eq!(line_content_len(&text, 2), 0);
+        assert_eq!(block_rows(&Rope::from(""), 0, 0), vec![(0, 0..0)]);
+    }
+
+    #[test]
+    fn replace_line_break_follows_line_terminator_and_indent() {
+        for (content, offset, expected) in [
+            ("\t x", 2, "\n\t "),
+            ("ab\r\ncd", 0, "\r\n"),
+            ("ab\ncd", 4, "\n"),
+            ("ab\r\ncd", 5, "\r\n"),
+            ("ab", 1, "\n"),
+        ] {
+            let text = Rope::from(content);
+            assert_eq!(
+                line_break_with_indent(&text, offset),
+                expected,
+                "{content:?}"
+            );
+        }
     }
 
     #[test]
