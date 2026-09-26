@@ -3,8 +3,8 @@
 DBFlux is a local-first desktop application. It does not collect, transmit, or
 store any information about you or your usage. The project website sets no
 cookies and loads no third-party scripts. This document says what that means
-in practice and names the two infrastructure providers that see traffic on the
-way to you.
+in practice and names the infrastructure providers that see traffic on the way
+to you.
 
 ## Quick path
 
@@ -12,8 +12,11 @@ way to you.
    only what is needed to run the queries you ask for.
 2. There is no telemetry, no crash reporting, no usage analytics, and no
    account. Nothing phones home.
-3. The website and documentation are static pages. They set no cookies, run no
-   analytics script, and keep no record of individual visitors.
+3. The website and documentation are static pages. They set no cookies, load
+   no third-party script, and keep no record of individual visitors. An
+   anonymous measurement of page usage, handled by the project's own server,
+   is described under [Website usage measurement](#website-usage-measurement);
+   it is not active yet.
 
 ## The application
 
@@ -232,23 +235,92 @@ To wipe DBFlux's data:
 `dbflux.dev` and `docs.dbflux.dev` are static sites built from this
 repository. They:
 
-- set no cookies, first-party or third-party;
-- load no analytics, advertising, or tracking script;
-- serve their fonts and assets from the same host, so a page view contacts no
-  other domain;
+- set no cookies, first-party or third-party, and store only one thing in your
+  browser: the theme you pick (Auto, Light, or Dark), which stays in local
+  storage and is never sent anywhere;
+- load no third-party analytics, advertising, or tracking script;
+- serve their fonts, assets, and scripts from the same host, so a page view
+  contacts no other domain;
 - keep no server-side log the project can read per visitor.
 
 The documentation search runs in your browser against an index file fetched
 from the same host. The query never leaves the page.
 
+## Website usage measurement
+
+> **Status: not active.** This section describes the measurement before it
+> ships. The version that enables it announces the change in its release notes,
+> and this line changes in the same commit.
+
+To learn which pages people read and how fast they load, each page view sends
+a small anonymous report. The script, the collector, and the schema that
+defines every accepted field live in this repository.
+
+### What a report contains
+
+| Field | Example | Where it comes from |
+|-------|---------|---------------------|
+| Host | `site` or `docs` | The page |
+| Page | The route, such as `/docs/usage/`. Never the query string or fragment. | The page, checked against the list of pages in the build |
+| Documentation version and page language | `v0.7`, `es` | The page |
+| Browser language | `es`, the primary language only | The browser |
+| Screen class | `mobile`, `tablet`, or `desktop` | The browser |
+| Origin of the visit | `none`, `internal`, `search`, `github`, `social`, or `other`. Never the address. | The browser |
+| Load timing | Time to first byte, DOM ready, full load, and largest contentful paint, in milliseconds | The browser |
+| Time on page | Visible time only, in milliseconds | The browser |
+| Reading depth | Furthest scroll position in 25% steps, and visible time per section heading | The browser |
+| Country | Two-letter code, such as `AR` | Cloudflare, from the request, before forwarding |
+| Browser and operating system | Family and major version, such as Firefox 131 on Linux | Derived from the User-Agent before forwarding; the full string is discarded |
+
+Every text field accepts only a fixed list of values or a strict pattern. The
+collector rejects anything else, so a report cannot carry free text.
+
+### What is never collected
+
+- The IP address. The Cloudflare Worker that receives a report builds a new
+  request that contains only the fields above, so the project's server never
+  receives the visitor's address.
+- The full User-Agent string, the full referrer address, query strings, or
+  fragments.
+- Cookies, browser storage, fingerprints, or identifiers of any kind: the
+  measurement neither reads nor writes them. Two reports from the same person
+  cannot be linked, and the project does not count unique visitors.
+- Mouse movement, clicks, keystrokes, form input, or page content.
+
+### How to opt out
+
+The script sends nothing when the browser signals Global Privacy Control or Do
+Not Track, and the Worker drops any report that arrives with either signal.
+Blocking the script with a content blocker also works; pages behave the same
+without it.
+
+### Where the data lives
+
+Reports are stored on a server the project rents from OVHcloud in the European
+Union, not in an analytics service. Raw reports are kept for 90 days; the daily
+totals derived from them are kept indefinitely. Only the maintainer reads them,
+over a private network the project runs itself. Backups are encrypted before
+they leave the server and are stored in Cloudflare R2, which holds the
+encrypted copy but not the key.
+
+### Removing data
+
+A report contains nothing that identifies a person, so there is no record to
+look up for a given visitor. If you believe a report carried something it
+should not have, report it privately through
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+rather than in a public issue. The affected data is removed from storage and
+from the backups that contain it.
+
 ## Infrastructure providers
 
-Two services sit between the project and you. Neither is used to identify
-individual visitors.
+These services sit between the project and you, or hold data on the project's
+behalf. None is used to identify individual visitors.
 
 | Provider | Role | What it sees |
 |----------|------|--------------|
-| Cloudflare | Hosts the website, the documentation, and the documentation MCP endpoint at `mcp.dbflux.dev`. | Every HTTP request to those hosts, including the IP address and user agent, as any host does. Cloudflare exposes aggregate traffic counts to the project. It does not expose per-visitor records, and the project has enabled no feature that would. |
+| Cloudflare | Hosts the website, the documentation, and the documentation MCP endpoint at `mcp.dbflux.dev`. Runs the Worker that forwards usage reports, and stores the encrypted backups of those reports in R2. | Every HTTP request to those hosts, including the IP address and user agent, as any host does, and the contents of a usage report while forwarding it. Cloudflare exposes aggregate traffic counts to the project. It does not expose per-visitor records, and the project has enabled no feature that would. In R2 it holds only encrypted backups. |
+| OVHcloud | Hosts the server that stores website usage reports, in a data center in the European Union. | The stored reports, as the operator of the machine they live on. It never receives an IP address or User-Agent from a visitor, because reports reach the server without them. It has no role in the application. |
 | Google Search Console | Reports how the site appears in Google search results. | Only what Google's crawler and search results already know. No script from Google is loaded on any page. |
 
 Cloudflare's own handling of request data is described in the
@@ -277,7 +349,9 @@ release notes of the version that introduces it.
 ## Contact
 
 Questions go to an issue in this repository with the title prefix
-`[privacy]`.
+`[privacy]`. To report data that should not be public, use
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+instead.
 
 ## Related
 

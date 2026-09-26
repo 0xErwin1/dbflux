@@ -3,8 +3,8 @@
 DBFlux es una aplicación de escritorio local-first. No recopila, transmite ni
 almacena información sobre ti ni sobre tu uso. El sitio web del proyecto no
 usa cookies ni carga scripts de terceros. Este documento explica qué significa
-eso en la práctica y nombra a los dos proveedores de infraestructura que ven
-el tráfico en su camino hacia ti.
+eso en la práctica y nombra a los proveedores de infraestructura que ven el
+tráfico en su camino hacia ti.
 
 ## Ruta rápida
 
@@ -13,8 +13,11 @@ el tráfico en su camino hacia ti.
 2. No hay telemetría, ni reporte de fallos, ni analítica de uso, ni cuenta de
    usuario. Nada llama a casa.
 3. El sitio web y la documentación son páginas estáticas. No usan cookies, no
-   ejecutan scripts de analítica y no guardan registro de visitantes
-   individuales.
+   cargan scripts de terceros y no guardan registro de visitantes
+   individuales. Una medición anónima del uso de las páginas, gestionada por el
+   servidor propio del proyecto, se describe en
+   [Medición de uso del sitio web](#medición-de-uso-del-sitio-web); todavía no
+   está activa.
 
 ## La aplicación
 
@@ -242,24 +245,97 @@ Para borrar los datos de DBFlux:
 `dbflux.dev` y `docs.dbflux.dev` son sitios estáticos construidos desde este
 repositorio. Estos sitios:
 
-- no usan cookies, ni propias ni de terceros;
-- no cargan scripts de analítica, publicidad ni seguimiento;
-- sirven sus fuentes y recursos desde el mismo host, así que una visita no
-  contacta con ningún otro dominio;
+- no usan cookies, ni propias ni de terceros, y solo guardan una cosa en tu
+  navegador: el tema que elijas (automático, claro u oscuro), que queda en el
+  almacenamiento local y nunca se envía a ningún sitio;
+- no cargan scripts de terceros de analítica, publicidad ni seguimiento;
+- sirven sus fuentes, recursos y scripts desde el mismo host, así que una
+  visita no contacta con ningún otro dominio;
 - no mantienen ningún registro por visitante en el servidor que el proyecto
   pueda leer.
 
 La búsqueda de la documentación se ejecuta en tu navegador contra un archivo
 de índice descargado del mismo host. La consulta nunca sale de la página.
 
+## Medición de uso del sitio web
+
+> **Estado: no activa.** Esta sección describe la medición antes de que se
+> publique. La versión que la active lo anunciará en sus notas de versión, y
+> esta línea cambiará en el mismo commit.
+
+Para saber qué páginas se leen y cuánto tardan en cargar, cada visita a una
+página envía un pequeño informe anónimo. El script, el colector y el schema
+que define cada campo aceptado están en este repositorio.
+
+### Qué contiene un informe
+
+| Campo | Ejemplo | De dónde sale |
+|-------|---------|---------------|
+| Host | `site` o `docs` | La página |
+| Página | La ruta, como `/docs/usage/`. Nunca la query string ni el fragmento. | La página, comprobada contra la lista de páginas del build |
+| Versión de la documentación e idioma de la página | `v0.7`, `es` | La página |
+| Idioma del navegador | `es`, solo el idioma principal | El navegador |
+| Tipo de pantalla | `mobile`, `tablet` o `desktop` | El navegador |
+| Origen de la visita | `none`, `internal`, `search`, `github`, `social` u `other`. Nunca la dirección. | El navegador |
+| Tiempos de carga | Tiempo hasta el primer byte, DOM listo, carga completa y largest contentful paint, en milisegundos | El navegador |
+| Tiempo en la página | Solo el tiempo visible, en milisegundos | El navegador |
+| Profundidad de lectura | Posición de scroll máxima en pasos del 25 %, y tiempo visible de cada encabezado de sección | El navegador |
+| País | Código de dos letras, como `AR` | Cloudflare, a partir de la petición, antes de reenviarla |
+| Navegador y sistema operativo | Familia y versión mayor, como Firefox 131 en Linux | Derivados del User-Agent antes de reenviar; la cadena completa se descarta |
+
+Cada campo de texto acepta solo una lista fija de valores o un patrón
+estricto. El colector rechaza cualquier otra cosa, así que un informe no puede
+llevar texto libre.
+
+### Qué no se recopila nunca
+
+- La dirección IP. El Worker de Cloudflare que recibe un informe construye una
+  petición nueva que contiene solo los campos anteriores, así que el servidor
+  del proyecto nunca recibe la dirección del visitante.
+- La cadena User-Agent completa, la dirección de referencia completa, las
+  query strings ni los fragmentos.
+- Cookies, almacenamiento del navegador, huellas digitales del navegador ni
+  identificadores de ningún tipo: la medición no lee ni escribe ninguno de
+  ellos. Dos informes de la misma persona no se pueden relacionar, y el
+  proyecto no cuenta visitantes únicos.
+- Movimientos del ratón, clics, pulsaciones de teclas, datos de formularios ni
+  contenido de la página.
+
+### Cómo desactivarla
+
+El script no envía nada cuando el navegador indica Global Privacy Control o Do
+Not Track, y el Worker descarta cualquier informe que llegue con alguna de
+esas señales. Bloquear el script con un bloqueador de contenido también
+funciona; las páginas se comportan igual sin él.
+
+### Dónde se guardan los datos
+
+Los informes se guardan en un servidor que el proyecto alquila a OVHcloud en la
+Unión Europea, no en un servicio de analítica. Los informes sin procesar se
+conservan 90 días; los totales diarios derivados de ellos se conservan de forma
+indefinida. Solo el mantenedor los lee, a través de una red privada que el
+proyecto gestiona por su cuenta. Las copias de seguridad se cifran antes de
+salir del servidor y se guardan en Cloudflare R2, que conserva la copia cifrada
+pero no la clave.
+
+### Eliminación de datos
+
+Un informe no contiene nada que identifique a una persona, así que no hay
+ningún registro que buscar para un visitante concreto. Si crees que un informe
+llevó algo que no debía, infórmalo de forma privada a través de
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+en lugar de en un issue público. Los datos afectados se eliminan del
+almacenamiento y de las copias de seguridad que los contengan.
+
 ## Proveedores de infraestructura
 
-Dos servicios se sitúan entre el proyecto y tú. Ninguno se usa para
-identificar visitantes individuales.
+Estos servicios se sitúan entre el proyecto y tú, o guardan datos en nombre
+del proyecto. Ninguno se usa para identificar visitantes individuales.
 
 | Proveedor | Función | Qué ve |
 |-----------|---------|--------|
-| Cloudflare | Aloja el sitio web, la documentación y el endpoint MCP de documentación en `mcp.dbflux.dev`. | Cada petición HTTP a esos hosts, incluyendo la dirección IP y el user agent, como cualquier host. Cloudflare expone al proyecto recuentos de tráfico agregados. No expone registros por visitante, y el proyecto no ha activado ninguna función que lo haga. |
+| Cloudflare | Aloja el sitio web, la documentación y el endpoint MCP de documentación en `mcp.dbflux.dev`. Ejecuta el Worker que reenvía los informes de uso y guarda en R2 las copias de seguridad cifradas de esos informes. | Cada petición HTTP a esos hosts, incluyendo la dirección IP y el user agent, como cualquier host, y el contenido de un informe de uso mientras lo reenvía. Cloudflare expone al proyecto recuentos de tráfico agregados. No expone registros por visitante, y el proyecto no ha activado ninguna función que lo haga. En R2 solo guarda copias de seguridad cifradas. |
+| OVHcloud | Aloja el servidor que guarda los informes de uso del sitio web, en un centro de datos de la Unión Europea. | Los informes guardados, como operador de la máquina en la que están. Nunca recibe la dirección IP ni el User-Agent de un visitante, porque los informes llegan al servidor sin ellos. No tiene ningún papel en la aplicación. |
 | Google Search Console | Informa de cómo aparece el sitio en los resultados de búsqueda de Google. | Solo lo que el rastreador y los resultados de Google ya conocen. Ninguna página carga scripts de Google. |
 
 El tratamiento que Cloudflare hace de los datos de las peticiones se describe
@@ -289,7 +365,9 @@ las notas de la versión que lo introduzca.
 ## Contacto
 
 Las preguntas van a un issue en este repositorio con el prefijo `[privacy]` en
-el título.
+el título. Para informar de datos que no deberían ser públicos, usa
+[GitHub Security Advisories](https://github.com/0xErwin1/dbflux/security/advisories/new)
+en su lugar.
 
 ## Relacionado
 
