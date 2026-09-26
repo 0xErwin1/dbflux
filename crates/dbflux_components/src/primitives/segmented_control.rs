@@ -11,8 +11,8 @@ use gpui::{App, SharedString, Window, div};
 use gpui_component::ActiveTheme;
 
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, Icon};
-use crate::tokens::{ChamferCut, Fields, FontSizes};
+use crate::primitives::{Chamfer, Icon, focus_underline};
+use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes};
 use crate::typography::AppFonts;
 
 /// A single option within a `SegmentedControl`.
@@ -60,10 +60,15 @@ pub fn new_active_id(items: &[SegmentedItem], _current: &str, clicked: &str) -> 
 /// - Active segment: raised thumb (`theme.secondary`, `ChamferCut::KEYCAP`),
 ///   strong text.
 /// - Inactive segment: muted text; hover lays the hover wash under it.
+/// - Keyboard focus: the track never rings. While focus is visible, the
+///   focused segment carries a 2 px tint underline inside it; selection is
+///   shown only by the raised thumb.
 #[derive(IntoElement)]
 pub struct SegmentedControl {
     items: Vec<SegmentedItem>,
     active_id: SharedString,
+    focused: bool,
+    focused_id: Option<SharedString>,
     on_select: Arc<dyn Fn(&SharedString, &mut Window, &mut App)>,
 }
 
@@ -76,8 +81,24 @@ impl SegmentedControl {
         Self {
             items,
             active_id: active_id.into(),
+            focused: false,
+            focused_id: None,
             on_select: Arc::new(on_select),
         }
+    }
+
+    /// Marks the control as holding the keyboard cursor. The focused segment
+    /// is the one set with [`Self::focused_item`], or the active one.
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// The segment the keyboard cursor is on, for owners that move it with
+    /// the arrow keys independently of the selection.
+    pub fn focused_item(mut self, id: impl Into<SharedString>) -> Self {
+        self.focused_id = Some(id.into());
+        self
     }
 }
 
@@ -88,11 +109,16 @@ impl RenderOnce for SegmentedControl {
         }
 
         let theme = cx.theme().clone();
+        let tint = ChromeColors::tint(&theme);
         let active_id = self.active_id.clone();
+        let focused_id = self
+            .focused
+            .then(|| self.focused_id.clone().unwrap_or_else(|| active_id.clone()));
         let on_select = self.on_select;
 
         let segments = self.items.into_iter().map(|item| {
             let is_active = item.id == active_id;
+            let is_focused = focused_id.as_ref() == Some(&item.id);
             let segment_id = SharedString::from(format!("seg-ctl-item-{}", item.id.as_ref()));
 
             let thumb = if is_active {
@@ -128,6 +154,7 @@ impl RenderOnce for SegmentedControl {
                     this.child(Icon::new(icon).size(Fields::SEGMENT_ICON).color(text_color))
                 })
                 .child(item.label)
+                .when(is_focused, |this| this.child(focus_underline(tint)))
                 .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                     on_select(&clicked_id, window, cx);
                 })
@@ -155,6 +182,114 @@ impl RenderOnce for SegmentedControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitives::{FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR};
+    use gpui::{
+        Context, Entity, FocusHandle, Modifiers, Render, TestAppContext, VisualTestContext, point,
+        px,
+    };
+
+    struct SegmentsHost {
+        focus_handle: FocusHandle,
+        active: SharedString,
+        focused_item: Option<SharedString>,
+    }
+
+    impl Render for SegmentsHost {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let entity = cx.entity();
+            let control = SegmentedControl::new(items(), self.active.clone(), move |id, _, cx| {
+                let id = id.clone();
+                entity.update(cx, |host, cx| {
+                    host.active = id;
+                    cx.notify();
+                });
+            })
+            .focused(true);
+
+            let control = match self.focused_item.clone() {
+                Some(id) => control.focused_item(id),
+                None => control,
+            };
+
+            div().track_focus(&self.focus_handle).size_full().child(
+                div()
+                    .flex()
+                    .debug_selector(|| "segments".to_string())
+                    .child(control),
+            )
+        }
+    }
+
+    fn open_segments<'a>(
+        focused_item: Option<&str>,
+        cx: &'a mut TestAppContext,
+    ) -> (Entity<SegmentsHost>, &'a mut VisualTestContext) {
+        cx.update(crate::theme::init);
+
+        let focused_item = focused_item.map(|id| SharedString::from(id.to_string()));
+        let (host, window) = cx.add_window_view(move |_, cx| SegmentsHost {
+            focus_handle: cx.focus_handle(),
+            active: SharedString::from("prefer"),
+            focused_item,
+        });
+        window.update(|window, cx| host.read(cx).focus_handle.clone().focus(window, cx));
+        window.run_until_parked();
+
+        (host, window)
+    }
+
+    #[gpui::test]
+    fn focused_segment_is_underlined_after_keys_only(cx: &mut TestAppContext) {
+        let (host, window) = open_segments(None, cx);
+
+        window.simulate_keystrokes("right");
+        assert!(window.debug_bounds(FOCUS_MARKER_SELECTOR).is_some());
+        assert!(
+            window.debug_bounds(FOCUS_RING_SELECTOR).is_none(),
+            "the track never draws a ring"
+        );
+
+        let track = window
+            .debug_bounds("segments")
+            .expect("the control is laid out");
+        let first_segment = point(track.left() + px(10.0), track.center().y);
+        window.simulate_click(first_segment, Modifiers::default());
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| host.read(cx).active.clone()).as_ref(),
+            "disable"
+        );
+        assert!(
+            window.debug_bounds(FOCUS_MARKER_SELECTOR).is_none(),
+            "a click leaves no focus marker"
+        );
+        assert!(window.debug_bounds(FOCUS_RING_SELECTOR).is_none());
+
+        window.simulate_keystrokes("tab");
+        assert!(window.debug_bounds(FOCUS_MARKER_SELECTOR).is_some());
+        assert!(window.debug_bounds(FOCUS_RING_SELECTOR).is_none());
+    }
+
+    #[gpui::test]
+    fn marker_follows_the_roving_item_not_the_selection(cx: &mut TestAppContext) {
+        let (_host, window) = open_segments(None, cx);
+        window.simulate_keystrokes("right");
+        let on_active = window
+            .debug_bounds(FOCUS_MARKER_SELECTOR)
+            .expect("the active segment is marked");
+
+        let (_host, window) = open_segments(Some("require"), cx);
+        window.simulate_keystrokes("right");
+        let on_roving = window
+            .debug_bounds(FOCUS_MARKER_SELECTOR)
+            .expect("the roving segment is marked");
+
+        assert!(
+            on_roving.left() > on_active.left(),
+            "the marker sits on `require`, right of the active `prefer`"
+        );
+    }
 
     fn items() -> Vec<SegmentedItem> {
         vec![

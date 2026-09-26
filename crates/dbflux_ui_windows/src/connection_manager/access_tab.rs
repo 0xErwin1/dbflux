@@ -1050,11 +1050,19 @@ impl ConnectionManagerWindow {
             },
         );
 
-        div().flex().child(layout::cursor_ring(
-            private_key_focused || password_focused,
-            control,
-            cx,
-        ))
+        let cursor_item = if private_key_focused {
+            Some("private-key")
+        } else if password_focused {
+            Some("password")
+        } else {
+            None
+        };
+
+        div().flex().child(
+            control
+                .focused(cursor_item.is_some())
+                .when_some(cursor_item, |control, id| control.focused_item(id)),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

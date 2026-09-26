@@ -358,17 +358,12 @@ impl AuditDocument {
         );
 
         let weak_self = cx.weak_entity();
-        let presets = focus_ring(
-            self.slot_has_ring(ToolbarSlot::Time),
-            FocusShape::Chamfer(ChamferCut::CONTROL),
-            None,
-            time_preset_control(self.selected_time_range, true, move |index, _, cx| {
-                if let Some(doc) = weak_self.upgrade() {
-                    doc.update(cx, |this, cx| this.select_time_preset(index, cx));
-                }
-            }),
-            cx,
-        );
+        let presets = time_preset_control(self.selected_time_range, true, move |index, _, cx| {
+            if let Some(doc) = weak_self.upgrade() {
+                doc.update(cx, |this, cx| this.select_time_preset(index, cx));
+            }
+        })
+        .focused(self.slot_has_ring(ToolbarSlot::Time));
 
         let timezone = focus_ring(
             self.slot_has_ring(ToolbarSlot::Timezone),

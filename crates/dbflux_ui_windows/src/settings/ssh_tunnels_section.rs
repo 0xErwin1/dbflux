@@ -433,12 +433,21 @@ impl SshTunnelsSection {
             },
         );
 
-        let cursor = self.is_cursor_on(SshFormField::AuthPrivateKey)
-            || self.is_cursor_on(SshFormField::AuthPassword);
+        let cursor_item = if self.is_cursor_on(SshFormField::AuthPrivateKey) {
+            Some("private-key")
+        } else if self.is_cursor_on(SshFormField::AuthPassword) {
+            Some("password")
+        } else {
+            None
+        };
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
 
         layout::form_row(
             dbflux_i18n::t!("settings.ssh_tunnels.field.method"),
-            div().flex().child(layout::cursor_ring(cursor, control, cx)),
+            div().flex().child(control),
             None,
         )
     }

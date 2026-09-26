@@ -14,15 +14,15 @@ use std::ops::Range;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ClickEvent, Entity, InteractiveElement, IntoElement, ListSizingBehavior,
-    MouseButton, MouseDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
-    Window, div, uniform_list,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, SharedString, StatefulInteractiveElement,
+    Styled, Window, div, uniform_list,
 };
 use gpui_component::scroll::Scrollbar;
 use gpui_component::{ActiveTheme, Sizable};
 
 use crate::controls::{GpuiInput as Input, InputState};
-use crate::primitives::Text;
-use crate::tokens::{FontSizes, RowColors, Spacing};
+use crate::primitives::{Chamfer, ChamferRing, Text};
+use crate::tokens::{ChromeColors, FontSizes, RowColors, Spacing};
 
 use super::events::DataTableEvent;
 use super::model::{CellValue, EditBuffer, TableModel, VisualRowSource};
@@ -335,7 +335,12 @@ fn render_fields(
                             .border_l_2()
                             .border_color(theme.warning)
                     })
-                    .when(is_active, |d| d.border_1().border_color(theme.ring))
+                    .when(is_active, |d| {
+                        d.relative().child(
+                            Chamfer::new(Pixels::ZERO)
+                                .ring(ChamferRing::focus(ChromeColors::tint(theme))),
+                        )
+                    })
                     .when(is_null || is_auto_generated, |d| d.italic())
                     .when(is_pending_delete, |d| d.line_through())
                     .child(Text::body(display_text).font_size(FontSizes::SM).color(

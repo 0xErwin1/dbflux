@@ -117,15 +117,14 @@ impl ConnectionFormMetrics {
     pub const SOURCE_SELECT_WIDTH: Pixels = px(170.0);
 
     /// Environment chips: 28 px tall, 12 px padding, 7 px gap, 6 px apart,
-    /// 12.5 px semibold text, a 7 px diamond, a 1.5 px ring and a 13% wash
-    /// of the environment color on the selected chip.
+    /// 12.5 px semibold text, a 7 px diamond and a 13% wash of the
+    /// environment color on the selected chip.
     pub const ENV_CHIP_HEIGHT: Pixels = px(28.0);
     pub const ENV_CHIP_PADDING_X: Pixels = px(12.0);
     pub const ENV_CHIP_GAP: Pixels = px(7.0);
     pub const ENV_CHIPS_GAP: Pixels = px(6.0);
     pub const ENV_CHIP_FONT: Pixels = px(12.5);
     pub const ENV_CHIP_DIAMOND: Pixels = px(7.0);
-    pub const ENV_CHIP_RING: Pixels = px(1.5);
     pub const ENV_CHIP_WASH_ALPHA: f32 = 0.13;
 
     /// Driver picker header: 18 by 24 px padding, 14 px gap, 3 px between

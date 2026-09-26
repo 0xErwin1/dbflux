@@ -1642,9 +1642,16 @@ impl HooksSection {
             && self.hook_focus == HookFocus::Form
             && is_kind_form_field(self.hook_form_field);
 
+        let control = control.focused(cursor).when_some(
+            cursor
+                .then(|| kind_segment_id(self.hook_form_field))
+                .flatten(),
+            |control, id| control.focused_item(id),
+        );
+
         layout::form_row(
             dbflux_i18n::t!("settings.hooks.form.kind"),
-            div().flex().child(layout::cursor_ring(cursor, control, cx)),
+            div().flex().child(control),
             None,
         )
     }
@@ -1681,11 +1688,9 @@ impl HooksSection {
 
         layout::form_row(
             dbflux_i18n::t!("settings.hooks.form.execution_mode"),
-            div().flex().child(layout::cursor_ring(
-                self.is_cursor_on(HookFormField::ExecutionMode),
-                control,
-                cx,
-            )),
+            div()
+                .flex()
+                .child(control.focused(self.is_cursor_on(HookFormField::ExecutionMode))),
             Some(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint").into()),
         )
     }
@@ -1726,11 +1731,9 @@ impl HooksSection {
 
         layout::form_row(
             dbflux_i18n::t!("settings.hooks.form.on_failure"),
-            div().flex().child(layout::cursor_ring(
-                self.is_cursor_on(HookFormField::OnFailure),
-                control,
-                cx,
-            )),
+            div()
+                .flex()
+                .child(control.focused(self.is_cursor_on(HookFormField::OnFailure))),
             None,
         )
     }
@@ -2299,6 +2302,17 @@ fn is_kind_form_field(field: HookFormField) -> bool {
         field,
         HookFormField::KindCommand | HookFormField::KindScript
     )
+}
+
+/// Segment of the kind selector that a kind form field stands for.
+fn kind_segment_id(field: HookFormField) -> Option<&'static str> {
+    match field {
+        HookFormField::KindCommand => Some("command"),
+        HookFormField::KindScript => Some("script"),
+        #[cfg(feature = "lua")]
+        HookFormField::KindLua => Some("lua"),
+        _ => None,
+    }
 }
 
 /// Width of the short text fields of the hook form (id, command). (300 px)

@@ -26,7 +26,7 @@
 
 use crate::controls::{Dropdown, InputState};
 use crate::icons::AppIcon;
-use crate::primitives::{Chamfer, ChamferRing, Icon};
+use crate::primitives::{Chamfer, ChamferRing, FOCUS_RING_SELECTOR, Icon, WhenFocusVisible};
 use crate::tokens::{ChamferCut, ChromeColors, Fields, FontSizes, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
 use gpui::prelude::*;
@@ -455,7 +455,7 @@ impl RenderOnce for FilterField {
             .border(theme.input);
 
         if self.error {
-            shape = shape.ring(ChamferRing::focus(theme.danger));
+            shape = shape.ring(ChamferRing::outline(theme.danger));
         } else if self.filter_focused {
             shape = shape.ring(ChamferRing::focus(tint));
         }
@@ -520,6 +520,20 @@ impl RenderOnce for FilterField {
 
 // ── Private render helpers ────────────────────────────────────────────────────
 
+/// The navigation cursor's frame over a filter item, shown only while focus
+/// is visible.
+fn focus_frame(theme: &gpui_component::theme::Theme) -> WhenFocusVisible {
+    WhenFocusVisible::new(
+        div()
+            .absolute()
+            .inset_0()
+            .rounded(Radii::SM)
+            .border_1()
+            .border_color(theme.ring)
+            .debug_selector(|| FOCUS_RING_SELECTOR.to_string()),
+    )
+}
+
 fn render_item(
     item: &FilterBarItem,
     ring_active: bool,
@@ -542,8 +556,9 @@ fn render_item(
                     .h(Heights::CONTROL)
                     .min_w(px(180.0))
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(div().flex_1().child(Input::new(input).small())),
+                    .relative()
+                    .child(div().flex_1().child(Input::new(input).small()))
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
@@ -558,8 +573,9 @@ fn render_item(
                     .items_center()
                     .h(Heights::CONTROL)
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(dropdown.clone()),
+                    .relative()
+                    .child(dropdown.clone())
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
@@ -575,31 +591,30 @@ fn render_item(
                     .h(Heights::CONTROL)
                     .min_w(px(220.0))
                     .rounded(Radii::SM)
-                    .when(ring_active, |d| d.border_1().border_color(theme.ring))
-                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small()),
+                    .relative()
+                    .child(gpui_component::date_picker::DatePicker::new(date_picker).small())
+                    .when(ring_active, |d| d.child(focus_frame(theme))),
             )
             .into_any_element(),
 
-        FilterBarItem::Button { label, icon } => {
-            let border_color = if ring_active { theme.ring } else { theme.input };
-
-            div()
-                .flex()
-                .items_center()
-                .h(Heights::CONTROL)
-                .px(Spacing::SM)
-                .gap_1()
-                .rounded(Radii::SM)
-                .bg(theme.background)
-                .border_1()
-                .border_color(border_color)
-                .cursor_pointer()
-                .hover(|d| d.bg(theme.accent.opacity(0.08)))
-                .when_some(*icon, |d, icon| {
-                    d.child(Icon::new(icon).size(Heights::ICON_SM).muted())
-                })
-                .child(Text::body(label.clone()).font_size(FontSizes::SM))
-                .into_any_element()
-        }
+        FilterBarItem::Button { label, icon } => div()
+            .flex()
+            .items_center()
+            .h(Heights::CONTROL)
+            .px(Spacing::SM)
+            .gap_1()
+            .rounded(Radii::SM)
+            .bg(theme.background)
+            .relative()
+            .border_1()
+            .border_color(theme.input)
+            .cursor_pointer()
+            .hover(|d| d.bg(theme.accent.opacity(0.08)))
+            .when_some(*icon, |d, icon| {
+                d.child(Icon::new(icon).size(Heights::ICON_SM).muted())
+            })
+            .child(Text::body(label.clone()).font_size(FontSizes::SM))
+            .when(ring_active, |d| d.child(focus_frame(theme)))
+            .into_any_element(),
     }
 }

@@ -828,9 +828,7 @@ impl ConnectionManagerWindow {
                     Self::field_row_cm(
                         field_def.label.clone(),
                         false,
-                        div()
-                            .flex()
-                            .child(layout::cursor_ring(focused, control, cx)),
+                        div().flex().child(control.focused(focused)),
                         None::<&str>,
                         cx,
                     )
@@ -879,7 +877,7 @@ impl ConnectionManagerWindow {
                             .when(!field_enabled, |row| {
                                 row.opacity(dbflux_components::tokens::Fields::DISABLED_OPACITY)
                             })
-                            .child(layout::cursor_ring(focused, control, cx)),
+                            .child(control.focused(focused)),
                         field_def.help.clone(),
                         cx,
                     )
@@ -979,7 +977,7 @@ impl ConnectionManagerWindow {
             div()
                 .id("cm-field-use_uri")
                 .flex()
-                .child(layout::cursor_ring(focused, control, cx)),
+                .child(control.focused(focused)),
             None::<&str>,
             cx,
         )

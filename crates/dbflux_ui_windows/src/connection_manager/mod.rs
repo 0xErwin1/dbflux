@@ -261,6 +261,9 @@ struct FormState {
     selected_driver: Option<Arc<dyn DbDriver>>,
     /// Deployment environment chosen in the Main tab; saved on the profile.
     environment: Option<dbflux_core::ConnectionEnvironment>,
+    /// Chip the arrow keys moved the environment row's cursor to, when it
+    /// differs from the selected one; cleared by any other command.
+    environment_cursor: Option<usize>,
     form_save_password: bool,
     form_save_ssh_secret: bool,
     input_name: Entity<InputState>,
@@ -884,6 +887,7 @@ impl ConnectionManagerWindow {
                 selected_driver_id: None,
                 selected_driver: None,
                 environment: None,
+                environment_cursor: None,
                 form_save_password: true,
                 form_save_ssh_secret: true,
                 input_name,

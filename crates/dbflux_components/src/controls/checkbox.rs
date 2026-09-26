@@ -8,7 +8,7 @@ use gpui_component::ActiveTheme;
 
 use crate::icons::AppIcon;
 use crate::primitives::{Chamfer, ChamferFillKind, ChamferRing, Icon};
-use crate::tokens::{Borders, ChamferCut, ChromeColors, Fields};
+use crate::tokens::{ChamferCut, ChromeColors, Fields};
 
 type CheckboxHandler = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 
@@ -102,11 +102,8 @@ impl RenderOnce for Checkbox {
         let box_shape = if checked {
             Chamfer::new(ChamferCut::KEYCAP).fill(theme.primary.opacity(opacity))
         } else {
-            Chamfer::new(ChamferCut::KEYCAP).ring(ChamferRing {
-                color: theme.input.opacity(opacity),
-                thickness: Borders::FOCUS_RING,
-                offset: -Borders::FOCUS_RING,
-            })
+            Chamfer::new(ChamferCut::KEYCAP)
+                .ring(ChamferRing::outline(theme.input.opacity(opacity)))
         };
 
         let fill_kind = if checked {

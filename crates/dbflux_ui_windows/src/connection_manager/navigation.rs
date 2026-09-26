@@ -11,18 +11,34 @@ use super::{
     FormFocus, View,
 };
 
-/// Environment after `current` in the order None, Development, Staging,
-/// Production, None.
-pub(super) fn next_environment(
-    current: Option<dbflux_core::ConnectionEnvironment>,
-) -> Option<dbflux_core::ConnectionEnvironment> {
-    use dbflux_core::ConnectionEnvironment::{Development, Production, Staging};
+/// The environment chips of the Main tab, in display order; `None` is the
+/// chip that clears the environment.
+pub(super) const ENVIRONMENT_CHIPS: [Option<dbflux_core::ConnectionEnvironment>; 4] = [
+    Some(dbflux_core::ConnectionEnvironment::Production),
+    Some(dbflux_core::ConnectionEnvironment::Staging),
+    Some(dbflux_core::ConnectionEnvironment::Development),
+    None,
+];
 
-    match current {
-        None => Some(Development),
-        Some(Development) => Some(Staging),
-        Some(Staging) => Some(Production),
-        Some(Production) => None,
+/// Index of the chip showing `environment`.
+pub(super) fn environment_chip_index(
+    environment: Option<dbflux_core::ConnectionEnvironment>,
+) -> usize {
+    ENVIRONMENT_CHIPS
+        .iter()
+        .position(|chip| *chip == environment)
+        .unwrap_or(ENVIRONMENT_CHIPS.len() - 1)
+}
+
+/// The chip the roving cursor lands on after one step left or right from
+/// `index`, wrapping at both ends.
+pub(super) fn step_environment_chip(index: usize, forward: bool) -> usize {
+    let count = ENVIRONMENT_CHIPS.len();
+
+    if forward {
+        (index + 1) % count
+    } else {
+        (index + count - 1) % count
     }
 }
 
@@ -1369,6 +1385,16 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let on_environment_row =
+            self.active_tab == ActiveTab::Main && self.form_focus == FormFocus::Environment;
+
+        if !matches!(
+            command,
+            Command::FocusLeft | Command::FocusRight | Command::Execute
+        ) {
+            self.form.environment_cursor = None;
+        }
+
         match command {
             Command::SelectNext => {
                 self.focus_down(cx);
@@ -1376,6 +1402,15 @@ impl ConnectionManagerWindow {
             }
             Command::SelectPrev => {
                 self.focus_up(cx);
+                true
+            }
+            Command::FocusLeft | Command::FocusRight if on_environment_row => {
+                let forward = command == Command::FocusRight;
+                self.form.environment_cursor = Some(step_environment_chip(
+                    self.environment_cursor_index(),
+                    forward,
+                ));
+                cx.notify();
                 true
             }
             Command::FocusLeft => {
@@ -1710,6 +1745,14 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
+    /// Chip under the environment row's roving cursor: the one moved to with
+    /// the arrow keys, or the selected one.
+    pub(super) fn environment_cursor_index(&self) -> usize {
+        self.form
+            .environment_cursor
+            .unwrap_or_else(|| environment_chip_index(self.form.environment))
+    }
+
     fn focus_left(&mut self, cx: &mut Context<Self>) {
         self.form_focus = match self.active_tab {
             ActiveTab::Main => self.form_focus.left_main(self.main_nav_state(cx)),
@@ -1998,7 +2041,8 @@ impl ConnectionManagerWindow {
             }
 
             FormFocus::Environment => {
-                self.form.environment = next_environment(self.form.environment);
+                self.form.environment = ENVIRONMENT_CHIPS[self.environment_cursor_index()];
+                self.form.environment_cursor = None;
             }
 
             FormFocus::UseUri => {
@@ -2185,10 +2229,35 @@ impl ConnectionManagerWindow {
 #[cfg(test)]
 mod tests {
     use super::{
-        AccessTabMode, ActiveTab, FormFocus, MainNavState, ProxyNavState, SshNavState,
-        next_active_tab, prev_active_tab,
+        AccessTabMode, ActiveTab, ENVIRONMENT_CHIPS, FormFocus, MainNavState, ProxyNavState,
+        SshNavState, environment_chip_index, next_active_tab, prev_active_tab,
+        step_environment_chip,
     };
     use crate::ssh_shared::SshAuthSelection;
+    use dbflux_core::ConnectionEnvironment;
+
+    #[test]
+    fn environment_cursor_starts_on_the_selected_chip() {
+        assert_eq!(
+            environment_chip_index(Some(ConnectionEnvironment::Production)),
+            0
+        );
+        assert_eq!(
+            environment_chip_index(Some(ConnectionEnvironment::Development)),
+            2
+        );
+        assert_eq!(environment_chip_index(None), 3);
+    }
+
+    #[test]
+    fn environment_cursor_roves_both_ways_and_wraps() {
+        let last = ENVIRONMENT_CHIPS.len() - 1;
+
+        assert_eq!(step_environment_chip(0, true), 1);
+        assert_eq!(step_environment_chip(1, false), 0);
+        assert_eq!(step_environment_chip(last, true), 0);
+        assert_eq!(step_environment_chip(0, false), last);
+    }
 
     fn ssh_disabled() -> SshNavState {
         SshNavState::new(false, false, false, SshAuthSelection::PrivateKey, false)

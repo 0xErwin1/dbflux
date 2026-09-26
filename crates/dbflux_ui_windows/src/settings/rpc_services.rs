@@ -1125,12 +1125,21 @@ impl ServicesSection {
             },
         );
 
-        let cursor = self.svc_cursor_on(ServiceFormRow::Kind, 0)
-            || self.svc_cursor_on(ServiceFormRow::Kind, 1);
+        let cursor_item = if self.svc_cursor_on(ServiceFormRow::Kind, 0) {
+            Some("driver")
+        } else if self.svc_cursor_on(ServiceFormRow::Kind, 1) {
+            Some("auth_provider")
+        } else {
+            None
+        };
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
 
         layout::form_row(
             dbflux_i18n::t!("settings.rpc_services.field.service_type"),
-            div().flex().child(layout::cursor_ring(cursor, control, cx)),
+            div().flex().child(control),
             None,
         )
     }

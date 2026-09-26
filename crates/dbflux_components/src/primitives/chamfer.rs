@@ -6,9 +6,10 @@ use gpui::prelude::*;
 use gpui::{
     App, Bounds, DispatchPhase, ElementId, Hitbox, HitboxBehavior, Hsla, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, Window, canvas,
-    point, px,
+    div, point, px,
 };
 
+use crate::primitives::focus_ring::{FOCUS_RING_SELECTOR, is_keyboard_modality};
 use crate::tokens::{Anim, Borders};
 
 /// Which corners of the rectangle are cut at 45°.
@@ -50,21 +51,37 @@ pub enum ChamferFillKind {
 /// equal to the thickness keeps the whole ring inside the bounds. A ring
 /// outside the bounds paints past the element's box, so an ancestor that
 /// clips its overflow also clips the ring.
+///
+/// A ring with `focus_visible` set is a keyboard focus indicator: the shape
+/// only strokes it while focus is visible in its window (see
+/// [`crate::primitives::is_keyboard_modality`]), so it never shows after a
+/// pointer press.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChamferRing {
     pub color: Hsla,
     pub thickness: Pixels,
     pub offset: Pixels,
+    pub focus_visible: bool,
 }
 
 impl ChamferRing {
     /// Keyboard focus ring: `Borders::FOCUS_RING` thick, fully inside the
-    /// bounds.
+    /// bounds, stroked only while focus is visible.
     pub fn focus(color: impl Into<Hsla>) -> Self {
+        Self {
+            focus_visible: true,
+            ..Self::outline(color)
+        }
+    }
+
+    /// The focus ring's geometry for a state other than focus (an invalid
+    /// value, an unchecked box): always stroked.
+    pub fn outline(color: impl Into<Hsla>) -> Self {
         Self {
             color: color.into(),
             thickness: Borders::FOCUS_RING,
             offset: -Borders::FOCUS_RING,
+            focus_visible: false,
         }
     }
 
@@ -632,10 +649,20 @@ struct ChamferInteraction {
 }
 
 impl RenderOnce for Chamfer {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let focus_ring_shown = match self.ring {
+            Some(ring) if ring.focus_visible => {
+                if !is_keyboard_modality(window) {
+                    self.ring = None;
+                }
+                self.ring.is_some()
+            }
+            _ => false,
+        };
+
         let interaction_id = self.interaction_id.clone();
 
-        canvas(
+        let shape = canvas(
             move |bounds, window, _cx| {
                 let id = interaction_id?;
                 let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
@@ -680,7 +707,18 @@ impl RenderOnce for Chamfer {
             },
         )
         .absolute()
-        .inset_0()
+        .inset_0();
+
+        if focus_ring_shown {
+            div()
+                .absolute()
+                .inset_0()
+                .debug_selector(|| FOCUS_RING_SELECTOR.to_string())
+                .child(shape)
+                .into_any_element()
+        } else {
+            shape.into_any_element()
+        }
     }
 }
 
@@ -1292,6 +1330,7 @@ mod tests {
                 color,
                 thickness: Borders::FOCUS_RING,
                 offset: Borders::MEDIUM,
+                focus_visible: true,
             }
         );
     }

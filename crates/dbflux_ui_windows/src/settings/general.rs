@@ -972,9 +972,7 @@ impl GeneralSection {
 
         layout::form_row(
             label,
-            div()
-                .flex()
-                .child(layout::cursor_ring(self.is_at(row), control, cx)),
+            div().flex().child(control.focused(self.is_at(row))),
             help.map(SharedString::from),
         )
     }

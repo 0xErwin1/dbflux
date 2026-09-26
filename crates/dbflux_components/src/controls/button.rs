@@ -623,9 +623,11 @@ mod tests {
                 .track_focus(&self.focus_handle)
                 .flex()
                 .child(
-                    Button::new("first", "First")
-                        .small()
-                        .on_click(move |_, _, _| first_clicks.borrow_mut().push("first")),
+                    div().debug_selector(|| "first-button".to_string()).child(
+                        Button::new("first", "First")
+                            .small()
+                            .on_click(move |_, _, _| first_clicks.borrow_mut().push("first")),
+                    ),
                 )
                 .child(
                     Button::new("second", "Second")
@@ -648,6 +650,73 @@ mod tests {
         });
         window.simulate_event(KeyUpEvent { keystroke });
         window.run_until_parked();
+    }
+
+    fn open_toolbar(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<ToolbarHarness>,
+        std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+        &mut gpui::VisualTestContext,
+    ) {
+        cx.update(crate::theme::init);
+
+        let clicks = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let harness_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, window) = cx.add_window_view({
+            let clicks = clicks.clone();
+            let harness_slot = harness_slot.clone();
+            move |window, cx| {
+                let harness = cx.new(|cx| ToolbarHarness {
+                    focus_handle: cx.focus_handle(),
+                    renders: 0,
+                    clicks,
+                });
+                harness_slot.replace(Some(harness.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let harness = harness_slot
+            .borrow()
+            .clone()
+            .expect("the harness should be built");
+
+        window.update(|window, cx| harness.read(cx).focus_handle.clone().focus(window, cx));
+        window.run_until_parked();
+
+        (harness, clicks, window)
+    }
+
+    #[gpui::test]
+    fn focus_ring_shows_after_tab_and_not_after_a_click(cx: &mut gpui::TestAppContext) {
+        let (_harness, clicks, window) = open_toolbar(cx);
+        let ring = crate::primitives::FOCUS_RING_SELECTOR;
+
+        window.simulate_keystrokes("tab");
+        assert!(
+            window.debug_bounds(ring).is_some(),
+            "Tab onto a button shows its ring"
+        );
+
+        let first = window
+            .debug_bounds("first-button")
+            .expect("the first button is laid out")
+            .center();
+        window.simulate_click(first, gpui::Modifiers::default());
+        window.run_until_parked();
+        assert_eq!(*clicks.borrow(), vec!["first"]);
+        assert!(
+            window.debug_bounds(ring).is_none(),
+            "a click leaves no ring on any button"
+        );
+
+        window.simulate_keystrokes("tab");
+        assert!(
+            window.debug_bounds(ring).is_some(),
+            "the next Tab shows the ring again"
+        );
     }
 
     #[gpui::test]

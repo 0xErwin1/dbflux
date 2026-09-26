@@ -397,8 +397,9 @@ mod tests {
 
     use gpui::{
         AccessibilityFrame, AppContext as _, Bounds, Context, Focusable as _, FrameObserver,
-        IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render, Role, Styled as _,
-        TestAppContext, VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
+        InteractiveElement as _, IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render,
+        Role, Styled as _, TestAppContext, VisualTestContext, Window, div, point,
+        prelude::FluentBuilder as _, px,
     };
 
     use super::{EditorState, GpuiEditor, GpuiInput, Input, InputState, ReadOnlyEditor};
@@ -433,6 +434,77 @@ mod tests {
 
             div().size_full().child(input)
         }
+    }
+
+    struct FieldPair {
+        first: gpui::Entity<InputState>,
+        second: gpui::Entity<InputState>,
+    }
+
+    impl Render for FieldPair {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .debug_selector(|| "first-field".to_string())
+                        .child(Input::new(&self.first)),
+                )
+                .child(Input::new(&self.second))
+        }
+    }
+
+    #[gpui::test]
+    fn input_rings_after_tab_but_not_after_a_click(cx: &mut TestAppContext) {
+        cx.update(crate::theme::init);
+
+        let pair_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, visual) = cx.add_window_view({
+            let pair_slot = pair_slot.clone();
+            move |window, cx| {
+                let first = cx.new(|cx| InputState::new(window, cx));
+                let second = cx.new(|cx| InputState::new(window, cx));
+                let pair = cx.new(|_| FieldPair { first, second });
+                pair_slot.replace(Some(pair.clone()));
+                gpui_component::Root::new(pair, window, cx)
+            }
+        });
+        visual.run_until_parked();
+
+        let pair = pair_slot.borrow().clone().expect("the fields are built");
+        let ring = crate::primitives::FOCUS_RING_SELECTOR;
+
+        let first = visual
+            .debug_bounds("first-field")
+            .expect("the first field is laid out")
+            .center();
+        visual.simulate_click(first, Modifiers::default());
+        settle_frame(visual);
+
+        let first_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).first.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(first_focused, "the click focuses the field");
+        assert!(
+            visual.debug_bounds(ring).is_none(),
+            "a clicked field shows no ring"
+        );
+
+        visual.simulate_keystrokes("tab");
+        settle_frame(visual);
+
+        let second_focused = visual.update(|window, cx| {
+            let state = pair.read(cx).second.clone();
+            state.read(cx).focus_handle(cx).is_focused(window)
+        });
+        assert!(second_focused, "Tab moves to the next field");
+        assert!(
+            visual.debug_bounds(ring).is_some(),
+            "a field reached with Tab shows its ring"
+        );
     }
 
     /// Open a window holding one input and observe its frames.

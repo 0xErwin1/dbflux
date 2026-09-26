@@ -2717,7 +2717,7 @@ impl SchemaVizDocument {
                 .interactive("schema-layout-select-shape");
 
             if self.layout_menu_open {
-                shape = shape.ring(ChamferRing::focus(ChromeColors::tint(&theme)));
+                shape = shape.ring(ChamferRing::outline(ChromeColors::tint(&theme)));
             }
 
             div()
@@ -3312,7 +3312,7 @@ impl SchemaVizDocument {
             Chamfer::new(ChamferCut::INPUT)
                 .fill(theme.popover)
                 .border(theme.input)
-                .ring(ChamferRing::focus(tint))
+                .ring(ChamferRing::outline(tint))
         } else {
             Chamfer::new(ChamferCut::INPUT)
                 .fill(theme.popover)

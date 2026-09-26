@@ -8,8 +8,8 @@ use dbflux_components::icons::AppIcon;
 #[cfg(feature = "mcp")]
 use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
-    Badge, BadgeTone, Chamfer, ChamferRing, FilePicker, Icon as AppIconElement, SegmentedControl,
-    SegmentedItem, Text, environment_label, status_diamond,
+    Badge, BadgeTone, Chamfer, FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem,
+    Text, environment_label, focus_underline, status_diamond,
 };
 use dbflux_components::tokens::ChamferCut;
 #[cfg(feature = "mcp")]
@@ -23,6 +23,7 @@ use gpui_component::ActiveTheme;
 #[cfg(feature = "mcp")]
 use gpui_component::scroll::ScrollableElement;
 
+use super::navigation::ENVIRONMENT_CHIPS;
 use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, cm_setting_id};
 
 impl ConnectionManagerWindow {
@@ -195,35 +196,36 @@ impl ConnectionManagerWindow {
     }
 
     /// Environment row of the Main tab (P1ConnForm): one chip per
-    /// environment, the selected one washed and ringed in its tone, plus a
-    /// chip that clears it.
+    /// environment, the selected one washed in its tone, plus a chip that
+    /// clears it. The group draws no ring: while the row holds the keyboard
+    /// cursor, the chip under the roving cursor carries the tint underline.
     fn render_environment_row(&self, show_focus: bool, cx: &mut Context<Self>) -> AnyElement {
-        let focused = show_focus && self.form_focus == FormFocus::Environment;
+        let row_focused = show_focus && self.form_focus == FormFocus::Environment;
+        let cursor = self.environment_cursor_index();
         let current = self.form.environment;
 
-        let mut chips: Vec<AnyElement> = [
-            ConnectionEnvironment::Production,
-            ConnectionEnvironment::Staging,
-            ConnectionEnvironment::Development,
-        ]
-        .into_iter()
-        .map(|environment| {
-            self.render_environment_chip(Some(environment), current == Some(environment), cx)
-        })
-        .collect();
+        let chips: Vec<AnyElement> = ENVIRONMENT_CHIPS
+            .into_iter()
+            .enumerate()
+            .map(|(index, environment)| {
+                self.render_environment_chip(
+                    environment,
+                    current == environment,
+                    row_focused && index == cursor,
+                    cx,
+                )
+            })
+            .collect();
 
-        chips.push(self.render_environment_chip(None, current.is_none(), cx));
-
-        let control = div().flex().child(layout::cursor_ring(
-            focused,
+        let control = div().flex().child(
             div()
                 .id("cm-environment")
+                .role(Role::RadioGroup)
                 .flex()
                 .items_center()
                 .gap(ConnectionFormMetrics::ENV_CHIPS_GAP)
                 .children(chips),
-            cx,
-        ));
+        );
 
         Self::field_row_cm(
             dbflux_i18n::t!("connection_manager.environment.label"),
@@ -239,9 +241,11 @@ impl ConnectionManagerWindow {
         &self,
         environment: Option<ConnectionEnvironment>,
         selected: bool,
+        focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
+        let tint = ChromeColors::tint(theme);
         let (label, id, tone_color) = match environment {
             Some(environment) => (
                 environment_label(environment),
@@ -258,11 +262,6 @@ impl ConnectionManagerWindow {
         let shape = if selected {
             Chamfer::new(ChamferCut::KEYCAP)
                 .fill(tone_color.opacity(ConnectionFormMetrics::ENV_CHIP_WASH_ALPHA))
-                .ring(ChamferRing {
-                    color: tone_color,
-                    thickness: ConnectionFormMetrics::ENV_CHIP_RING,
-                    offset: -ConnectionFormMetrics::ENV_CHIP_RING,
-                })
         } else {
             Chamfer::new(ChamferCut::KEYCAP)
                 .fill(theme.secondary)
@@ -296,8 +295,10 @@ impl ConnectionManagerWindow {
                 ConnectionFormMetrics::ENV_CHIP_DIAMOND,
             ))
             .child(label)
+            .when(focused, |chip| chip.child(focus_underline(tint)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.form.environment = environment;
+                this.form.environment_cursor = None;
                 this.form_focus = FormFocus::Environment;
                 cx.notify();
             }))

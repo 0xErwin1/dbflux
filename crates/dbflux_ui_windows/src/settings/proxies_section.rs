@@ -312,11 +312,18 @@ impl ProxiesSection {
             });
         });
 
-        let cursor = kinds.iter().any(|(field, _, _)| self.is_cursor_on(*field));
+        let cursor_item = kinds
+            .iter()
+            .find(|(field, _, _)| self.is_cursor_on(*field))
+            .map(|(_, _, id)| *id);
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
 
         layout::form_row(
             dbflux_i18n::t!("settings.proxies.field.protocol"),
-            div().flex().child(layout::cursor_ring(cursor, control, cx)),
+            div().flex().child(control),
             None,
         )
     }
@@ -352,12 +359,21 @@ impl ProxiesSection {
             },
         );
 
-        let cursor = self.is_cursor_on(ProxyFormField::AuthNone)
-            || self.is_cursor_on(ProxyFormField::AuthBasic);
+        let cursor_item = if self.is_cursor_on(ProxyFormField::AuthNone) {
+            Some("none")
+        } else if self.is_cursor_on(ProxyFormField::AuthBasic) {
+            Some("basic")
+        } else {
+            None
+        };
+
+        let control = control
+            .focused(cursor_item.is_some())
+            .when_some(cursor_item, |control, id| control.focused_item(id));
 
         layout::form_row(
             dbflux_i18n::t!("settings.proxies.field.authentication"),
-            div().flex().child(layout::cursor_ring(cursor, control, cx)),
+            div().flex().child(control),
             None,
         )
     }

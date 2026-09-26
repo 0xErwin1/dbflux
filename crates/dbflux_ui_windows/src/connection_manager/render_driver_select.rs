@@ -210,8 +210,9 @@ impl ConnectionManagerWindow {
     }
 
     /// One driver card: logo, name and the default port (or the driver's
-    /// description when it has no port) in a chamfered card; the selected
-    /// card gets the tint ring, an 8% tint wash and a check mark.
+    /// description when it has no port) in a chamfered card; the card under
+    /// the keyboard cursor gets an 8% tint wash and a check mark, plus the
+    /// tint ring while focus is visible.
     fn render_driver_card(
         &self,
         driver: &DriverInfo,
@@ -233,6 +234,7 @@ impl ConnectionManagerWindow {
                     color: tint,
                     thickness: ConnectionFormMetrics::CARD_SELECTED_RING,
                     offset: -ConnectionFormMetrics::CARD_SELECTED_RING,
+                    focus_visible: true,
                 })
         } else {
             Chamfer::new(ChamferCut::INPUT)

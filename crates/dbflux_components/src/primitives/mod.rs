@@ -24,7 +24,10 @@ pub use chamfer::{
 };
 pub use divider::{DividerTone, divider, hdivider, vdivider};
 pub use file_picker::{FilePicker, file_picker_label};
-pub use focus_ring::{FocusShape, focus_ring};
+pub use focus_ring::{
+    FOCUS_MARKER_SELECTOR, FOCUS_RING_SELECTOR, FocusShape, WhenFocusVisible, focus_ring,
+    focus_underline, focus_visible, is_focus_visible, is_keyboard_modality,
+};
 pub use icon::Icon;
 pub use kbd::{Kbd, KbdTone};
 pub use label::Label;

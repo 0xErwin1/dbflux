@@ -2,10 +2,10 @@
 //! place (DSApp "Tree", DSAppPlan "ListRow").
 
 use gpui::prelude::*;
-use gpui::{App, Div, ElementId, Pixels, Stateful, div};
+use gpui::{App, Div, ElementId, Stateful, div};
 use gpui_component::ActiveTheme;
 
-use crate::primitives::{Chamfer, ChamferRing};
+use crate::primitives::{FOCUS_MARKER_SELECTOR, WhenFocusVisible};
 use crate::tokens::{ChromeColors, TreeMetrics};
 
 /// A clickable row of a list, table-like panel or picker.
@@ -13,8 +13,9 @@ use crate::tokens::{ChromeColors, TreeMetrics};
 /// - Selected: tint wash, optionally with a 2 px tint bar on the left edge
 ///   (the tree and sidebar treatment).
 /// - Hovered: the palette hover wash, only while not selected.
-/// - Focused: a 1.5 px tint ring inside the row's rectangle, for rows that
-///   take keyboard focus themselves.
+/// - Focused: the keyboard cursor of the list. The tint wash (when not
+///   already selected) and the 2 px tint bar on the left edge, shown only
+///   while focus is visible; a list never rings its rows.
 ///
 /// [`ListRow::build`] returns the row as a `Stateful<Div>`; the caller lays
 /// out its content and wires its handlers on it. Rows have no cut: they hold
@@ -64,6 +65,7 @@ impl ListRow {
         let theme = cx.theme();
         let tint = ChromeColors::tint(theme);
         let hover_wash = theme.list_hover;
+        let selected_wash = theme.list_active;
         let show_bar = self.selected && self.selection_bar;
 
         div()
@@ -86,7 +88,22 @@ impl ListRow {
                 )
             })
             .when(self.focused, |row| {
-                row.child(Chamfer::new(Pixels::ZERO).ring(ChamferRing::focus(tint)))
+                row.child(WhenFocusVisible::new(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .when(!self.selected, |marker| marker.bg(selected_wash))
+                        .debug_selector(|| FOCUS_MARKER_SELECTOR.to_string())
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(TreeMetrics::SELECTION_BAR)
+                                .bg(tint),
+                        ),
+                ))
             })
     }
 }
