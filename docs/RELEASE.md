@@ -91,13 +91,14 @@ The manifest version is `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently be
 2. When ready to stabilize, cut `release/v0.7` from `main` HEAD.
    - On `release/v0.7`: bump every versioned artifact to `0.7.0-rc.0`. Commit and push.
    - On `main`: bump every versioned artifact to `0.8.0-dev.0`. Commit and push. `main` now targets the next minor.
+   - On `main`: add `v0.7` to `web/versions.json`, not current. The site keeps serving `v0.6` at `/docs/`.
    - Tag `v0.7.0-rc.0` on the release branch. git-cliff renders the unreleased range as the RC body automatically.
 3. A bug is found during RC:
    - Commit the fix on `main`.
    - `git cherry-pick -x <sha>` into `release/v0.7`.
    - Bump to `v0.7.0-rc.1` and tag.
 4. When clean, bump the release branch from `v0.7.0-rc.N` to `v0.7.0` and rename the top `CHANGELOG.md` heading to `## [0.7.0] - <date>` in that same commit. Tag `v0.7.0`. git-cliff renders the full range since `v0.6.0` as the stable release body.
-5. `main` is already on `0.8.0-dev.0`, so no further version bump is needed after stable. One commit closes the released `[Unreleased]` section and opens a fresh one above it.
+5. `main` is already on `0.8.0-dev.0`, so no further version bump is needed after stable. One commit closes the released `[Unreleased]` section and opens a fresh one above it, and another moves `"current": true` in `web/versions.json` from `v0.6` to `v0.7`.
 6. Patches (`v0.7.1`, `v0.7.2`, …) come from the same release branch via cherry-picks from `main`, and each one prepends a generated `## [0.7.N]` section to `CHANGELOG.md`.
 
 ## Artifact Identity and Signing
@@ -189,7 +190,18 @@ PNGs under `packaging/icons/<size>/apps/`, the in-app PNGs and the lockup
    - Commit: `chore(version): move main to X.(Y+1).0-dev.0 marker`.
    - Push.
 
-6. Tag `vX.Y.0-rc.0` on the release branch.
+6. Still on `main`, register the minor on the website. `release/vX.Y` must already be on origin (step 4); see [Website](#website) for why. Add the entry right after `nightly`, without `current` — an RC is not the current release:
+
+   ```json
+   { "id": "nightly", "ref": "main", "noindex": true },
+   { "id": "vX.Y", "ref": "release/vX.Y" },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)", "current": true },
+   ```
+
+   - Commit: `chore(web): add vX.Y to the site versions`.
+   - Push.
+
+7. Tag `vX.Y.0-rc.0` on the release branch.
 
 The RC release body is generated from conventional commits automatically, so an RC needs no CHANGELOG step at all.
 
@@ -209,6 +221,15 @@ Run on `release/vX.Y` when the RC is clean:
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` on the release branch and push branch + tag.
 5. CI generates the stable release body from every user-visible commit since the previous stable tag.
+6. On `main`, make the new minor the site's current release: in `web/versions.json`, move `"current": true` from `vX.(Y-1)` to `vX.Y`.
+
+   ```json
+   { "id": "vX.Y", "ref": "release/vX.Y", "current": true },
+   { "id": "vX.(Y-1)", "ref": "release/vX.(Y-1)" },
+   ```
+
+   - Commit: `chore(web): make vX.Y the current site version`.
+   - Push. The site deploys from `main`, so this commit switches `/docs/` to `vX.Y` and the product version shown on the landing and compare pages to `X.Y.0`.
 
 The release workflow refuses to publish a stable tag whose version has no `## [X.Y.Z]` section in `CHANGELOG.md`, so step 2 cannot be skipped silently.
 
@@ -217,6 +238,20 @@ The release workflow refuses to publish a stable tag whose version has no `## [X
 `main` is bumped to `X.(Y+1).0-dev.0` **when `release/vX.Y` is cut** (see Cut Procedure, step 5). No further bump to `main` is required after the stable tag. Nightly builds continue from `main` HEAD automatically, producing `X.(Y+1).0-nightly+<sha>` throughout the stabilization window.
 
 Once the stable tag is pushed, `main` gets one commit that closes the released section the same way (rename `## [Unreleased]` to `## [X.Y.0] - <date>`) and opens a fresh `## [Unreleased]` above it, so the repository changelog keeps the released history. `7a13aceb` is an example of that commit. Work that landed on `main` after the cut and did not ship belongs under the new `[Unreleased]`, not in the released section; that split is the model's one hand-fold.
+
+## Website
+
+The site publishes one documentation set per minor, listed in `web/versions.json` (the fields are described in `web/src/data/versions.ts`). It is not bumped per release: it changes at three points in a minor's life, always with a commit on `main`, because the site deploys from `main` (`.github/workflows/web.yml`).
+
+| Event | Change in `web/versions.json` | Commit |
+|-------|-------------------------------|--------|
+| Cut (`release/vX.Y` pushed) | add `{ "id": "vX.Y", "ref": "release/vX.Y" }` right after `nightly` | `chore(web): add vX.Y to the site versions` |
+| Stable (`vX.Y.0` tagged and pushed) | move `"current": true` to `vX.Y` | `chore(web): make vX.Y the current site version` |
+| EOL (before `release/vX.Y` is deleted) | repoint `vX.Y`'s `ref` to its last tag, e.g. `vX.Y.Z` | `chore(web): pin vX.Y site docs to vX.Y.Z` |
+
+- **The ref must exist on origin first.** `web/scripts/fetch-docs.ts` reads each entry from its git ref, fetching it from `origin` when the clone lacks it. A ref it cannot read is skipped with only a warning, but the build then fails rendering that version's pages (`No materialised documentation for version "vX.Y"`). An entry that lands before its branch is pushed, or that still names a deleted branch, breaks every site deploy from `main`.
+- **The product version is not typed anywhere.** The site reads it from each ref's `Cargo.toml`, so it follows the release branch's bumps (`X.Y.0-rc.N`, then `X.Y.0`, then patches) without a site change.
+- **Site copy for a new minor waits for the stable release.** Landing or compare-page text describing features of `vX.Y` must not reach `main` before the commit that makes `vX.Y` current; until then the site describes `vX.(Y-1)`.
 
 ## Files to Bump
 
@@ -230,6 +265,8 @@ Per release, update all of the following to the exact same version:
 After the GitHub Release artifacts for the tag are published, also update:
 
 - `nix/release-info.nix` — `version` + both prebuilt-tarball `url`s and `hash`es (see [Nix](#nix-this-repos-flake) below). This is a per-branch channel pointer. It requires the published artifacts, so it lands as a follow-up commit once the release workflow finishes.
+
+`web/versions.json` is not part of the per-release bump; it changes at the cut, the stable promote and the EOL of a minor (see [Website](#website)).
 
 The AUR `PKGBUILD` lives in an **external AUR repository**, not in this repo. It is bumped only for stable tags.
 
@@ -350,6 +387,8 @@ Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs`.
 - Pushing the AUR bump with `pkgver` containing a hyphen.
 - Cutting `release/vX.Y` from a `main` HEAD that does not contain the `Classify release` job in `release.yml`.
 - Creating new `-dev.N` tags (the channel is retired; use nightly instead).
+- Marking an RC minor `"current": true` in `web/versions.json`, or keeping the previous minor current after `vX.Y.0` is published.
+- Adding a `web/versions.json` entry whose ref is not yet on origin, or deleting a `release/vX.Y` branch that an entry still points at.
 
 ## Local Validation Before Tagging
 
@@ -369,4 +408,5 @@ These fast suites do not cover the driver live integration tests: driver-specifi
 - `.github/workflows/build.yml` — reusable build jobs (called by release and nightly)
 - `.github/release-template.md` — installation section appended to every release body
 - `cliff.toml` — git-cliff configuration for changelog generation
+- `web/versions.json` — documentation versions the site publishes, and which one is current
 - `skills/dbflux-release/SKILL.md` — agent-facing skill that automates this process
