@@ -176,7 +176,13 @@ and therefore is not deduplicated until it is saved.
 
 ## Creating a chart in the UI
 
-There are three entry points.
+There are four entry points.
+
+### Chart button in the query editor
+
+Any query that produces tabular results can be charted. In the query editor
+toolbar, click the chart button (tooltip: "Open current query in a chart
+document") to open the current query in a chart document.
 
 ### Chart this query
 
@@ -198,6 +204,10 @@ non-empty query causes the document to auto-execute on its first render.
 The "Open chart..." command lists saved charts (built by
 `build_saved_chart_palette_items`) for the active profile, and opens the
 selected chart via `open_saved_chart` as described above.
+
+Charts can be saved per connection profile. To reopen a saved chart, run **Open
+Chart...** from the command palette (`OpenSavedChart`), which lists the saved
+charts for the current profile in a fuzzy overlay.
 
 ### Time-series collections
 

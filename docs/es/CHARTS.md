@@ -184,7 +184,14 @@ a un ID guardado y, por tanto, no se deduplica hasta que se guarda.
 
 ## Crear un chart en la UI
 
-Hay tres puntos de entrada.
+Hay cuatro puntos de entrada.
+
+### Botón de gráfico en el editor de queries
+
+Cualquier query que produzca resultados tabulares se puede graficar. En la
+toolbar del editor de queries, haz clic en el botón de gráfico (tooltip: "Open
+current query in a chart document") para abrir la query actual en un documento
+de gráfico.
 
 ### Chart this query
 
@@ -207,6 +214,11 @@ en su primer render.
 El comando "Open chart..." lista los saved charts (construidos por
 `build_saved_chart_palette_items`) para el perfil activo, y abre el chart
 seleccionado a través de `open_saved_chart` como se describió arriba.
+
+Los gráficos se pueden guardar por perfil de conexión. Para reabrir un gráfico
+guardado, ejecuta **Open Chart...** desde el command palette (`OpenSavedChart`),
+que lista los gráficos guardados del perfil actual en un overlay de búsqueda
+difusa.
 
 ### Colecciones de series temporales
 

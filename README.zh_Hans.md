@@ -24,16 +24,16 @@ DBFlux 是一个开源桌面客户端，为关系型与非关系型数据库提�
 
 | 目标                   | 指南                                                                                                                                                         |
 |------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 创建连接               | 从[使用指南](docs/USAGE.md#1-first-launch-and-creating-a-connection)开始。SSH 隧道、代理、AWS SSO 与值来源参见[连接数据库 — 高级配置](docs/CONNECTIONS.md)。 |
+| 创建连接               | 从[快速开始](docs/GETTING_STARTED.md)开始。SSH 隧道、代理、AWS SSO 与值来源参见[连接数据库 — 高级配置](docs/CONNECTIONS.md)。 |
 | 执行查询并掌握常用流程 | 按[使用指南](docs/USAGE.md)执行查询、浏览结果、绘制图表、导出结果并使用键盘导航。                                                                            |
-| 查看审计事件           | 按[仪表盘与审计查看器使用指南](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer)打开审计查看器。                                                                    |
+| 查看审计事件           | 按[审计查看器指南](docs/AUDIT.md#audit-viewer)打开审计查看器。                                                                    |
 | 使用 MCP               | 参见[AI + MCP 集成指南](docs/MCP_AI_INTEGRATION.md)。                                                                                                        |
 | 查看驱动支持与限制     | 参见[驱动概览](docs/DRIVERS.md)，它是能力与限制的权威说明。                                                                                                  |
 
 ### 更多用户指南
 
 - [设置与 Hooks](docs/SETTINGS.md) — 设置项、连接 Hook 与认证配置文件
-- [数据与隐私](docs/DATA_AND_PRIVACY.md) — 数据与密钥的存储、备份与重置
+- [数据与隐私](PRIVACY.md#your-data-on-this-machine) — 数据与密钥的存储、备份与重置
 - [Lua 脚本](docs/LUA.md) — 用于 Hook 的内嵌 Lua 运行时
 
 ### 贡献者

@@ -17,9 +17,10 @@
 | [서비스](#서비스rpc) | 외부 RPC 드라이버 및 인증 제공자. |
 | [훅](#연결-훅) | 재사용 가능한 연결 훅 정의. |
 | [드라이버](#드라이버) | 드라이버별 재정의 및 설정. |
+| 정보 | 버전 및 빌드 정보. |
 
 MCP 관련 섹션(Clients, Roles, Policies)은 바이너리가 `mcp` 기능과 함께 빌드된
-경우에만 나타납니다. [AI + MCP Integration](MCP_AI_INTEGRATION.md)을 참고하세요.
+경우에만 나타나며, 기본 빌드에는 이 기능이 포함됩니다. [AI + MCP Integration](MCP_AI_INTEGRATION.md)을 참고하세요.
 
 ---
 ## 일반
@@ -44,7 +45,7 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 
 | 설정 | 기본값 | 설명 |
 |---------|---------|--------------|
-| **Vim mode in code editors** | Off | 코드 편집기의 모드 편집: `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, `u`를 쓰는 노멀 모드와 삽입 모드. 저장하면 열려 있는 편집기에 적용됩니다. [사용 가이드](USAGE.md) 키보드 참조의 Vim 모드 섹션을 참고하세요. |
+| **Vim mode in code editors** | Off | 코드 편집기의 모드 편집: `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, `u`를 쓰는 노멀 모드와 삽입 모드. 저장하면 열려 있는 편집기에 적용됩니다. 키보드 참조의 [Vim 모드](KEYBOARD.md#vim-모드선택-사항) 섹션을 참고하세요. |
 
 ### 시작 및 세션
 
@@ -101,7 +102,7 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 | **Use the stable database** | Off | 나이틀리 빌드가 `dbflux-nightly.db` 대신 안정(stable) 버전의 `dbflux.db`를 공유하도록 합니다. 다음 실행 시 적용됩니다. |
 
 나이틀리 데이터베이스와 안정 데이터베이스가 어떻게 분리되어 있는지는
-[Data & Privacy](DATA_AND_PRIVACY.md#데이터-위치)를 참고하세요.
+[Data & Privacy](PRIVACY.md#데이터-위치)를 참고하세요.
 
 ---
 
@@ -114,9 +115,9 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 
 보존(Retention, 이벤트를 얼마나 유지하는지)이 설정되어 있으면 주기적인 백그라운드
 제거가 수행됩니다. 일상적인 감사 사용 경험 — 뷰어 열기, 필터링, 내보내기 — 에
-대해서는 [Dashboards & Audit](DASHBOARDS_AND_AUDIT.md#감사-뷰어)를 참고하세요.
+대해서는 [감사 → 감사 뷰어](AUDIT.md#감사-뷰어)를 참고하세요.
 전체 이벤트 스키마와 마스킹 동작은 [Audit](AUDIT.md) 및
-[Data & Privacy](DATA_AND_PRIVACY.md#감사-및-개인정보)를 참고하세요.
+[Data & Privacy](PRIVACY.md#감사-및-개인정보)를 참고하세요.
 
 ---
 
@@ -126,7 +127,7 @@ CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`
 키, 컨텍스트 조건식을 기준으로 필터링하거나, 컨텍스트 필터로 하나의 컨텍스트만
 표시할 수 있습니다. 다른 컨텍스트를 상속하는 컨텍스트(편집기는 전역을 상속)는
 자신이 가리지 않는 상속 바인딩도 함께 나열합니다. 전체 기본 키맵은
-[Usage → Keyboard Reference](USAGE.md#7-키보드-참조)에 문서화되어 있습니다.
+[키보드 참조](KEYBOARD.md)에 문서화되어 있습니다.
 
 **단축키 변경.** 바인딩의 연필을 누르거나, 바인딩을 선택하고 `Enter`를 누른 뒤
 새 키를 누르세요. 단축키는 수정 키를 포함한 키 하나이거나 `g g`, `Ctrl+K Ctrl+S`
@@ -204,7 +205,7 @@ Vim 모드용으로 만든 바인딩은 Vim이 키를 읽기 전에 실행되며
 - [SSH 터널](CONNECTIONS.md#ssh-터널)
 
 여기에 입력한 자격 증명은 데이터베이스가 아니라 운영체제 키링에 저장됩니다.
-[Data & Privacy → Secrets](DATA_AND_PRIVACY.md#비밀과-os-키링)를
+[Data & Privacy → Secrets](PRIVACY.md#비밀과-os-키링)를
 참고하세요.
 
 ---
@@ -347,7 +348,8 @@ stdout/stderr가 표시됩니다. 출력은 훅당 4 MiB로 제한됩니다.
 
 ## 관련 문서
 
-- [Usage Guide](USAGE.md) — 핵심 워크플로와 키보드 참조.
+- [시작하기](GETTING_STARTED.md) — 핵심 워크플로.
+- [키보드 참조](KEYBOARD.md) — 전체 기본 키맵.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — SSH, 프록시, 인증, 값 소스.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — 설정과 비밀이 저장되는 위치.
+- [Data & Privacy](PRIVACY.md#이-컴퓨터에-저장되는-데이터) — 설정과 비밀이 저장되는 위치.
 - [Lua Scripting](LUA.md) — 훅을 위한 내장 Lua 런타임.

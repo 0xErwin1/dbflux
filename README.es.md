@@ -26,16 +26,16 @@ Elige el camino que corresponda a lo que quieres hacer.
 
 | Objetivo                                            | Guía                                                                                                                                                                                                       |
 | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Crear una conexión                                  | Comienza con la [Guía de uso](docs/USAGE.md#1-first-launch-and-creating-a-connection). Para túneles SSH, proxies, AWS SSO y value sources, usa [Conectando — Configuración avanzada](docs/CONNECTIONS.md). |
+| Crear una conexión                                  | Comienza con [Primeros pasos](docs/GETTING_STARTED.md). Para túneles SSH, proxies, AWS SSO y value sources, usa [Conectando — Configuración avanzada](docs/CONNECTIONS.md). |
 | Ejecutar queries y seguir flujos de trabajo comunes | Sigue la [Guía de uso](docs/USAGE.md) para hacer queries, navegar resultados, graficar, exportar y usar la navegación por teclado.                                                                         |
-| Ver eventos de auditoría                            | Abre el visor de auditoría con la [Guía de usuario de Dashboards & Audit](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer).                                                                                      |
+| Ver eventos de auditoría                            | Abre el visor de auditoría con la [guía del visor de auditoría](docs/AUDIT.md#audit-viewer).                                                                                      |
 | Usar MCP                                            | Sigue la [Guía de integración de IA + MCP](docs/MCP_AI_INTEGRATION.md).                                                                                                                                    |
 | Revisar el soporte y las limitaciones de drivers    | Usa [Vista general de drivers](docs/DRIVERS.md), la vista canónica de capacidades y limitaciones.                                                                                                          |
 
 ### Más guías de usuario
 
 - [Ajustes y hooks](docs/SETTINGS.md) — ajustes, hooks de conexión y perfiles de acceso
-- [Datos y privacidad](docs/DATA_AND_PRIVACY.md) — almacenamiento de datos y secretos, backup y reseteo
+- [Datos y privacidad](PRIVACY.md#your-data-on-this-machine) — almacenamiento de datos y secretos, backup y reseteo
 - [Scripting con Lua](docs/LUA.md) — el runtime de Lua embebido para hooks
 
 ### Contribuidores

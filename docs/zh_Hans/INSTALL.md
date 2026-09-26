@@ -187,5 +187,5 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ## 后续步骤
 
-- [使用指南](USAGE.md) — 首次启动、创建连接并执行第一个查询
+- [快速开始](GETTING_STARTED.md) — 首次启动、创建连接并执行第一个查询
 - [连接 — 高级设置](CONNECTIONS.md) — SSH 隧道、代理、AWS SSO 和值来源

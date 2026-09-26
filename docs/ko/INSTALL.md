@@ -187,5 +187,5 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ## 다음 단계
 
-- [사용 안내](USAGE.md) — 첫 실행, 연결 만들기, 첫 쿼리 실행
+- [시작하기](GETTING_STARTED.md) — 첫 실행, 연결 만들기, 첫 쿼리 실행
 - [연결 — 고급 설정](CONNECTIONS.md) — SSH 터널, 프록시, AWS SSO 및 값 소스

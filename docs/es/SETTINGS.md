@@ -18,9 +18,11 @@ lateral. La ventana está organizada en secciones a lo largo del lado izquierdo.
 | [Services](#services-rpc)                           | Drivers RPC externos y auth providers.                                       |
 | [Hooks](#connection-hooks)                          | Definiciones reutilizables de connection hooks.                              |
 | [Drivers](#drivers)                                 | Overrides y ajustes por driver.                                              |
+| About                                               | Información de versión y build.                                              |
 
 Las secciones relacionadas con MCP (Clients, Roles, Policies) aparecen solo
-cuando el binario se construye con el feature `mcp`; ver [AI + MCP
+cuando el binario se construye con el feature `mcp`, que es el valor por
+defecto; ver [AI + MCP
 Integration](MCP_AI_INTEGRATION.md).
 
 ---
@@ -49,7 +51,7 @@ y permanece en English por ahora.
 
 | Setting                      | Default | Qué hace |
 | ---------------------------- | ------- | -------- |
-| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de modo Vim en la referencia de teclado de la [Guía de uso](USAGE.md). |
+| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de [modo Vim](KEYBOARD.md#modo-vim-opcional) en la referencia de teclado. |
 
 ### Inicio y sesión
 
@@ -109,7 +111,7 @@ Lua, Python o Bash, hooks de conexión ni métricas.
 | --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------- |
 | **Use the stable database** | Off     | Hace que un build Nightly comparta el `dbflux.db` stable en lugar de `dbflux-nightly.db`. Aplica en el próximo inicio. |
 
-Ver [Data & Privacy](DATA_AND_PRIVACY.md#data-locations) para cómo se separan
+Ver [Data & Privacy](PRIVACY.md#ubicaciones-de-datos) para cómo se separan
 las bases de datos Nightly y stable.
 
 ---
@@ -123,10 +125,9 @@ trail. Guardar tiene efecto sin reiniciar.
 
 La retention (cuánto tiempo se conservan los eventos) impulsa un purge periódico
 en segundo plano cuando está configurada. Para la experiencia diaria de audit —
-abrir el viewer, filtrar, exportar — ver [Dashboards &
-Audit](DASHBOARDS_AND_AUDIT.md#audit-viewer). Para el schema completo de eventos
+abrir el viewer, filtrar, exportar — ver [Audit → Visor de audit](AUDIT.md#visor-de-audit). Para el schema completo de eventos
 y el comportamiento de redaction ver [Audit](AUDIT.md) y [Data &
-Privacy](DATA_AND_PRIVACY.md#audit-and-privacy).
+Privacy](PRIVACY.md#auditoría-y-privacidad).
 
 ---
 
@@ -136,7 +137,7 @@ Esta sección lista el keymap activo agrupado por contexto. Fíltralo por comand
 tecla o predicado de contexto con el campo de texto, o muestra un solo contexto
 con el filtro de contexto. Un contexto que hereda de otro (el Editor hereda de
 Global) también lista los bindings heredados que no sombrea. El keymap por
-defecto completo está documentado en [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+defecto completo está documentado en [Referencia de teclado](KEYBOARD.md).
 
 **Cambiar un atajo.** Pulsa el lápiz de un binding, o selecciónalo y pulsa
 `Enter`, y luego pulsa las teclas nuevas. Un atajo puede ser una tecla con sus
@@ -222,7 +223,7 @@ AWS SSO, reglas de no-proxy, métodos de auth SSH — en [Connecting to a Databa
 
 Las credenciales que ingresas aquí se guardan en el keyring de tu sistema
 operativo, no en la base de datos. Ver [Data & Privacy →
-Secrets](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+Secrets](PRIVACY.md#secretos-y-el-keyring-del-sistema-operativo).
 
 ---
 
@@ -368,9 +369,10 @@ tope de 4 MiB por hook.
 
 ## Relacionado
 
-- [Usage Guide](USAGE.md) — flujo principal y referencia de teclado.
+- [Primeros pasos](GETTING_STARTED.md) — flujo principal.
+- [Referencia de teclado](KEYBOARD.md) — el keymap por defecto completo.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — SSH, proxy, auth, fuentes de
   valores.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — dónde se almacenan los settings y
+- [Data & Privacy](PRIVACY.md#tus-datos-en-este-equipo) — dónde se almacenan los settings y
   secrets.
 - [Lua Scripting](LUA.md) — el runtime de Lua embebido para hooks.

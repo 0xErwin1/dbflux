@@ -17,9 +17,11 @@ window is organized into sections down the left side.
 | [Services](#services-rpc) | External RPC drivers and auth providers. |
 | [Hooks](#connection-hooks) | Reusable connection-hook definitions. |
 | [Drivers](#drivers) | Per-driver overrides and settings. |
+| About | Version and build information. |
 
 MCP-related sections (Clients, Roles, Policies) appear only when the binary is
-built with the `mcp` feature; see [AI + MCP Integration](MCP_AI_INTEGRATION.md).
+built with the `mcp` feature, which is the default; see [AI + MCP
+Integration](MCP_AI_INTEGRATION.md).
 
 ---
 
@@ -46,7 +48,7 @@ converted crate by crate and stays in English for now.
 
 | Setting | Default | What it does |
 |---------|---------|--------------|
-| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See the Vim mode section of the [Usage Guide](USAGE.md) keyboard reference. |
+| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See [Vim mode](KEYBOARD.md#vim-mode-opt-in) in the keyboard reference. |
 
 ### Startup & session
 
@@ -104,7 +106,7 @@ Lua, Python, or Bash scripts, connection hooks, or metrics.
 |---------|---------|--------------|
 | **Use the stable database** | Off | Make a Nightly build share the stable `dbflux.db` instead of `dbflux-nightly.db`. Applies on next launch. |
 
-See [Data & Privacy](DATA_AND_PRIVACY.md#data-locations) for how the Nightly and
+See [Data & Privacy](../PRIVACY.md#data-locations) for how the Nightly and
 stable databases are separated.
 
 ---
@@ -118,9 +120,9 @@ takes effect without a restart.
 
 Retention (how long events are kept) drives a periodic background purge when
 configured. For the day-to-day audit experience — opening the viewer, filtering,
-exporting — see [Dashboards & Audit](DASHBOARDS_AND_AUDIT.md#audit-viewer). For
+exporting — see [Audit → Audit viewer](AUDIT.md#audit-viewer). For
 the full event schema and redaction behavior see [Audit](AUDIT.md) and
-[Data & Privacy](DATA_AND_PRIVACY.md#audit-and-privacy).
+[Data & Privacy](../PRIVACY.md#audit-and-privacy).
 
 ---
 
@@ -130,7 +132,7 @@ This section lists the active keymap grouped by context. Filter it by command,
 key or context predicate with the text field, or show one context with the
 context filter. A context that inherits from another (the Editor inherits from
 Global) also lists the inherited bindings it does not shadow. The full default
-keymap is documented in [Usage → Keyboard Reference](USAGE.md#7-keyboard-reference).
+keymap is documented in [Keyboard Reference](KEYBOARD.md).
 
 **Changing a shortcut.** Press the pencil on a binding, or select it and press
 `Enter`, then press the new keys. A shortcut can be one key with its modifiers
@@ -211,7 +213,7 @@ rules, SSH auth methods — in
 - [SSH Tunnels](CONNECTIONS.md#ssh-tunnels)
 
 Credentials entered here are stored in your OS keyring, not the database. See
-[Data & Privacy → Secrets](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+[Data & Privacy → Secrets](../PRIVACY.md#secrets-and-the-os-keyring).
 
 ---
 
@@ -353,7 +355,8 @@ stdout/stderr in the Tasks panel; output is capped at 4 MiB per hook.
 
 ## Related
 
-- [Usage Guide](USAGE.md) — core workflow and keyboard reference.
+- [Getting Started](GETTING_STARTED.md) — the core workflow.
+- [Keyboard Reference](KEYBOARD.md) — the full default keymap.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — SSH, proxy, auth, value sources.
-- [Data & Privacy](DATA_AND_PRIVACY.md) — where settings and secrets are stored.
+- [Data & Privacy](../PRIVACY.md#your-data-on-this-machine) — where settings and secrets are stored.
 - [Lua Scripting](LUA.md) — the embedded Lua runtime for hooks.
