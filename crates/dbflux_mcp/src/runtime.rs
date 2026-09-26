@@ -17,6 +17,20 @@ use crate::governance_service::{
     TrustedClientDto,
 };
 use crate::handlers::approval as approval_handler;
+use crate::server::authorization::{
+    ApprovalGate, ApprovalResolution, AuthorizationError, AuthorizationOutcome,
+    AuthorizationRequest, authorize_request_with_approval,
+};
+
+/// Tools an agent uses to put calls into the approval queue or read it.
+/// When a policy sends their class to approval they run without being queued
+/// themselves: queuing a request for approval would only make a person
+/// approve twice, and reading the queue changes nothing.
+pub const APPROVAL_QUEUE_TOOLS: &[&str] = &[
+    "request_execution",
+    "list_pending_executions",
+    "get_pending_execution",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpRuntimeEvent {
@@ -521,6 +535,65 @@ impl McpRuntime {
         })
     }
 
+    /// Uses the approval a person granted for `plan`, if any, so it cannot
+    /// authorize a second call.
+    pub fn consume_approved_execution_mut(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecutionSummary>, GovernanceError> {
+        let consumed = self
+            .approval_service
+            .consume_approved(plan)
+            .map_err(|error| GovernanceError::Operation(error.to_string()))?;
+
+        let Some(consumed) = consumed else {
+            return Ok(None);
+        };
+
+        self.push_event(McpRuntimeEvent::PendingExecutionsUpdated);
+
+        Ok(Some(PendingExecutionSummary {
+            id: consumed.id.to_string(),
+            actor_id: consumed.plan.actor_id,
+            connection_id: consumed.plan.connection_id,
+            tool_id: consumed.plan.tool_id,
+            classification: consumed.plan.classification,
+            status: format!("{:?}", consumed.status).to_ascii_lowercase(),
+            created_at_epoch_ms: consumed.created_at,
+        }))
+    }
+
+    /// Authorizes a tool call with this runtime's approval queue behind any
+    /// policy decision that requires approval.
+    ///
+    /// `payload` is the call's arguments. A call that matches an approved
+    /// pending execution (same actor, connection, tool and payload) consumes
+    /// it and runs; any other call that needs approval is queued as a new
+    /// pending execution and reported as not allowed.
+    pub fn authorize_with_approval_mut(
+        &mut self,
+        trusted_clients: &TrustedClientRegistry,
+        policy_engine: &dbflux_policy::PolicyEngine,
+        request: &AuthorizationRequest,
+        payload: serde_json::Value,
+        created_at_epoch_ms: i64,
+    ) -> Result<AuthorizationOutcome, AuthorizationError> {
+        let audit_service = self.audit_service.clone();
+        let mut gate = RuntimeApprovalGate {
+            runtime: self,
+            payload,
+        };
+
+        authorize_request_with_approval(
+            trusted_clients,
+            policy_engine,
+            &audit_service,
+            request,
+            Some(&mut gate),
+            created_at_epoch_ms,
+        )
+    }
+
     pub fn policy_assignments_for_engine(&self) -> Vec<ConnectionPolicyAssignment> {
         self.connection_policy_assignments
             .values()
@@ -581,6 +654,51 @@ impl McpRuntime {
             actor_id: recorded.actor_id.unwrap_or_default(),
             timestamp_ms: recorded.ts_ms,
         }
+    }
+}
+
+/// Approval gate backed by the runtime's pending execution queue.
+struct RuntimeApprovalGate<'a> {
+    runtime: &'a mut McpRuntime,
+    payload: serde_json::Value,
+}
+
+impl ApprovalGate for RuntimeApprovalGate<'_> {
+    fn resolve(
+        &mut self,
+        request: &AuthorizationRequest,
+    ) -> Result<ApprovalResolution, AuthorizationError> {
+        if APPROVAL_QUEUE_TOOLS.contains(&request.tool_id.as_str()) {
+            return Ok(ApprovalResolution::Exempt);
+        }
+
+        let plan = ExecutionPlan {
+            connection_id: request.connection_id.clone(),
+            actor_id: request.identity.client_id.clone(),
+            tool_id: request.tool_id.clone(),
+            classification: request.classification,
+            payload: self.payload.clone(),
+        };
+
+        let consumed = self
+            .runtime
+            .consume_approved_execution_mut(&plan)
+            .map_err(|error| AuthorizationError::Approval(error.to_string()))?;
+
+        if let Some(consumed) = consumed {
+            return Ok(ApprovalResolution::Granted {
+                pending_id: consumed.id,
+            });
+        }
+
+        let queued = self
+            .runtime
+            .request_execution_mut(plan)
+            .map_err(|error| AuthorizationError::Approval(error.to_string()))?;
+
+        Ok(ApprovalResolution::Queued {
+            pending_id: queued.id,
+        })
     }
 }
 

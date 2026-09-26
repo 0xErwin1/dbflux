@@ -29,6 +29,8 @@ pub enum ScriptHandlerError {
     NotRunnable,
     #[error("policy denied request")]
     PolicyDenied,
+    #[error("policy requires approval before this request can run")]
+    ApprovalRequired,
     #[error("policy evaluation failed: {0}")]
     Policy(#[from] dbflux_policy::PolicyEngineError),
 }
@@ -108,8 +110,10 @@ impl ScriptHandler {
             classification: ExecutionClassification::Admin,
         })?;
 
-        if !matches!(decision, PolicyDecision::Allow) {
-            return Err(ScriptHandlerError::PolicyDenied);
+        match decision {
+            PolicyDecision::Allow => {}
+            PolicyDecision::RequireApproval => return Err(ScriptHandlerError::ApprovalRequired),
+            PolicyDecision::Deny(_) => return Err(ScriptHandlerError::PolicyDenied),
         }
 
         Ok(script)

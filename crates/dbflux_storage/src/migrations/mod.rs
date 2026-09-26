@@ -176,6 +176,7 @@ impl MigrationRegistry {
         registry.register(mod_031_general_settings_editor_row_limit::MigrationImpl);
         registry.register(mod_032_cfg_update_settings::MigrationImpl);
         registry.register(mod_033_connection_profile_environment::MigrationImpl);
+        registry.register(mod_034_cfg_tool_policy_approval_classes::MigrationImpl);
         registry
     }
 
@@ -399,6 +400,7 @@ mod mod_030_general_settings_vim_mode;
 mod mod_031_general_settings_editor_row_limit;
 mod mod_032_cfg_update_settings;
 mod mod_033_connection_profile_environment;
+mod mod_034_cfg_tool_policy_approval_classes;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1102,6 +1104,7 @@ mod tests {
             "031_general_settings_editor_row_limit",
             "032_cfg_update_settings",
             "033_connection_profile_environment",
+            "034_cfg_tool_policy_approval_classes",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

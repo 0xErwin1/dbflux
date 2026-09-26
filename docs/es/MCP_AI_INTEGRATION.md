@@ -94,10 +94,13 @@ Toda solicitud de IA se hace cumplir a través de todas estas capas, en orden:
 2. **Connection MCP gate**: la conexión objetivo debe tener MCP habilitado.
 3. **Policy assignment**: el actor debe tener una asignación con scope en esa
    conexión.
-4. **Tool + classification allowlist**: tanto el tool ID como su clase de
-   ejecución deben estar permitidos por la policy asignada.
-5. **Approval path**: los flujos de write/destructive pueden requerir aprobación
-   humana antes de ejecutarse.
+4. **Tool + decisión por clase**: el tool ID debe estar listado en una policy
+   asignada, y esa policy decide la clase de ejecución de la llamada como Allow,
+   Ask o Deny (ver la sección 5).
+5. **Approval path**: una decisión Ask encola la llamada como ejecución
+   pendiente. Una persona la aprueba o la rechaza en DBFlux, y una llamada
+   aprobada se ejecuta una vez cuando el agente la repite con los mismos
+   argumentos.
 6. **Audit trail**: cada decisión se añade a `aud_audit_events` en la base de
    datos SQLite unificada y es consultable/exportable. Ver `docs/AUDIT.md` para
    el esquema completo de eventos.
@@ -141,11 +144,11 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `update_script`           | write                                  | Sobrescribe un script guardado existente                                                                             |
 | Scripts         | `delete_script`           | admin                                  | Elimina permanentemente un script                                                                                    |
 | Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado contra una conexión. La clasificación se deriva del cuerpo del script                     |
-| Aprobación      | `request_execution`       | admin                                  | Envía una mutación para aprobación humana antes de ejecutarla                                                        |
+| Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
 | Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
 | Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica                                                           |
-| Aprobación      | `approve_execution`       | admin                                  | Aprueba una mutación pendiente (solo admin)                                                                          |
-| Aprobación      | `reject_execution`        | admin                                  | Rechaza y descarta una mutación pendiente (solo admin)                                                               |
+| Aprobación      | `approve_execution`       | —                                      | Siempre se deniega por MCP. Una persona aprueba en DBFlux                                                            |
+| Aprobación      | `reject_execution`        | —                                      | Siempre se deniega por MCP. Una persona rechaza en DBFlux                                                            |
 | Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
 | Auditoría       | `get_audit_entry`         | read                                   | Obtiene una entrada específica del audit log por ID                                                                  |
 | Auditoría       | `export_audit_logs`       | read                                   | Descarga entradas del audit log como CSV o JSON                                                                      |
@@ -158,8 +161,14 @@ Tools diferidas (rechazadas explícitamente en tiempo de solicitud en v1):
 ## 5. Clases de ejecución
 
 Las policies controlan las tools en dos niveles: el tool ID en sí y la
-clasificación de ejecución. Una solicitud solo se permite cuando ambos coinciden
-con la allowlist de la policy.
+clasificación de ejecución. Una policy lista las tools que cubre y le da a cada
+clase de ejecución una decisión:
+
+| Decisión | Qué pasa con una llamada de esa clase                                                                   |
+| -------- | ------------------------------------------------------------------------------------------------------- |
+| Allow    | Se ejecuta de inmediato                                                                                 |
+| Ask      | Espera a una persona: la llamada se encola como ejecución pendiente y solo se ejecuta después de aprobarse |
+| Deny     | Se rechaza                                                                                              |
 
 | Clase               | Qué cubre                                                                         |
 | ------------------- | --------------------------------------------------------------------------------- |
@@ -168,8 +177,50 @@ con la allowlist de la policy.
 | `write`             | Insertar, actualizar o ejecutar scripts que modifican datos                       |
 | `destructive`       | DELETE, DROP, TRUNCATE y otras operaciones irreversibles                          |
 | `admin_safe`        | Operaciones DDL seguras como cambios de schema aditivos y creación de índices     |
-| `admin`             | Operaciones DDL riesgosas, aprobaciones, export de audit y acciones privilegiadas |
+| `admin`             | Operaciones DDL riesgosas, export de audit y acciones privilegiadas               |
 | `admin_destructive` | Operaciones admin irreversibles, como eliminar o truncar objetos de schema        |
+
+`metadata` y `read` solo leen. Las otras cinco clases modifican datos o schema y
+más abajo se llaman clases que modifican datos.
+
+### Cómo se combinan las policies
+
+Un actor puede tener varias policies en una conexión, directamente y a través de
+roles. Solo participan las policies que listan la tool pedida, y entre ellas gana
+la decisión más permisiva: Allow sobre Ask sobre Deny. Las policies otorgan
+acceso; un Deny es la ausencia de un permiso, no un veto. Por eso, una policy que
+pide aprobación para una clase no frena a un actor al que otra policy asignada ya
+le permite ejecutar esa clase. Para que una clase espere aprobación, asegúrate de
+que ninguna otra policy asignada al actor la permita.
+
+### El flujo de aprobación
+
+1. El agente llama a una tool cuya clase la policy decide como Ask. El servidor
+   encola la llamada como ejecución pendiente, registra un evento de auditoría
+   `mcp_authorize` con outcome `pending` y responde con un error JSON-RPC cuyos
+   datos son `{"code": "approval_required", "status": "pending", "pending_id": "..."}`.
+2. Una persona aprueba o rechaza la llamada en DBFlux (**Workspace → Pending
+   Approvals**). El servidor y la app comparten la cola a través de
+   `dbflux.db`, así que una llamada encolada por `dbflux mcp` aparece en la app.
+3. El agente vuelve a llamar a la misma tool con los mismos argumentos. El
+   servidor encuentra la aprobación que coincide con el actor, la conexión, la
+   tool y los argumentos, la consume y ejecuta la llamada. El evento
+   `mcp_authorize` de esa llamada tiene outcome `success` y nombra la aprobación
+   en `details_json.pending_execution_id`.
+
+Una aprobación ejecuta una llamada. Repetir la llamada otra vez encola una nueva
+solicitud, igual que cambiar cualquier argumento. Una llamada rechazada nunca se
+ejecuta. Una aprobación vence 24 horas después de encolarse la llamada.
+
+`request_execution` encola una llamada de forma explícita, con el mismo resultado
+que llamar a la tool bajo Ask. `request_execution`, `list_pending_executions` y
+`get_pending_execution` solo crean o leen entradas de la cola, así que bajo Ask
+se ejecutan sin encolarse ellas mismas.
+
+Los clientes MCP nunca pueden aprobar ni rechazar: `approve_execution` y
+`reject_execution` se deniegan por MCP diga lo que diga la policy, con el código
+de error `self_approval_forbidden`, y cada intento se audita. Solo una persona
+resuelve las ejecuciones pendientes, en la UI de DBFlux.
 
 ## 6. Policies y roles integrados
 
@@ -179,11 +230,28 @@ modificarse.
 
 ### Policies integradas
 
-| ID                  | Clases permitidas                                                        | Scope                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `builtin/read-only` | metadata, read                                                           | Todas las tools de discovery + schema; tools de query y preview de solo lectura; listado/get de scripts; tools de lectura de audit |
-| `builtin/write`     | metadata, read, write                                                    | Todas las tools de solo lectura más los flujos de scripts con capacidad de write y de request/approval-submission                  |
-| `builtin/admin`     | metadata, read, write, destructive, admin_safe, admin, admin_destructive | Todas las tools canónicas expuestas en esta branch                                                                                 |
+La lectura se permite por defecto y cada clase que modifica datos que otorga un
+built-in pide aprobación.
+
+| ID                  | Allow          | Ask                                                      | Scope                                                                                                                              |
+| ------------------- | -------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `builtin/read-only` | metadata, read | —                                                        | Todas las tools de discovery + schema; tools de query y preview de solo lectura; listado/get de scripts; tools de lectura de audit |
+| `builtin/write`     | metadata, read | write                                                    | Todas las tools de solo lectura más los flujos de scripts con capacidad de write y de request/approval-submission                  |
+| `builtin/admin`     | metadata, read | write, destructive, admin_safe, admin, admin_destructive | Todas las tools canónicas excepto `approve_execution` y `reject_execution`                                                         |
+
+Las clases que un built-in no lista se deniegan.
+
+### Policies creadas antes de que existiera Ask
+
+Antes de la decisión Ask, una policy solo podía permitir una clase, así que
+permitir una clase que modifica datos nunca fue una elección explícita de
+ejecutarla sin aprobación. La migración de almacenamiento que introdujo Ask
+(`034_cfg_tool_policy_approval_classes`) reescribe las policies personalizadas
+existentes en consecuencia: una clase que modifica datos y estaba permitida pasa
+a Ask, una clase `metadata` o `read` permitida sigue en Allow y una clase que no
+estaba permitida sigue en Deny. Para que un agente vuelva a ejecutar llamadas que
+modifican datos sin aprobación, elige **Permitir todo sin aprobación** en la
+policy.
 
 ### Roles integrados
 
@@ -217,7 +285,12 @@ Configura la governance en la GUI de DBFlux antes de arrancar el servidor MCP.
 
 3. **Settings → MCP → pestaña Policies**
    - Las policies integradas aparecen arriba y no se pueden modificar.
-   - Crea policies personalizadas activando checkboxes de tools y clases.
+   - Crea policies personalizadas eligiendo tools y decidiendo Allow, Ask o
+     Deny para cada clase de ejecución. Con el teclado, `enter` en una fila de
+     clase pasa a la decisión siguiente.
+   - **Permitir todo sin aprobación** pone en Allow todas las clases que
+     modifican datos. El agente podrá entonces ejecutar cualquier llamada que
+     modifique datos, incluido `DROP DATABASE`, sin preguntar.
 
 4. **Connection Manager → pestaña MCP**
    - Habilita MCP para la conexión objetivo.
@@ -225,10 +298,11 @@ Configura la governance en la GUI de DBFlux antes de arrancar el servidor MCP.
      conexión desde los dropdowns ya poblados.
 
 5. **Workspace → Pending Approvals**
-   - Revisa y aprueba/rechaza solicitudes de write/destructive que dispararon el
-     approval path.
-   - `j` / `k` recorren las llamadas pendientes, `a` aprueba y ejecuta la
-     seleccionada y `r` la rechaza. Cada decisión se escribe en el audit log.
+   - Revisa y aprueba o rechaza las llamadas que una policy envió a aprobación.
+     Es el único lugar donde se resuelven las ejecuciones pendientes.
+   - `j` / `k` recorren las llamadas pendientes, `a` aprueba la seleccionada y
+     `r` la rechaza. Una llamada aprobada se ejecuta cuando el agente la repite
+     con los mismos argumentos. Cada decisión se escribe en el audit log.
 
 6. **Workspace → Audit**
    - Filtra por actor/tool/decisión/rango de tiempo y exporta CSV/JSON.
@@ -316,6 +390,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        correlation_id: None,
     },
     now_epoch_ms(),
 )?;
@@ -324,6 +399,12 @@ if !outcome.allowed {
     // deny_code and deny_reason explain why
 }
 ```
+
+`authorize_request` no tiene cola de aprobación: una decisión Ask vuelve como no
+permitida con `deny_code == Some("approval_required")`. El servidor MCP llama en
+su lugar a `McpRuntime::authorize_with_approval_mut`, que pasa los argumentos de
+la llamada para que una decisión Ask se encole, o consume una aprobación que
+coincide y deja ejecutar la llamada.
 
 ## 10. Checklist de integración
 
@@ -336,8 +417,8 @@ Antes de apuntar un cliente de IA al servidor MCP:
 - [ ] La conexión objetivo tiene MCP habilitado
 - [ ] El actor tiene una policy assignment en esa conexión
 - [ ] La policy cubre las tools que usará el agente
-- [ ] El flujo de aprobación está entendido para cualquier tool de
-  write/destructive
+- [ ] Las clases que necesitan aprobación están en Ask, y alguien atiende
+  Pending Approvals mientras el agente trabaja
 
 ## 11. Higiene de tests
 
@@ -377,16 +458,19 @@ Para evitar contaminar las máquinas de desarrollo durante los tests:
 
 - Confirma que el actor tiene una assignment en el scope de esa conexión.
 - Confirma que el tool ID está en las tools permitidas de la policy asignada.
-- Confirma que la clase de ejecución está en las clases permitidas de la policy.
+- Confirma que la policy decide la clase de ejecución como Allow o Ask, no Deny.
 - Si usas `builtin/read-only`, las tools de write (`create_script`, etc.) quedan
   excluidas por diseño.
 
-### Aprobación atascada en pending
+### La llamada responde con `approval_required`
 
-- Revisa la cola de pending en el workspace de DBFlux y aprueba/rechaza
-  explícitamente.
-- `approve_execution` requiere la clase `admin` — asegúrate de que la policy del
-  aprobador la incluya.
+- La policy decide la clase de la llamada como Ask. Aprueba la ejecución
+  pendiente indicada por `pending_id` en **Workspace → Pending Approvals** y
+  repite la llamada con los mismos argumentos.
+- Repetir la llamada con otros argumentos encola una nueva solicitud en lugar de
+  usar la aprobación.
+- Un agente no puede aprobar sus propias llamadas: `approve_execution` y
+  `reject_execution` siempre se deniegan por MCP (`self_approval_forbidden`).
 
 ### La exportación de audit no muestra eventos
 

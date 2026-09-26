@@ -14,9 +14,13 @@ pub struct PolicyEvaluationRequest {
     pub classification: ExecutionClassification,
 }
 
+/// Outcome of evaluating one request against every policy that applies to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecision {
     Allow,
+    /// The call may run only after a person approves it through the pending
+    /// execution queue.
+    RequireApproval,
     Deny(PolicyDecisionReason),
 }
 
@@ -35,6 +39,22 @@ pub struct PolicyRole {
     pub policy_ids: Vec<String>,
 }
 
+/// What one policy does with one execution class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassDecision {
+    Allow,
+    Ask,
+    Deny,
+}
+
+/// A tool allowlist plus a decision for each execution class.
+///
+/// The decision per class is encoded in two lists so policies serialized
+/// before the Ask decision existed keep their meaning: a class listed in
+/// `allowed_classes` is Allow, a class listed in `approval_classes` is Ask,
+/// and a class in neither is Deny. A class listed in both is Ask, the
+/// stricter of the two.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicy {
     pub id: String,
@@ -42,6 +62,20 @@ pub struct ToolPolicy {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_classes: Vec<ExecutionClassification>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_classes: Vec<ExecutionClassification>,
+}
+
+impl ToolPolicy {
+    pub fn class_decision(&self, classification: ExecutionClassification) -> ClassDecision {
+        if self.approval_classes.contains(&classification) {
+            ClassDecision::Ask
+        } else if self.allowed_classes.contains(&classification) {
+            ClassDecision::Allow
+        } else {
+            ClassDecision::Deny
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -76,6 +110,13 @@ impl PolicyEngine {
         }
     }
 
+    /// Evaluates a request against the union of policies assigned to the actor
+    /// on the connection, directly or through roles.
+    ///
+    /// Policies are additive grants, so among the policies that list the tool
+    /// the most permissive class decision wins: Allow over Ask over Deny. Deny
+    /// is the absence of a grant rather than a veto, which keeps every policy
+    /// composed before the Ask decision existed evaluating exactly as before.
     pub fn evaluate(
         &self,
         request: &PolicyEvaluationRequest,
@@ -102,6 +143,7 @@ impl PolicyEngine {
         }
 
         let mut has_tool_match = false;
+        let mut requires_approval = false;
 
         for policy_id in policy_ids {
             let Some(policy) = self.policies.get(&policy_id) else {
@@ -118,16 +160,16 @@ impl PolicyEngine {
 
             has_tool_match = true;
 
-            if policy
-                .allowed_classes
-                .iter()
-                .any(|class| class == &request.classification)
-            {
-                return Ok(PolicyDecision::Allow);
+            match policy.class_decision(request.classification) {
+                ClassDecision::Allow => return Ok(PolicyDecision::Allow),
+                ClassDecision::Ask => requires_approval = true,
+                ClassDecision::Deny => {}
             }
         }
 
-        if has_tool_match {
+        if requires_approval {
+            Ok(PolicyDecision::RequireApproval)
+        } else if has_tool_match {
             Ok(PolicyDecision::Deny(
                 PolicyDecisionReason::ClassificationDenied,
             ))
@@ -145,9 +187,25 @@ mod tests {
     use crate::classification::ExecutionClassification;
 
     use super::{
-        PolicyDecision, PolicyDecisionReason, PolicyEngine, PolicyEngineError,
+        ClassDecision, PolicyDecision, PolicyDecisionReason, PolicyEngine, PolicyEngineError,
         PolicyEvaluationRequest, PolicyRole, ToolPolicy,
     };
+
+    const ALL_CLASSES: [ExecutionClassification; 7] = [
+        ExecutionClassification::Metadata,
+        ExecutionClassification::Read,
+        ExecutionClassification::Write,
+        ExecutionClassification::Destructive,
+        ExecutionClassification::AdminSafe,
+        ExecutionClassification::Admin,
+        ExecutionClassification::AdminDestructive,
+    ];
+
+    const ALL_DECISIONS: [ClassDecision; 3] = [
+        ClassDecision::Allow,
+        ClassDecision::Ask,
+        ClassDecision::Deny,
+    ];
 
     fn request(connection_id: &str) -> PolicyEvaluationRequest {
         PolicyEvaluationRequest {
@@ -174,6 +232,7 @@ mod tests {
                 id: "read-a".to_string(),
                 allowed_tools: vec!["read_query".to_string()],
                 allowed_classes: vec![ExecutionClassification::Read],
+                approval_classes: Vec::new(),
             }],
         );
 
@@ -200,6 +259,7 @@ mod tests {
                 id: "read-a".to_string(),
                 allowed_tools: vec!["read_query".to_string()],
                 allowed_classes: vec![ExecutionClassification::Read],
+                approval_classes: Vec::new(),
             }],
         );
 
@@ -229,6 +289,7 @@ mod tests {
                 id: "read-a".to_string(),
                 allowed_tools: vec!["read_query".to_string()],
                 allowed_classes: vec![ExecutionClassification::Metadata],
+                approval_classes: Vec::new(),
             }],
         );
 
@@ -261,6 +322,7 @@ mod tests {
             id: id.to_string(),
             allowed_tools: vec!["read_query".to_string()],
             allowed_classes: vec![ExecutionClassification::Read],
+            approval_classes: Vec::new(),
         }
     }
 
@@ -315,6 +377,7 @@ mod tests {
                 id: "write-only".to_string(),
                 allowed_tools: vec!["write_query".to_string()],
                 allowed_classes: vec![ExecutionClassification::Read],
+                approval_classes: Vec::new(),
             }],
         );
 
@@ -368,6 +431,7 @@ mod tests {
                     id: "meta-only".to_string(),
                     allowed_tools: vec!["describe_table".to_string()],
                     allowed_classes: vec![ExecutionClassification::Metadata],
+                    approval_classes: Vec::new(),
                 },
                 read_query_policy("read-a"),
             ],
@@ -378,5 +442,232 @@ mod tests {
             .expect("evaluation should succeed");
 
         assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    /// A read_query policy that gives `classification` the `decision` and
+    /// denies every other class.
+    fn policy_with_decision(
+        id: &str,
+        classification: ExecutionClassification,
+        decision: ClassDecision,
+    ) -> ToolPolicy {
+        let mut policy = ToolPolicy {
+            id: id.to_string(),
+            allowed_tools: vec!["read_query".to_string()],
+            allowed_classes: Vec::new(),
+            approval_classes: Vec::new(),
+        };
+
+        match decision {
+            ClassDecision::Allow => policy.allowed_classes.push(classification),
+            ClassDecision::Ask => policy.approval_classes.push(classification),
+            ClassDecision::Deny => {}
+        }
+
+        policy
+    }
+
+    fn classified_request(classification: ExecutionClassification) -> PolicyEvaluationRequest {
+        PolicyEvaluationRequest {
+            classification,
+            ..request("A")
+        }
+    }
+
+    fn expected_decision(decision: ClassDecision) -> PolicyDecision {
+        match decision {
+            ClassDecision::Allow => PolicyDecision::Allow,
+            ClassDecision::Ask => PolicyDecision::RequireApproval,
+            ClassDecision::Deny => PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied),
+        }
+    }
+
+    fn most_permissive(left: ClassDecision, right: ClassDecision) -> ClassDecision {
+        if left == ClassDecision::Allow || right == ClassDecision::Allow {
+            ClassDecision::Allow
+        } else if left == ClassDecision::Ask || right == ClassDecision::Ask {
+            ClassDecision::Ask
+        } else {
+            ClassDecision::Deny
+        }
+    }
+
+    #[test]
+    fn class_decision_reads_both_lists_and_prefers_ask_when_listed_twice() {
+        let policy = ToolPolicy {
+            id: "mixed".to_string(),
+            allowed_tools: vec!["read_query".to_string()],
+            allowed_classes: vec![
+                ExecutionClassification::Read,
+                ExecutionClassification::Write,
+            ],
+            approval_classes: vec![
+                ExecutionClassification::Write,
+                ExecutionClassification::Destructive,
+            ],
+        };
+
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Read),
+            ClassDecision::Allow
+        );
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Write),
+            ClassDecision::Ask
+        );
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Destructive),
+            ClassDecision::Ask
+        );
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Admin),
+            ClassDecision::Deny
+        );
+    }
+
+    #[test]
+    fn single_policy_decision_matrix_covers_every_class() {
+        for classification in ALL_CLASSES {
+            for decision in ALL_DECISIONS {
+                let engine = PolicyEngine::new(
+                    vec![read_query_assignment(
+                        Vec::new(),
+                        vec!["policy".to_string()],
+                    )],
+                    Vec::new(),
+                    vec![policy_with_decision("policy", classification, decision)],
+                );
+
+                let evaluated = engine
+                    .evaluate(&classified_request(classification))
+                    .expect("evaluation should succeed");
+
+                assert_eq!(
+                    evaluated,
+                    expected_decision(decision),
+                    "class {classification:?} with decision {decision:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decision_for_one_class_does_not_leak_into_other_classes() {
+        for classification in ALL_CLASSES {
+            for other in ALL_CLASSES
+                .into_iter()
+                .filter(|other| *other != classification)
+            {
+                let engine = PolicyEngine::new(
+                    vec![read_query_assignment(
+                        Vec::new(),
+                        vec!["policy".to_string()],
+                    )],
+                    Vec::new(),
+                    vec![policy_with_decision(
+                        "policy",
+                        classification,
+                        ClassDecision::Ask,
+                    )],
+                );
+
+                let evaluated = engine
+                    .evaluate(&classified_request(other))
+                    .expect("evaluation should succeed");
+
+                assert_eq!(
+                    evaluated,
+                    PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied),
+                    "Ask on {classification:?} must not affect {other:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn role_and_direct_policies_compose_to_the_most_permissive_decision() {
+        for classification in ALL_CLASSES {
+            for role_decision in ALL_DECISIONS {
+                for direct_decision in ALL_DECISIONS {
+                    let engine = PolicyEngine::new(
+                        vec![read_query_assignment(
+                            vec!["role".to_string()],
+                            vec!["direct".to_string()],
+                        )],
+                        vec![PolicyRole {
+                            id: "role".to_string(),
+                            policy_ids: vec!["from-role".to_string()],
+                        }],
+                        vec![
+                            policy_with_decision("from-role", classification, role_decision),
+                            policy_with_decision("direct", classification, direct_decision),
+                        ],
+                    );
+
+                    let evaluated = engine
+                        .evaluate(&classified_request(classification))
+                        .expect("evaluation should succeed");
+
+                    assert_eq!(
+                        evaluated,
+                        expected_decision(most_permissive(role_decision, direct_decision)),
+                        "class {classification:?}, role {role_decision:?}, direct {direct_decision:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ask_from_a_policy_without_the_tool_is_ignored() {
+        let mut other_tool = policy_with_decision(
+            "other-tool",
+            ExecutionClassification::Read,
+            ClassDecision::Ask,
+        );
+        other_tool.allowed_tools = vec!["write_query".to_string()];
+
+        let engine = PolicyEngine::new(
+            vec![read_query_assignment(
+                Vec::new(),
+                vec!["other-tool".to_string(), "deny-read".to_string()],
+            )],
+            Vec::new(),
+            vec![
+                other_tool,
+                policy_with_decision(
+                    "deny-read",
+                    ExecutionClassification::Read,
+                    ClassDecision::Deny,
+                ),
+            ],
+        );
+
+        let evaluated = engine
+            .evaluate(&request("A"))
+            .expect("evaluation should succeed");
+
+        assert_eq!(
+            evaluated,
+            PolicyDecision::Deny(PolicyDecisionReason::ClassificationDenied)
+        );
+    }
+
+    #[test]
+    fn policy_serialized_before_ask_existed_deserializes_with_no_approval_classes() {
+        let legacy = r#"{"id":"legacy","allowed_tools":["read_query"],"allowed_classes":["read"]}"#;
+
+        let policy: ToolPolicy =
+            serde_json::from_str(legacy).expect("legacy policy should deserialize");
+
+        assert!(policy.approval_classes.is_empty());
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Read),
+            ClassDecision::Allow
+        );
+        assert_eq!(
+            policy.class_decision(ExecutionClassification::Write),
+            ClassDecision::Deny
+        );
     }
 }

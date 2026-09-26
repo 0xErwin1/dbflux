@@ -293,6 +293,8 @@ connection_manager:
   additional_policies_optional: Additional policies (optional)
   mcp_effective_tools: "Tools: %{tools}"
   mcp_effective_classes: "Classes: %{classes}"
+  mcp_effective_approval_classes: "Needs approval: %{classes}"
+  mcp_effective_asks_badge: "asks"
   mcp_effective_none: none
   mcp_orphan_bindings:
     one: 1 binding references a client that no longer exists.
@@ -3529,12 +3531,6 @@ settings:
       get_pending_execution:
         name: Get Pending
         description: Retrieve details of a specific pending execution
-      approve_execution:
-        name: Approve Execution
-        description: Approve and trigger a pending mutation
-      reject_execution:
-        name: Reject Execution
-        description: Reject and discard a pending mutation
       query_audit_logs:
         name: Query Audit Logs
         description: Search and filter the audit trail
@@ -3557,9 +3553,15 @@ settings:
       destructive:
         label: Destructive
         description: "DELETE, DROP, TRUNCATE and other irreversible operations"
+      admin_safe:
+        label: "Admin (safe)"
+        description: "CREATE TABLE, CREATE INDEX, ADD COLUMN and other additive schema changes"
       admin:
-        label: Admin
-        description: Approving executions, exporting audit logs, and privileged actions
+        label: "Admin"
+        description: "Risky schema changes (DROP COLUMN, RENAME, ALTER COLUMN), exporting audit logs, and privileged actions"
+      admin_destructive:
+        label: "Admin (destructive)"
+        description: "DROP TABLE, DROP DATABASE, TRUNCATE TABLE and other irreversible schema changes"
     group:
       policy: "Policy"
       role: "Role"
@@ -3578,7 +3580,7 @@ settings:
     roles_form_description: Group policies into named roles assigned to actors per connection
     policies_title: Policies
     policies_description: Manage tool and execution-class policy rules for MCP governance
-    policies_form_description: Define which tools and execution classes are allowed
+    policies_form_description: "Define which tools a policy covers and whether each execution class is allowed, needs approval, or is denied"
     new_client: New Trusted Client
     new_role: New Role
     new_policy: New Policy
@@ -3595,7 +3597,7 @@ settings:
       role_id: Role ID
       policies: Policies
       policy_id: Policy ID
-      allowed_execution_classes: Allowed Execution Classes
+      execution_classes: "Execution classes"
       allowed_tools: Allowed Tools
       policy_count:
         one: 1 policy
@@ -3628,6 +3630,12 @@ settings:
     status:
       unsaved: Unsaved form changes
       saved: All changes applied
+    decision:
+      allow: "Allow"
+      ask: "Ask"
+      deny: "Deny"
+    warning:
+      allow_all_without_approval: "The agent can then run every mutating call, including DROP DATABASE, without asking."
     action:
       update_client: Update Client
       create_client: Create Client
@@ -3638,6 +3646,7 @@ settings:
       create_role: Create Role
       update_policy: Update Policy
       create_policy: Create Policy
+      allow_all_without_approval: "Allow all without approval"
   drivers:
     section_title: Drivers
     section_description: "Per-driver overrides and settings the driver declares."

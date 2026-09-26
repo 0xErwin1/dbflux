@@ -514,7 +514,7 @@ crates/
   dbflux_approval/           # 지연 실행을 위한 승인 서비스
     src/lib.rs              # ApprovalService 및 대기 저장소 내보내기
     src/service.rs          # ApprovalService (승인/거부 수명 주기)
-    src/store.rs            # InMemoryPendingExecutionStore 및 ExecutionPlan
+    src/store.rs            # PendingExecutionStore 트레이트, InMemoryPendingExecutionStore (테스트용), ExecutionPlan
   dbflux_audit/             # 감사 로깅
     src/lib.rs              # AuditService: 검증, 지문 생성, 마스킹, 기록
     src/query.rs            # AuditQueryFilter (행위자, 범주, 작업, 결과, 날짜 범위)
@@ -879,9 +879,9 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 
 **정책 엔진** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()`는 액터, 연결, 도구, 분류를 받습니다
-- `PolicyDecision::Allow` 또는 `PolicyDecision::Deny(reason)`를 반환합니다
+- `PolicyDecision::Allow`, `PolicyDecision::RequireApproval`, `PolicyDecision::Deny(reason)` 중 하나를 반환합니다. 도구를 나열한 정책 중 가장 관대한 클래스 결정이 적용됩니다 (Allow > Ask > Deny)
 - `PolicyRole`은 여러 도구 정책을 조합합니다
-- `ToolPolicy`는 허용된 도구와 분류 수준을 정의합니다
+- `ToolPolicy`는 허용된 도구와 클래스별 `ClassDecision`(Allow / Ask / Deny)을 정의하며, `allowed_classes` + `approval_classes`로 저장됩니다
 - `ConnectionPolicyAssignment`는 액터/연결을 역할과 정책에 바인딩합니다
 
 **신뢰할 수 있는 클라이언트** (`dbflux_policy/trusted_clients.rs`):
@@ -890,7 +890,8 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 
 **승인 흐름** (`dbflux_approval`):
 - `ApprovalService`는 지연된 실행에 대한 승인/거부 수명 주기를 관리합니다
-- `InMemoryPendingExecutionStore`는 사람의 승인을 기다리는 대기 중 실행을 보관합니다
+- 대기 중인 실행은 `SqlitePendingExecutionStore`(`crates/dbflux_storage/src/pending_executions.rs`)를 통해 `dbflux.db`의 `app_pending_executions`에 저장되며, 앱과 독립 실행형 `dbflux mcp` 서버가 공유합니다. 이 저장소를 열 수 없을 때는 `InMemoryPendingExecutionStore`가 대체로 쓰이며 테스트도 이를 사용합니다
+- 클래스가 Ask인 호출은 큐에 들어가고, 사람이 앱에서 승인하거나 거부하며, 동일한 호출을 반복하면 승인이 한 번 소비됩니다 (`PendingStatus::Consumed`). MCP 클라이언트는 `approve_execution` / `reject_execution`을 절대 호출할 수 없습니다
 - `ExecutionPlan`은 지연 실행을 위해 원래 요청 컨텍스트를 캡처합니다
 
 **감사** (`dbflux_audit`):

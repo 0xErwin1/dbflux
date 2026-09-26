@@ -4,8 +4,8 @@
 //! - `request_execution`: Request approval for a pending operation
 //! - `list_pending_executions`: List all pending executions
 //! - `get_pending_execution`: Get details of a specific pending execution
-//! - `approve_execution`: Approve and execute a pending operation
-//! - `reject_execution`: Reject a pending operation
+//! - `approve_execution` / `reject_execution`: always denied over MCP by
+//!   authorization; a person resolves pending executions in DBFlux
 
 use dbflux_approval::store::ExecutionPlan;
 use dbflux_policy::ExecutionClassification;
@@ -61,7 +61,9 @@ pub struct RejectExecutionParams {
 
 #[tool_router(router = approval_router, vis = "pub")]
 impl DbFluxServer {
-    #[tool(description = "Request approval for a potentially destructive operation")]
+    #[tool(
+        description = "Queue an operation for approval by a person in DBFlux and return its pending_id. Tell the user to approve it in DBFlux (Workspace > Pending Approvals), wait (MCP clients cannot approve), check it with get_pending_execution, and once approved call the target tool itself with exactly the same params to run it once"
+    )]
     async fn request_execution(
         &self,
         Parameters(params): Parameters<RequestExecutionParams>,
@@ -114,7 +116,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "List pending executions awaiting approval")]
+    #[tool(
+        description = "List executions still waiting for a person to approve or reject them in DBFlux. An execution disappears from this list once it is approved, rejected or expired"
+    )]
     async fn list_pending_executions(
         &self,
         Parameters(params): Parameters<ListPendingExecutionsParams>,
@@ -156,7 +160,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Get details of a specific pending execution")]
+    #[tool(
+        description = "Check a pending execution by pending_id. While it is returned, it is still waiting for a person to approve it in DBFlux. Once it is no longer found it was approved, rejected or expired: repeat the identical original call (same tool, same arguments); an approved call then runs once, otherwise a new request is queued"
+    )]
     async fn get_pending_execution(
         &self,
         Parameters(params): Parameters<GetPendingExecutionParams>,
@@ -197,7 +203,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Approve a pending operation (returns replay instructions)")]
+    #[tool(
+        description = "Always denied over MCP: pending executions are approved by a person in DBFlux (Pending Approvals), never by an MCP client"
+    )]
     async fn approve_execution(
         &self,
         Parameters(params): Parameters<ApproveExecutionParams>,
@@ -269,7 +277,9 @@ impl DbFluxServer {
             .await
     }
 
-    #[tool(description = "Reject a pending execution")]
+    #[tool(
+        description = "Always denied over MCP: pending executions are rejected by a person in DBFlux (Pending Approvals), never by an MCP client"
+    )]
     async fn reject_execution(
         &self,
         Parameters(params): Parameters<RejectExecutionParams>,
@@ -453,6 +463,7 @@ mod tests {
                 id: "admin-only".to_string(),
                 allowed_tools: vec!["drop_index".to_string()],
                 allowed_classes: vec![ExecutionClassification::Admin],
+                approval_classes: Vec::new(),
             }],
         );
 

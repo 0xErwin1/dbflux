@@ -293,6 +293,8 @@ connection_manager:
   additional_policies_optional: 附加策略（可选）
   mcp_effective_tools: "工具：%{tools}"
   mcp_effective_classes: "分类：%{classes}"
+  mcp_effective_approval_classes: "需审批：%{classes}"
+  mcp_effective_asks_badge: "需审批"
   mcp_effective_none: 无
   mcp_orphan_bindings:
     one: 有 1 个绑定引用了已不存在的客户端。
@@ -3529,12 +3531,6 @@ settings:
       get_pending_execution:
         name: 获取待处理项
         description: 检索特定待处理执行的详情
-      approve_execution:
-        name: 批准执行
-        description: 批准并触发待处理的变更
-      reject_execution:
-        name: 拒绝执行
-        description: 拒绝并丢弃待处理的变更
       query_audit_logs:
         name: 查询审计日志
         description: 搜索和筛选审计记录
@@ -3557,9 +3553,15 @@ settings:
       destructive:
         label: 破坏性
         description: DELETE、DROP、TRUNCATE 及其他不可逆操作
+      admin_safe:
+        label: "管理（安全）"
+        description: "CREATE TABLE、CREATE INDEX、ADD COLUMN 等增量式架构变更"
       admin:
-        label: 管理
-        description: 批准执行、导出审计日志及特权操作
+        label: "管理"
+        description: "有风险的架构变更（DROP COLUMN、RENAME、ALTER COLUMN）、导出审计日志及特权操作"
+      admin_destructive:
+        label: "管理（破坏性）"
+        description: "DROP TABLE、DROP DATABASE、TRUNCATE TABLE 等不可逆的架构变更"
     group:
       policy: "策略"
       role: "角色"
@@ -3578,7 +3580,7 @@ settings:
     roles_form_description: 将策略分组为命名角色，按连接分配给执行者
     policies_title: 策略
     policies_description: 管理 MCP 治理的工具和执行类别策略规则
-    policies_form_description: 定义允许哪些工具和执行类别
+    policies_form_description: "定义策略涵盖哪些工具，以及每个执行类别是允许、需要审批还是拒绝"
     new_client: 新建受信客户端
     new_role: 新建角色
     new_policy: 新建策略
@@ -3595,7 +3597,7 @@ settings:
       role_id: 角色 ID
       policies: 策略
       policy_id: 策略 ID
-      allowed_execution_classes: 允许的执行类别
+      execution_classes: "执行类别"
       allowed_tools: 允许的工具
       policy_count:
         one: 1 个策略
@@ -3628,6 +3630,12 @@ settings:
     status:
       unsaved: 表单有未保存的更改
       saved: 所有更改已应用
+    decision:
+      allow: "允许"
+      ask: "需审批"
+      deny: "拒绝"
+    warning:
+      allow_all_without_approval: "此后代理可以不经询问执行任何变更调用，包括 DROP DATABASE。"
     action:
       update_client: 更新客户端
       create_client: 创建客户端
@@ -3638,6 +3646,7 @@ settings:
       create_role: 创建角色
       update_policy: 更新策略
       create_policy: 创建策略
+      allow_all_without_approval: "全部允许，无需审批"
   drivers:
     section_title: 驱动
     section_description: "按驱动的覆盖项以及驱动声明的设置。"

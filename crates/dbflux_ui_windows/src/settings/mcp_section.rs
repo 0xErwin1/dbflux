@@ -14,9 +14,10 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::BadgeTone;
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{SegmentedControl, SegmentedItem, Text};
 use dbflux_components::tokens::{Spacing, Widths};
-use dbflux_mcp::{PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
+use dbflux_mcp::{MUTATING_CLASS_IDS, PolicyRoleDto, ToolPolicyDto, TrustedClientDto};
+use dbflux_policy::ClassDecision;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity, McpRuntimeEventRaised};
@@ -49,8 +50,6 @@ const TOOL_IDS: &[&str] = &[
     "request_execution",
     "list_pending_executions",
     "get_pending_execution",
-    "approve_execution",
-    "reject_execution",
     "query_audit_logs",
     "get_audit_entry",
     "export_audit_logs",
@@ -73,7 +72,122 @@ fn tool_meta() -> Vec<(&'static str, String, String)> {
 /// Execution class ids in their stable display order. Each id doubles as the
 /// catalog key segment for its translated label and description:
 /// `settings.mcp.class.<id>.label` and `settings.mcp.class.<id>.description`.
-const CLASS_IDS: &[&str] = &["metadata", "read", "write", "destructive", "admin"];
+const CLASS_IDS: &[&str] = &[
+    "metadata",
+    "read",
+    "write",
+    "destructive",
+    "admin_safe",
+    "admin",
+    "admin_destructive",
+];
+
+/// Segment ids of the per-class Allow / Ask / Deny control.
+const DECISION_ALLOW: &str = "allow";
+const DECISION_ASK: &str = "ask";
+const DECISION_DENY: &str = "deny";
+
+fn decision_id(decision: ClassDecision) -> &'static str {
+    match decision {
+        ClassDecision::Allow => DECISION_ALLOW,
+        ClassDecision::Ask => DECISION_ASK,
+        ClassDecision::Deny => DECISION_DENY,
+    }
+}
+
+fn decision_from_id(id: &str) -> Option<ClassDecision> {
+    match id {
+        DECISION_ALLOW => Some(ClassDecision::Allow),
+        DECISION_ASK => Some(ClassDecision::Ask),
+        DECISION_DENY => Some(ClassDecision::Deny),
+        _ => None,
+    }
+}
+
+/// The decision `enter` moves a focused class row to.
+pub(super) fn next_class_decision(decision: ClassDecision) -> ClassDecision {
+    match decision {
+        ClassDecision::Allow => ClassDecision::Ask,
+        ClassDecision::Ask => ClassDecision::Deny,
+        ClassDecision::Deny => ClassDecision::Allow,
+    }
+}
+
+/// Per-class decisions of the policy being edited: a class in `allowed` is
+/// Allow, a class in `approval` is Ask, and a class in neither is Deny.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct PolicyClassDraft {
+    allowed: HashSet<String>,
+    approval: HashSet<String>,
+}
+
+impl PolicyClassDraft {
+    pub(super) fn from_policy(policy: &ToolPolicyDto) -> Self {
+        Self {
+            allowed: policy.allowed_classes.iter().cloned().collect(),
+            approval: policy.approval_classes.iter().cloned().collect(),
+        }
+    }
+
+    pub(super) fn decision(&self, class: &str) -> ClassDecision {
+        if self.approval.contains(class) {
+            ClassDecision::Ask
+        } else if self.allowed.contains(class) {
+            ClassDecision::Allow
+        } else {
+            ClassDecision::Deny
+        }
+    }
+
+    pub(super) fn set(&mut self, class: &str, decision: ClassDecision) {
+        self.allowed.remove(class);
+        self.approval.remove(class);
+
+        match decision {
+            ClassDecision::Allow => {
+                self.allowed.insert(class.to_string());
+            }
+            ClassDecision::Ask => {
+                self.approval.insert(class.to_string());
+            }
+            ClassDecision::Deny => {}
+        }
+    }
+
+    /// Lets every mutating class run without approval: the explicit opt-in
+    /// behind "Allow all without approval".
+    pub(super) fn allow_all_mutating(&mut self) {
+        for class in MUTATING_CLASS_IDS {
+            self.set(class, ClassDecision::Allow);
+        }
+    }
+
+    /// Whether the agent can run every mutating class without asking.
+    pub(super) fn allows_all_mutating(&self) -> bool {
+        MUTATING_CLASS_IDS
+            .iter()
+            .all(|class| self.decision(class) == ClassDecision::Allow)
+    }
+
+    /// Number of classes the policy can run at all (Allow or Ask).
+    pub(super) fn usable_count(&self) -> usize {
+        self.allowed.union(&self.approval).count()
+    }
+
+    /// Sorted (allowed, approval) class lists for a `ToolPolicyDto`.
+    pub(super) fn into_lists(self) -> (Vec<String>, Vec<String>) {
+        let mut allowed: Vec<String> = self.allowed.into_iter().collect();
+        let mut approval: Vec<String> = self.approval.into_iter().collect();
+        allowed.sort();
+        approval.sort();
+        (allowed, approval)
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.allowed.clear();
+        self.approval.clear();
+    }
+}
 
 /// Resolves the execution class display metadata for the active locale:
 /// (id, translated label, translated description). Call once per render and
@@ -131,8 +245,6 @@ const TOOL_GROUPS: &[(&str, &[&str])] = &[
             "request_execution",
             "list_pending_executions",
             "get_pending_execution",
-            "approve_execution",
-            "reject_execution",
         ],
     ),
     (
@@ -183,6 +295,7 @@ pub(super) enum McpFormField {
     RolePolicies,
     PolicyId,
     PolicyClass(usize),
+    PolicyAllowAll,
     PolicyTool(usize),
     DeleteButton,
     SaveButton,
@@ -210,8 +323,10 @@ pub(super) fn mcp_policy_tool_ids() -> Vec<&'static str> {
 }
 
 /// The row table a `McpSection` form walks with `j`/`k`/`tab`. Builtin roles
-/// and policies drop the save/delete button row so a stale field cursor can
-/// never land on a mutating control for a read-only item.
+/// and policies drop the save/delete button row and the "Allow all without
+/// approval" action so a stale field cursor can never land on a mutating
+/// control for a read-only item. Each execution class has its own row, the
+/// way the class rows are drawn.
 pub(super) fn mcp_form_rows(
     variant: McpSectionVariant,
     is_builtin: bool,
@@ -239,7 +354,10 @@ pub(super) fn mcp_form_rows(
         }
         McpSectionVariant::Policies => {
             let mut rows = vec![vec![McpFormField::PolicyId]];
-            rows.push((0..class_count).map(McpFormField::PolicyClass).collect());
+            rows.extend((0..class_count).map(|i| vec![McpFormField::PolicyClass(i)]));
+            if !is_builtin {
+                rows.push(vec![McpFormField::PolicyAllowAll]);
+            }
             rows.extend((0..tool_count).map(|i| vec![McpFormField::PolicyTool(i)]));
             if !is_builtin {
                 rows.push(vec![McpFormField::DeleteButton, McpFormField::SaveButton]);
@@ -280,7 +398,7 @@ pub(super) struct McpSection {
 
     // Policy tab
     input_policy_id: Entity<InputState>,
-    draft_policy_classes: HashSet<String>,
+    draft_policy_classes: PolicyClassDraft,
     draft_policy_tools: HashSet<String>,
     selected_policy_id: Option<String>,
 
@@ -373,7 +491,7 @@ impl McpSection {
             selected_role_id: None,
 
             input_policy_id,
-            draft_policy_classes: HashSet::new(),
+            draft_policy_classes: PolicyClassDraft::default(),
             draft_policy_tools: HashSet::new(),
             selected_policy_id: None,
 
@@ -709,7 +827,7 @@ impl McpSection {
         self.selected_policy_id = Some(policy.id.clone());
         self.input_policy_id
             .update(cx, |i, cx| i.set_value(policy.id.clone(), window, cx));
-        self.draft_policy_classes = policy.allowed_classes.into_iter().collect();
+        self.draft_policy_classes = PolicyClassDraft::from_policy(&policy);
         self.draft_policy_tools = policy.allowed_tools.into_iter().collect();
 
         self.validate_form_field();
@@ -744,13 +862,13 @@ impl McpSection {
 
         let mut tools: Vec<String> = self.draft_policy_tools.iter().cloned().collect();
         tools.sort();
-        let mut classes: Vec<String> = self.draft_policy_classes.iter().cloned().collect();
-        classes.sort();
+        let (allowed_classes, approval_classes) = self.draft_policy_classes.clone().into_lists();
 
         let dto = ToolPolicyDto {
             id: id.clone(),
             allowed_tools: tools,
-            allowed_classes: classes,
+            allowed_classes,
+            approval_classes,
         };
 
         self.app_state.update(cx, |state, cx| {
@@ -1130,7 +1248,7 @@ impl McpSection {
                     label: SharedString::from(label),
                     detail: Some(SharedString::from(mcp_policy_tools_classes_summary(
                         policy.allowed_tools.len(),
-                        policy.allowed_classes.len(),
+                        PolicyClassDraft::from_policy(policy).usable_count(),
                     ))),
                     badge,
                     selected: is_selected,
@@ -1158,33 +1276,29 @@ impl McpSection {
 
         let mut tool_index = 0usize;
 
-        let class_rows =
-            class_meta
-                .iter()
-                .enumerate()
-                .map(|(index, (class, label, description))| {
-                    let class = *class;
-                    let checked = self.draft_policy_classes.contains(class);
-                    let is_focused = is_form_focused && field == McpFormField::PolicyClass(index);
+        let is_builtin = self.policy_is_builtin();
 
-                    self.render_policy_check_row(
-                        SharedString::from(format!("policy-class-{}", class)),
-                        label.clone(),
-                        description.clone(),
-                        checked,
-                        is_focused,
-                        move |this, checked| {
-                            if checked {
-                                this.draft_policy_classes.insert(class.to_string());
-                            } else {
-                                this.draft_policy_classes.remove(class);
-                            }
-                        },
-                        cx,
-                    )
-                });
+        let class_rows: Vec<Div> = class_meta
+            .iter()
+            .enumerate()
+            .map(|(index, (class, label, description))| {
+                let decision = self.draft_policy_classes.decision(class);
+                let is_focused = is_form_focused && field == McpFormField::PolicyClass(index);
 
-        let class_rows: Vec<Div> = class_rows.collect();
+                self.render_policy_class_row(
+                    class,
+                    label.clone(),
+                    description.clone(),
+                    decision,
+                    is_focused,
+                    cx,
+                )
+            })
+            .collect();
+
+        let allow_all_row = (!is_builtin).then(|| {
+            self.render_allow_all_row(is_form_focused && field == McpFormField::PolicyAllowAll, cx)
+        });
 
         let tool_groups: Vec<Div> = TOOL_GROUPS
             .iter()
@@ -1254,11 +1368,12 @@ impl McpSection {
                     None,
                 ))
                 .child(dbflux_components::composites::section_header(
-                    dbflux_i18n::t!("settings.mcp.field.allowed_execution_classes"),
+                    dbflux_i18n::t!("settings.mcp.field.execution_classes"),
                     Some(AppIcon::Layers.into()),
                     cx,
                 ))
                 .children(class_rows)
+                .children(allow_all_row)
                 .child(dbflux_components::composites::section_header(
                     crate::labels::mcp_allowed_tools_header(
                         allowed_tool_count,
@@ -1295,6 +1410,107 @@ impl McpSection {
             .overflow_hidden()
             .child(list)
             .child(form)
+    }
+
+    /// One execution-class row of the policy form: the class name, its muted
+    /// description, and the Allow / Ask / Deny control.
+    fn render_policy_class_row(
+        &self,
+        class: &'static str,
+        label: String,
+        description: String,
+        decision: ClassDecision,
+        is_focused: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let entity = cx.entity();
+        let items = vec![
+            SegmentedItem::new(
+                DECISION_ALLOW,
+                dbflux_i18n::t!("settings.mcp.decision.allow"),
+            ),
+            SegmentedItem::new(DECISION_ASK, dbflux_i18n::t!("settings.mcp.decision.ask")),
+            SegmentedItem::new(DECISION_DENY, dbflux_i18n::t!("settings.mcp.decision.deny")),
+        ];
+
+        let control =
+            SegmentedControl::new(items, decision_id(decision), move |selected, _, cx| {
+                let Some(decision) = decision_from_id(selected.as_ref()) else {
+                    return;
+                };
+                entity.update(cx, |this, cx| {
+                    if this.policy_is_builtin() {
+                        return;
+                    }
+                    this.draft_policy_classes.set(class, decision);
+                    cx.notify();
+                });
+            })
+            .focused(is_focused);
+
+        div()
+            .flex()
+            .items_center()
+            .gap(FormMetrics::ROW_GAP)
+            .py(FormMetrics::ROW_PADDING_Y)
+            .border_b_1()
+            .border_color(cx.theme().table_row_border)
+            .child(
+                div()
+                    .w(SettingsMetrics::FORM_LABEL_WIDTH)
+                    .flex_shrink_0()
+                    .child(Text::body(label)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(layout::help_text(description)),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("policy-class-{class}")))
+                    .flex_none()
+                    .child(control),
+            )
+    }
+
+    /// The "Allow all without approval" action and the warning that it lets
+    /// the agent run any mutating call, DROP DATABASE included, unasked.
+    fn render_allow_all_row(&self, is_focused: bool, cx: &mut Context<Self>) -> Div {
+        let already_allowed = self.draft_policy_classes.allows_all_mutating();
+
+        layout::inline_controls()
+            .py(FormMetrics::ROW_PADDING_Y)
+            .child(
+                Button::new(
+                    "mcp-policy-allow-all",
+                    dbflux_i18n::t!("settings.mcp.action.allow_all_without_approval"),
+                )
+                .secondary()
+                .icon(AppIcon::TriangleAlert)
+                .focused(is_focused)
+                .disabled(already_allowed)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.allow_all_without_approval(cx);
+                })),
+            )
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "settings.mcp.warning.allow_all_without_approval"
+                ))
+                .font_size(FormMetrics::HELP_FONT)
+                .text_color(cx.theme().warning),
+            )
+    }
+
+    fn allow_all_without_approval(&mut self, cx: &mut Context<Self>) {
+        if self.policy_is_builtin() {
+            return;
+        }
+
+        self.draft_policy_classes.allow_all_mutating();
+        cx.notify();
     }
 
     /// One checkbox row of the policy form: the checkbox and its name, and
@@ -1789,13 +2005,13 @@ impl McpSection {
             }
             McpFormField::PolicyClass(index) => {
                 if let Some(&id) = mcp_policy_class_ids().get(index) {
-                    if self.draft_policy_classes.contains(id) {
-                        self.draft_policy_classes.remove(id);
-                    } else {
-                        self.draft_policy_classes.insert(id.to_string());
-                    }
+                    let next = next_class_decision(self.draft_policy_classes.decision(id));
+                    self.draft_policy_classes.set(id, next);
                     cx.notify();
                 }
+            }
+            McpFormField::PolicyAllowAll => {
+                self.allow_all_without_approval(cx);
             }
             McpFormField::PolicyTool(index) => {
                 if let Some(&id) = mcp_policy_tool_ids().get(index) {
@@ -2140,9 +2356,11 @@ impl Render for McpSection {
 #[cfg(test)]
 mod form_row_tests {
     use super::{
-        McpFormField, McpSectionVariant, mcp_form_rows, mcp_is_input_field, mcp_policy_class_ids,
-        mcp_policy_tool_ids,
+        McpFormField, McpSectionVariant, PolicyClassDraft, mcp_form_rows, mcp_is_input_field,
+        mcp_policy_class_ids, mcp_policy_tool_ids, next_class_decision,
     };
+    use dbflux_mcp::{MUTATING_CLASS_IDS, ToolPolicyDto};
+    use dbflux_policy::ClassDecision;
 
     fn all_fields(rows: &[Vec<McpFormField>]) -> Vec<McpFormField> {
         rows.iter().flatten().copied().collect()
@@ -2176,15 +2394,20 @@ mod form_row_tests {
     }
 
     #[test]
-    fn policies_class_row_length_matches_class_count() {
-        let rows = mcp_form_rows(McpSectionVariant::Policies, false, 5, 0);
-        let class_row = &rows[1];
+    fn policies_have_one_row_per_class_followed_by_allow_all() {
+        let rows = mcp_form_rows(McpSectionVariant::Policies, false, 7, 0);
 
-        assert_eq!(class_row.len(), 5);
-        assert_eq!(
-            class_row,
-            &(0..5).map(McpFormField::PolicyClass).collect::<Vec<_>>()
-        );
+        for index in 0..7 {
+            assert_eq!(rows[1 + index], vec![McpFormField::PolicyClass(index)]);
+        }
+        assert_eq!(rows[8], vec![McpFormField::PolicyAllowAll]);
+    }
+
+    #[test]
+    fn builtin_policies_drop_the_allow_all_action() {
+        let builtin = mcp_form_rows(McpSectionVariant::Policies, true, 7, 3);
+
+        assert!(!all_fields(&builtin).contains(&McpFormField::PolicyAllowAll));
     }
 
     #[test]
@@ -2249,11 +2472,21 @@ mod form_row_tests {
         let classes = mcp_policy_class_ids();
         assert_eq!(
             classes,
-            vec!["metadata", "read", "write", "destructive", "admin"]
+            vec![
+                "metadata",
+                "read",
+                "write",
+                "destructive",
+                "admin_safe",
+                "admin",
+                "admin_destructive"
+            ]
         );
 
         let tools = mcp_policy_tool_ids();
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 23);
+        assert!(!tools.contains(&"approve_execution"));
+        assert!(!tools.contains(&"reject_execution"));
         assert_eq!(tools[0], "list_connections");
         assert_eq!(tools[tools.len() - 1], "export_audit_logs");
     }
@@ -2270,9 +2503,71 @@ mod form_row_tests {
         assert!(!mcp_is_input_field(McpFormField::ClientToggleActive));
         assert!(!mcp_is_input_field(McpFormField::RolePolicies));
         assert!(!mcp_is_input_field(McpFormField::PolicyClass(0)));
+        assert!(!mcp_is_input_field(McpFormField::PolicyAllowAll));
         assert!(!mcp_is_input_field(McpFormField::PolicyTool(0)));
         assert!(!mcp_is_input_field(McpFormField::DeleteButton));
         assert!(!mcp_is_input_field(McpFormField::SaveButton));
+    }
+
+    fn legacy_policy() -> ToolPolicyDto {
+        ToolPolicyDto {
+            id: "analyst".to_string(),
+            allowed_tools: vec!["select_data".to_string()],
+            allowed_classes: vec!["metadata".to_string(), "read".to_string()],
+            approval_classes: vec!["write".to_string()],
+        }
+    }
+
+    #[test]
+    fn class_draft_reads_allow_ask_and_deny_from_a_policy() {
+        let draft = PolicyClassDraft::from_policy(&legacy_policy());
+
+        assert_eq!(draft.decision("metadata"), ClassDecision::Allow);
+        assert_eq!(draft.decision("read"), ClassDecision::Allow);
+        assert_eq!(draft.decision("write"), ClassDecision::Ask);
+        assert_eq!(draft.decision("destructive"), ClassDecision::Deny);
+        assert_eq!(draft.usable_count(), 3);
+    }
+
+    #[test]
+    fn class_draft_set_moves_a_class_between_decisions() {
+        let mut draft = PolicyClassDraft::from_policy(&legacy_policy());
+
+        draft.set("write", ClassDecision::Allow);
+        draft.set("read", ClassDecision::Deny);
+        draft.set("destructive", ClassDecision::Ask);
+
+        let (allowed, approval) = draft.into_lists();
+        assert_eq!(allowed, vec!["metadata", "write"]);
+        assert_eq!(approval, vec!["destructive"]);
+    }
+
+    #[test]
+    fn allow_all_without_approval_allows_every_mutating_class_only() {
+        let mut draft = PolicyClassDraft::from_policy(&legacy_policy());
+        assert!(!draft.allows_all_mutating());
+
+        draft.allow_all_mutating();
+
+        assert!(draft.allows_all_mutating());
+        for class in MUTATING_CLASS_IDS {
+            assert_eq!(draft.decision(class), ClassDecision::Allow, "{class}");
+        }
+        let (_, approval) = draft.into_lists();
+        assert!(approval.is_empty());
+    }
+
+    #[test]
+    fn enter_cycles_allow_ask_deny() {
+        assert_eq!(
+            next_class_decision(ClassDecision::Allow),
+            ClassDecision::Ask
+        );
+        assert_eq!(next_class_decision(ClassDecision::Ask), ClassDecision::Deny);
+        assert_eq!(
+            next_class_decision(ClassDecision::Deny),
+            ClassDecision::Allow
+        );
     }
 }
 
@@ -2289,8 +2584,17 @@ mod tests {
         "settings.mcp.class.write.description",
         "settings.mcp.class.destructive.label",
         "settings.mcp.class.destructive.description",
+        "settings.mcp.class.admin_safe.label",
+        "settings.mcp.class.admin_safe.description",
         "settings.mcp.class.admin.label",
         "settings.mcp.class.admin.description",
+        "settings.mcp.class.admin_destructive.label",
+        "settings.mcp.class.admin_destructive.description",
+        "settings.mcp.decision.allow",
+        "settings.mcp.decision.ask",
+        "settings.mcp.decision.deny",
+        "settings.mcp.action.allow_all_without_approval",
+        "settings.mcp.warning.allow_all_without_approval",
         "settings.mcp.group.discovery",
         "settings.mcp.group.schema",
         "settings.mcp.group.query",
@@ -2319,7 +2623,7 @@ mod tests {
         "settings.mcp.field.role_id",
         "settings.mcp.field.policies",
         "settings.mcp.field.policy_id",
-        "settings.mcp.field.allowed_execution_classes",
+        "settings.mcp.field.execution_classes",
         "settings.mcp.field.allowed_tools",
         "settings.mcp.field.builtin_badge",
         "settings.mcp.placeholder.client_name",
@@ -2356,7 +2660,15 @@ mod tests {
         "settings.mcp.badge.inactive",
     ];
 
-    const EXPECTED_CLASS_IDS: &[&str] = &["metadata", "read", "write", "destructive", "admin"];
+    const EXPECTED_CLASS_IDS: &[&str] = &[
+        "metadata",
+        "read",
+        "write",
+        "destructive",
+        "admin_safe",
+        "admin",
+        "admin_destructive",
+    ];
 
     #[test]
     fn mcp_chrome_keys_resolve_in_both_locales() {
@@ -2417,8 +2729,6 @@ mod tests {
         "request_execution",
         "list_pending_executions",
         "get_pending_execution",
-        "approve_execution",
-        "reject_execution",
         "query_audit_logs",
         "get_audit_entry",
         "export_audit_logs",

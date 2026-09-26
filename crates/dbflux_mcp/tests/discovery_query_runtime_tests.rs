@@ -27,6 +27,7 @@ fn allow_engine(tool_id: &str, class: ExecutionClassification) -> PolicyEngine {
             id: "policy-a".to_string(),
             allowed_tools: vec![tool_id.to_string()],
             allowed_classes: vec![class],
+            approval_classes: Vec::new(),
         }],
     )
 }

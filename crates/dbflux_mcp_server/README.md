@@ -100,7 +100,7 @@ Claude: I can see the following MCP tools available: connect, list_connections, 
 2. **Server routes to tool handler** based on method name
 3. **Authorization checks** client ID against trusted clients registry
 4. **Policy evaluation** classifies operation and checks policy
-5. **Approval check** (if required) queues for human approval
+5. **Approval check**: a class the policy decides as Ask is queued for a person to approve in DBFlux; an approved call runs once when it is repeated with the same arguments
 6. **Execution** delegates to driver layer
 7. **Audit logging** records operation and result
 8. **Response** returned to AI client via stdout
@@ -174,8 +174,9 @@ See [DDL Safety Guide](./docs/DDL_SAFETY.md) for detailed classification rules.
 |------|-------------|----------------|
 | `list_pending_executions` | List operations awaiting approval | Metadata |
 | `get_pending_execution` | Get pending execution details | Metadata |
-| `approve_execution` | Approve pending operation | Admin |
-| `reject_execution` | Reject pending operation | Admin |
+| `request_execution` | Queue an operation for approval by a person | Admin |
+| `approve_execution` | Always denied over MCP; a person approves in DBFlux | — |
+| `reject_execution` | Always denied over MCP; a person rejects in DBFlux | — |
 | `query_audit_logs` | Query audit log | Metadata |
 | `get_audit_entry` | Get audit entry by ID | Metadata |
 | `export_audit_logs` | Export audit logs (CSV/JSON) | Metadata |
@@ -287,11 +288,13 @@ Before executing schema changes, preview what will happen:
 
 ### Classification Levels
 
-| Level | Description | Requires Approval? |
-|-------|-------------|-------------------|
-| `admin_safe` | Safe, reversible schema changes | No (default policy) |
-| `admin` | Risky schema changes (rename, drop column) | Yes (default policy) |
-| `admin_destructive` | Irreversible data loss (DROP TABLE) | Yes (always) |
+| Level | Description | Built-in `admin` policy |
+|-------|-------------|-------------------------|
+| `admin_safe` | Safe, reversible schema changes | Ask (requires approval) |
+| `admin` | Risky schema changes (rename, drop column) | Ask (requires approval) |
+| `admin_destructive` | Irreversible data loss (DROP TABLE) | Ask (requires approval) |
+
+Each policy decides every class as Allow, Ask or Deny; see [AI + MCP Integration](../../docs/MCP_AI_INTEGRATION.md).
 
 See [DDL Safety Guide](./docs/DDL_SAFETY.md) for complete classification matrix and best practices.
 
@@ -371,16 +374,11 @@ roles:
     policies:
       - classification: [metadata, read]
         decision: allow
-      - classification: [write]
-        decision: allow
-        max_rows: 1000
-      - classification: [destructive]
-        decision: require_approval
-      - classification: [admin_safe]
-        decision: allow
-      - classification: [admin, admin_destructive]
-        decision: require_approval
+      - classification: [write, destructive, admin_safe, admin, admin_destructive]
+        decision: ask
 ```
+
+A policy lists the tools it covers and decides each execution class as `allow`, `ask` (requires approval) or `deny`. When several assigned policies list the tool, the most permissive decision wins.
 
 ### Trusted Clients
 
@@ -403,11 +401,10 @@ Register AI clients to assign policies:
 
 ### Approval Workflow
 
-1. **Operation requires approval** (e.g., `DROP TABLE`)
-2. **Queued in pending executions** (in-memory store)
-3. **Human reviews** via `list_pending_executions`
-4. **Approve or reject** via `approve_execution` / `reject_execution`
-5. **Execution proceeds** (if approved) or fails (if rejected)
+1. **Operation requires approval**: the policy decides its class as Ask (e.g., `DROP TABLE` under the built-in `admin` policy)
+2. **Queued in pending executions**, stored in `dbflux.db` and shared with the DBFlux app; the call returns a JSON-RPC error with `code: "approval_required"` and the `pending_id`
+3. **A person approves or rejects** it in DBFlux (Workspace → Pending Approvals). MCP clients cannot: `approve_execution` / `reject_execution` are always denied over MCP
+4. **The agent repeats the call** with the same arguments: an approved call runs once, a rejected one is queued again and never runs
 
 ### Audit Logging
 

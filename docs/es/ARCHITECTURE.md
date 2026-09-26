@@ -540,7 +540,7 @@ crates/
   dbflux_approval/           # Approval service for deferred executions
     src/lib.rs              # Exports for ApprovalService and pending store
     src/service.rs          # ApprovalService (approve/reject lifecycle)
-    src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait, InMemoryPendingExecutionStore (tests), ExecutionPlan
   dbflux_audit/             # Audit logging
     src/lib.rs              # AuditService: validate, fingerprint, redact, record
     src/query.rs            # AuditQueryFilter (actor, category, action, outcome, date range)
@@ -1477,9 +1477,12 @@ IA con una capa completa de gobernanza:
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` toma actor, connection, tool y classification
-- Devuelve `PolicyDecision::Allow` o `PolicyDecision::Deny(reason)`
+- Devuelve `PolicyDecision::Allow`, `PolicyDecision::RequireApproval` o
+  `PolicyDecision::Deny(reason)`; entre las policies que listan el tool gana la
+  decisión de clase más permisiva (Allow > Ask > Deny)
 - `PolicyRole` compone múltiples tool policies
-- `ToolPolicy` define los tools permitidos y los niveles de classification
+- `ToolPolicy` define los tools permitidos y un `ClassDecision` por clase
+  (Allow / Ask / Deny), guardado como `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` vincula actors/connections a roles y policies
 
 **Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
@@ -1490,8 +1493,15 @@ IA con una capa completa de gobernanza:
 **Approval Flow** (`dbflux_approval`):
 - `ApprovalService` gestiona el lifecycle de approve/reject para ejecuciones
   diferidas
-- `InMemoryPendingExecutionStore` mantiene las ejecuciones pendientes a la
-  espera de approval humano
+- Las ejecuciones pendientes se persisten en `app_pending_executions` dentro de
+  `dbflux.db` mediante `SqlitePendingExecutionStore`
+  (`crates/dbflux_storage/src/pending_executions.rs`), compartido por la app y
+  el servidor `dbflux mcp`; `InMemoryPendingExecutionStore` es el respaldo
+  cuando ese store no puede abrirse y lo usan los tests
+- Una llamada cuya clase es Ask se encola; una persona la aprueba o rechaza en
+  la app, y la llamada idéntica repetida consume la aprobación una vez
+  (`PendingStatus::Consumed`). Los clientes MCP nunca pueden llamar a
+  `approve_execution` / `reject_execution`
 - `ExecutionPlan` captura el contexto original del request para la ejecución
   diferida
 

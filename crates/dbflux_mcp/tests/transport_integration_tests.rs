@@ -74,6 +74,7 @@ impl IntegrationHarness {
                 id: "policy-read".to_string(),
                 allowed_tools: vec!["select_data".to_string()],
                 allowed_classes: vec![ExecutionClassification::Read],
+                approval_classes: Vec::new(),
             }],
         );
 

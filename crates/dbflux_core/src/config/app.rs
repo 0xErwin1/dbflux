@@ -148,6 +148,9 @@ pub struct PolicyRoleConfig {
     pub policy_ids: Vec<String>,
 }
 
+/// A tool policy as persisted in configuration. A class listed in
+/// `allowed_classes` is Allow, a class listed in `approval_classes` requires
+/// approval (Ask), and a class in neither is Deny.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolPolicyConfig {
     pub id: String,
@@ -155,6 +158,8 @@ pub struct ToolPolicyConfig {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_classes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_classes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

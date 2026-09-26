@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use dbflux_approval::{
     ExecutionPlan, PendingExecution, PendingExecutionStore, PendingStatus, PendingStoreError,
+    approval_matches_plan,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -39,6 +40,7 @@ fn status_to_str(c: PendingStatus) -> &'static str {
         PendingStatus::Pending => "pending",
         PendingStatus::Approved => "approved",
         PendingStatus::Rejected => "rejected",
+        PendingStatus::Consumed => "consumed",
     }
 }
 
@@ -47,6 +49,7 @@ fn status_from_str(s: &str) -> Result<PendingStatus, PendingStoreError> {
         "pending" => Ok(PendingStatus::Pending),
         "approved" => Ok(PendingStatus::Approved),
         "rejected" => Ok(PendingStatus::Rejected),
+        "consumed" => Ok(PendingStatus::Consumed),
         other => Err(PendingStoreError::Serialization(format!(
             "unknown pending status: {other}"
         ))),
@@ -277,6 +280,80 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
         Ok(executions)
     }
 
+    fn consume_approved(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecution>, PendingStoreError> {
+        let now = now_epoch_ms();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, tool_id, connection_id, actor_id, classification, payload_json,
+                        status, created_at, expires_at
+                 FROM app_pending_executions
+                 WHERE status = 'approved'
+                   AND actor_id = ?1
+                   AND connection_id = ?2
+                   AND tool_id = ?3
+                   AND (expires_at IS NULL OR expires_at > ?4)
+                 ORDER BY created_at",
+            )
+            .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![plan.actor_id, plan.connection_id, plan.tool_id, now],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                    ))
+                },
+            )
+            .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+        let mut candidates = Vec::new();
+        for row in rows {
+            let raw = row.map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+            candidates.push(row_to_execution(raw)?);
+        }
+        drop(stmt);
+
+        for mut candidate in candidates {
+            if !approval_matches_plan(&candidate.plan, plan) {
+                continue;
+            }
+
+            // The status guard makes the transition atomic against another
+            // process consuming the same approval between the read and here.
+            let rows_changed = conn
+                .execute(
+                    "UPDATE app_pending_executions SET status = 'consumed'
+                     WHERE id = ?1 AND status = 'approved'",
+                    rusqlite::params![candidate.id.to_string()],
+                )
+                .map_err(|e| PendingStoreError::Backend(e.to_string()))?;
+
+            if rows_changed == 1 {
+                candidate.status = PendingStatus::Consumed;
+                return Ok(Some(candidate));
+            }
+        }
+
+        Ok(None)
+    }
+
     fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, PendingStoreError> {
         let conn = self
             .conn
@@ -286,7 +363,7 @@ impl PendingExecutionStore for SqlitePendingExecutionStore {
         let rows_deleted = conn
             .execute(
                 "DELETE FROM app_pending_executions
-                 WHERE status IN ('approved', 'rejected')
+                 WHERE status IN ('rejected', 'consumed')
                     OR (expires_at IS NOT NULL AND expires_at <= ?1)",
                 rusqlite::params![now_ms],
             )

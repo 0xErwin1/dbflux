@@ -588,6 +588,7 @@ impl AppState {
                     id: policy.policy_id,
                     allowed_tools: policy.allowed_tools,
                     allowed_classes: policy.allowed_classes,
+                    approval_classes: policy.approval_classes,
                 })
                 .map_err(|e| format!("failed to upsert tool policy: {}", e))?;
         }

@@ -77,8 +77,8 @@ Every AI request is enforced through all of these layers in order:
 1. **Trusted client**: requester identity must be active and registered.
 2. **Connection MCP gate**: target connection must have MCP enabled.
 3. **Policy assignment**: actor must have a scoped assignment on that connection.
-4. **Tool + classification allowlist**: both the tool ID and its execution class must be permitted by the assigned policy.
-5. **Approval path**: write/destructive flows can require human approval before execution.
+4. **Tool + class decision**: the tool ID must be listed by an assigned policy, and that policy decides the call's execution class as Allow, Ask, or Deny (see section 5).
+5. **Approval path**: an Ask decision queues the call as a pending execution. A person approves or rejects it in DBFlux, and an approved call runs once when the agent repeats it with the same arguments.
 6. **Audit trail**: every decision is appended to `aud_audit_events` in the unified SQLite database and is queryable/exportable. See `docs/AUDIT.md` for the full event schema.
 
 All six layers run inside the server process on every `tools/call` request. None can be bypassed from the client side.
@@ -119,11 +119,11 @@ All six layers run inside the server process on every `tools/call` request. None
 | Scripts | `update_script` | write | Overwrite an existing saved script |
 | Scripts | `delete_script` | admin | Permanently remove a script |
 | Scripts | `execute_script` | computed | Execute a saved script against a connection. Classification is derived from the script body |
-| Approval | `request_execution` | admin | Submit a mutation for human approval before it runs |
+| Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
 | Approval | `list_pending_executions` | read | View all executions awaiting approval |
 | Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution |
-| Approval | `approve_execution` | admin | Approve a pending mutation (admin only) |
-| Approval | `reject_execution` | admin | Reject and discard a pending mutation (admin only) |
+| Approval | `approve_execution` | — | Always denied over MCP. A person approves in DBFlux |
+| Approval | `reject_execution` | — | Always denied over MCP. A person rejects in DBFlux |
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |
 | Audit | `get_audit_entry` | read | Retrieve a single audit log entry by ID |
 | Audit | `export_audit_logs` | read | Download audit log entries as CSV or JSON |
@@ -135,7 +135,13 @@ Deferred tools (explicitly rejected at request time in v1):
 
 ## 5. Execution Classes
 
-Policies gate tools at two levels: the tool ID itself and the execution classification. A request is allowed only when both match the policy's allowlist.
+Policies gate tools at two levels: the tool ID itself and the execution classification. A policy lists the tools it covers and gives every execution class one decision:
+
+| Decision | What happens to a call of that class |
+|----------|--------------------------------------|
+| Allow | Runs immediately |
+| Ask | Waits for a person: the call is queued as a pending execution and runs only after it is approved |
+| Deny | Is rejected |
 
 | Class | What it covers |
 |-------|---------------|
@@ -144,8 +150,26 @@ Policies gate tools at two levels: the tool ID itself and the execution classifi
 | `write` | Inserting, updating, or running scripts that modify data |
 | `destructive` | DELETE, DROP, TRUNCATE and other irreversible operations |
 | `admin_safe` | Safe DDL operations such as additive schema changes and index creation |
-| `admin` | Risky DDL operations, approvals, audit export, and privileged actions |
+| `admin` | Risky DDL operations, audit export, and privileged actions |
 | `admin_destructive` | Irreversible admin operations such as dropping or truncating schema objects |
+
+`metadata` and `read` only read. The other five classes change data or schema and are called mutating classes below.
+
+### How policies combine
+
+An actor can hold several policies on a connection, directly and through roles. Only the policies that list the requested tool take part, and among them the most permissive decision wins: Allow over Ask over Deny. Policies grant access; a Deny is the absence of a grant, not a veto. A policy that asks for approval of a class therefore does not slow down an actor that another assigned policy already allows to run that class. To make a class wait for approval, make sure no other policy assigned to the actor allows it.
+
+### The approval flow
+
+1. The agent calls a tool whose class the policy decides as Ask. The server queues the call as a pending execution, records an `mcp_authorize` audit event with outcome `pending`, and answers with a JSON-RPC error whose data is `{"code": "approval_required", "status": "pending", "pending_id": "..."}`.
+2. A person approves or rejects the call in DBFlux (**Workspace → Pending Approvals**). The server and the app share the queue through `dbflux.db`, so a call queued by `dbflux mcp` appears in the app.
+3. The agent calls the same tool again with the same arguments. The server finds the approval that matches the actor, connection, tool and arguments, consumes it, and runs the call. The `mcp_authorize` event of that call has outcome `success` and names the approval in `details_json.pending_execution_id`.
+
+One approval runs one call. Repeating the call again queues a new request, and so does changing any argument. A rejected call never runs. An approval expires 24 hours after the call was queued.
+
+`request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions` and `get_pending_execution` only create or read queue entries, so under Ask they run without being queued themselves.
+
+MCP clients can never approve or reject: `approve_execution` and `reject_execution` are denied over MCP whatever the policies say, with the error code `self_approval_forbidden`, and each attempt is audited. Only a person resolves pending executions, in the DBFlux UI.
 
 ## 6. Built-in Policies and Roles
 
@@ -153,11 +177,19 @@ Three policies and three roles are shipped as immutable built-ins. They are alwa
 
 ### Built-in policies
 
-| ID | Allowed classes | Scope |
-|----|----------------|-------|
-| `builtin/read-only` | metadata, read | All discovery + schema tools; read-only query and preview tools; script listing/get; audit read tools |
-| `builtin/write` | metadata, read, write | All read-only tools plus write-capable script and request/approval-submission flows |
-| `builtin/admin` | metadata, read, write, destructive, admin_safe, admin, admin_destructive | All canonical tools exposed in this branch |
+Reading is allowed by default and every mutating class a built-in grants asks for approval.
+
+| ID | Allow | Ask | Scope |
+|----|-------|-----|-------|
+| `builtin/read-only` | metadata, read | — | All discovery + schema tools; read-only query and preview tools; script listing/get; audit read tools |
+| `builtin/write` | metadata, read | write | All read-only tools plus write-capable script and request/approval-submission flows |
+| `builtin/admin` | metadata, read | write, destructive, admin_safe, admin, admin_destructive | All canonical tools except `approve_execution` and `reject_execution` |
+
+Classes a built-in does not list are denied.
+
+### Policies created before Ask existed
+
+Before the Ask decision, a policy could only allow a class, so allowing a mutating class was never an explicit choice to run it without approval. The storage migration that introduced Ask (`034_cfg_tool_policy_approval_classes`) rewrites existing custom policies accordingly: an allowed mutating class becomes Ask, an allowed `metadata` or `read` class stays Allow, and a class that was not allowed stays Deny. To let an agent run mutating calls without approval again, choose **Allow all without approval** on the policy.
 
 ### Built-in roles
 
@@ -181,15 +213,16 @@ Configure governance in the DBFlux GUI before starting the MCP server.
 
 3. **Settings → MCP → Policies tab**
    - Built-in policies appear at the top and cannot be modified.
-   - Create custom policies by toggling tool and class checkboxes.
+   - Create custom policies by selecting tools and choosing Allow, Ask, or Deny for each execution class. With the keyboard, `enter` on a class row moves it to the next decision.
+   - **Allow all without approval** sets every mutating class to Allow. The agent can then run any mutating call, including `DROP DATABASE`, without asking.
 
 4. **Connection Manager → MCP tab**
    - Enable MCP for the target connection.
    - Select the actor (trusted client), role, and/or policy for this connection from populated dropdowns.
 
 5. **Workspace → Pending Approvals**
-   - Review and approve/reject write/destructive requests that triggered the approval path.
-   - `j` / `k` move through the pending calls, `a` approves and runs the selected one, and `r` rejects it. Every decision is written to the audit log.
+   - Review and approve or reject the calls a policy sent to approval. This is the only place pending executions are resolved.
+   - `j` / `k` move through the pending calls, `a` approves the selected one, and `r` rejects it. An approved call runs when the agent repeats it with the same arguments. Every decision is written to the audit log.
 
 6. **Workspace → Audit**
    - Filter by actor/tool/decision/time range and export CSV/JSON.
@@ -266,6 +299,7 @@ let outcome = authorize_request(
         tool_id: "select_data".to_string(),
         classification: ExecutionClassification::Read,
         mcp_enabled_for_connection: true,
+        correlation_id: None,
     },
     now_epoch_ms(),
 )?;
@@ -274,6 +308,8 @@ if !outcome.allowed {
     // deny_code and deny_reason explain why
 }
 ```
+
+`authorize_request` has no approval queue: an Ask decision comes back as not allowed with `deny_code == Some("approval_required")`. The MCP server calls `McpRuntime::authorize_with_approval_mut` instead, which passes the call's arguments so an Ask decision is queued, or consumes a matching approval and lets the call run.
 
 ## 10. Integration Checklist
 
@@ -285,7 +321,7 @@ Before pointing an AI client at the MCP server:
 - [ ] Target connection has MCP enabled
 - [ ] Actor has a policy assignment on that connection
 - [ ] Policy covers the tools the agent will use
-- [ ] Approval workflow understood for any write/destructive tools
+- [ ] Classes that need approval are set to Ask, and someone watches Pending Approvals while the agent works
 
 ## 11. Test Hygiene
 
@@ -318,13 +354,14 @@ To avoid polluting developer machines during tests:
 
 - Confirm the actor has an assignment on that connection scope.
 - Confirm the tool ID is in the assigned policy's allowed tools.
-- Confirm the execution class is in the policy's allowed classes.
+- Confirm the policy decides the execution class as Allow or Ask, not Deny.
 - If using `builtin/read-only`, write tools (`create_script`, etc.) are excluded by design.
 
-### Approval stuck pending
+### Call answered with `approval_required`
 
-- Check the pending queue in the DBFlux workspace and approve/reject explicitly.
-- `approve_execution` requires the `admin` class — ensure the approver's policy includes it.
+- The policy decides the call's class as Ask. Approve the pending execution named by `pending_id` in **Workspace → Pending Approvals**, then repeat the call with the same arguments.
+- Repeating the call with different arguments queues a new request instead of using the approval.
+- An agent cannot approve its own calls: `approve_execution` and `reject_execution` are always denied over MCP (`self_approval_forbidden`).
 
 ### Audit export missing events
 

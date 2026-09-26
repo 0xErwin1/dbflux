@@ -515,7 +515,7 @@ crates/
   dbflux_approval/           # Approval service for deferred executions
     src/lib.rs              # Exports for ApprovalService and pending store
     src/service.rs          # ApprovalService (approve/reject lifecycle)
-    src/store.rs            # InMemoryPendingExecutionStore and ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait, InMemoryPendingExecutionStore (tests), ExecutionPlan
   dbflux_audit/             # Audit logging
     src/lib.rs              # AuditService: validate, fingerprint, redact, record
     src/query.rs            # AuditQueryFilter (actor, category, action, outcome, date range)
@@ -887,9 +887,9 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` takes actor, connection, tool, and classification
-- Returns `PolicyDecision::Allow` or `PolicyDecision::Deny(reason)`
+- Returns `PolicyDecision::Allow`, `PolicyDecision::RequireApproval`, or `PolicyDecision::Deny(reason)`; among the policies that list the tool, the most permissive class decision wins (Allow > Ask > Deny)
 - `PolicyRole` composes multiple tool policies
-- `ToolPolicy` defines allowed tools and classification levels
+- `ToolPolicy` defines allowed tools and a per-class `ClassDecision` (Allow / Ask / Deny), stored as `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` binds actors/connections to roles and policies
 
 **Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
@@ -898,7 +898,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Approval Flow** (`dbflux_approval`):
 - `ApprovalService` manages approve/reject lifecycle for deferred executions
-- `InMemoryPendingExecutionStore` holds pending executions awaiting human approval
+- Pending executions are persisted in `app_pending_executions` in `dbflux.db` through `SqlitePendingExecutionStore` (`crates/dbflux_storage/src/pending_executions.rs`), shared by the app and the standalone `dbflux mcp` server; `InMemoryPendingExecutionStore` is a fallback when that store cannot be opened, and is used by tests
+- A call whose class is Ask is queued; a person approves or rejects it in the app, and the identical repeated call consumes the approval once (`PendingStatus::Consumed`). MCP clients can never call `approve_execution` / `reject_execution`
 - `ExecutionPlan` captures the original request context for deferred execution
 
 **Audit** (`dbflux_audit`):

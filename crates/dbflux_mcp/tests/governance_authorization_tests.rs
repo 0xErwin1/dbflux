@@ -38,6 +38,7 @@ fn read_query_policy_engine() -> PolicyEngine {
             id: "policy-read".to_string(),
             allowed_tools: vec!["read_query".to_string()],
             allowed_classes: vec![ExecutionClassification::Read],
+            approval_classes: Vec::new(),
         }],
     )
 }

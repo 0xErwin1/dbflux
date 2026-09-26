@@ -293,6 +293,8 @@ connection_manager:
   additional_policies_optional: Políticas adicionales (opcional)
   mcp_effective_tools: "Herramientas: %{tools}"
   mcp_effective_classes: "Clases: %{classes}"
+  mcp_effective_approval_classes: "Requiere aprobación: %{classes}"
+  mcp_effective_asks_badge: "pregunta"
   mcp_effective_none: ninguna
   mcp_orphan_bindings:
     one: 1 asignación hace referencia a un cliente que ya no existe.
@@ -3529,12 +3531,6 @@ settings:
       get_pending_execution:
         name: Obtener pendiente
         description: Obtener los detalles de una ejecución pendiente específica
-      approve_execution:
-        name: Aprobar ejecución
-        description: Aprobar y disparar una mutación pendiente
-      reject_execution:
-        name: Rechazar ejecución
-        description: Rechazar y descartar una mutación pendiente
       query_audit_logs:
         name: Consultar registros de auditoría
         description: Buscar y filtrar el registro de auditoría
@@ -3557,9 +3553,15 @@ settings:
       destructive:
         label: Destructiva
         description: "DELETE, DROP, TRUNCATE y otras operaciones irreversibles"
+      admin_safe:
+        label: "Administración (segura)"
+        description: "CREATE TABLE, CREATE INDEX, ADD COLUMN y otros cambios de esquema aditivos"
       admin:
-        label: Administración
-        description: Aprobar ejecuciones, exportar registros de auditoría y acciones privilegiadas
+        label: "Administración"
+        description: "Cambios de esquema riesgosos (DROP COLUMN, RENAME, ALTER COLUMN), exportar registros de auditoría y acciones privilegiadas"
+      admin_destructive:
+        label: "Administración (destructiva)"
+        description: "DROP TABLE, DROP DATABASE, TRUNCATE TABLE y otros cambios de esquema irreversibles"
     group:
       policy: "Política"
       role: "Rol"
@@ -3578,7 +3580,7 @@ settings:
     roles_form_description: Agrupa políticas en roles con nombre asignados a actores por conexión
     policies_title: Políticas
     policies_description: Gestiona las reglas de política de herramientas y clases de ejecución para la gobernanza de MCP
-    policies_form_description: Define qué herramientas y clases de ejecución están permitidas
+    policies_form_description: "Define qué herramientas cubre la política y si cada clase de ejecución se permite, requiere aprobación o se deniega"
     new_client: Nuevo cliente de confianza
     new_role: Nuevo rol
     new_policy: Nueva política
@@ -3595,7 +3597,7 @@ settings:
       role_id: ID de rol
       policies: Políticas
       policy_id: ID de política
-      allowed_execution_classes: Clases de ejecución permitidas
+      execution_classes: "Clases de ejecución"
       allowed_tools: Herramientas permitidas
       policy_count:
         one: 1 política
@@ -3628,6 +3630,12 @@ settings:
     status:
       unsaved: Cambios sin guardar
       saved: Todos los cambios aplicados
+    decision:
+      allow: "Permitir"
+      ask: "Preguntar"
+      deny: "Denegar"
+    warning:
+      allow_all_without_approval: "El agente podrá ejecutar cualquier llamada que modifique datos, incluido DROP DATABASE, sin preguntar."
     action:
       update_client: Actualizar cliente
       create_client: Crear cliente
@@ -3638,6 +3646,7 @@ settings:
       create_role: Crear rol
       update_policy: Actualizar política
       create_policy: Crear política
+      allow_all_without_approval: "Permitir todo sin aprobación"
   drivers:
     section_title: Drivers
     section_description: "Reemplazos por driver y ajustes que declara el driver."

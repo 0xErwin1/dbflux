@@ -188,3 +188,147 @@ fn payload_with_nested_json_survives_round_trip() {
 
     assert_eq!(fetched.plan.payload, plan.payload);
 }
+
+#[test]
+fn approved_plan_is_consumed_exactly_once() {
+    let rt = runtime();
+    let mut store = rt.pending_executions().expect("store should open");
+
+    let entry = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(entry.id, PendingStatus::Approved)
+        .expect("update_status should succeed");
+
+    let consumed = store
+        .consume_approved(&sample_plan())
+        .expect("consume_approved should succeed")
+        .expect("the approved row should match the plan");
+
+    assert_eq!(consumed.id, entry.id);
+    assert_eq!(consumed.status, PendingStatus::Consumed);
+    assert!(
+        store
+            .consume_approved(&sample_plan())
+            .expect("consume_approved should succeed")
+            .is_none(),
+        "a consumed approval must not authorize a second call"
+    );
+}
+
+#[test]
+fn consume_approved_skips_pending_rejected_and_other_payloads() {
+    let rt = runtime();
+    let mut store = rt.pending_executions().expect("store should open");
+
+    store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    let rejected = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(rejected.id, PendingStatus::Rejected)
+        .expect("update_status should succeed");
+
+    let mut other = sample_plan();
+    other.payload = serde_json::json!({"table": "users", "where": "id = 2"});
+    let approved_other = store
+        .create_pending(&other, None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(approved_other.id, PendingStatus::Approved)
+        .expect("update_status should succeed");
+
+    assert!(
+        store
+            .consume_approved(&sample_plan())
+            .expect("consume_approved should succeed")
+            .is_none()
+    );
+}
+
+#[test]
+fn purge_keeps_live_approvals_and_drops_consumed_and_rejected_rows() {
+    let rt = runtime();
+    let mut store = rt.pending_executions().expect("store should open");
+
+    let approved = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(approved.id, PendingStatus::Approved)
+        .expect("update_status should succeed");
+    let rejected = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(rejected.id, PendingStatus::Rejected)
+        .expect("update_status should succeed");
+    let consumed = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    store
+        .update_status(consumed.id, PendingStatus::Consumed)
+        .expect("update_status should succeed");
+
+    let purged = store
+        .purge_terminal_and_expired(i64::MAX - 1)
+        .expect("purge should succeed");
+
+    assert_eq!(purged, 2);
+    assert!(
+        store
+            .consume_approved(&sample_plan())
+            .expect("consume_approved should succeed")
+            .is_some(),
+        "the approved row must survive the purge"
+    );
+}
+
+#[test]
+fn approval_given_by_one_process_is_consumed_by_another() {
+    let path = std::env::temp_dir().join(format!(
+        "dbflux_pending_cross_process_{}_{}.sqlite",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+
+    let app_runtime = StorageRuntime::for_path(path.clone()).expect("app runtime should open");
+    let server_runtime =
+        StorageRuntime::for_path(path.clone()).expect("server runtime should open");
+    let mut app_store = app_runtime
+        .pending_executions()
+        .expect("app store should open");
+    let mut server_store = server_runtime
+        .pending_executions()
+        .expect("server store should open");
+
+    let queued = server_store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    let listed = app_store
+        .list_pending()
+        .expect("list_pending should succeed");
+    assert!(listed.iter().any(|entry| entry.id == queued.id));
+
+    app_store
+        .update_status(queued.id, PendingStatus::Approved)
+        .expect("update_status should succeed");
+
+    let consumed = server_store
+        .consume_approved(&sample_plan())
+        .expect("consume_approved should succeed")
+        .expect("the server should see the approval given by the app");
+    assert_eq!(consumed.id, queued.id);
+
+    for suffix in ["", "-wal", "-shm"] {
+        let file = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+        match std::fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove {}: {error}", file.display()),
+        }
+    }
+}

@@ -1183,6 +1183,24 @@ impl ConnectionManagerWindow {
                 .child(Text::caption(crate::labels::mcp_effective_classes_line(
                     &classes_text,
                 )))
+                .when(!effective.approval_classes.is_empty(), |column| {
+                    column.child(
+                        div()
+                            .id("connection-mcp-effective-approval-classes")
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(Badge::new(
+                                dbflux_i18n::t!("connection_manager.mcp_effective_asks_badge"),
+                                BadgeTone::Warning,
+                            ))
+                            .child(Text::caption(
+                                crate::labels::mcp_effective_approval_classes_line(
+                                    &effective.approval_classes.join(", "),
+                                ),
+                            )),
+                    )
+                })
         } else {
             column.child(Text::caption(dbflux_i18n::t!(
                 "connection_manager.mcp_client_denied"

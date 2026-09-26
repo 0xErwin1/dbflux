@@ -515,7 +515,7 @@ crates/
   dbflux_approval/           # 用于延后执行的审批服务
     src/lib.rs              # ApprovalService 与待处理存储的导出
     src/service.rs          # ApprovalService（批准/驳回生命周期）
-    src/store.rs            # InMemoryPendingExecutionStore 与 ExecutionPlan
+    src/store.rs            # PendingExecutionStore trait、InMemoryPendingExecutionStore（测试用）与 ExecutionPlan
   dbflux_audit/             # 审计日志记录
     src/lib.rs              # AuditService：校验、指纹、脱敏、记录
     src/query.rs            # AuditQueryFilter（执行者、类别、动作、结果、日期范围）
@@ -878,9 +878,9 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 **策略引擎**（`dbflux_policy/engine.rs`）：
 - `PolicyEngine::evaluate()` 接收执行者、连接、工具与分类
-- 返回 `PolicyDecision::Allow` 或 `PolicyDecision::Deny(reason)`
+- 返回 `PolicyDecision::Allow`、`PolicyDecision::RequireApproval` 或 `PolicyDecision::Deny(reason)`；在列出该工具的策略中，最宽松的类别决定生效（Allow > Ask > Deny）
 - `PolicyRole` 组合多个工具策略
-- `ToolPolicy` 定义允许的工具与分类级别
+- `ToolPolicy` 定义允许的工具，以及按类别的 `ClassDecision`（Allow / Ask / Deny），存储为 `allowed_classes` + `approval_classes`
 - `ConnectionPolicyAssignment` 把执行者/连接绑定到角色与策略
 
 **受信客户端**（`dbflux_policy/trusted_clients.rs`）：
@@ -889,7 +889,8 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 **审批流程**（`dbflux_approval`）：
 - `ApprovalService` 管理延后执行的批准/驳回生命周期
-- `InMemoryPendingExecutionStore` 保存等待人工审批的执行
+- 待审批执行通过 `SqlitePendingExecutionStore`（`crates/dbflux_storage/src/pending_executions.rs`）持久化在 `dbflux.db` 的 `app_pending_executions` 表中，由应用与独立的 `dbflux mcp` 服务器共享；无法打开该存储时以 `InMemoryPendingExecutionStore` 作为后备，测试也使用它
+- 类别为 Ask 的调用会被排队；由人在应用中批准或驳回，重复的相同调用会消耗该批准一次（`PendingStatus::Consumed`）。MCP 客户端永远不能调用 `approve_execution` / `reject_execution`
 - `ExecutionPlan` 捕获延后执行所需的原始请求上下文
 
 **审计**（`dbflux_audit`）：

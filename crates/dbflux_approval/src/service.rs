@@ -76,7 +76,16 @@ impl ApprovalService {
         Ok(self.store.list_pending()?)
     }
 
-    /// Removes terminal (approved/rejected) and expired rows from the store.
+    /// Uses the approval granted for `plan`, if one exists, so it cannot
+    /// authorize a second call.
+    pub fn consume_approved(
+        &mut self,
+        plan: &ExecutionPlan,
+    ) -> Result<Option<PendingExecution>, ApprovalError> {
+        Ok(self.store.consume_approved(plan)?)
+    }
+
+    /// Removes rejected, consumed and expired rows from the store.
     pub fn purge_terminal_and_expired(&mut self, now_ms: i64) -> Result<usize, ApprovalError> {
         Ok(self.store.purge_terminal_and_expired(now_ms)?)
     }
@@ -273,6 +282,43 @@ mod tests {
         assert!(
             listed.is_empty(),
             "expired entry must not appear after purge"
+        );
+    }
+
+    #[test]
+    fn approved_plan_is_consumed_once_and_rejected_plan_never() {
+        let mut service = service();
+
+        let approved = service
+            .request_execution(&sample_plan())
+            .expect("request_execution should succeed");
+        service
+            .approve(approved.id)
+            .expect("approve should succeed");
+
+        let consumed = service
+            .consume_approved(&sample_plan())
+            .expect("consume should succeed")
+            .expect("approved plan should be consumable");
+        assert_eq!(consumed.id, approved.id);
+        assert_eq!(consumed.status, PendingStatus::Consumed);
+        assert!(
+            service
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_none()
+        );
+
+        let rejected = service
+            .request_execution(&sample_plan())
+            .expect("request_execution should succeed");
+        service.reject(rejected.id).expect("reject should succeed");
+        assert!(
+            service
+                .consume_approved(&sample_plan())
+                .expect("consume should succeed")
+                .is_none(),
+            "a rejected plan must never authorize a call"
         );
     }
 }

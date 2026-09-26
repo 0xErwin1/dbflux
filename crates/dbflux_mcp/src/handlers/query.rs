@@ -24,6 +24,8 @@ pub struct QueryExecutionResponse {
 pub enum QueryHandlerError {
     #[error("policy denied request")]
     PolicyDenied,
+    #[error("policy requires approval before this request can run")]
+    ApprovalRequired,
     #[error("policy evaluation failed: {0}")]
     Policy(#[from] dbflux_policy::PolicyEngineError),
 }
@@ -43,8 +45,10 @@ pub fn handle_query_tool(
         classification,
     })?;
 
-    if !matches!(decision, PolicyDecision::Allow) {
-        return Err(QueryHandlerError::PolicyDenied);
+    match decision {
+        PolicyDecision::Allow => {}
+        PolicyDecision::RequireApproval => return Err(QueryHandlerError::ApprovalRequired),
+        PolicyDecision::Deny(_) => return Err(QueryHandlerError::PolicyDenied),
     }
 
     let preview_only = request.tool_id == "preview_mutation";

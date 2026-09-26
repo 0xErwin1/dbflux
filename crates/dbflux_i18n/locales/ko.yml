@@ -293,6 +293,8 @@ connection_manager:
   additional_policies_optional: 추가 정책(선택 사항)
   mcp_effective_tools: "도구: %{tools}"
   mcp_effective_classes: "분류: %{classes}"
+  mcp_effective_approval_classes: "승인 필요: %{classes}"
+  mcp_effective_asks_badge: "승인 필요"
   mcp_effective_none: 없음
   mcp_orphan_bindings:
     one: 1개의 바인딩이 더 이상 존재하지 않는 클라이언트를 참조합니다.
@@ -3528,12 +3530,6 @@ settings:
       get_pending_execution:
         name: 대기 항목 조회
         description: 특정 대기 중인 실행의 세부 정보를 조회합니다
-      approve_execution:
-        name: 실행 승인
-        description: 대기 중인 변경을 승인하고 실행합니다
-      reject_execution:
-        name: 실행 거부
-        description: 대기 중인 변경을 거부하고 폐기합니다
       query_audit_logs:
         name: 감사 로그 조회
         description: 감사 로그를 검색하고 필터링합니다
@@ -3556,9 +3552,15 @@ settings:
       destructive:
         label: 파괴적
         description: "DELETE, DROP, TRUNCATE 및 기타 되돌릴 수 없는 작업"
+      admin_safe:
+        label: "관리(안전)"
+        description: "CREATE TABLE, CREATE INDEX, ADD COLUMN 및 기타 추가형 스키마 변경"
       admin:
-        label: 관리
-        description: 실행 승인, 감사 로그 내보내기 및 특수 권한 작업
+        label: "관리"
+        description: "위험한 스키마 변경(DROP COLUMN, RENAME, ALTER COLUMN), 감사 로그 내보내기 및 특수 권한 작업"
+      admin_destructive:
+        label: "관리(파괴적)"
+        description: "DROP TABLE, DROP DATABASE, TRUNCATE TABLE 및 기타 되돌릴 수 없는 스키마 변경"
     group:
       policy: "정책"
       role: "역할"
@@ -3577,7 +3579,7 @@ settings:
     roles_form_description: 정책을 이름이 지정된 역할로 묶어 연결별로 행위자에게 할당합니다
     policies_title: 정책
     policies_description: MCP 거버넌스를 위한 도구 및 실행 클래스 정책 규칙을 관리합니다
-    policies_form_description: 허용되는 도구와 실행 클래스를 정의합니다
+    policies_form_description: "정책이 다루는 도구와, 각 실행 클래스를 허용할지, 승인이 필요한지, 거부할지 정의합니다"
     new_client: 새 신뢰 클라이언트
     new_role: 새 역할
     new_policy: 새 정책
@@ -3594,7 +3596,7 @@ settings:
       role_id: 역할 ID
       policies: 정책
       policy_id: 정책 ID
-      allowed_execution_classes: 허용된 실행 클래스
+      execution_classes: "실행 클래스"
       allowed_tools: 허용된 도구
       policy_count:
         one: 정책 1개
@@ -3627,6 +3629,12 @@ settings:
     status:
       unsaved: 저장되지 않은 양식 변경 사항
       saved: 모든 변경 사항이 적용되었습니다
+    decision:
+      allow: "허용"
+      ask: "승인 필요"
+      deny: "거부"
+    warning:
+      allow_all_without_approval: "이후 에이전트는 DROP DATABASE를 포함한 모든 변경 호출을 묻지 않고 실행할 수 있습니다."
     action:
       update_client: 클라이언트 업데이트
       create_client: 클라이언트 만들기
@@ -3637,6 +3645,7 @@ settings:
       create_role: 역할 만들기
       update_policy: 정책 업데이트
       create_policy: 정책 만들기
+      allow_all_without_approval: "승인 없이 모두 허용"
   drivers:
     section_title: 드라이버
     section_description: "드라이버별 재정의와 드라이버가 선언한 설정."

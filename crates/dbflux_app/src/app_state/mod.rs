@@ -2654,6 +2654,7 @@ impl AppState {
                     policy_id: policy.id,
                     allowed_tools: policy.allowed_tools,
                     allowed_classes: policy.allowed_classes,
+                    approval_classes: policy.approval_classes,
                 },
             )
             .collect::<Vec<_>>();

@@ -178,6 +178,16 @@ pub(crate) fn mcp_effective_classes_line(classes: &str) -> String {
     )
 }
 
+/// Formats the line listing the classes a connection's MCP client may run
+/// only after a person approves each call.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_effective_approval_classes_line(classes: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.mcp_effective_approval_classes",
+        classes = classes
+    )
+}
+
 /// Formats the "Configure <driver name>" call-to-action label shown in the driver picker
 /// footer once a driver card is focused.
 pub(crate) fn driver_select_configure(name: &str) -> String {
@@ -1221,6 +1231,24 @@ mod tests {
         let message = mcp_effective_tools_line("read_query, list_tables");
 
         assert!(message.contains("read_query, list_tables"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_effective_approval_classes_line_embeds_classes() {
+        use super::mcp_effective_approval_classes_line;
+
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            let badge = dbflux_i18n::t!(
+                "connection_manager.mcp_effective_asks_badge",
+                locale = locale
+            );
+            assert_ne!(badge, "connection_manager.mcp_effective_asks_badge");
+        }
+
+        let message = mcp_effective_approval_classes_line("write, destructive");
+
+        assert!(message.contains("write, destructive"));
     }
 
     #[cfg(feature = "mcp")]

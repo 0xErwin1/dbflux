@@ -6,5 +6,5 @@ pub use service::{
 };
 pub use store::{
     ExecutionPlan, InMemoryPendingExecutionStore, PendingExecution, PendingExecutionStore,
-    PendingStatus, PendingStoreError,
+    PendingStatus, PendingStoreError, approval_matches_plan,
 };

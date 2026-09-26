@@ -13,12 +13,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use dbflux_core::observability::EventOrigin;
 use dbflux_core::{
     AuthProfileManager, ConnectionProfile, DbConfig, DbDriver, NoopSecretStore, ProfileManager,
     SecretManager,
 };
 use dbflux_mcp::{
-    ConnectionPolicyAssignmentDto, McpRuntime, TrustedClientDto, builtin_policies, builtin_roles,
+    ConnectionPolicyAssignmentDto, McpRuntime, PolicyRoleDto, ToolPolicyDto, TrustedClientDto,
+    builtin_policies, builtin_roles,
 };
 use dbflux_mcp_server::{
     connection_cache::ConnectionCache, server::DbFluxServer, state::ServerState,
@@ -37,6 +39,9 @@ use tokio::sync::RwLock;
 const AGENT: &str = "e2e-agent";
 const ADMIN_ROLE: &str = "builtin/admin";
 const READ_ONLY_ROLE: &str = "builtin/read-only";
+/// A custom role whose policy allows every class without approval: the
+/// explicit opt-in a user makes with "Allow all without approval".
+const ALLOW_ALL_ROLE: &str = "e2e/allow-all";
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -48,6 +53,7 @@ const READ_ONLY_ROLE: &str = "builtin/read-only";
 struct Agent {
     client: RunningService<RoleClient, ()>,
     _server: RunningService<RoleServer, DbFluxServer>,
+    runtime: Arc<RwLock<McpRuntime>>,
 }
 
 impl Agent {
@@ -88,6 +94,57 @@ impl Agent {
             panic!("tool '{tool}' returned content that is not JSON ({error}): {text}")
         })
     }
+
+    /// `tools/call` that a policy sends to approval: the first call must be
+    /// queued, a person approves it the way the DBFlux UI does, and the same
+    /// call is repeated to run it.
+    async fn call_json_with_approval(&self, tool: &str, arguments: Value) -> Value {
+        let pending_id = expect_queued(self.try_call(tool, arguments.clone()).await);
+        self.approve_as_person(&pending_id).await;
+        self.call_json(tool, arguments).await
+    }
+
+    /// Approves a pending execution through the runtime, as the DBFlux UI does.
+    async fn approve_as_person(&self, pending_id: &str) {
+        self.runtime
+            .write()
+            .await
+            .approve_pending_execution_with_origin_mut(pending_id, "local", EventOrigin::local())
+            .expect("a person should be able to approve the pending execution");
+    }
+}
+
+/// Asserts that a call was queued for approval and returns its pending id.
+fn expect_queued(result: Result<CallToolResult, rmcp::ServiceError>) -> String {
+    let error = result.expect_err("the call should wait for approval instead of running");
+    let rmcp::ServiceError::McpError(error) = error else {
+        panic!("expected an MCP error for a queued call");
+    };
+
+    assert_eq!(error.code, ErrorCode::INVALID_REQUEST);
+    let data = error.data.expect("a queued call carries error data");
+    assert_eq!(data["code"], json!("approval_required"));
+    assert_eq!(data["status"], json!("pending"));
+    assert_eq!(
+        data["next_action"],
+        json!("wait_for_human_approval_then_repeat_identical_call")
+    );
+    assert_eq!(data["status_tool"], json!("get_pending_execution"));
+
+    let pending_id = data["pending_id"].as_str().unwrap_or_default();
+    assert!(
+        error
+            .message
+            .contains(&format!("pending execution {pending_id}"))
+            && error.message.contains("repeat this exact call"),
+        "the error must tell the agent what to do next: {}",
+        error.message
+    );
+
+    data["pending_id"]
+        .as_str()
+        .expect("a queued call carries its pending id")
+        .to_string()
 }
 
 /// Serves the server over an in-memory transport and completes the MCP
@@ -97,6 +154,7 @@ async fn start_agent(
     connection: Option<(Arc<dyn DbDriver>, ConnectionProfile)>,
 ) -> Agent {
     let state = build_state(role, connection);
+    let runtime = state.runtime.clone();
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);
 
     let server_transport = {
@@ -126,6 +184,7 @@ async fn start_agent(
     Agent {
         client,
         _server: server,
+        runtime,
     }
 }
 
@@ -212,6 +271,37 @@ fn build_runtime(connection_id: Option<&str>, role: &str) -> McpRuntime {
             .expect("register built-in policy");
     }
 
+    let admin_tools = builtin_policies()
+        .into_iter()
+        .find(|policy| policy.id == ADMIN_ROLE)
+        .expect("the built-in admin policy exists")
+        .allowed_tools;
+    runtime
+        .upsert_policy_mut(ToolPolicyDto {
+            id: ALLOW_ALL_ROLE.to_string(),
+            allowed_tools: admin_tools,
+            allowed_classes: [
+                "metadata",
+                "read",
+                "write",
+                "destructive",
+                "admin_safe",
+                "admin",
+                "admin_destructive",
+            ]
+            .iter()
+            .map(|class| class.to_string())
+            .collect(),
+            approval_classes: Vec::new(),
+        })
+        .expect("register the allow-all policy");
+    runtime
+        .upsert_role_mut(PolicyRoleDto {
+            id: ALLOW_ALL_ROLE.to_string(),
+            policy_ids: vec![ALLOW_ALL_ROLE.to_string()],
+        })
+        .expect("register the allow-all role");
+
     runtime
         .upsert_trusted_client_mut(TrustedClientDto {
             id: AGENT.to_string(),
@@ -246,39 +336,42 @@ fn build_runtime(connection_id: Option<&str>, role: &str) -> McpRuntime {
     runtime
 }
 
-/// Connects, creates `items` and inserts two rows, returning the connection id.
-async fn prepare_items_table(agent: &Agent, connection_id: &str) -> Value {
+/// Connects, creates `items` and inserts two rows, returning the insert
+/// result. With `approve` set, each mutating call is approved by a person
+/// before it runs, as the built-in admin policy requires.
+async fn prepare_items_table(agent: &Agent, connection_id: &str, approve: bool) -> Value {
     agent
         .call_json("connect", json!({ "connection_id": connection_id }))
         .await;
 
-    agent
-        .call_json(
-            "create_table",
-            json!({
-                "connection_id": connection_id,
-                "table": "items",
-                "columns": [
-                    { "name": "id", "type": "integer", "primary_key": true },
-                    { "name": "label", "type": "text", "nullable": false }
-                ]
-            }),
-        )
-        .await;
+    let create_arguments = json!({
+        "connection_id": connection_id,
+        "table": "items",
+        "columns": [
+            { "name": "id", "type": "integer", "primary_key": true },
+            { "name": "label", "type": "text", "nullable": false }
+        ]
+    });
+    let insert_arguments = json!({
+        "connection_id": connection_id,
+        "table": "items",
+        "records": [
+            { "id": 1, "label": "alpha" },
+            { "id": 2, "label": "beta" }
+        ]
+    });
 
-    agent
-        .call_json(
-            "insert_record",
-            json!({
-                "connection_id": connection_id,
-                "table": "items",
-                "records": [
-                    { "id": 1, "label": "alpha" },
-                    { "id": 2, "label": "beta" }
-                ]
-            }),
-        )
-        .await
+    if approve {
+        agent
+            .call_json_with_approval("create_table", create_arguments)
+            .await;
+        return agent
+            .call_json_with_approval("insert_record", insert_arguments)
+            .await;
+    }
+
+    agent.call_json("create_table", create_arguments).await;
+    agent.call_json("insert_record", insert_arguments).await
 }
 
 // ---------------------------------------------------------------------------
@@ -397,9 +490,9 @@ async fn agent_creates_inserts_and_reads_rows_over_the_wire() {
     let directory = tempfile::tempdir().expect("create the test data directory");
     let profile = sqlite_profile(&directory);
     let connection_id = profile.id.to_string();
-    let agent = start_agent(ADMIN_ROLE, Some((sqlite_driver(), profile))).await;
+    let agent = start_agent(ALLOW_ALL_ROLE, Some((sqlite_driver(), profile))).await;
 
-    let inserted = prepare_items_table(&agent, &connection_id).await;
+    let inserted = prepare_items_table(&agent, &connection_id, false).await;
     assert_eq!(inserted["inserted"], json!(2));
 
     let selected = agent
@@ -506,13 +599,118 @@ async fn read_only_agent_denial_is_a_jsonrpc_error_and_is_audited() {
 }
 
 #[tokio::test]
-async fn agent_requests_approval_and_replays_the_approved_plan() {
+async fn ask_call_is_queued_approved_by_a_person_and_runs_exactly_once() {
     let directory = tempfile::tempdir().expect("create the test data directory");
     let profile = sqlite_profile(&directory);
     let connection_id = profile.id.to_string();
     let agent = start_agent(ADMIN_ROLE, Some((sqlite_driver(), profile))).await;
 
-    prepare_items_table(&agent, &connection_id).await;
+    let inserted = prepare_items_table(&agent, &connection_id, true).await;
+    assert_eq!(inserted["inserted"], json!(2));
+
+    let delete_arguments = json!({
+        "connection_id": connection_id,
+        "table": "items",
+        "where": { "id": 1 }
+    });
+
+    let pending_id = expect_queued(
+        agent
+            .try_call("delete_records", delete_arguments.clone())
+            .await,
+    );
+
+    let pending = agent
+        .call_json("list_pending_executions", json!({ "actor_id": AGENT }))
+        .await;
+    assert!(
+        pending.to_string().contains(&pending_id),
+        "the queued call should be listed: {pending}"
+    );
+
+    let counted_before = agent
+        .call_json(
+            "count_records",
+            json!({ "connection_id": connection_id, "table": "items" }),
+        )
+        .await;
+    assert_eq!(
+        counted_before["count"],
+        json!(2),
+        "a queued call must not run before it is approved"
+    );
+
+    agent.approve_as_person(&pending_id).await;
+
+    let executed = agent
+        .call_json("delete_records", delete_arguments.clone())
+        .await;
+    assert_eq!(executed["deleted"], json!(1));
+
+    let second_pending = expect_queued(agent.try_call("delete_records", delete_arguments).await);
+    assert_ne!(
+        second_pending, pending_id,
+        "one approval authorizes one call; repeating it queues a new request"
+    );
+}
+
+#[tokio::test]
+async fn rejected_call_never_runs() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ADMIN_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, true).await;
+
+    let delete_arguments = json!({
+        "connection_id": connection_id,
+        "table": "items",
+        "where": { "id": 2 }
+    });
+    let pending_id = expect_queued(
+        agent
+            .try_call("delete_records", delete_arguments.clone())
+            .await,
+    );
+
+    agent
+        .runtime
+        .write()
+        .await
+        .reject_pending_execution_with_origin_mut(
+            &pending_id,
+            "local",
+            Some("not approved"),
+            EventOrigin::local(),
+        )
+        .expect("a person should be able to reject the pending execution");
+
+    expect_queued(agent.try_call("delete_records", delete_arguments).await);
+
+    let counted = agent
+        .call_json(
+            "count_records",
+            json!({ "connection_id": connection_id, "table": "items" }),
+        )
+        .await;
+    assert_eq!(counted["count"], json!(2));
+}
+
+#[tokio::test]
+async fn agent_requests_approval_and_cannot_approve_it_itself() {
+    let directory = tempfile::tempdir().expect("create the test data directory");
+    let profile = sqlite_profile(&directory);
+    let connection_id = profile.id.to_string();
+    let agent = start_agent(ADMIN_ROLE, Some((sqlite_driver(), profile))).await;
+
+    prepare_items_table(&agent, &connection_id, true).await;
+
+    let delete_arguments = json!({
+        "connection_id": connection_id,
+        "table": "items",
+        "where": { "id": 1 }
+    });
 
     let requested = agent
         .call_json(
@@ -520,11 +718,7 @@ async fn agent_requests_approval_and_replays_the_approved_plan() {
             json!({
                 "tool_id": "delete_records",
                 "connection_id": connection_id,
-                "params": {
-                    "connection_id": connection_id,
-                    "table": "items",
-                    "where": { "id": 1 }
-                }
+                "params": delete_arguments
             }),
         )
         .await;
@@ -534,30 +728,24 @@ async fn agent_requests_approval_and_replays_the_approved_plan() {
         .to_string();
     assert_eq!(requested["status"], json!("pending"));
 
-    let pending = agent
-        .call_json("list_pending_executions", json!({ "actor_id": AGENT }))
-        .await;
-    assert!(
-        pending.to_string().contains(&pending_id),
-        "the pending execution should be listed: {pending}"
-    );
+    for tool in ["approve_execution", "reject_execution"] {
+        let error = agent
+            .try_call(tool, json!({ "pending_id": pending_id }))
+            .await
+            .expect_err("an MCP client must never resolve a pending execution");
+        let rmcp::ServiceError::McpError(error) = error else {
+            panic!("expected an MCP error for {tool}");
+        };
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("code")),
+            Some(&json!("self_approval_forbidden")),
+            "{tool}"
+        );
+    }
 
-    let approved = agent
-        .call_json("approve_execution", json!({ "pending_id": pending_id }))
-        .await;
-    assert_eq!(approved["approved"], json!(true));
-    let replay = &approved["replay_plan"];
-    assert_eq!(replay["tool_id"], json!("delete_records"));
-    assert_eq!(
-        replay["params"]["where"],
-        json!({ "id": 1 }),
-        "the approval returns the plan the agent must replay"
-    );
+    agent.approve_as_person(&pending_id).await;
 
-    // Replaying the plan the server handed back is the step an agent performs.
-    let executed = agent
-        .call_json("delete_records", replay["params"].clone())
-        .await;
+    let executed = agent.call_json("delete_records", delete_arguments).await;
     assert_eq!(executed["deleted"], json!(1));
 
     let counted = agent
