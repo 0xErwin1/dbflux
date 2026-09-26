@@ -2,117 +2,134 @@
 version: alpha
 name: DBFlux Desktop
 description: >-
-  Design system for the DBFlux desktop client, a keyboard-first database tool
-  built with GPUI. Three Ayu-derived palettes (Dark, Mirage, Light) and two
-  density styles (Default, Compact). Tokens below record the Dark palette at
-  Default density, which is what ships as the default. The other palettes are
+  Bolt Byzantium, the design system of the DBFlux desktop client, a
+  keyboard-first database tool built with GPUI. One byzantine accent on a
+  near-black (or near-white) ground, three typefaces, and 45 degree cut corners
+  on every control and surface. Two palettes (Dark, Light, plus Follow system)
+  and two densities (Default, Compact). Tokens below record the Dark palette at
+  Default density, which is what ships as the default. The Light palette is
   tabulated in the Colors section. Source of truth is
   crates/dbflux_components/src/{theme.rs,tokens.rs,density.rs,semantic.rs}.
 colors:
-  background: "#0A0E14"
-  panel: "#0F1419"
-  raised: "#151E2B"
-  tiles: "#111823"
-  foreground: "#B3B1AD"
-  muted: "#5C6773"
-  muted-foreground: "#828D9D"
-  border: "#1F2430"
-  ghost-border: "rgba(82, 68, 54, 0.15)"
-  selection: "#273747"
-  primary: "#FFB454"
-  primary-hover: "#E6A34C"
-  primary-active: "#CC9143"
-  on-primary: "#0A0E14"
-  hover-tint: "rgba(179, 177, 173, 0.05)"
-  input-edge: "rgba(179, 177, 173, 0.14)"
-  ring: "rgba(255, 180, 84, 0.75)"
-  overlay: "rgba(0, 0, 0, 0.55)"
-  danger: "#F07178"
-  on-danger: "#FFFFFF"
-  success: "#AAD94C"
-  warning: "#FFB454"
-  info: "#59C2FF"
-  table-even: "rgba(179, 177, 173, 0.02)"
-  table-hover: "rgba(179, 177, 173, 0.05)"
-  table-active: "rgba(89, 194, 255, 0.15)"
-  table-active-border: "rgba(89, 194, 255, 0.50)"
-  row-insert: "rgba(170, 217, 76, 0.15)"
-  row-dirty: "rgba(255, 180, 84, 0.20)"
-  row-delete: "rgba(240, 113, 120, 0.10)"
-  row-error: "rgba(240, 113, 120, 0.15)"
-  row-saving: "rgba(255, 180, 84, 0.10)"
-  syntax-table: "#4EC9B0"
-  syntax-view: "#DCDCAA"
-  syntax-column: "#9CDCFE"
-  syntax-type: "#C586C0"
-  syntax-database: "#CE9178"
-  syntax-schema: "#569CD6"
-  syntax-folder-dim: "#808080"
-  chart-1: "#59C2FF"
-  chart-2: "#AAD94C"
-  chart-3: "#FFB454"
-  chart-4: "#F07178"
-  chart-5: "#D2A6FF"
-  scrollbar-thumb: "rgba(179, 177, 173, 0.15)"
-  scrollbar-thumb-hover: "rgba(179, 177, 173, 0.25)"
+  background: "#09090B"
+  panel: "#100F13"
+  raised: "#1A181E"
+  line: "#232128"
+  line-2: "#37333D"
+  row-divider: "#18161B"
+  strong: "#F7F4F7"
+  foreground: "#C6C3CC"
+  muted-foreground: "#8E8996"
+  byzantine: "#702963"
+  byzantine-hover: "#7F3171"
+  deep: "#4A1B41"
+  tint: "#D48CC8"
+  on-primary: "#FFFFFF"
+  primary: "{colors.byzantine}"
+  primary-hover: "{colors.byzantine-hover}"
+  primary-active: "{colors.deep}"
+  secondary: "{colors.raised}"
+  secondary-hover: "{colors.line}"
+  secondary-active: "{colors.line-2}"
+  border: "{colors.line}"
+  input: "{colors.line-2}"
+  ring: "{colors.tint}"
+  success: "#7BE0A0"
+  info: "#6EA8FF"
+  warning: "#FFC23D"
+  danger: "#FF6B5E"
+  null: "#B79CFF"
+  cyan: "#6FD3D8"
+  on-semantic: "#09090B"
+  hover-wash: "rgba(255, 255, 255, 0.04)"
+  alternating-row: "rgba(255, 255, 255, 0.012)"
+  selected-row: "rgba(212, 140, 200, 0.07)"
+  selected-item: "rgba(212, 140, 200, 0.12)"
+  text-selection: "rgba(212, 140, 200, 0.25)"
+  drop-target: "rgba(212, 140, 200, 0.10)"
+  overlay: "rgba(5, 5, 7, 0.62)"
+  danger-soft: "rgba(255, 107, 94, 0.14)"
+  danger-soft-hover: "rgba(255, 107, 94, 0.22)"
+  danger-soft-pressed: "rgba(255, 107, 94, 0.30)"
+  banner-info: "rgba(110, 168, 255, 0.12)"
+  banner-success: "rgba(123, 224, 160, 0.12)"
+  banner-warning: "rgba(255, 194, 61, 0.12)"
+  banner-error: "rgba(255, 107, 94, 0.12)"
+  row-insert: "rgba(123, 224, 160, 0.15)"
+  row-delete: "rgba(255, 107, 94, 0.10)"
+  row-error: "rgba(255, 107, 94, 0.15)"
+  row-saving: "rgba(255, 194, 61, 0.10)"
+  syntax-keyword: "#D48CC8"
+  syntax-string: "#7BE0A0"
+  syntax-number: "#B79CFF"
+  syntax-comment: "#8E8996"
+  syntax-type: "#6EA8FF"
+  syntax-function: "#FFC23D"
+  syntax-operator: "#C6C3CC"
+  syntax-plain: "#F7F4F7"
+  chart-1: "#D48CC8"
+  chart-2: "#6EA8FF"
+  chart-3: "#7BE0A0"
+  chart-4: "#FFC23D"
+  chart-5: "#FF6B5E"
+  scrollbar-thumb: "rgba(142, 137, 150, 0.30)"
+  scrollbar-thumb-hover: "rgba(142, 137, 150, 0.50)"
 typography:
   title:
-    fontFamily: JetBrains Mono
+    fontFamily: Archivo
     fontSize: 20px
     fontWeight: 700
   heading:
-    fontFamily: JetBrains Mono
+    fontFamily: Archivo
     fontSize: 18px
     fontWeight: 700
-  headline-sm:
-    fontFamily: JetBrains Mono
-    fontSize: 15px
-    fontWeight: 700
   body:
-    fontFamily: JetBrains Mono
-    fontSize: 14px
+    fontFamily: Archivo
+    fontSize: 13px
+    fontWeight: 500
+  body-sm:
+    fontFamily: Archivo
+    fontSize: 12px
     fontWeight: 500
   label:
-    fontFamily: JetBrains Mono
-    fontSize: 14px
-    fontWeight: 500
-  label-sm:
-    fontFamily: JetBrains Mono
-    fontSize: 13px
-    fontWeight: 500
+    fontFamily: Archivo Expanded
+    fontSize: 11px
+    fontWeight: 800
+    letterSpacing: 0.14em
+    textTransform: uppercase
   caption:
-    fontFamily: JetBrains Mono
-    fontSize: 13px
+    fontFamily: Archivo
+    fontSize: 12px
     fontWeight: 500
   code:
     fontFamily: JetBrains Mono
     fontSize: 13px
     fontWeight: 500
-  caption-xs:
-    fontFamily: JetBrains Mono
-    fontSize: 12px
-    fontWeight: 500
   key-hint:
     fontFamily: JetBrains Mono
     fontSize: 12px
-    fontWeight: 700
-  sidebar-group-label:
-    fontFamily: JetBrains Mono
-    fontSize: 12px
-    fontWeight: 700
-  chart-label:
-    fontFamily: JetBrains Mono
-    fontSize: 11px
     fontWeight: 500
-  chart-tiny:
+  button:
+    fontFamily: Archivo
+    fontSize: 12.5px
+    fontWeight: 600
+  kbd:
     fontFamily: JetBrains Mono
-    fontSize: 10px
+    fontSize: 10.5px
     fontWeight: 500
 rounded:
   sm: 0px
   md: 0px
   lg: 0px
   full: 9999px
+cuts:
+  keycap: 4px
+  control: 6px
+  input: 8px
+  large-control: 10px
+  overlay: 12px
+  card: 14px
+  modal: 18px
 spacing:
   xs: 4px
   xxs: 6px
@@ -122,338 +139,426 @@ spacing:
   xl: 24px
   border-thin: 1px
   border-medium: 2px
-  row: 28px
-  row-compact: 24px
-  control: 28px
-  button: 28px
-  input: 32px
-  toolbar: 32px
-  tab: 36px
-  header: 40px
+  focus-ring: 1.5px
+  control: 30px
+  control-inline: 24px
+  control-large: 44px
+  icon-only-width: 32px
+  input: 30px
+  segment: 26px
+  segment-track-padding: 2px
+  filter-field: 34px
+  checkbox: 16px
+  menu-row: 30px
+  tree-row: 26px
+  tree-indent: 14px
+  grid-row: 31px
+  grid-header: 40px
+  document-tab: 36px
+  document-tab-bar: 42px
+  panel-header: 40px
+  title-bar: 43px
+  activity-rail: 52px
   icon-sm: 16px
   icon-md: 20px
   icon-lg: 24px
-  tab-stripe: 1px
-  tree-indent: 14px
-  results-panel: 220px
-  inspector-width: 320px
-  settings-list-panel: 300px
-  settings-form-label: 220px
-  form-dropdown: 240px
+motion:
+  fast: 150ms
+  easing: cubic-bezier(.2, .8, .2, 1)
 components:
-  button-default:
-    backgroundColor: "{colors.raised}"
-    textColor: "{colors.foreground}"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    height: "{spacing.button}"
   button-primary:
     backgroundColor: "{colors.primary}"
     textColor: "{colors.on-primary}"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    height: "{spacing.button}"
+    typography: "{typography.button}"
+    cut: "{cuts.control}"
+    height: "{spacing.control}"
   button-primary-hover:
     backgroundColor: "{colors.primary-hover}"
   button-primary-active:
     backgroundColor: "{colors.primary-active}"
+  button-secondary:
+    backgroundColor: "{colors.secondary}"
+    textColor: "{colors.foreground}"
+    typography: "{typography.button}"
+    cut: "{cuts.control}"
+    height: "{spacing.control}"
+  button-secondary-hover:
+    backgroundColor: "{colors.secondary-hover}"
+  button-secondary-active:
+    backgroundColor: "{colors.secondary-active}"
   button-ghost:
     backgroundColor: transparent
     textColor: "{colors.foreground}"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    height: "{spacing.button}"
+    typography: "{typography.button}"
+    cut: "{cuts.control}"
+    height: "{spacing.control}"
   button-ghost-hover:
-    backgroundColor: "{colors.hover-tint}"
+    backgroundColor: "{colors.raised}"
+  button-ghost-active:
+    backgroundColor: "{colors.line}"
   button-danger:
-    backgroundColor: "{colors.danger}"
-    textColor: "{colors.on-danger}"
-    typography: "{typography.label}"
-    rounded: "{rounded.sm}"
-    height: "{spacing.button}"
+    backgroundColor: "{colors.danger-soft}"
+    textColor: "{colors.danger}"
+    typography: "{typography.button}"
+    cut: "{cuts.control}"
+    height: "{spacing.control}"
+  button-danger-hover:
+    backgroundColor: "{colors.danger-soft-hover}"
+  button-danger-active:
+    backgroundColor: "{colors.danger-soft-pressed}"
   input:
     backgroundColor: "{colors.background}"
+    borderColor: "{colors.line}"
     textColor: "{colors.foreground}"
-    typography: "{typography.body}"
-    rounded: "{rounded.sm}"
+    cut: "{cuts.control}"
     height: "{spacing.input}"
   focus-ring:
-    backgroundColor: "{colors.ring}"
-    size: "{spacing.border-thin}"
-  tab-strip:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.muted-foreground}"
-    typography: "{typography.label-sm}"
-    height: "{spacing.tab}"
-    padding: "{spacing.md}"
-  tab-active:
+    color: "{colors.ring}"
+    size: "{spacing.focus-ring}"
+  document-tab:
     backgroundColor: "{colors.background}"
-    textColor: "{colors.foreground}"
-  sidebar-row:
-    backgroundColor: transparent
-    textColor: "{colors.foreground}"
-    typography: "{typography.label-sm}"
-    height: "{spacing.row}"
-    padding: "{spacing.xs}"
-  sidebar-row-hover:
-    backgroundColor: "{colors.hover-tint}"
-  sidebar-row-selected:
-    backgroundColor: "{colors.selection}"
-  table-row:
-    backgroundColor: transparent
-    textColor: "{colors.foreground}"
-    typography: "{typography.label-sm}"
-    height: "{spacing.row}"
-  table-row-even:
-    backgroundColor: "{colors.table-even}"
-  table-row-hover:
-    backgroundColor: "{colors.table-hover}"
-  table-row-active:
-    backgroundColor: "{colors.table-active}"
-  table-header:
-    backgroundColor: "{colors.panel}"
     textColor: "{colors.muted-foreground}"
-    typography: "{typography.label-sm}"
-  panel:
-    backgroundColor: "{colors.background}"
+    height: "{spacing.document-tab}"
+  document-tab-active:
+    backgroundColor: "{colors.panel}"
+    textColor: "{colors.strong}"
+    topEdge: "{colors.byzantine}"
+    cut: "{cuts.input}"
+  tree-row:
+    height: "{spacing.tree-row}"
     textColor: "{colors.foreground}"
-    rounded: "{rounded.lg}"
+  tree-row-selected:
+    backgroundColor: "{colors.selected-item}"
+    leftBar: "{colors.tint}"
+  grid-row:
+    height: "{spacing.grid-row}"
+    typography: "{typography.code}"
+    borderColor: "{colors.row-divider}"
+  grid-row-even:
+    backgroundColor: "{colors.alternating-row}"
+  grid-row-hover:
+    backgroundColor: "{colors.hover-wash}"
+  grid-row-selected:
+    backgroundColor: "{colors.selected-row}"
+  menu:
+    backgroundColor: "{colors.raised}"
+    borderColor: "{colors.line-2}"
+    cut: "{cuts.overlay}"
   card:
-    backgroundColor: "{colors.raised}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.lg}"
-  popover:
-    backgroundColor: "{colors.raised}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.md}"
+    backgroundColor: "{colors.panel}"
+    borderColor: "{colors.line-2}"
+    cut: "{cuts.card}"
   modal:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.foreground}"
-    rounded: "{rounded.lg}"
+    backgroundColor: "{colors.panel}"
+    borderColor: "{colors.line-2}"
+    cut: "{cuts.modal}"
   modal-scrim:
     backgroundColor: "{colors.overlay}"
-  badge-info:
-    backgroundColor: "rgba(89, 194, 255, 0.15)"
-    textColor: "{colors.info}"
-    typography: "{typography.caption-xs}"
-    rounded: "{rounded.sm}"
-    padding: "{spacing.xs}"
-  badge-success:
-    backgroundColor: "rgba(170, 217, 76, 0.15)"
-    textColor: "{colors.success}"
-    typography: "{typography.caption-xs}"
-    rounded: "{rounded.sm}"
-    padding: "{spacing.xs}"
-  badge-warning:
-    backgroundColor: "rgba(255, 180, 84, 0.15)"
-    textColor: "{colors.warning}"
-    typography: "{typography.caption-xs}"
-    rounded: "{rounded.sm}"
-    padding: "{spacing.xs}"
-  badge-danger:
-    backgroundColor: "rgba(240, 113, 120, 0.15)"
-    textColor: "{colors.danger}"
-    typography: "{typography.caption-xs}"
-    rounded: "{rounded.sm}"
-    padding: "{spacing.xs}"
-  badge-neutral:
-    backgroundColor: "{colors.raised}"
-    textColor: "{colors.muted-foreground}"
-    typography: "{typography.caption-xs}"
-    rounded: "{rounded.sm}"
-    padding: "{spacing.xs}"
-  status-bar:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.muted-foreground}"
-    typography: "{typography.caption-xs}"
-    height: "{spacing.toolbar}"
-  status-bar-item-hover:
-    backgroundColor: "{colors.raised}"
-  key-hint:
-    textColor: "{colors.muted-foreground}"
-    typography: "{typography.key-hint}"
+  badge:
+    height: 20px
+    typography: "{typography.caption}"
+    cut: "{cuts.keycap}"
+  kbd:
+    typography: "{typography.kbd}"
+    cut: "{cuts.keycap}"
 ---
 
-# DBFlux Desktop
+# DBFlux Desktop: Bolt Byzantium
 
 ## Overview
 
-DBFlux is a database client for people who keep their hands on the keyboard. The interface is dense, flat, and monospaced. Every surface is a step in a short scale of near-black blues, every region is separated by a hairline or by nothing at all, and the single amber accent tells you where the cursor is, what is focused, or what will happen when you press Enter.
+Bolt Byzantium is a dark, dense, keyboard-first interface with one accent: byzantine purple (`#702963`) as a fill and its light tint (`#D48CC8`) for accent text, icons and focus. Controls and surfaces have 45° cut corners; data (rows, cells, code, charts) keeps square edges.
 
-The emotional target is a well-configured terminal: calm, fast, and predictable. Nothing bounces, nothing glows, nothing is rounded unless the user opts into the Compact style. Hierarchy comes from tone and weight, not from decoration.
+The user picks two things in Settings:
 
-The system has two axes the user picks in Settings:
+- **Theme:** Dark (default), Light, or Follow system (`ThemeSetting::System`, resolved from the window's OS appearance).
+- **Density:** Default or Compact. Compact lowers every text role by 1 px.
 
-- **Theme:** Ayu Dark (default), Ayu Mirage, Ayu Light. Each is a hand-picked palette, not a derived one.
-- **Style:** Default (square corners, 12 to 20px type scale) or Compact (2 to 3px radii, 11 to 18px type scale).
+Where the tokens live:
 
-The tokens above record Dark at Default density. Everything else in this document is theme-invariant unless a table says otherwise.
+| File | Holds |
+|---|---|
+| `crates/dbflux_components/src/theme.rs` | `Palette::dark()` / `Palette::light()` and their mapping onto gpui-component `Theme` fields |
+| `crates/dbflux_components/src/tokens.rs` | spacing, heights, cuts (`ChamferCut`), per-component metrics (`ButtonMetrics`, `Fields`, `MenuMetrics`, `TreeMetrics`, `GridMetrics`, ...), `ChromeColors`, `SyntaxColors`, `Anim` |
+| `crates/dbflux_components/src/density.rs` | density-aware font and radius accessors (`font_base(cx)`, ...) |
+| `crates/dbflux_components/src/semantic.rs` | per-theme banner, row-state and chart chrome colors |
+| `crates/dbflux_components/src/typography.rs` | `AppFonts` and the bundled font files |
 
-Tokens live in code, not in a resource file. `theme.rs` holds the three palettes, `tokens.rs` the spacing, height, radius and shadow scales, `density.rs` the style-aware accessors, and `semantic.rs` the per-theme banner, row-state and chart colors. A guardrail test rejects bare pixel values of 4, 6, 8, 12, 16 or 24 and raw color literals anywhere else in the components crate, so the tables here are the only place a number gets to exist.
+A guardrail test (`style_guardrails.rs`) rejects raw color literals and bare `px(4/6/8/12/16/24)` anywhere in the components crate outside the token files. New numbers go into `tokens.rs` first.
+
+The design canvas is the reference for intent: https://claude.ai/artifact/RrT5VLW14vaPQzV1ab71hT. When the canvas and this document disagree, the code on `main` wins and the gap is a bug to file.
 
 ## Colors
 
-Three palettes share one structure. Each defines the same twelve base slots and derives the rest from them. Hover and active variants of a semantic color are the base darkened by 10% and 20%. Tints for hover rows, table stripes and sidebar hover are the foreground at a low alpha, which is why they work on any palette without a rename.
+### Base roles
 
-### Base slots per palette
+| Role | Dark | Light | Theme field / accessor | Use |
+|---|---|---|---|---|
+| bg | `#09090B` | `#F6F4F7` | `background` | window ground, sidebar, tab bar, input fill |
+| panel | `#100F13` | `#FFFFFF` | `popover`, `tab_active`, `table` | panes, cards, modals, active tab |
+| raised | `#1A181E` | `#EEEAF0` | `secondary` | secondary buttons, chips, menus, keycaps |
+| line | `#232128` | `#E3DEE6` | `border` | separators, pane edges, input edges |
+| line-2 | `#37333D` | `#CBC4D1` | `input`, `muted` | control edges on raised surfaces, card and modal edges |
+| row divider | `#18161B` | `#F0ECF2` | `table_row_border` | grid row dividers |
+| strong | `#F7F4F7` | `#141118` | `ChromeColors::strong` | titles, data values, active labels |
+| body | `#C6C3CC` | `#3B3740` | `foreground` | body copy, button labels |
+| muted | `#8E8996` | `#6B6572` | `muted_foreground` | metadata, section labels, inactive tabs |
+| byzantine | `#702963` | `#702963` | `primary` | primary fills, checked boxes, active tab edge |
+| byzantine hover | `#7F3171` | `#7F3171` | `primary_hover` | primary hover |
+| deep | `#4A1B41` | `#4A1B41` | `primary_active` | primary pressed |
+| tint | `#D48CC8` | `#702963` | `ring`, `ChromeColors::tint` | accent text and icons, focus ring, caret, keywords |
+| ink | `#FFFFFF` | `#FFFFFF` | `primary_foreground` | text on byzantine |
+| success | `#7BE0A0` | `#1C7F45` | `success` | connected, included, inserts |
+| info | `#6EA8FF` | `#1F5FD1` | `info`, `link` | links, foreign keys |
+| warning | `#FFC23D` | `#B7791F` | `warning` | caution, primary keys |
+| danger | `#FF6B5E` | `#C7362B` | `danger` | delete, errors, production |
+| null | `#B79CFF` | `#6B4FD8` | `SyntaxColors::number` | NULL cells, numbers |
+| cyan | `#6FD3D8` | `#0F7C82` | `cyan` | chart stats accent |
 
-| Slot | Dark | Mirage | Light |
+Text on a solid success, info, warning or danger fill is `#09090B` on Dark and `#FFFFFF` on Light (`*_foreground`). Semantic hover and pressed fills are the base shifted +5 % and −6 % in lightness.
+
+### Washes
+
+| Wash | Dark | Light | Where |
 |---|---|---|---|
-| background | `#0A0E14` | `#1F2430` | `#FAFAFA` |
-| panel | `#0F1419` | `#232834` | `#F3F3F3` |
-| raised (secondary, popover) | `#151E2B` | `#242936` | `#F7F8FA` |
-| tiles | `#111823` | `#202734` | `#E8E8E8` |
-| foreground | `#B3B1AD` | `#CBCCC6` | `#5C6166` |
-| muted (decoration, switch, slider) | `#5C6773` | `#707A8C` | `#ABB0B6` |
-| muted foreground (secondary text, icons) | `#828D9D` | `#8F98AA` | `#676E75` |
-| border | `#1F2430` | `#3A4052` | `#D9DEE8` |
-| selection | `#273747` | `#33415E` | `#D3E8F8` |
-| primary (accent, caret, drag border) | `#FFB454` | `#FFCC66` | `#FF9940` |
-| danger | `#F07178` | `#F28779` | `#E65050` |
-| success | `#AAD94C` | `#AAD94C` | `#86B300` |
-| warning | `#FFB454` | `#FFCC66` | `#F2AE49` |
-| info (links, active row) | `#59C2FF` | `#73D0FF` | `#399EE6` |
+| hover | white 4 % | strong 4 % | hovered rows, menu rows, ghost surfaces (`accent`, `table_hover`, `list_hover`) |
+| alternating row | white 1.2 % | strong 1.5 % | even grid and list rows |
+| selected row | tint 7 % | byzantine 7 % | selected grid row (`table_active`) |
+| selected item | tint 12 % | byzantine 14 % | selected tree row, list item, sidebar item (`list_active`, `sidebar_accent`) |
+| menu / grid cell highlight | tint 14 % / 12 % | same alphas | selected menu row (`MenuMetrics::SELECTED_ALPHA`), selected cell (`GridMetrics::CELL_SELECTED_ALPHA`) |
+| selected secondary or ghost button | tint 14 / 22 / 30 % | same alphas | toggled toolbar buttons (`Button::selected`) |
+| danger soft | danger 14 / 22 / 30 % | same alphas | danger buttons at rest, hover, pressed |
+| success soft | success 14 % | same alpha | success badges (`Feedback::BADGE_FILL_ALPHA`) |
+| banner field | semantic 12 % | semantic 14 % | `BannerColors` in `semantic.rs` |
+| text selection | tint 25 % | byzantine 25 % | `selection` |
+| drop target | tint 10 % | byzantine 10 % | drag and drop |
+| scrim | `#050507` 62 % | `#1E1423` 28 % | behind modals (`overlay`) |
 
-### Alpha-derived slots
+Row-state tints for the data grid (`RowStateColors`): insert success 15 %, delete danger 10 %, error danger 15 %, saving warning 10 % on Dark; 14 / 12 / 14 / 14 % on Light. Dirty rows get no row tint; the edited cell carries the marker.
 
-| Slot | Dark | Mirage | Light |
-|---|---|---|---|
-| hover tint (accent, sidebar accent, table hover) | fg 5% | fg 6% | fg 6% |
-| table even stripe | fg 2% | fg 2% | fg 3% |
-| table active | info 15% | info 12% | info 12% |
-| table active border | info 50% | info 40% | info 40% |
-| input edge | fg 14% | fg 9% | fg 6% |
-| focus ring | primary 75% | primary 72% | primary 50% |
-| modal overlay | black 55% | black 45% | black 30% |
-| drop target | primary 10% | primary 10% | primary 10% |
+### Two hard rules
 
-Roles worth naming:
-
-- **Primary** is amber. It is the caret, the focus ring, the primary button, the active tab stripe, the drag border, the busy status dot. Text on primary is the page background.
-- **Info** is blue and is a second, quieter accent. Links, the active data row, and the first chart series use it. Do not use it for actions.
-- **Danger text is always white**, even on Dark, because the palette's error red does not carry dark text at a readable contrast.
-- **Ghost border** is `#524436` at 15% alpha in every theme. It is a felt-not-seen separator between major regions, for example the top edge of the status bar and the dividers between its sections. Use it where a solid border would be too loud.
-- **Table row borders are transparent** in every theme. The even-row stripe does the separating.
-- **Row state tints** are theme-invariant overlays for the data grid: insert green 15%, dirty amber 20%, delete red 10%, error red 15%, saving amber 10%. They layer on top of the stripe.
-- **Syntax colors** for the object tree are theme-invariant and borrowed from the editor convention: tables teal, views yellow, columns light blue, types purple, databases orange, schemas blue, dimmed folders gray.
-- **Chart series** run blue, green, amber, red, purple, in that order, with a Light variant that keeps the hue and lowers the brightness.
-- **Banner colors** (info, success, warning, error) are hand-picked per theme at roughly 12 to 14% background alpha with a full-strength foreground. They are not computed at runtime, so legibility is guaranteed on all three palettes.
+1. **Byzantine is a fill, never text on the dark ground.** It reads at 2.1:1 on `#09090B`. Use it for primary buttons, checked boxes, active tab edges and bands.
+2. **Accent text and icons use the tint.** Read it with `ChromeColors::tint(theme)` (or `Text::primary()`), never `theme.primary`. On Light the tint is byzantine itself, which is why the accessor exists.
 
 ## Typography
 
-One typeface. JetBrains Mono is the headline, body, code and shortcut face, bundled in eight weights and styles from `assets/fonts` and registered at startup. The fallback is the platform monospace. There is no sans-serif anywhere in the client.
+Three families, bundled from `crates/dbflux_components/assets/fonts` and exposed as `AppFonts`:
 
-The size scale has six steps and shifts down one notch under the Compact style:
+| Family | Constant | Use |
+|---|---|---|
+| Archivo | `AppFonts::INTERFACE` | everything a person reads as interface: buttons, menus, tabs, tree rows, forms, body copy |
+| Archivo Expanded | `AppFonts::DISPLAY` | uppercase section labels and large titles, weight 800, 0.14 em tracking. Never body text |
+| JetBrains Mono | `AppFonts::MONO` | data: grid cells, queries, identifiers, ids, keys, key hints, numeric readouts |
 
-| Step | Default | Compact | Role |
-|---|---|---|---|
-| xs | 12px | 11px | badges, captions, key hints, sidebar group labels |
-| sm | 13px | 12px | labels, secondary metadata, code, table cells |
-| base | 14px | 13px | body, inputs, field labels |
-| lg | 15px | 14px | emphasized labels, headline level 1 |
-| xl | 18px | 16px | headings, headline level 2 |
-| title | 20px | 18px | window-level headings, headline level 3 |
+The eight text roles are the `Text` constructors in `primitives/text.rs`. Base size is 13 px. Compact lowers every role by 1 px (read through `TextVariant::density_size`).
 
-Weights are Medium for everything that reads and Bold for everything that labels a region: titles, headings, sidebar group labels, key hints. Semi-bold appears only on the third headline level. Line height is left to GPUI's default.
+| Role | Constructor | Family | Default | Compact | Weight | Default color |
+|---|---|---|---|---|---|---|
+| Title | `Text::title` | Archivo | 20 px | 18 px | 700 | strong |
+| Heading | `Text::heading` | Archivo | 18 px | 16 px | 700 | strong |
+| Body | `Text::body` | Archivo | 13 px | 12 px | 500 | body |
+| Body small | `Text::body_sm` | Archivo | 12 px | 11 px | 500 | body |
+| Label | `Text::label` | Archivo Expanded, uppercase, 0.14 em | 11 px | 10 px | 800 | muted |
+| Caption | `Text::caption` | Archivo | 12 px | 11 px | 500 | muted |
+| Code | `Text::code` | JetBrains Mono | 13 px | 12 px | 500 | body |
+| Key hint | `Text::key_hint` | JetBrains Mono | 12 px | 11 px | 500 | muted |
 
-Secondary text uses the muted foreground slot, a hand-picked readable value per palette. It has three levels: full alpha for captions, at 70% for secondary dims, at 50% for tertiary dims. Never invent a fourth.
+`Text::label` capitalizes its content itself, so pass ordinary text. Color overrides go through `.primary()` (tint), `.danger()`, `.warning()`, `.success()`, `.link()` and `.muted_foreground()`. Buttons use Archivo 600 at 12.5 px (12 px inline, 13 px large); keycaps use JetBrains Mono at 10.5 px.
 
 ## Layout
 
-The window is a fixed frame of chrome around one flexible document area: sidebar on the left, tab strip on top, status bar at the bottom, optional inspector sliding in from the right.
+- **Spacing scale:** 4, 8, 12, 16, 24 px (`Spacing`), plus a locked 6 px half-step (`Spacing::XXS`).
+- **Borders:** 1 px thin, 2 px medium, 1.5 px focus ring (`Borders`).
+- **Chrome:** title bar 43 px, activity rail 52 px wide with 38 px buttons, panel headers 40 px, document tab bar 42 px with 36 px tabs, result tab bar 40 px, result footer 36 px.
+- **Rows:** tree 26 px with 14 px indent, grid 31 px with a 40 px header, menu 30 px, list rows in modals 40 px.
 
-- **Spacing scale:** 4, 8, 12, 16, 24px. A locked 6px half-step exists for form-row label padding and chart pills and is the only exception to the doubling rhythm.
-- **Heights:** rows 28px (24px compact), inline controls and buttons 28px, inputs and toolbars 32px, tabs 36px, panel headers 40px. Anything packed into a toolbar uses the 28px control height so heterogeneous controls align.
-- **Icons:** 16, 20, 24px.
-- **Tree indent:** 14px per depth level in the sidebar.
-- **Fixed regions:** the SQL results panel is 220px tall in split layout, the row inspector rail opens 380px wide, the settings list panel is 300px wide with a 220px form-label column.
-- **Borders:** 1px thin, 2px medium. Border tokens are widths only and are never reused as margins or radii.
+### Control sizes
+
+| Control | Height | Width | Cut | Token |
+|---|---|---|---|---|
+| Button, default | 30 px | label + 12 px padding | 6 | `ButtonMetrics::HEIGHT` |
+| Button, inline (rows, chips, cards) | 24 px | label + 10 px padding | 6 | `ButtonMetrics::HEIGHT_INLINE` |
+| Button, large (rare call to action) | 44 px | label + 16 px padding | 10 | `ButtonMetrics::HEIGHT_LARGE` |
+| Icon-only button | 30 px | 32 px (24 inline, 44 large) | 6 | `ButtonMetrics::ICON_ONLY_WIDTH` |
+| Input, select | 30 px (24 small) | caller | 6 | `Fields::HEIGHT` |
+| Segmented control | 30 px: 26 px segments + 2 px track inset | content | 6 track, 4 thumb | `Fields::SEGMENT_HEIGHT` |
+| Filter field | 34 px | caller | 8 | `Fields::FILTER_HEIGHT` |
+| Checkbox | 16 px box | — | 4 | `Fields::CHECKBOX_SIZE` |
+| Badge | 20 px | content | 4 | `Feedback::BADGE_HEIGHT` |
+
+Everything in one toolbar row is 30 px, so buttons, inputs, selects and segmented controls align without adjustments.
 
 ## Elevation & Depth
 
-Flat by default. Regions are separated by the input-edge tint (surfaces, separators, controls, modal separators) or by the solid border (popovers). Major regions use the ghost border. Rows are separated by nothing but the alternating stripe.
+Flat. Regions are separated by a 1 px line, not by shadow. The five surface roles (`primitives::surface(SurfaceRole, cx)`) decide fill, edge and cut:
 
-Surfaces map to a role, and the role decides the background slot, the edge color and the radius:
+| Role | Fill | Edge | Cut | Use |
+|---|---|---|---|---|
+| `Panel` | panel | line | none | panes, document areas |
+| `Card` | panel | line-2 | 14 | framed content, empty-state cards |
+| `Raised` | raised | line | none | SQL previews, inset blocks |
+| `Overlay` | panel | line-2 | 12 | popovers, floating panels |
+| `Modal` | panel | line-2 | 18 | dialogs |
 
-| Role | Background | Edge | Radius |
-|---|---|---|---|
-| Panel | background | input edge | lg |
-| Card | raised | input edge | lg |
-| Raised (popover, dropdown, tooltip) | raised | border | md |
-| Modal container | background | border | lg |
-| Scrim | overlay | none | lg |
+Menus (`menu_frame`) use the raised fill with a line-2 edge, cut 12 and the large shadow. Shadows exist for floating chrome only: menus, dropdown lists and popovers take the large shadow (GPUI `shadow_lg`, or `Shadows::lg()` where a `BoxShadow` is needed). The modal scrim is the `overlay` color.
 
-The modal container deliberately uses the page background, not the popover slot, so child controls keep their contrast against it.
+## Shapes: the cut
 
-Shadows exist for floating chrome only:
+The signature shape is a 45° cut on the **top-left and bottom-right** corners (`ChamferCorners::TopLeftBottomRight`, the default). Document and result tabs cut the **top-left only** (`ChamferCorners::TopLeft`); a split button cuts top-left on the main action and bottom-right on the menu segment. The cut depth grows with the size of the thing:
 
-- **md** `0 4px 8px rgba(0,0,0,.24)` on dropdowns, popovers and tooltips.
-- **lg** `0 8px 24px rgba(0,0,0,.32)` on modals.
-- **inspector left** `-6px 0 16px rgba(0,0,0,.28)` on the left edge of the slide-in inspector.
+| Cut | Token | Applies to |
+|---|---|---|
+| 4 px | `ChamferCut::KEYCAP` | keycaps, badges, env tags, counters, checkboxes, segmented thumb |
+| 6 px | `ChamferCut::CONTROL` | 24–30 px controls: buttons, inputs, selects, icon buttons, segmented track, command search |
+| 8 px | `ChamferCut::INPUT` | document tabs (top-left only), banners, the 34 px filter field, modal code blocks |
+| 10 px | `ChamferCut::LARGE_CONTROL` | 44 px buttons |
+| 12 px | `ChamferCut::OVERLAY` | menus, popovers, dropdown lists, toasts |
+| 14 px | `ChamferCut::CARD` | cards |
+| 18 px | `ChamferCut::MODAL` | modals, hero frames |
 
-The modal scrim is black at 55%, 45% and 30% for Dark, Mirage and Light.
+Rules:
 
-## Shapes
+- **Controls and surfaces are cut; data never is.** Grid cells, rows, list items, code editors and charts keep square edges.
+- **Borders run on the straight edges only.** `Chamfer::border` paints a 1 px inset line on the four straight sides; the diagonals stay borderless. A focus ring is the one stroke that follows the diagonals.
+- Radii stay 0 in Default density. Compact keeps its 2–3 px radii for non-chamfered gpui-component widgets; the cut does not change with density.
 
-Square. Under the Default style every radius is 0px. Under the Compact style small and medium radii become 2px and the large radius becomes 3px. The full radius (9999px) is reserved for status dots, pills and avatars, and it does not change with style.
+### Using `Chamfer` in code
 
-Buttons are the one place the rule is enforced by the component rather than by the token: the button primitive hardcodes a 0px radius regardless of style.
+GPUI has no clip-path, so the shape is a canvas painted behind the content:
+
+```rust
+div()
+    .relative()
+    .h(ButtonMetrics::HEIGHT)
+    .child(
+        Chamfer::new(ChamferCut::CONTROL)
+            .fill(theme.secondary)
+            .fill_hover(theme.secondary_hover)
+            .fill_active(theme.secondary_active)
+            .border(theme.input)
+            .interactive("export-button"),
+    )
+    .child(label)
+```
+
+- `Chamfer` must be the **first child** of a `.relative()` container; it covers the box and does not affect layout.
+- Do not set `.bg()` on that container. The chamfer paints the fill.
+- `.interactive(id)` tracks hover and press and fades between fills; `.held(true)` shows the pressed fill while Enter or Space is held.
+- `.ring(ChamferRing::focus_for(color, kind))` strokes the focus ring; `.top_edge`, `.bottom_edge` and `.left_edge` paint the active-tab edge, keycap edge and banner/toast stripe.
+- Prefer a component that already does this (`Button`, `Input`, `surface`, `Kbd`, `Badge`) over a hand-built `Chamfer`.
 
 ## Components
 
-### Buttons
+### Interaction states
 
-Five variants: Default, Primary, Ghost, Danger, Dropdown. Two sizes: Default and Small. 28px tall, square corners in every style. Primary is amber on page-background text. Danger is red on white text. Ghost is transparent and takes the hover tint. A focused button draws a 1px focus frame in the ring color as an absolute overlay, transparent when unfocused.
+From the DSStates board, implemented in `controls::button::button_colors`:
 
-### Inputs
+| Variant | Rest | Hover | Pressed | Content | Focus ring |
+|---|---|---|---|---|---|
+| Primary | byzantine `#702963` | `#7F3171` | deep `#4A1B41` | white | outside, 2 px offset |
+| Secondary | raised | line | line-2 | body | inset |
+| Ghost / icon | transparent | raised | line | body; active icon in tint | inset |
+| Danger (soft) | danger 14 % | danger 22 % | danger 30 % | danger (`#FF6B5E` / `#C7362B`) | outside, 2 px offset |
+| Selected secondary or ghost | tint 14 % | tint 22 % | tint 30 % | tint | inset |
+| Disabled | rest fill at 45 % opacity | none | none | 45 % opacity, no pointer | none |
 
-32px tall, page background, input-edge border, body text. Focus uses the same 1px ring frame as buttons. The caret is amber.
+Use one primary button per toolbar or dialog.
 
-### Tabs
+**Motion.** Fill changes fade over 150 ms (`Anim::FAST_MS`) on `cubic-bezier(.2, .8, .2, 1)` (`motion_ease`). The pressed state also shows while Enter or Space is held on a focused control. When the platform asks for reduced motion, fills switch instantly and the spinner draws fully charged without moving.
 
-The tab strip is 36px tall on the panel background with 12px horizontal padding and 4px gaps. The active tab moves to the page background and carries a 1px amber stripe at its bottom edge. The strip's bottom edge is a separator, not a border.
+### Focus
 
-### Sidebar tree
+- **Focus-visible only.** Focus indication shows only after keyboard input and disappears on the next pointer press (`is_keyboard_modality`, `is_focus_visible`, `WhenFocusVisible` in `primitives/focus_ring.rs`).
+- **The ring:** 1.5 px (`Borders::FOCUS_RING`) in the tint, tracing the full cut outline, diagonals included. It sits **outside, 2 px from the edge** on filled controls (primary, danger, checked checkbox) and **inset** on everything else (`ChamferFillKind::Filled` vs `Surface`, `FocusShape::FilledChamfer` vs `Chamfer`). Square data surfaces use `FocusShape::Rect`.
+- **Composite controls mark the focused item, never the container.** Segmented controls, chips and tabs draw a 2 px tint underline inside the item (`focus_underline`); lists and trees draw the tint wash plus a 2 px tint bar on the left (`ListRow`); menus use the row wash.
+- **Selection is fill only.** A selected item takes a wash or a raised thumb, never a ring. Focus and selection can coexist on the same item.
+- Controls with their own focus handle (`Button`, `Input`, `Dropdown`, `Checkbox`) draw the ring themselves. Use `focus_ring(...)` for controls whose focus lives in navigation state.
 
-28px rows, 14px indent per level, 16px icons, 8px gap between icon and label, 4px padding. Hover takes the foreground tint, selection takes the selection color. Drag targets show the primary color at 10%, and drop indicators are 2px lines above or below the row.
+### Component map
 
-### Data grid
+Use these. Never hand-roll a rounded `div`, a color literal or a one-off control.
 
-28px rows, no row borders. Even rows carry the 2% stripe, hovered rows the 5% tint, the active row the info color at 15% with a 50% info border. Row-state tints for insert, dirty, delete, error and saving layer on top. Headers are muted small labels on the panel background.
+| Board component | Code | Module | When to use |
+|---|---|---|---|
+| Button | `Button` (`.primary/.secondary/.ghost/.danger`, `.inline/.large`, `.icon`, `.icon_only`, `.kbd`, `.selected`) | `dbflux_components::controls::button` | every clickable action, including icon buttons |
+| Split | `SplitButton` | `composites::split_button` | an action with a menu of variants (Run, Refresh, Export) |
+| Keycap | `Kbd` (`Kbd::new`, `Kbd::chord`) | `primitives::kbd` | any shortcut shown on screen |
+| Badge / env tag | `Badge`, `EnvTag` | `primitives::badge` | short status labels; PROD/STAGING next to a connection |
+| Status | `StatusIndicator` | `primitives::status` | connection or task state: 7 px diamond, label, latency |
+| Banner | `BannerBlock` | `primitives::banner` | inline notice inside a pane or dialog |
+| Toast | `Toast` (`::success/::info/::warning/::error`) | `dbflux_ui_base::toast` | transient feedback; errors go through `report_error` |
+| Spinner | `Spinner` | `primitives::loading_state` | work in progress |
+| Surface | `surface(SurfaceRole, cx)` | `primitives::surface` | any pane, card, raised block, overlay or modal frame |
+| Modal | `Modal`, `modal_field`, `modal_code`, `modal_lead` | `modals` | dialogs; handles Escape, Enter and focus |
+| Headers | `panel_header`, `panel_header_with_actions`, `section_header`, `page_header`, `collapsible_bar` | `composites::header` | titles of panels, sections and pages |
+| Tabs | `document_tab`, `result_tab`, `inline_tab` (+ `*_tab_bar`) | `composites::tabs` | document tabs, result tabs, in-pane tab strips |
+| Focus | `focus_ring`, `focus_underline`, `WhenFocusVisible` | `primitives::focus_ring` | keyboard focus on anything that is not already a control |
+| Text | `Text::title/heading/body/body_sm/label/caption/code/key_hint` | `primitives::text` | every piece of copy |
+| Input | `Input` | `controls::input` | single-line text entry |
+| Select | `Dropdown` (`.chevron_trigger`) | `controls::dropdown` | pick one value from a list |
+| Checkbox | `Checkbox` | `controls::checkbox` | boolean options |
+| Segmented | `SegmentedControl` | `primitives::segmented_control` | 2–5 mutually exclusive modes |
+| Filter field | `FilterField` | `components::filter_bar` | WHERE / filter entry above a grid |
+| Menu | `menu_row`, `menu_frame` | `composites::menu_item` | context menus, flyouts, dropdown lists |
+| Tree | sidebar tree (`TreeMetrics`, `TreeNav`, `ListRow`) | `dbflux_ui_sidebar::render_tree`, `components::tree_nav` | connection and schema trees |
+| Data grid | `DataTable` | `components::data_table` | tabular results |
+| Result panel | `ResultPanel` + `ViewHandle` | `result_panel` | chrome around a result view (modes, toolbar segments) |
+| Stepper | `render_wizard_rail`, `render_wizard_stepper` | `composites::wizard_rail` | multi-step wizards |
+| List row | `ListRow` | `composites::list_row` | rows of lists, pickers, settings lists |
+| Breadcrumb | `Breadcrumb` | `composites::breadcrumb` | object paths (bucket/prefix, schema/table) |
+| Empty state | `EmptyState` (`.card`, `.danger`) | `composites::empty_state` | empty or failed regions |
+| Divider | `divider(axis, DividerTone, cx)` | `primitives::divider` | 1 px rules between regions and control groups |
+| Activity rail | `ActivityRail` | `composites::activity_rail` | the left rail of the main window |
+| Command search | `CommandSearch` | `composites::shell_bar` | title-bar trigger for the command palette |
+| Row inspector | `RowInspectorContent` | `dbflux_ui_document::data_grid_panel::row_inspector` | the inspector rail for one grid row |
 
-### Badges
+## Board map
 
-Info, Success, Warning, Danger, Neutral. Background is the semantic color at 15% alpha, text is the color at full strength. Neutral uses the raised surface with muted text. Pill mode pads 4px horizontally and 2px vertically at the xs size; dot mode is an 8px filled circle.
+All boards live on the design canvas: https://claude.ai/artifact/RrT5VLW14vaPQzV1ab71hT. Each dark board has a `*Light*` twin (for example `AppByzLightTable`, `P1LightModals`).
 
-### Modals
-
-A builder sets width and height as fixed, max or fraction, plus top offset or vertical centering. The frame is the modal-container surface over the scrim, with a separator under the header. Modals are top-anchored by default.
-
-### Status bar
-
-32px tall on the page background with a ghost-border top edge. Sections are separated by 1px by 16px ghost-border verticals. Items take the raised surface on hover. Status dots follow a fixed palette: idle muted, busy amber, success green, warning amber, danger red, neutral muted at 50%.
-
-### Command palette
-
-A raised overlay listing commands in mono labels with a mono caption for the shortcut. The selected row inverts to the selection color. Navigation is Up, Down, Ctrl-K, Ctrl-J, Escape, Enter.
-
-### Key hints
-
-Bold 12px mono in muted text. Wherever a shortcut is shown, this is the treatment.
-
-### Charts
-
-Chart chrome (panel background, border, label, value, muted, hover, pill, checkbox, stats accent) is hand-picked per theme in `semantic.rs`. Geometry is fixed: 10px tiny text, 11px labels, 1px hairlines, 2px accent stripe, 10px swatches, 11px legend rows.
+| Board | Specifies |
+|---|---|
+| DSFoundations | colors, type, cut depths, motion, icons |
+| DSStates | interaction states of buttons and controls |
+| DSApp | app components |
+| DSAppPlan | which code component each board component becomes |
+| DSBrand | brand mark and app icons |
+| AppByzTable | table view with the row inspector |
+| AppByzEditor | query editor with results |
+| AppByzMenu | cell context menu |
+| P1Sidebar | sidebar states and menus |
+| P1Empty | empty workspace and tasks panel |
+| P1Palette | command palette |
+| P1Modals | modals and toasts |
+| P1Flows | sign-in, wizards and editors |
+| P1Migrate | migrate wizard |
+| P1ConnForm, P1DriverPicker | connection manager form and driver picker |
+| P1SettingsGeneral, P1SettingsKeys, P1SettingsAuth, P1SettingsSsh, P1SettingsHooks, P1SettingsDrivers, P1SettingsMcp, P1SettingsUpdates | settings sections |
+| P1Welcome, P1WhatsNew | first run, what's new and update notice |
+| P1DocTable, P1DocSchema | document collections: table with inspector, schema |
+| P1KvHash, P1KvString | key-value hash key, JSON string and large value |
+| P1Builder | visual query builder |
+| P1Chart, P1Dashboard | chart document, dashboard in edit mode |
+| P1Schema | schema diagram |
+| P1Audit, P1Approvals | audit viewer, MCP approvals |
+| P1Buckets, P1Objects, P1ObjectEditor | object storage buckets, browser, editor |
+| P2DocNested | nested column groups and commit conflicts |
+| P2KvFilter, P2KvStream, P2KvZset | key-value search while scanning, streams, sorted sets |
+| P2Series | time-series measurement |
+| P2Findings | phase 2 review findings |
 
 ## Do's and Don'ts
 
-- Do read every color through the theme slots and every dimension through the token tables. The guardrail test will reject a raw literal.
-- Do use the density accessors for font size and radius at render sites, so the Compact style is honored.
-- Do use the ghost border between major regions and the input-edge tint between controls. Reserve the solid border for popovers.
-- Do put white text on the danger color in every theme.
-- Do use amber for the one focused or primary thing on screen and blue for links and the active data row. Never swap them.
-- Don't add row dividers to a grid or a list. The stripe is the divider.
-- Don't derive a semantic color at runtime from an opacity calculation. Pick it per theme in `semantic.rs`.
-- Don't introduce a second typeface. Headings, body, code and shortcuts are all JetBrains Mono.
-- Don't round a corner under the Default style, and don't exceed 3px under Compact.
-- Don't branch on the theme name in a component. Read the slot, and the palette takes care of itself.
+- Do build screens from the components above. A new visual need is a new token or component in `dbflux_components`, not a local style.
+- Do read colors through theme fields and `ChromeColors`, sizes through `tokens.rs`, and text through `Text` roles.
+- Do cut controls and surfaces with the cut for their size, and keep data square.
+- Do use the tint for accent text and icons, and byzantine only as a fill.
+- Do keep one primary button per toolbar or dialog, and keep toolbar controls at 30 px.
+- Do give interactive elements a stable `.id(...)` so UI automation can target them.
+- Don't write byzantine text on the dark ground, or `theme.primary` as a text color.
+- Don't put a border on a diagonal, a radius on a cut control, or a cut on a grid cell.
+- Don't ring a composite container or show a ring after a mouse click.
+- Don't mark selection with a ring. Selection is a fill.
+- Don't use Archivo Expanded for body text or JetBrains Mono for interface copy.
+- Don't branch on the theme name in a component. Read the role, and both palettes follow.
