@@ -420,6 +420,43 @@ kbd,
   box-shadow: inset 0 -2px 0 var(--border-strong);
 }
 
+/*
+ * Comparison verdicts, shared by the home page teaser and the comparison
+ * pages: the icon carries the colour, and the text stays readable on it.
+ */
+[data-verdict='included'] {
+  --verdict-icon: var(--success);
+  --verdict-text: var(--text-strong);
+}
+
+[data-verdict='limited'] {
+  --verdict-icon: var(--link);
+  --verdict-text: var(--text);
+}
+
+[data-verdict='paid'] {
+  --verdict-icon: var(--accent);
+  --verdict-text: var(--accent);
+}
+
+[data-verdict='none'] {
+  --verdict-icon: var(--text-muted);
+  --verdict-text: var(--text-muted);
+}
+
+[data-verdict='unknown'] {
+  --verdict-icon: var(--text-faint);
+  --verdict-text: var(--text-muted);
+}
+
+[data-verdict] {
+  color: var(--verdict-text);
+}
+
+[data-verdict] .verdict-icon {
+  color: var(--verdict-icon);
+}
+
 /* Shiki emits both Ayu color sets as custom properties when defaultColor is false. */
 html:not([data-theme]) .astro-code,
 html[data-theme='dark'] .astro-code {

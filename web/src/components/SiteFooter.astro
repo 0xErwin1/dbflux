@@ -26,6 +26,7 @@ const COLUMNS = [
     title: t(locale, 'footer.product'),
     links: [
       { href: docsUrl('drivers', '', locale), label: t(locale, 'footer.drivers') },
+      { href: siteUrl('compare/', locale), label: t(locale, 'footer.compare') },
       { href: `${REPO}/releases`, label: t(locale, 'footer.releases') },
       { href: `${REPO}/blob/main/CHANGELOG.md`, label: t(locale, 'footer.changelog') },
     ],
@@ -56,7 +57,7 @@ const COLUMNS = [
 /** The short row that replaces the columns on a phone. */
 const COMPACT = [
   { href: docsUrl('', '', locale), label: t(locale, 'nav.docs') },
-  { href: `${home}#compare`, label: t(locale, 'footer.compare') },
+  { href: siteUrl('compare/', locale), label: t(locale, 'footer.compare') },
   { href: siteUrl('about/', locale), label: t(locale, 'footer.about') },
   { href: REPO, label: t(locale, 'footer.source') },
 ] as const;

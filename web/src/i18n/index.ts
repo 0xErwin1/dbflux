@@ -239,6 +239,7 @@ export interface Dictionary {
       why: string;
       leads: string;
       reviewed: string;
+      full: string;
       legend: {
         included: string;
         limited: string;
@@ -260,6 +261,21 @@ export interface Dictionary {
         mcp: string;
         builder_short: string;
         s3_short: string;
+        table_editor: string;
+        query_plan: string;
+        import_connections: string;
+      };
+      row_note: {
+        limits: string;
+        dynamodb: string;
+        builder: string;
+        s3: string;
+      };
+      group: {
+        licence: string;
+        engines: string;
+        query: string;
+        cloud: string;
       };
       cell: {
         included: string;
@@ -276,6 +292,8 @@ export interface Dictionary {
         with_roles: string;
         mcp_dbeaver: string;
         mcp_dbgate: string;
+        not_yet: string;
+        not_included: string;
       };
       gain: {
         dbeaver: string;
@@ -319,6 +337,97 @@ export interface Dictionary {
       nix: string;
       macos: string;
       windows: string;
+    };
+  };
+  compare_page: {
+    page_title: string;
+    page_description: string;
+    eyebrow: string;
+    h1_1: string;
+    h1_2: string;
+    lede: string;
+    meta: string;
+    meta_body: string;
+    legend: {
+      included: string;
+      limited: string;
+      paid: string;
+      none: string;
+      unknown: string;
+    };
+    highlight_hint: string;
+    edition_compared: string;
+    note_dynamodb: string;
+    note_datagrip: string;
+    sources_title: string;
+    per_client: string;
+    read_comparison: string;
+    feedback: string;
+    feedback_link: string;
+    vs_dbeaver: {
+      page_title: string;
+      page_description: string;
+      crumb: string;
+      h1: string;
+      lede: string;
+      download: string;
+      bring: string;
+      on_page: string;
+      toc: {
+        edition: string;
+        gain: string;
+        gaps: string;
+        moving: string;
+      };
+      meta: string;
+      edition_title: string;
+      edition_body: string;
+      col_feature: string;
+      col_community: string;
+      col_paid: string;
+      sources: string;
+      editions_page: string;
+      dynamodb_note: string;
+      gain_title: string;
+      gain: {
+        builder: { title: string; body: string; link: string };
+        redis: { title: string; body: string; link: string };
+        aws: { title: string; body: string; link: string };
+      };
+      mockup: {
+        columns: string;
+        joins: string;
+        filters: string;
+        run: string;
+        keys: string;
+        preview_first: string;
+        unsaved: string;
+      };
+      gaps_title: string;
+      gaps_body: string;
+      not_yet: string;
+      gap: {
+        table_editor: { name: string; detail: string };
+        formats: { name: string; detail: string };
+        query_plan: { name: string; detail: string };
+        users: { name: string; detail: string };
+        backup: { name: string; detail: string };
+        data_compare: { name: string; detail: string };
+      };
+      moving_title: string;
+      step: {
+        install: { title: string; body: string };
+        import: { title: string; body: string };
+        query: { title: string; body: string };
+      };
+      where_title: string;
+      term: {
+        sidebar: string;
+        query_tab: string;
+        diagram: string;
+        transfer: string;
+        schema_diff: string;
+      };
     };
   };
   about: {

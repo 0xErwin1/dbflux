@@ -209,6 +209,7 @@ export const zh_Hans: Dictionary = {
       why: '为什么切换',
       leads: '{name} 的优势',
       reviewed: '最后审阅 {date}',
+      full: '完整对比',
       legend: {
         included: '包含',
         limited: '有限',
@@ -230,6 +231,21 @@ export const zh_Hans: Dictionary = {
         mcp: '面向 AI 客户端的 MCP 服务器',
         builder_short: '查询构建器',
         s3_short: 'S3 浏览器',
+        table_editor: '表与约束编辑器',
+        query_plan: '查询计划可视化',
+        import_connections: '可导入连接的来源',
+      },
+      row_note: {
+        limits: '以所对比版本为准',
+        dynamodb: '注 1',
+        builder: 'SELECT、UPDATE、DELETE',
+        s3: '兼容 R2、MinIO',
+      },
+      group: {
+        licence: '许可',
+        engines: '引擎',
+        query: '查询与可视化',
+        cloud: '云与自动化',
       },
       cell: {
         included: '包含',
@@ -246,6 +262,8 @@ export const zh_Hans: Dictionary = {
         with_roles: '含角色与审批',
         mcp_dbeaver: 'Team / CloudBeaver EE；免费 dbvr CLI',
         mcp_dbgate: '只读，Docker 版',
+        not_yet: '尚未提供',
+        not_included: '不包含',
       },
       gain: {
         dbeaver: '无需升级付费版本即可使用 MongoDB、Redis、DynamoDB、查询构建器和图表。',
@@ -289,6 +307,141 @@ export const zh_Hans: Dictionary = {
       nix: '也提供 nightly flake 输出。',
       macos: 'Apple Silicon 与 Intel。需要 macOS 11 或更高版本。尚未签名。',
       windows: '安装程序或便携版。Windows 10 或更高版本，x86_64。',
+    },
+  },
+  compare_page: {
+    page_title: 'DBFlux 与 DBeaver、DataGrip、TablePlus、Beekeeper 和 DbGate 的对比',
+    page_description:
+      '每个数据库客户端在哪个版本、哪个平台上包含什么，均依据各厂商自己的页面核实。',
+    eyebrow: '对比',
+    h1_1: 'DBFlux 与你',
+    h1_2: '正在用的客户端。',
+    lede: '每个客户端包含什么、在哪个版本、在哪个平台上。锁表示该功能需要许可，而不是缺失。DBFlux 做不到的地方，对应的行会直接说明。',
+    meta: 'DBFlux {version} · 最后审阅 {date}',
+    meta_body: '依据各厂商自己的定价与功能页面编写。',
+    legend: {
+      included: '所对比版本中包含',
+      limited: '有限',
+      paid: '付费版本',
+      none: '不可用',
+      unknown: '尚未审阅',
+    },
+    highlight_hint: '点击某一列以高亮显示。',
+    edition_compared: '所对比版本',
+    note_dynamodb:
+      '1 — DBFlux 执行 DynamoDB 的原生操作：scan、query、put、update 和 delete。不提供 PartiQL 和事务。',
+    note_datagrip: '2 — DataGrip 仅对非商业用途免费。这里对比的是商业许可。',
+    sources_title: '来源',
+    per_client: '逐个客户端对比',
+    read_comparison: '阅读对比',
+    feedback: '发现过时的内容？提交一个 issue，该行会连同来源一起修正。',
+    feedback_link: '提交 issue',
+    vs_dbeaver: {
+      page_title: '免费开源的 DBeaver 替代品',
+      page_description:
+        'MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中需要付费，在 DBFlux 中都包含在同一个免费版本里。你能得到什么、还缺什么，以及如何迁移连接。',
+      crumb: '对比',
+      h1: '免费开源的 DBeaver 替代品。',
+      lede: 'DBeaver Community 免费且开源，是一个好客户端。区别在于版本之间的界线：MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中是 PRO 功能，在 DBFlux 中则属于同一个免费版本。',
+      download: '下载 DBFlux',
+      bring: '迁移你的 DBeaver 连接',
+      on_page: '本页内容',
+      toc: {
+        edition: '按版本',
+        gain: '你能得到什么',
+        gaps: '尚未取代的部分',
+        moving: '迁移过来',
+      },
+      meta: 'DBFlux {version} · DBeaver 版本信息截至 {editions} · 最后审阅 {date}',
+      edition_title: '按版本',
+      edition_body:
+        'DBeaver 提供免费的 Community 版和付费桌面版（Lite、Enterprise、Ultimate）。每一行列出包含该功能的最便宜的 DBeaver 版本。',
+      col_feature: '功能',
+      col_community: 'DBeaver Community',
+      col_paid: 'DBeaver 付费版本',
+      sources: '来源：',
+      editions_page: '版本',
+      dynamodb_note: 'DBFlux 中的 DynamoDB 执行原生操作，不提供 PartiQL 和事务。',
+      gain_title: '你能得到什么',
+      gain: {
+        builder: {
+          title: '不写 SQL 也能构建查询',
+          body: '在构建器侧栏中选择表、连接、筛选和聚合。生成的 SQL 使用该连接的方言，当结果能映射回单张表时仍可编辑。',
+          link: '可视化查询构建器',
+        },
+        redis: {
+          title: 'SQL 与 Redis 在同一个窗口',
+          body: '把 PostgreSQL 查询标签页和 Redis 键浏览器放在一起，支持集群和哨兵拓扑，并在加载大值之前先检查大小。',
+          link: '键值浏览',
+        },
+        aws: {
+          title: '日志和对象就在数据旁边',
+          body: '对 CloudWatch 运行 Logs Insights，然后打开任务写入的 S3 存储桶，预览文件并直接编辑。',
+          link: 'CloudWatch 与 S3 驱动',
+        },
+      },
+      mockup: {
+        columns: '列',
+        joins: '连接',
+        filters: '筛选',
+        run: '运行',
+        keys: '个键',
+        preview_first: '先预览',
+        unsaved: '未保存',
+      },
+      gaps_title: 'DBFlux 尚未取代的部分',
+      gaps_body: '如果你的日常工作依赖其中某一项，暂时保留 DBeaver。这些功能目前 DBFlux 都还没有。',
+      not_yet: '尚未提供',
+      gap: {
+        table_editor: {
+          name: '表与约束编辑器',
+          detail: '通过表单创建和修改表。目前 DDL 需要手写，或从 Schema 差异中应用。',
+        },
+        formats: {
+          name: '更多导出与导入格式',
+          detail:
+            '导出写入 CSV 和 JSON，导入只读取 DBFlux 自己的导出。不支持 SQL、Excel 等其他格式。',
+        },
+        query_plan: {
+          name: '查询计划可视化',
+          detail: '解释查询以行的形式显示计划，不会绘制带成本的树。',
+        },
+        users: {
+          name: '用户、角色与权限',
+          detail: '在界面中创建用户并授予或撤销权限。',
+        },
+        backup: {
+          name: '备份与恢复',
+          detail: '原生转储与恢复。表导出和导入只能以 CSV 或 JSON 迁移数据。',
+        },
+        data_compare: {
+          name: '数据对比',
+          detail: '表与连接之间的逐行差异。Schema 差异只比较结构。',
+        },
+      },
+      moving_title: '迁移过来',
+      step: {
+        install: {
+          title: '安装 DBFlux',
+          body: '下载页提供 Linux、macOS 和 Windows 版本。不会改动你的 DBeaver 配置。',
+        },
+        import: {
+          title: '导入你的 DBeaver 连接',
+          body: '在连接管理器中选择“从另一个客户端导入”，然后选择工作区的 data-sources.json。再添加 credentials-config.json，已保存的密码会存入系统密钥环。PostgreSQL、MySQL、MariaDB、SQLite、SQL Server、MongoDB 和 Redis 连接会被导入，但不含 SSH 和 SSL 设置；DBFlux 无法转换的条目会连同原因一起列出。',
+        },
+        query: {
+          title: '打开查询标签页',
+          body: 'Ctrl N 在当前连接上打开一个。其他所有操作都可以在命令面板中按名称找到。',
+        },
+      },
+      where_title: '对应位置',
+      term: {
+        sidebar: '连接侧栏',
+        query_tab: '查询标签页',
+        diagram: 'Schema 关系图',
+        transfer: '导出、导入、迁移',
+        schema_diff: 'Schema 差异',
+      },
     },
   },
   about: {

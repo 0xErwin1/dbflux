@@ -211,6 +211,7 @@ export const en = {
       why: 'Why switch',
       leads: 'Where {name} leads',
       reviewed: 'Last reviewed {date}',
+      full: 'Full comparison',
       legend: {
         included: 'Included',
         limited: 'Limited',
@@ -232,6 +233,21 @@ export const en = {
         mcp: 'MCP server for AI clients',
         builder_short: 'Query builder',
         s3_short: 'S3 browser',
+        table_editor: 'Table and constraint editor',
+        query_plan: 'Query plan visualiser',
+        import_connections: 'Import connections from',
+      },
+      row_note: {
+        limits: 'In the compared edition',
+        dynamodb: 'Note 1',
+        builder: 'SELECT, UPDATE, DELETE',
+        s3: 'R2, MinIO compatible',
+      },
+      group: {
+        licence: 'Licence',
+        engines: 'Engines',
+        query: 'Query and visualisation',
+        cloud: 'Cloud and automation',
       },
       cell: {
         included: 'Included',
@@ -248,6 +264,8 @@ export const en = {
         with_roles: 'With roles and approvals',
         mcp_dbeaver: 'Team / CloudBeaver EE; free dbvr CLI',
         mcp_dbgate: 'Read-only, Docker build',
+        not_yet: 'Not yet',
+        not_included: 'Not included',
       },
       gain: {
         dbeaver:
@@ -296,6 +314,147 @@ export const en = {
       nix: 'A nightly flake output is available too.',
       macos: 'Apple Silicon and Intel. macOS 11 or later. Not signed yet.',
       windows: 'Installer or portable. Windows 10 or later, x86_64.',
+    },
+  },
+  compare_page: {
+    page_title: 'DBFlux compared with DBeaver, DataGrip, TablePlus, Beekeeper and DbGate',
+    page_description:
+      'What each database client includes, in which edition and on which platform, checked against each vendor’s own pages.',
+    eyebrow: 'Compare',
+    h1_1: 'DBFlux next to',
+    h1_2: 'the clients you use.',
+    lede: 'What each client includes, in which edition, and on which platform. A lock means the feature exists behind a licence, not that it is missing. Where DBFlux falls short, the row says so.',
+    meta: 'DBFlux {version} · last reviewed {date}',
+    meta_body: 'Written from each vendor’s own pricing and feature pages.',
+    legend: {
+      included: 'Included in the compared edition',
+      limited: 'Limited',
+      paid: 'Paid edition',
+      none: 'Not available',
+      unknown: 'Not reviewed yet',
+    },
+    highlight_hint: 'Click a column to highlight it.',
+    edition_compared: 'Edition compared',
+    note_dynamodb:
+      '1 — DBFlux runs DynamoDB’s native operations: scan, query, put, update and delete. PartiQL and transactions are not exposed.',
+    note_datagrip:
+      '2 — DataGrip is free for non-commercial use only. The commercial licence is compared here.',
+    sources_title: 'Sources',
+    per_client: 'One comparison per client',
+    read_comparison: 'Read the comparison',
+    feedback:
+      'Spotted something out of date? Open an issue and the row gets fixed with its source.',
+    feedback_link: 'Open an issue',
+    vs_dbeaver: {
+      page_title: 'A free, open-source alternative to DBeaver',
+      page_description:
+        'MongoDB, Redis, DynamoDB, the visual query builder and charts are paid in DBeaver and part of the one free build in DBFlux. What you gain, what is still missing, and how to bring your connections over.',
+      crumb: 'Compare',
+      h1: 'A free, open-source alternative to DBeaver.',
+      lede: 'DBeaver Community is free and open source, and it is a good client. The difference is where the line between editions falls: MongoDB, Redis, DynamoDB, the visual query builder and charts are PRO features in DBeaver and part of the one free build in DBFlux.',
+      download: 'Download DBFlux',
+      bring: 'Bring your DBeaver connections',
+      on_page: 'On this page',
+      toc: {
+        edition: 'By edition',
+        gain: 'What you gain',
+        gaps: 'Not replaced yet',
+        moving: 'Moving over',
+      },
+      meta: 'DBFlux {version} · DBeaver editions as of {editions} · last reviewed {date}',
+      edition_title: 'By edition',
+      edition_body:
+        'DBeaver ships a free Community edition and paid desktop editions (Lite, Enterprise, Ultimate). Each row names the cheapest DBeaver edition that includes the feature.',
+      col_feature: 'Feature',
+      col_community: 'DBeaver Community',
+      col_paid: 'DBeaver paid editions',
+      sources: 'Sources:',
+      editions_page: 'editions',
+      dynamodb_note: 'DynamoDB in DBFlux runs native operations without PartiQL or transactions.',
+      gain_title: 'What you gain',
+      gain: {
+        builder: {
+          title: 'Build a query without writing SQL',
+          body: 'Pick tables, joins, filters and aggregates in the builder rail. The SQL it generates is the dialect of the connection, and the result stays editable when it maps back to one table.',
+          link: 'Visual query builder',
+        },
+        redis: {
+          title: 'SQL and Redis in the same window',
+          body: 'Keep a PostgreSQL query tab next to a Redis key browser, with cluster and sentinel topologies and a size check before a large value loads.',
+          link: 'Key-value browsing',
+        },
+        aws: {
+          title: 'Logs and objects next to the data',
+          body: 'Run Logs Insights against CloudWatch, then open the S3 bucket the job wrote to, preview a file and edit it in place.',
+          link: 'CloudWatch and S3 drivers',
+        },
+      },
+      mockup: {
+        columns: 'Columns',
+        joins: 'Joins',
+        filters: 'Filters',
+        run: 'Run',
+        keys: 'keys',
+        preview_first: 'Preview first',
+        unsaved: 'unsaved',
+      },
+      gaps_title: 'What DBFlux does not replace yet',
+      gaps_body:
+        'If your day depends on one of these, keep DBeaver installed for now. Each one is missing from DBFlux today.',
+      not_yet: 'Not yet',
+      gap: {
+        table_editor: {
+          name: 'Table and constraint editor',
+          detail:
+            'Create and alter tables through a form. Today DDL is written by hand, or applied from a schema diff.',
+        },
+        formats: {
+          name: 'More export and import formats',
+          detail:
+            'Export writes CSV and JSON, and import reads DBFlux’s own export. SQL, Excel and other formats are not supported.',
+        },
+        query_plan: {
+          name: 'Query plan visualiser',
+          detail: 'Explain query shows the plan as rows. A tree with costs is not drawn.',
+        },
+        users: {
+          name: 'Users, roles and permissions',
+          detail: 'Create users and grant or revoke privileges from the UI.',
+        },
+        backup: {
+          name: 'Backup and restore',
+          detail:
+            'Native dumps and restores. Table export and import move data as CSV or JSON only.',
+        },
+        data_compare: {
+          name: 'Data compare',
+          detail:
+            'Row-level diff between tables and connections. Schema diff compares structure only.',
+        },
+      },
+      moving_title: 'Moving over',
+      step: {
+        install: {
+          title: 'Install DBFlux',
+          body: 'Linux, macOS and Windows builds are on the download page. Nothing touches your DBeaver setup.',
+        },
+        import: {
+          title: 'Import your DBeaver connections',
+          body: 'In the connection manager, choose Import from another client and pick your workspace data-sources.json. Add credentials-config.json to bring saved passwords into the system keyring. PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB and Redis connections come across without their SSH and SSL settings, and any entry DBFlux cannot map is listed with the reason.',
+        },
+        query: {
+          title: 'Open a query tab',
+          body: 'Ctrl N opens one on the active connection. The command palette finds every other action by name.',
+        },
+      },
+      where_title: 'Where things are',
+      term: {
+        sidebar: 'Connections sidebar',
+        query_tab: 'Query tab',
+        diagram: 'Schema diagram',
+        transfer: 'Export, import, migrate',
+        schema_diff: 'Schema diff',
+      },
     },
   },
   about: {

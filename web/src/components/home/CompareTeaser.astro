@@ -10,6 +10,7 @@ import {
 } from '../../data/compare';
 import type { CompareCell, CompareRow, CompareTone } from '../../data/compare';
 import { CURRENT, productVersion } from '../../data/versions';
+import { siteUrl } from '../../data/site';
 import { DEFAULT_LOCALE, dictionary } from '../../i18n';
 import type { Locale } from '../../i18n';
 
@@ -20,6 +21,7 @@ interface Props {
 const { locale = DEFAULT_LOCALE } = Astro.props;
 const strings = dictionary(locale).landing.compare;
 const version = productVersion(CURRENT.id);
+const fullComparison = siteUrl('compare/', locale);
 
 const cellText = ([, value]: CompareCell) =>
   'key' in value ? strings.cell[value.key] : value.text;
@@ -78,12 +80,12 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
                 <Glyph name={row.icon} size={17} class="cmp__name-icon" />
                 {rowLabel(row.label)}
               </span>
-              <span class="cmp__cell cmp__cell--dbflux" role="cell" data-tone={row.dbflux[0]}>
-                <Glyph name={TONE_ICON[row.dbflux[0]]} size={16} class="cmp__icon" />
+              <span class="cmp__cell cmp__cell--dbflux" role="cell" data-verdict={row.dbflux[0]}>
+                <Glyph name={TONE_ICON[row.dbflux[0]]} size={16} class="verdict-icon" />
                 <span>{cellText(row.dbflux)}</span>
               </span>
-              <span class="cmp__cell" role="cell" data-tone={row.clients[client.id][0]}>
-                <Glyph name={TONE_ICON[row.clients[client.id][0]]} size={16} class="cmp__icon" />
+              <span class="cmp__cell" role="cell" data-verdict={row.clients[client.id][0]}>
+                <Glyph name={TONE_ICON[row.clients[client.id][0]]} size={16} class="verdict-icon" />
                 <span>{cellText(row.clients[client.id])}</span>
               </span>
             </div>
@@ -108,12 +110,16 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
           <div class="cmp__meta">
             <div class="cmp__legend">
               {LEGEND.map((tone) => (
-                <span data-tone={tone}>
-                  <Glyph name={TONE_ICON[tone]} size={14} class="cmp__icon" />
+                <span data-verdict={tone}>
+                  <Glyph name={TONE_ICON[tone]} size={14} class="verdict-icon" />
                   {strings.legend[tone]}
                 </span>
               ))}
             </div>
+            <a class="go cmp__full" href={fullComparison}>
+              {strings.full}
+              <Glyph name="chevron-right" size={14} class="go__chev" />
+            </a>
             <span class="cmp__reviewed mono">
               {strings.reviewed.replace('{date}', COMPARE_REVIEWED)}
             </span>
@@ -136,18 +142,23 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
             <Glyph name={row.icon} size={15} class="cmp__name-icon" />
             {rowLabel(row.label)}
           </span>
-          <span role="cell" data-tone={row.dbflux}>
-            <Glyph name={TONE_ICON[row.dbflux]} size={17} class="cmp__icon" />
+          <span role="cell" data-verdict={row.dbflux}>
+            <Glyph name={TONE_ICON[row.dbflux]} size={17} class="verdict-icon" />
             <span class="visually-hidden">{strings.legend[row.dbflux]}</span>
           </span>
-          <span role="cell" data-tone={row.dbeaver}>
-            <Glyph name={TONE_ICON[row.dbeaver]} size={17} class="cmp__icon" />
+          <span role="cell" data-verdict={row.dbeaver}>
+            <Glyph name={TONE_ICON[row.dbeaver]} size={17} class="verdict-icon" />
             <span class="visually-hidden">{strings.legend[row.dbeaver]}</span>
           </span>
         </div>
       ))
     }
   </div>
+
+  <a class="go go--plain cmp__phone-full" href={fullComparison}>
+    {strings.full}
+    <Glyph name="chevron-right" size={14} class="go__chev" />
+  </a>
 </section>
 
 <script>
@@ -324,39 +335,6 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
     background: color-mix(in srgb, var(--accent) 4%, transparent);
   }
 
-  [data-tone='included'] {
-    --tone-icon: var(--success);
-    --tone-text: var(--text-strong);
-  }
-
-  [data-tone='limited'] {
-    --tone-icon: var(--link);
-    --tone-text: var(--text);
-  }
-
-  [data-tone='paid'] {
-    --tone-icon: var(--accent);
-    --tone-text: var(--accent);
-  }
-
-  [data-tone='none'] {
-    --tone-icon: var(--text-muted);
-    --tone-text: var(--text-muted);
-  }
-
-  [data-tone='unknown'] {
-    --tone-icon: var(--text-faint);
-    --tone-text: var(--text-muted);
-  }
-
-  [data-tone] {
-    color: var(--tone-text);
-  }
-
-  [data-tone] :global(.cmp__icon) {
-    color: var(--tone-icon);
-  }
-
   .cmp__side {
     display: flex;
     flex-direction: column;
@@ -412,17 +390,26 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
     font-size: 12.5px;
   }
 
-  .cmp__legend [data-tone] {
+  .cmp__legend [data-verdict] {
     display: flex;
     align-items: center;
     gap: 6px;
     color: var(--text-muted);
   }
 
-  .cmp__reviewed {
+  .cmp__full {
+    align-self: flex-start;
     margin-top: 10px;
+  }
+
+  .cmp__reviewed {
     font-size: 11.5px;
     color: var(--text-muted);
+  }
+
+  .cmp__phone-full {
+    display: none;
+    align-self: flex-start;
   }
 
   .cmp__phone {
@@ -518,6 +505,10 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
 
     .cmp__phone {
       display: block;
+    }
+
+    .cmp__phone-full {
+      display: inline-flex;
     }
   }
 </style>

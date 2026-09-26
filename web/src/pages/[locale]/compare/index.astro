@@ -1,0 +1,29 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ComparePage from '../../../components/compare/ComparePage.astro';
+import { DOCS_AT_ROOT, SITE_ORIGIN } from '../../../data/site';
+import { DEFAULT_LOCALE, LOCALES, dictionary } from '../../../i18n';
+import type { Locale } from '../../../i18n';
+
+export function getStaticPaths() {
+  return LOCALES.filter((locale) => locale !== DEFAULT_LOCALE).map((locale) => ({
+    params: { locale },
+    props: { locale },
+  }));
+}
+
+const { locale } = Astro.props as { locale: Locale };
+const strings = dictionary(locale).compare_page;
+---
+
+<Base
+  title={strings.page_title}
+  description={strings.page_description}
+  current="compare"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/${locale}/compare/` : undefined}
+  locale={locale}
+  translated
+>
+  <ComparePage locale={locale} />
+</Base>

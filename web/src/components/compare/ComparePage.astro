@@ -1,0 +1,709 @@
+---
+import Glyph from '../Glyph.astro';
+import {
+  COMPARE_CLIENTS,
+  COMPARE_GROUPS,
+  COMPARE_PAGES,
+  COMPARE_REVIEWED,
+  TONE_ICON,
+} from '../../data/compare';
+import type { CompareCell, CompareRow, CompareSource, CompareTone } from '../../data/compare';
+import { REPO } from '../../data/nav';
+import { siteUrl } from '../../data/site';
+import { CURRENT, productVersion } from '../../data/versions';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const dict = dictionary(locale);
+const strings = dict.compare_page;
+const shared = dict.landing.compare;
+const version = productVersion(CURRENT.id);
+
+const cellText = ([, value]: CompareCell) => ('key' in value ? shared.cell[value.key] : value.text);
+
+const rowLabel = (label: CompareRow['label']) =>
+  'key' in label ? shared.row[label.key] : label.text;
+
+const clientName = (source: CompareSource) => {
+  const name = COMPARE_CLIENTS.find((client) => client.id === source.client)?.name ?? '';
+
+  return source.detail ? `${name} (${source.detail})` : name;
+};
+
+const COLUMNS = [
+  { name: 'DBFlux', edition: version },
+  ...COMPARE_CLIENTS.map((client) => ({
+    name: client.name,
+    edition: shared.edition[client.edition],
+  })),
+];
+
+const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', 'unknown'];
+
+const SOURCED_ROWS = COMPARE_GROUPS.flatMap((group) => group.rows).filter(
+  (row) => row.sources.length > 0,
+);
+---
+
+<div class="cp">
+  <section class="cp__intro shell rise">
+    <p class="eyebrow">{strings.eyebrow}</p>
+    <h1 class="display cp__h1">{strings.h1_1}<br />{strings.h1_2}</h1>
+
+    <div class="cp__lede-row">
+      <p class="cp__lede">{strings.lede}</p>
+      <div class="cp__meta card c14">
+        <span class="cp__meta-title">
+          <Glyph name="file-text" size={15} />
+          {strings.meta.replace('{version}', version).replace('{date}', COMPARE_REVIEWED)}
+        </span>
+        <span class="cp__meta-body">{strings.meta_body}</span>
+      </div>
+    </div>
+
+    <div class="cp__legend">
+      {
+        LEGEND.map((tone) => (
+          <span data-verdict={tone} class="cp__legend-item">
+            <Glyph name={TONE_ICON[tone]} size={15} class="verdict-icon" />
+            {strings.legend[tone]}
+          </span>
+        ))
+      }
+      <span class="cp__legend-spacer"></span>
+      <span class="cp__hint">{strings.highlight_hint}</span>
+    </div>
+  </section>
+
+  <section class="cp__matrix shell rise">
+    <div class="cp__frame card c18" data-cmp-table data-col="0">
+      <div class="cp__scroll">
+        <table class="cp__table">
+          <caption class="visually-hidden">{strings.page_title}</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="cp__corner">
+                <span class="x">{strings.edition_compared}</span>
+              </th>
+              {
+                COLUMNS.map((column, index) => (
+                  <th scope="col" class="cp__head" data-c={index}>
+                    <button
+                      type="button"
+                      class="cp__chip"
+                      aria-pressed={index === 0 ? 'true' : 'false'}
+                      data-pick={index}
+                    >
+                      <span class="cp__chip-name">{column.name}</span>
+                      <span class="cp__chip-edition mono">{column.edition}</span>
+                    </button>
+                  </th>
+                ))
+              }
+            </tr>
+          </thead>
+          {
+            COMPARE_GROUPS.map((group) => (
+              <tbody>
+                <tr class="cp__group">
+                  <th scope="colgroup" colspan={COLUMNS.length + 1}>
+                    <span class="cp__group-label">
+                      <Glyph name={group.icon} size={15} />
+                      <span class="x">{shared.group[group.id]}</span>
+                    </span>
+                  </th>
+                </tr>
+                {group.rows.map((row) => (
+                  <tr class="cp__row">
+                    <th scope="row" class="cp__name">
+                      <span class="cp__name-inner">
+                        <Glyph name={row.icon} size={17} class="cp__name-icon" />
+                        <span class="cp__name-text">
+                          <span class="cp__name-label">{rowLabel(row.label)}</span>
+                          {row.note && (
+                            <span class="cp__name-note">{shared.row_note[row.note]}</span>
+                          )}
+                        </span>
+                      </span>
+                    </th>
+                    {[row.dbflux, ...COMPARE_CLIENTS.map((client) => row.clients[client.id])].map(
+                      (cell, index) => (
+                        <td class="cp__cell" data-c={index} data-verdict={cell[0]}>
+                          <span class="cp__cell-inner">
+                            <Glyph name={TONE_ICON[cell[0]]} size={15} class="verdict-icon" />
+                            <span>{cellText(cell)}</span>
+                          </span>
+                        </td>
+                      ),
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            ))
+          }
+        </table>
+      </div>
+    </div>
+
+    <div class="cp__notes">
+      <p>{strings.note_dynamodb}</p>
+      <p>{strings.note_datagrip}</p>
+    </div>
+
+    <div class="cp__sources">
+      <p class="cp__sources-title x">{strings.sources_title}</p>
+      <ul>
+        {
+          SOURCED_ROWS.map((row) => (
+            <li>
+              <span class="cp__sources-row">{rowLabel(row.label)}</span>
+              {row.sources.map((source, index) => (
+                <>
+                  {index > 0 && <span aria-hidden="true"> · </span>}
+                  <a href={source.href} rel="noopener">
+                    {clientName(source)}
+                  </a>
+                </>
+              ))}
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="cp__pages shell reveal">
+    <p class="eyebrow">{strings.per_client}</p>
+    <div class="cp__cards">
+      {
+        COMPARE_CLIENTS.map((client) => {
+          const page = COMPARE_PAGES[client.id];
+          const Tag = page ? 'a' : 'article';
+
+          return (
+            <Tag
+              class:list={['cp__card card c14', { 'lift cp__card--link': page }]}
+              href={page ? siteUrl(page, locale) : undefined}
+            >
+              <span class="cp__card-title x">vs {client.name}</span>
+              <span class="cp__card-block">
+                <span class="cp__card-label cp__card-label--gain">
+                  <Glyph name="zap" size={14} />
+                  {shared.why}
+                </span>
+                <span class="cp__card-text">{shared.gain[client.id]}</span>
+              </span>
+              <span class="cp__card-block">
+                <span class="cp__card-label">
+                  <Glyph name="flag" size={14} />
+                  {shared.leads.replace('{name}', client.name)}
+                </span>
+                <span class="cp__card-text">{shared.keep[client.id]}</span>
+              </span>
+              {page && (
+                <span class="cp__card-go go go--plain">
+                  {strings.read_comparison}
+                  <Glyph name="chevron-right" size={14} class="go__chev" />
+                </span>
+              )}
+            </Tag>
+          );
+        })
+      }
+    </div>
+
+    <p class="cp__feedback">
+      <Glyph name="flag" size={16} />
+      <span>{strings.feedback}</span>
+      <a class="cp__feedback-link" href={`${REPO}/issues/new/choose`} rel="noopener">
+        {strings.feedback_link}
+        <Glyph name="external-link" size={13} />
+      </a>
+    </p>
+  </section>
+</div>
+
+<script>
+  const frame = document.querySelector<HTMLElement>('[data-cmp-table]');
+
+  if (frame) {
+    const picks = Array.from(frame.querySelectorAll<HTMLButtonElement>('[data-pick]'));
+
+    picks.forEach((pick) => {
+      pick.addEventListener('click', () => {
+        frame.dataset.col = pick.dataset.pick;
+        picks.forEach((other) => other.setAttribute('aria-pressed', String(other === pick)));
+      });
+    });
+  }
+</script>
+
+<style>
+  .cp {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cp > section {
+    width: 100%;
+  }
+
+  .cp__intro {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding-top: 80px;
+  }
+
+  .cp__h1 {
+    font-size: clamp(2.25rem, 1.75rem + 3.05vw, 4.5rem);
+    line-height: 0.92;
+  }
+
+  .cp__lede-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 64px;
+  }
+
+  .cp__lede {
+    max-width: 700px;
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.65;
+  }
+
+  .cp__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 18px 22px;
+    font-size: 13px;
+  }
+
+  .cp__meta-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-strong);
+    font-weight: 700;
+  }
+
+  .cp__meta-body {
+    color: var(--text-muted);
+  }
+
+  .cp__legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 20px;
+    padding: 6px 0 4px;
+    font-size: 13px;
+  }
+
+  .cp__legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-muted);
+  }
+
+  .cp__legend-spacer {
+    flex-grow: 1;
+  }
+
+  .cp__hint {
+    color: var(--text-muted);
+  }
+
+  .cp__matrix {
+    padding-top: 18px;
+  }
+
+  .cp__frame {
+    overflow: hidden;
+  }
+
+  .cp__scroll {
+    overflow-x: auto;
+  }
+
+  .cp__table {
+    width: 100%;
+    min-width: 1080px;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .cp__table th,
+  .cp__table td {
+    padding: 0;
+    text-align: left;
+    font-weight: inherit;
+  }
+
+  .cp__corner {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    width: 300px;
+    vertical-align: bottom;
+    padding: 0 20px 16px !important;
+    background: var(--panel);
+    border-bottom: var(--bw) solid var(--border-strong);
+  }
+
+  .cp__corner .x {
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cp__head {
+    height: 96px;
+    border-bottom: var(--bw) solid var(--border-strong);
+  }
+
+  .cp__chip {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 3px;
+    width: 100%;
+    height: 96px;
+    padding: 0 16px 16px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background var(--t-instant) linear,
+      color var(--t-instant) linear;
+  }
+
+  .cp__chip:hover {
+    color: var(--text-strong);
+  }
+
+  .cp__chip:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  .cp__chip[aria-pressed='true'] {
+    background: var(--raised);
+    color: var(--text-strong);
+    box-shadow: inset 0 -3px 0 var(--text-strong);
+  }
+
+  .cp__chip-name {
+    font-size: 15px;
+    font-weight: 700;
+  }
+
+  .cp__chip-edition {
+    font-size: 11px;
+    opacity: 0.75;
+  }
+
+  /* The DBFlux column is always tinted, and tinted harder when picked. */
+  .cp__cell[data-c='0'],
+  .cp__head[data-c='0'] .cp__chip {
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+  }
+
+  .cp__head[data-c='0'] .cp__chip {
+    box-shadow: inset 0 -3px 0 var(--accent-fill);
+  }
+
+  .cp__frame[data-col='0'] .cp__cell[data-c='0'],
+  .cp__frame[data-col='0'] .cp__head[data-c='0'] .cp__chip {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+
+  .cp__frame[data-col='1'] .cp__cell[data-c='1'],
+  .cp__frame[data-col='2'] .cp__cell[data-c='2'],
+  .cp__frame[data-col='3'] .cp__cell[data-c='3'],
+  .cp__frame[data-col='4'] .cp__cell[data-c='4'],
+  .cp__frame[data-col='5'] .cp__cell[data-c='5'] {
+    background: var(--raised);
+  }
+
+  .cp__group th {
+    height: 44px;
+    background: var(--band);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .cp__group-label {
+    position: sticky;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 20px;
+    color: var(--accent);
+  }
+
+  .cp__group-label .x {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .cp__row {
+    border-bottom: var(--bw) solid var(--row-line);
+  }
+
+  .cp__row:last-child {
+    border-bottom-color: transparent;
+  }
+
+  .cp__name {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    height: 54px;
+    background: var(--panel);
+  }
+
+  .cp__name-inner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 20px;
+  }
+
+  .cp__name :global(.cp__name-icon) {
+    color: var(--text-muted);
+  }
+
+  .cp__name-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .cp__name-label {
+    color: var(--text-strong);
+    font-size: 14px;
+  }
+
+  .cp__name-note {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .cp__cell-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-size: 13px;
+    line-height: 1.3;
+  }
+
+  .cp__notes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 18px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .cp__notes p {
+    margin: 0;
+  }
+
+  .cp__sources {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 22px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+
+  .cp__sources-title {
+    margin: 0;
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .cp__sources ul {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 40px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .cp__sources-row {
+    margin-right: 8px;
+    color: var(--text);
+  }
+
+  .cp__pages {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding-top: 72px;
+  }
+
+  .cp__cards {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .cp__card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px;
+    color: var(--text);
+  }
+
+  .cp__card--link:hover {
+    color: var(--text);
+  }
+
+  .cp__card-title {
+    font-weight: 900;
+    font-size: 22px;
+    line-height: 1.05;
+    text-transform: uppercase;
+    color: var(--text-strong);
+  }
+
+  .cp__card-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .cp__card-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .cp__card-label--gain {
+    color: var(--success);
+  }
+
+  .cp__card-text {
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .cp__card-go {
+    margin-top: auto;
+    font-size: 13px;
+  }
+
+  .cp__feedback {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    padding: 20px 0 72px;
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+
+  .cp__feedback-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 8px;
+  }
+
+  @media (max-width: 1180px) {
+    .cp__lede-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .cp__meta {
+      margin-left: 0;
+    }
+
+    .cp__cards {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 900px) {
+    .cp__cards,
+    .cp__sources ul {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .cp__cards {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cp__legend-spacer {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .cp__intro {
+      padding-top: 48px;
+    }
+
+    .cp__lede {
+      font-size: 16px;
+    }
+
+    .cp__table {
+      min-width: 900px;
+    }
+
+    .cp__corner {
+      width: 168px;
+      padding: 0 14px 14px !important;
+    }
+
+    .cp__name-inner {
+      padding: 8px 14px;
+      gap: 10px;
+    }
+
+    .cp__cards {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .cp__feedback {
+      padding-bottom: 56px;
+    }
+
+    .cp__feedback-link {
+      margin-left: 0;
+    }
+  }
+</style>

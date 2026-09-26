@@ -211,6 +211,7 @@ export const ko: Dictionary = {
       why: '갈아탈 이유',
       leads: '{name}이(가) 앞서는 점',
       reviewed: '마지막 검토 {date}',
+      full: '전체 비교',
       legend: {
         included: '포함',
         limited: '제한',
@@ -232,6 +233,21 @@ export const ko: Dictionary = {
         mcp: 'AI 클라이언트용 MCP 서버',
         builder_short: '쿼리 빌더',
         s3_short: 'S3 브라우저',
+        table_editor: '테이블 및 제약 조건 편집기',
+        query_plan: '쿼리 실행 계획 시각화',
+        import_connections: '연결 가져오기 대상',
+      },
+      row_note: {
+        limits: '비교한 에디션 기준',
+        dynamodb: '주석 1',
+        builder: 'SELECT, UPDATE, DELETE',
+        s3: 'R2, MinIO 호환',
+      },
+      group: {
+        licence: '라이선스',
+        engines: '엔진',
+        query: '쿼리와 시각화',
+        cloud: '클라우드와 자동화',
       },
       cell: {
         included: '포함',
@@ -248,6 +264,8 @@ export const ko: Dictionary = {
         with_roles: '역할과 승인 포함',
         mcp_dbeaver: 'Team / CloudBeaver EE; 무료 dbvr CLI',
         mcp_dbgate: '읽기 전용, Docker 빌드',
+        not_yet: '아직 없음',
+        not_included: '포함 안 됨',
       },
       gain: {
         dbeaver: '유료 에디션 없이 MongoDB, Redis, DynamoDB, 쿼리 빌더, 차트를 씁니다.',
@@ -295,6 +313,146 @@ export const ko: Dictionary = {
       nix: 'nightly flake 출력도 있습니다.',
       macos: 'Apple Silicon과 Intel. macOS 11 이상. 아직 서명되지 않았습니다.',
       windows: '설치 프로그램 또는 포터블. Windows 10 이상, x86_64.',
+    },
+  },
+  compare_page: {
+    page_title: 'DBFlux와 DBeaver, DataGrip, TablePlus, Beekeeper, DbGate 비교',
+    page_description:
+      '각 데이터베이스 클라이언트가 어떤 에디션과 플랫폼에서 무엇을 포함하는지, 각 공급업체의 페이지로 확인했습니다.',
+    eyebrow: '비교',
+    h1_1: '지금 쓰는 클라이언트',
+    h1_2: '옆에 놓은 DBFlux.',
+    lede: '각 클라이언트가 어떤 에디션과 플랫폼에서 무엇을 포함하는지 정리했습니다. 자물쇠는 기능이 없다는 뜻이 아니라 라이선스 뒤에 있다는 뜻입니다. DBFlux가 부족한 부분은 해당 행에 그대로 적었습니다.',
+    meta: 'DBFlux {version} · 마지막 검토 {date}',
+    meta_body: '각 공급업체의 가격 및 기능 페이지를 바탕으로 작성했습니다.',
+    legend: {
+      included: '비교한 에디션에 포함',
+      limited: '제한',
+      paid: '유료 에디션',
+      none: '없음',
+      unknown: '아직 검토 안 됨',
+    },
+    highlight_hint: '열을 클릭하면 강조됩니다.',
+    edition_compared: '비교한 에디션',
+    note_dynamodb:
+      '1 — DBFlux는 DynamoDB의 네이티브 작업(scan, query, put, update, delete)을 실행합니다. PartiQL과 트랜잭션은 제공하지 않습니다.',
+    note_datagrip:
+      '2 — DataGrip은 비상업적 용도로만 무료입니다. 여기서는 상용 라이선스를 비교합니다.',
+    sources_title: '출처',
+    per_client: '클라이언트별 비교',
+    read_comparison: '비교 읽기',
+    feedback: '오래된 내용을 발견했나요? 이슈를 열면 해당 행을 출처와 함께 고칩니다.',
+    feedback_link: '이슈 열기',
+    vs_dbeaver: {
+      page_title: '무료 오픈 소스 DBeaver 대안',
+      page_description:
+        'MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서 유료이고 DBFlux에서는 하나의 무료 빌드에 들어 있습니다. 얻는 것, 아직 없는 것, 연결을 옮기는 방법.',
+      crumb: '비교',
+      h1: '무료 오픈 소스 DBeaver 대안.',
+      lede: 'DBeaver Community는 무료 오픈 소스이고 좋은 클라이언트입니다. 차이는 에디션 사이의 경계에 있습니다. MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서는 PRO 기능이고 DBFlux에서는 하나의 무료 빌드에 포함됩니다.',
+      download: 'DBFlux 다운로드',
+      bring: 'DBeaver 연결 가져오기',
+      on_page: '이 페이지에서',
+      toc: {
+        edition: '에디션별',
+        gain: '얻는 것',
+        gaps: '아직 대체하지 못하는 것',
+        moving: '옮겨 오기',
+      },
+      meta: 'DBFlux {version} · DBeaver 에디션 기준 {editions} · 마지막 검토 {date}',
+      edition_title: '에디션별',
+      edition_body:
+        'DBeaver는 무료 Community 에디션과 유료 데스크톱 에디션(Lite, Enterprise, Ultimate)을 제공합니다. 각 행에는 해당 기능을 포함하는 가장 저렴한 DBeaver 에디션을 적었습니다.',
+      col_feature: '기능',
+      col_community: 'DBeaver Community',
+      col_paid: 'DBeaver 유료 에디션',
+      sources: '출처:',
+      editions_page: '에디션',
+      dynamodb_note: 'DBFlux의 DynamoDB는 PartiQL이나 트랜잭션 없이 네이티브 작업을 실행합니다.',
+      gain_title: '얻는 것',
+      gain: {
+        builder: {
+          title: 'SQL을 쓰지 않고 쿼리 만들기',
+          body: '빌더 패널에서 테이블, 조인, 필터, 집계를 고릅니다. 생성되는 SQL은 연결의 방언을 따르고, 결과가 하나의 테이블에 대응하면 계속 편집할 수 있습니다.',
+          link: '시각적 쿼리 빌더',
+        },
+        redis: {
+          title: '한 창에서 SQL과 Redis',
+          body: 'PostgreSQL 쿼리 탭 옆에 Redis 키 브라우저를 둡니다. 클러스터와 센티널 토폴로지를 지원하고, 큰 값을 불러오기 전에 크기를 확인합니다.',
+          link: '키-값 탐색',
+        },
+        aws: {
+          title: '데이터 옆의 로그와 객체',
+          body: 'CloudWatch에서 Logs Insights를 실행한 뒤, 작업이 기록한 S3 버킷을 열어 파일을 미리 보고 그 자리에서 편집합니다.',
+          link: 'CloudWatch 및 S3 드라이버',
+        },
+      },
+      mockup: {
+        columns: '열',
+        joins: '조인',
+        filters: '필터',
+        run: '실행',
+        keys: '키',
+        preview_first: '먼저 미리 보기',
+        unsaved: '저장 안 됨',
+      },
+      gaps_title: 'DBFlux가 아직 대체하지 못하는 것',
+      gaps_body:
+        '하루 업무가 이 중 하나에 달려 있다면 당분간 DBeaver를 설치해 두세요. 모두 지금 DBFlux에 없는 기능입니다.',
+      not_yet: '아직 없음',
+      gap: {
+        table_editor: {
+          name: '테이블 및 제약 조건 편집기',
+          detail:
+            '양식으로 테이블을 만들고 변경합니다. 지금은 DDL을 직접 쓰거나 스키마 차이에서 적용합니다.',
+        },
+        formats: {
+          name: '더 많은 내보내기 및 가져오기 형식',
+          detail:
+            '내보내기는 CSV와 JSON을 쓰고, 가져오기는 DBFlux 자체 내보내기만 읽습니다. SQL, Excel 등 다른 형식은 지원하지 않습니다.',
+        },
+        query_plan: {
+          name: '쿼리 실행 계획 시각화',
+          detail:
+            '쿼리 실행 계획은 계획을 행으로 보여 줍니다. 비용이 표시된 트리는 그리지 않습니다.',
+        },
+        users: {
+          name: '사용자, 역할, 권한',
+          detail: 'UI에서 사용자를 만들고 권한을 부여하거나 회수합니다.',
+        },
+        backup: {
+          name: '백업과 복원',
+          detail:
+            '네이티브 덤프와 복원. 테이블 내보내기와 가져오기는 데이터를 CSV나 JSON으로만 옮깁니다.',
+        },
+        data_compare: {
+          name: '데이터 비교',
+          detail: '테이블과 연결 사이의 행 단위 차이. 스키마 차이는 구조만 비교합니다.',
+        },
+      },
+      moving_title: '옮겨 오기',
+      step: {
+        install: {
+          title: 'DBFlux 설치',
+          body: 'Linux, macOS, Windows 빌드는 다운로드 페이지에 있습니다. DBeaver 설정은 건드리지 않습니다.',
+        },
+        import: {
+          title: 'DBeaver 연결 가져오기',
+          body: '연결 관리자에서 다른 클라이언트에서 가져오기를 고르고 작업 공간의 data-sources.json을 선택합니다. credentials-config.json을 추가하면 저장된 비밀번호가 시스템 키링으로 옮겨집니다. PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB, Redis 연결을 SSH와 SSL 설정 없이 가져오며, DBFlux가 변환하지 못한 항목은 이유와 함께 표시됩니다.',
+        },
+        query: {
+          title: '쿼리 탭 열기',
+          body: 'Ctrl N으로 활성 연결에 쿼리 탭을 엽니다. 다른 모든 동작은 명령 팔레트에서 이름으로 찾을 수 있습니다.',
+        },
+      },
+      where_title: '어디에 있나요',
+      term: {
+        sidebar: '연결 사이드바',
+        query_tab: '쿼리 탭',
+        diagram: '스키마 다이어그램',
+        transfer: '내보내기, 가져오기, 마이그레이션',
+        schema_diff: '스키마 차이',
+      },
     },
   },
   about: {

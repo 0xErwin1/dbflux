@@ -1,0 +1,21 @@
+---
+import Base from '../../layouts/Base.astro';
+import ComparePage from '../../components/compare/ComparePage.astro';
+import { DOCS_AT_ROOT, SITE_ORIGIN } from '../../data/site';
+import { dictionary } from '../../i18n';
+
+const locale = 'en' as const;
+const strings = dictionary(locale).compare_page;
+---
+
+<Base
+  title={strings.page_title}
+  description={strings.page_description}
+  current="compare"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/compare/` : undefined}
+  locale={locale}
+  translated
+>
+  <ComparePage locale={locale} />
+</Base>

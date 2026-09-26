@@ -1,0 +1,349 @@
+---
+import Glyph from '../Glyph.astro';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+/**
+ * A small drawing of the app for each "what you gain" card.
+ *
+ * Built from the site's own tokens rather than a screenshot, so it follows the
+ * theme and stays sharp at any width. The names and values are illustrative;
+ * the card text beside it is what describes the feature.
+ */
+interface Props {
+  kind: 'builder' | 'redis' | 'aws';
+  locale?: Locale;
+}
+
+const { kind, locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).compare_page.vs_dbeaver.mockup;
+---
+
+<div class="mk c10" aria-hidden="true">
+  {
+    kind === 'builder' && (
+      <div class="mk__split">
+        <div class="mk__pane mk__grid">
+          <div class="mk__grid-row mk__grid-row--head">
+            <span>email</span>
+            <span>orders</span>
+          </div>
+          {[
+            ['ana@northwind.io', '42'],
+            ['e.laurent@verre.fr', '37'],
+            ['n.patel@quarry.in', '31'],
+            ['jon@brightline.io', '24'],
+            ['h.kim@cobalt.kr', '19'],
+          ].map(([email, count]) => (
+            <div class="mk__grid-row">
+              <span>{email}</span>
+              <span class="mk__num">{count}</span>
+            </div>
+          ))}
+        </div>
+        <div class="mk__pane mk__rail">
+          <span class="mk__label x">{strings.columns}</span>
+          <span class="mk__chips">
+            <span class="mk__chip">u.email</span>
+            <span class="mk__chip">COUNT(o.id)</span>
+          </span>
+          <span class="mk__label x">{strings.joins}</span>
+          <span class="mk__line">
+            orders o <b>ON</b> o.user_id = u.id
+          </span>
+          <span class="mk__label x">{strings.filters}</span>
+          <span class="mk__line">
+            o.status = <i>'paid'</i>
+          </span>
+          <span class="mk__run c4">
+            <Glyph name="play" size={10} />
+            {strings.run}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  {
+    kind === 'redis' && (
+      <div class="mk__split">
+        <div class="mk__pane">
+          <span class="mk__tab">
+            <Glyph name="brand/postgresql" size={11} />
+            orders.sql
+          </span>
+          <span class="mk__code">
+            <b>SELECT</b> id, total
+          </span>
+          <span class="mk__code">
+            <b>FROM</b> orders
+          </span>
+          <span class="mk__code">
+            <b>WHERE</b> status = <i>'failed'</i>
+          </span>
+          <span class="mk__code">
+            <b>LIMIT</b> <em>50</em>;
+          </span>
+        </div>
+        <div class="mk__pane">
+          <span class="mk__tab">
+            <Glyph name="brand/redis" size={11} />
+            cache · cluster
+          </span>
+          {[
+            ['session:8f2a', 'hash', '1.2 KB'],
+            ['queue:mail', 'list', '18 KB'],
+            ['rank:daily', 'zset', '240 KB'],
+            ['feed:global', 'string', '48 MB'],
+          ].map(([key, type, size]) => (
+            <span class="mk__key">
+              <span>{key}</span>
+              <span class="mk__muted">{type}</span>
+              <span class="mk__num">{size}</span>
+            </span>
+          ))}
+          <span class="mk__warn c4">
+            <Glyph name="circle-alert" size={11} />
+            48 MB · {strings.preview_first}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  {
+    kind === 'aws' && (
+      <div class="mk__split">
+        <div class="mk__pane">
+          <span class="mk__tab">
+            <Glyph name="logs" size={11} />
+            /aws/lambda/export
+          </span>
+          <span class="mk__code">
+            <b>fields</b> @timestamp, @message
+          </span>
+          <span class="mk__code">
+            | <b>filter</b> @message <b>like</b> <i>/wrote/</i>
+          </span>
+          {[
+            ['14:02:11', 'wrote s3://exports/0926.csv'],
+            ['13:58:40', 'wrote s3://exports/0925.csv'],
+            ['13:41:09', 'wrote s3://exports/0924.csv'],
+          ].map(([time, message]) => (
+            <span class="mk__event">
+              <span class="mk__muted">{time}</span>
+              <span>{message}</span>
+            </span>
+          ))}
+        </div>
+        <div class="mk__pane">
+          <span class="mk__tab">
+            <Glyph name="boxes" size={11} />
+            0926.csv
+            <span class="mk__dirty">{strings.unsaved}</span>
+          </span>
+          {[
+            'order,total,status',
+            '48213,1284.00,failed',
+            '48202,412.60,failed',
+            '48177,96.10,retried',
+          ].map((line, index) => (
+            <span class="mk__code">
+              <span class="mk__gutter">{index + 1}</span>
+              {line}
+            </span>
+          ))}
+        </div>
+      </div>
+    )
+  }
+</div>
+
+<style>
+  .mk {
+    height: 200px;
+    padding: 14px;
+    overflow: hidden;
+    background: var(--band);
+    box-shadow: inset 0 0 0 1px var(--border);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+
+  .mk__split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px;
+    height: 100%;
+  }
+
+  .mk__pane {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    padding: 10px;
+    overflow: hidden;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .mk__pane > * {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mk b {
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  .mk i {
+    font-style: normal;
+    color: var(--success);
+  }
+
+  .mk em {
+    font-style: normal;
+    color: var(--violet);
+  }
+
+  .mk__muted {
+    color: var(--text-muted);
+  }
+
+  .mk__num {
+    color: var(--violet);
+    text-align: right;
+  }
+
+  .mk__grid {
+    gap: 0;
+    padding: 0;
+  }
+
+  .mk__grid-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: var(--bw) solid var(--row-line);
+  }
+
+  .mk__grid-row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mk__grid-row--head {
+    color: var(--text-muted);
+    border-bottom-color: var(--border-strong);
+  }
+
+  .mk__rail {
+    gap: 4px;
+  }
+
+  .mk__label {
+    margin-top: 2px;
+    font-weight: 800;
+    font-size: 8.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .mk__chips {
+    display: flex;
+    gap: 4px;
+  }
+
+  .mk__chip {
+    padding: 1px 6px;
+    background: var(--raised);
+    color: var(--text-strong);
+  }
+
+  .mk__line {
+    color: var(--text-strong);
+  }
+
+  .mk__run {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 5px;
+    margin-top: auto;
+    padding: 3px 9px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-family: var(--font-sans);
+    font-weight: 700;
+  }
+
+  .mk__tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: -10px -10px 4px;
+    padding: 6px 10px;
+    border-bottom: var(--bw) solid var(--border);
+    color: var(--text-strong);
+    box-shadow: inset 0 -2px 0 var(--accent-fill);
+  }
+
+  .mk__code {
+    color: var(--text-strong);
+  }
+
+  .mk__gutter {
+    display: inline-block;
+    width: 14px;
+    color: var(--text-muted);
+  }
+
+  .mk__key {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 36px 44px;
+    gap: 6px;
+  }
+
+  .mk__key span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mk__warn {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 5px;
+    margin-top: auto;
+    padding: 3px 8px;
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+
+  .mk__event {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .mk__event span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mk__dirty {
+    flex-shrink: 0;
+    margin-left: auto;
+    padding: 0 5px;
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+    font-size: 9px;
+  }
+</style>
