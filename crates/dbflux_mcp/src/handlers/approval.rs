@@ -48,9 +48,12 @@ pub fn get_pending_execution(
 pub fn reject_execution(
     approval_service: &mut ApprovalService,
     pending_id: &str,
+    reason: Option<&str>,
 ) -> Result<RejectedExecution, ApprovalHandlerError> {
     let pending_id = Uuid::parse_str(pending_id)
         .map_err(|_| ApprovalHandlerError::InvalidPendingId(pending_id.to_string()))?;
 
-    approval_service.reject(pending_id).map_err(Into::into)
+    approval_service
+        .reject(pending_id, reason)
+        .map_err(Into::into)
 }

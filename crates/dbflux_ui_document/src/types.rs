@@ -38,6 +38,10 @@ pub enum DocumentKind {
     ObjectEditor,
     // Offline analysis report for a driver's native dump/export file
     DumpAnalysis,
+    // MCP approvals queue (agent calls parked for a person)
+    McpApprovals,
+    // Migrate-data wizard (table -> table, cross-connection)
+    MigrateWizard,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -69,6 +73,8 @@ pub enum DocumentIcon {
     Buckets,
     ObjectBrowser,
     DumpAnalysis,
+    McpApprovals,
+    Migrate,
 }
 
 impl DocumentIcon {
@@ -89,6 +95,8 @@ impl DocumentIcon {
             Self::Buckets => "box",
             Self::ObjectBrowser => "folder-open",
             Self::DumpAnalysis => "hard-drive",
+            Self::McpApprovals => "bot",
+            Self::Migrate => "arrow-up-down",
         }
     }
 }

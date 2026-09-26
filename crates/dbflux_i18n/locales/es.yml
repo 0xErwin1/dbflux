@@ -921,7 +921,6 @@ document:
       run: Ejecutar
       last_run: "última ejecución %{seconds} s"
       new_tab: Nueva pestaña
-      selection: Selección
       read_only: Solo lectura
       saved: Guardado
       save: Guardar
@@ -1041,7 +1040,6 @@ document:
         body: "Las sentencias peligrosas piden confirmación antes de ejecutarse."
     execution:
       toast:
-        select_query: Selecciona el texto de la consulta a ejecutar
         enter_query: Escribe una consulta para ejecutar
         no_active_connection: No hay ninguna conexión activa
         connection_not_found: Conexión no encontrada
@@ -1357,6 +1355,9 @@ document:
         chart_name: Nombre del gráfico
       filter:
         open_in_builder: Abrir en el generador
+        builder_notice: Las filas vienen de la consulta del generador
+        edit_in_builder: Editar en el generador
+        reset_builder: Restablecer
       toast:
         query_imported: Consulta importada correctamente
         mutation_queued: Mutación en cola para aprobación.
@@ -1561,11 +1562,11 @@ document:
     execution_plan: "Qué va a ejecutar"
     approve: "Aprobar y ejecutar"
     reject: Rechazar
+    reject_reason_placeholder: "Motivo (se envía al agente al rechazar)"
     select_prompt: Selecciona una solicitud pendiente para ver los detalles.
     load_failed: "No se pudo cargar la ejecución pendiente %{id}: %{error}"
     title: "Aprobaciones MCP"
     subtitle: "llamadas de agentes que una política dejó en espera de una persona"
-    close: "Cerrar"
     pending_count: "Pendientes · %{count}"
     list_hint: "mover · las decisiones se escriben en el registro de auditoría"
     requested_by: "Solicitado por"
@@ -1970,6 +1971,8 @@ document:
         edit_locked: "Para editar, pon Compresión en Ninguna y Ver como en Auto, JSON o Texto"
   migrate_wizard:
     title: Migrar datos
+    already_running: "Ya hay una migración en curso. Se trajo al frente; espera a que termine antes de iniciar otra."
+    already_running_in_tasks: "Ya hay una migración en curso en el panel de tareas. Espera a que termine o cancélala antes de iniciar otra."
     task:
       one: "Migrar %{count} tabla"
       many: "Migrar %{count} tablas"
@@ -2073,7 +2076,6 @@ document:
     footer:
       cancel_migration: "Cancelar migración"
       referential_integrity_off: "La integridad referencial está desactivada hasta que termine la ejecución"
-      run_in_background: "Ejecutar en segundo plano"
       back: Atrás
       continue: Continuar
       loading: "Cargando…"

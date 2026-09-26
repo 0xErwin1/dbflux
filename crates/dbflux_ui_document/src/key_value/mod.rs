@@ -332,7 +332,6 @@ impl KeyValueDocument {
             Dropdown::new("kv-compression")
                 .items(items)
                 .selected_index(Some(Compression::None.index()))
-                .chevron_trigger(ButtonVariant::Secondary)
         });
 
         let compression_dropdown_subscription = cx.subscribe(

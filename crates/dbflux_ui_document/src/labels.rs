@@ -3141,7 +3141,6 @@ mod tests {
             "document.code.toolbar.run",
             "document.code.toolbar.last_run",
             "document.code.toolbar.new_tab",
-            "document.code.toolbar.selection",
             "document.code.toolbar.read_only",
             "document.code.toolbar.saved",
             "document.code.toolbar.save",

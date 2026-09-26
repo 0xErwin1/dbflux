@@ -216,7 +216,7 @@ crates/
       data_view.rs          # DataViewMode abstraction (Table vs Document)
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
-      governance.rs         # MCP approvals view for pending executions
+      governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
       history_modal.rs      # Recent/saved queries modal
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
@@ -1547,8 +1547,8 @@ IA con una capa completa de gobernanza:
   seguro y no mutante
 
 **Integración con la UI**:
-- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) para
-  revisar ejecuciones pendientes
+- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance/`), pestaña de
+  documento para revisar ejecuciones pendientes
 - `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) en
   Settings para trusted clients, roles y policies
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) como el visor de

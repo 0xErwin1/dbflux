@@ -375,10 +375,10 @@ impl DataGridPanel {
         let is_paginated = self.source.is_paginated();
         let (_, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
-        let filter_keyword = if self.builder.filter_input_hidden {
-            String::new()
-        } else {
+        let filter_keyword = if self.filter_input_visible() {
             raw_filter_keyword.to_string()
+        } else {
+            String::new()
         };
         let filter_input = self.filter_bar.filter_input.clone();
         let filter_has_value = !self.filter_bar.filter_input.read(cx).value().is_empty();
@@ -691,6 +691,7 @@ impl DataGridPanel {
             return div()
                 .relative()
                 .flex_1()
+                .min_h_0()
                 .flex()
                 .flex_col()
                 .overflow_hidden()
@@ -705,6 +706,7 @@ impl DataGridPanel {
                 .child(
                     div()
                         .flex_1()
+                        .min_h_0()
                         .flex()
                         .flex_col()
                         .overflow_hidden()
@@ -716,6 +718,7 @@ impl DataGridPanel {
 
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -749,7 +752,7 @@ impl DataGridPanel {
     ) -> impl IntoElement {
         let theme = theme.clone();
 
-        let content = div().flex_1().overflow_hidden();
+        let content = div().flex_1().min_h_0().overflow_hidden();
 
         let content = content.when(
             matches!(content_mode, DataGridContentMode::EmptyFallback),
@@ -1142,6 +1145,9 @@ impl DataGridPanel {
                     .min_w(px(0.0))
                     .items_center()
                     .gap(Spacing::XS)
+                    .when(self.builder_notice_visible(), |d| {
+                        d.child(self.render_builder_notice(theme, cx))
+                    })
                     .child(field)
                     .when_some(toolbar_error, |d, err| d.child(err)),
             )
@@ -1194,6 +1200,61 @@ impl DataGridPanel {
                     }
                 }),
             ))
+    }
+
+    /// Stands in for the WHERE input while a closed builder's spec drives the
+    /// rows: says where the rows come from and offers to reopen the builder
+    /// or reset back to the plain table read.
+    fn render_builder_notice(
+        &self,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id("builder-query-notice")
+            .debug_selector(|| "builder-query-notice".to_string())
+            .flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .items_center()
+            .gap(Spacing::SM)
+            .child(
+                Icon::new(AppIcon::ListFilter)
+                    .size(Fields::FILTER_ICON)
+                    .color(theme.muted_foreground),
+            )
+            .child(
+                div().min_w(px(0.0)).truncate().child(
+                    Text::body_sm(dbflux_i18n::t!("document.data.grid.filter.builder_notice"))
+                        .color(theme.muted_foreground),
+                ),
+            )
+            .child(
+                Button::new(
+                    "builder-notice-edit",
+                    dbflux_i18n::t!("document.data.grid.filter.edit_in_builder"),
+                )
+                .ghost()
+                .inline()
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_query_builder(window, cx);
+                })),
+            )
+            .child(
+                Button::new(
+                    "builder-notice-reset",
+                    dbflux_i18n::t!("document.data.grid.filter.reset_builder"),
+                )
+                .ghost()
+                .inline()
+                .icon(AppIcon::RotateCcw)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.reset_builder_query(window, cx);
+                    cx.notify();
+                })),
+            )
     }
 
     /// Right side of the header of an editable table: the unsaved-changes
@@ -3532,8 +3593,9 @@ impl DataGridPanel {
             );
 
         div()
+            .debug_selector(|| "data-grid-footer".to_string())
             .flex()
-            .flex_shrink_0()
+            .flex_none()
             .items_center()
             .gap(ResultMetrics::FOOTER_GAP)
             .h(ResultMetrics::FOOTER_HEIGHT)

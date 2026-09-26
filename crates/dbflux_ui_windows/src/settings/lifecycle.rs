@@ -413,11 +413,11 @@ impl SettingsCoordinator {
 
         match (chord.key.as_str(), chord.modifiers) {
             ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                self.sidebar_tree.move_next();
+                self.sidebar_tree.move_next_selectable();
                 cx.notify();
             }
             ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                self.sidebar_tree.move_prev();
+                self.sidebar_tree.move_prev_selectable();
                 cx.notify();
             }
             ("left", modifiers) if modifiers == Modifiers::none() => {
@@ -590,12 +590,12 @@ impl SettingsCoordinator {
                 cx.notify();
             }
             ("down", modifiers) if modifiers == Modifiers::none() => {
-                self.sidebar_tree.move_next();
+                self.sidebar_tree.move_next_selectable();
                 self.focus_handle.focus(window, cx);
                 cx.notify();
             }
             ("up", modifiers) if modifiers == Modifiers::none() => {
-                self.sidebar_tree.move_prev();
+                self.sidebar_tree.move_prev_selectable();
                 self.focus_handle.focus(window, cx);
                 cx.notify();
             }

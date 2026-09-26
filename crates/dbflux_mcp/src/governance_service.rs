@@ -195,8 +195,11 @@ pub trait McpGovernanceService {
         pending_id: &str,
     ) -> Result<ApprovalOutcome, GovernanceError>;
 
+    /// Rejects a pending execution. `reason` is returned to the requesting
+    /// agent and recorded in the audit event.
     fn reject_pending_execution(
         &self,
         pending_id: &str,
+        reason: Option<&str>,
     ) -> Result<ApprovalOutcome, GovernanceError>;
 }

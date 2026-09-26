@@ -30,8 +30,6 @@ use crate::ui::dock::{SidebarDock, SidebarDockEvent};
 use crate::ui::document::{CodeDocument, DataDocument, Tab, TabBar, TabBarEvent, TabManager};
 use dbflux_ui_base::keymap::{RunCommand, run_command};
 
-#[cfg(feature = "mcp")]
-use crate::ui::document::McpApprovalsView;
 use crate::ui::icons::AppIcon;
 use crate::ui::overlays::command_palette::{
     CommandPalette, CommandPaletteClosed, PaletteCommand, PaletteItem, PaletteSelection,
@@ -330,9 +328,6 @@ pub struct Workspace {
     workspace_inspector: Entity<inspector::WorkspaceInspector>,
     _workspace_inspector_subscription: Subscription,
 
-    #[cfg(feature = "mcp")]
-    mcp_approvals_view: Entity<McpApprovalsView>,
-
     /// S8 modals — rendered as full-screen overlays via `Modal`.
     modal_delete_connection: Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
     /// "Active query running" prompt shown before a disconnect or quit that
@@ -362,9 +357,6 @@ pub struct Workspace {
     /// Import wizard (folder bundle -> tables), targeting the connection it
     /// was opened from.
     import_wizard: Entity<dbflux_ui_document::import_wizard::ImportWizard>,
-    /// Migrate wizard (table -> table, cross-connection), pre-populated from
-    /// the sidebar's multi-select Migrate action.
-    migrate_wizard: Entity<dbflux_ui_document::migrate_wizard::MigrateWizard>,
     /// Export wizard (table -> file bundle), pre-populated from the
     /// sidebar's multi-select Export action.
     export_wizard: Entity<dbflux_ui_document::export_wizard::ExportWizard>,
@@ -386,9 +378,6 @@ pub struct Workspace {
     /// Tab stop of the title bar's command search, which opens the palette.
     command_search_focus: FocusHandle,
 
-    #[cfg(feature = "mcp")]
-    active_governance_panel: Option<GovernancePanel>,
-
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
     _background_purge_task: Option<Task<()>>,
@@ -398,12 +387,6 @@ pub struct Workspace {
     ///
     /// Fields: `(provider_name, profile_name, url)`.
     pending_login_modal_open: Option<(String, String, Option<String>)>,
-}
-
-#[cfg(feature = "mcp")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum GovernancePanel {
-    Approvals,
 }
 
 /// The operation the active-query prompt interrupted.
@@ -461,23 +444,6 @@ impl Workspace {
         let status_bar =
             cx.new(|cx| StatusBar::new(app_state.clone(), tab_manager.clone(), window, cx));
 
-        #[cfg(feature = "mcp")]
-        let workspace_handle = cx.weak_entity();
-        #[cfg(feature = "mcp")]
-        let mcp_approvals_view = cx.new(|cx| {
-            let mut view = McpApprovalsView::new(app_state.clone(), cx);
-            let workspace = workspace_handle.clone();
-            view.set_on_close(move |window, cx| {
-                let closed = workspace.update(cx, |workspace, cx| {
-                    workspace.close_governance_panel(window, cx);
-                });
-                if let Err(error) = closed {
-                    log::debug!("workspace released before the approvals closed: {error}");
-                }
-            });
-            view
-        });
-
         let command_palette = cx.new(|cx| CommandPalette::new(window, cx));
 
         let sql_preview_modal = cx.new(|cx| SqlPreviewModal::new(app_state.clone(), window, cx));
@@ -515,9 +481,6 @@ impl Workspace {
         });
         let import_wizard = cx
             .new(|cx| dbflux_ui_document::import_wizard::ImportWizard::new(app_state.clone(), cx));
-        let migrate_wizard = cx.new(|cx| {
-            dbflux_ui_document::migrate_wizard::MigrateWizard::new(app_state.clone(), cx)
-        });
         let export_wizard = cx.new(|cx| {
             dbflux_ui_document::export_wizard::ExportWizard::new(app_state.clone(), window, cx)
         });
@@ -1276,12 +1239,13 @@ impl Workspace {
                     database,
                     tables,
                 } => {
-                    let profile_id = *profile_id;
-                    let database = database.clone();
-                    let tables = tables.clone();
-                    this.migrate_wizard.update(cx, |wizard, cx| {
-                        wizard.open(profile_id, database, tables, window, cx);
-                    });
+                    this.open_migrate_wizard(
+                        *profile_id,
+                        database.clone(),
+                        tables.clone(),
+                        window,
+                        cx,
+                    );
                 }
                 SidebarEvent::RequestSchemaDiff {
                     profile_id,
@@ -1567,8 +1531,6 @@ impl Workspace {
             tab_bar,
             workspace_inspector,
             _workspace_inspector_subscription: workspace_inspector_subscription,
-            #[cfg(feature = "mcp")]
-            mcp_approvals_view,
             modal_delete_connection,
             modal_active_query,
             pending_active_query: None,
@@ -1584,7 +1546,6 @@ impl Workspace {
             modal_add_panel,
             export_modal,
             import_wizard,
-            migrate_wizard,
             export_wizard,
             tasks_state: PanelState::Collapsed,
             pending_command: None,
@@ -1598,8 +1559,6 @@ impl Workspace {
             focus_target: FocusTarget::default(),
             focus_handle,
             command_search_focus: cx.focus_handle(),
-            #[cfg(feature = "mcp")]
-            active_governance_panel: None,
             _background_purge_task: None,
             pending_login_modal_open: None,
         };
@@ -3870,46 +3829,172 @@ mod tab_close_request_tests {
     }
 
     #[cfg(feature = "mcp")]
-    fn open_approvals_overlay(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+    fn open_approvals(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
         window.update(|window, cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.dispatch(Command::OpenMcpApprovals, window, cx);
             });
         });
         window.run_until_parked();
+    }
 
-        assert!(
-            approvals_overlay_is_open(window, workspace),
-            "opening the approvals must show the overlay"
+    fn tabs_of_kind(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        kind: crate::ui::document::DocumentKind,
+    ) -> Vec<DocumentId> {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .documents()
+                .iter()
+                .filter(|tab| tab.kind() == kind)
+                .map(|tab| tab.id())
+                .collect()
+        })
+    }
+
+    fn active_tab_id(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Option<DocumentId> {
+        window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id())
+    }
+
+    /// The approvals open as a document tab, not as an overlay over the app.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_approvals_open_as_a_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
+
+        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
+        assert_eq!(approvals.len(), 1, "the approvals must open one tab");
+        assert_eq!(
+            active_tab_id(window, &workspace),
+            approvals.first().copied(),
+            "the approvals tab must become the active tab"
+        );
+        assert_eq!(
+            window.update(|_, cx| workspace.read(cx).focus_target),
+            FocusTarget::Document,
+            "the approvals tab must take the keyboard"
         );
     }
 
-    #[cfg(feature = "mcp")]
-    fn approvals_overlay_is_open(
-        window: &mut VisualTestContext,
-        workspace: &Entity<Workspace>,
-    ) -> bool {
-        window.update(|_, cx| workspace.read(cx).active_governance_panel.is_some())
-    }
-
-    /// Regression: Cancel had no handler for the approvals overlay, so the
-    /// only way out was opening the audit viewer.
+    /// Opening the approvals again focuses the tab that is already open
+    /// instead of adding a second one.
     #[cfg(feature = "mcp")]
     #[gpui::test]
-    fn cancel_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals_overlay(window, &workspace);
+    fn opening_the_approvals_again_focuses_the_existing_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
 
-        window.update(|window, cx| {
-            workspace.update(cx, |workspace, cx| {
-                workspace.dispatch(Command::Cancel, window, cx);
-            });
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
+        let other = open_code_tab(window, &workspace, &app_state);
+        activate_tab(window, &workspace, other);
+
+        open_approvals(window, &workspace);
+
+        let approvals = tabs_of_kind(window, &workspace, DocumentKind::McpApprovals);
+        assert_eq!(approvals.len(), 1, "a second open must not add a tab");
+        assert_eq!(
+            active_tab_id(window, &workspace),
+            approvals.first().copied()
+        );
+    }
+
+    /// The status bar's approvals chip opens the same tab.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_status_bar_chip_opens_the_approvals_tab(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+        use crate::ui::views::status_bar::OpenApprovalsRequested;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        let status_bar = window.update(|_, cx| workspace.read(cx).status_bar.clone());
+
+        window.update(|_, cx| {
+            status_bar.update(cx, |_, cx| cx.emit(OpenApprovalsRequested));
         });
         window.run_until_parked();
 
-        assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "Cancel must close the approvals overlay"
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
+            1,
+            "the status bar chip must open the approvals tab"
+        );
+    }
+
+    /// Escape inside the approvals tab leaves the tab open: it is a document,
+    /// not an overlay that Cancel dismisses.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn escape_leaves_the_approvals_tab_open(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals(window, &workspace);
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::McpApprovals).len(),
+            1
+        );
+    }
+
+    /// The Migrate action opens the wizard as a tab; repeating it for the same
+    /// selection focuses that tab, and a different selection gets its own.
+    #[gpui::test]
+    fn the_migrate_wizard_opens_as_a_tab_deduplicated_by_its_selection(cx: &mut TestAppContext) {
+        use crate::ui::document::DocumentKind;
+        use dbflux_core::TableRef;
+
+        let (workspace, app_state, window) = new_workspace(cx);
+        let profile_id = uuid::Uuid::new_v4();
+        let users = vec![TableRef {
+            schema: Some("public".to_string()),
+            name: "users".to_string(),
+        }];
+        let orders = vec![TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        }];
+
+        let open_migrate = |window: &mut VisualTestContext, tables: Vec<TableRef>| {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.open_migrate_wizard(profile_id, None, tables, window, cx);
+                });
+            });
+            window.run_until_parked();
+        };
+
+        open_migrate(window, users.clone());
+        let first = tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard);
+        assert_eq!(first.len(), 1, "the Migrate action must open one tab");
+
+        let other = open_code_tab(window, &workspace, &app_state);
+        activate_tab(window, &workspace, other);
+
+        open_migrate(window, users);
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard),
+            first,
+            "the same selection must focus the existing wizard tab"
+        );
+        assert_eq!(active_tab_id(window, &workspace), first.first().copied());
+
+        open_migrate(window, orders);
+        assert_eq!(
+            tabs_of_kind(window, &workspace, DocumentKind::MigrateWizard).len(),
+            2,
+            "a different selection must open its own wizard tab"
         );
     }
 
@@ -3993,57 +4078,6 @@ mod tab_close_request_tests {
 
         window.simulate_keystrokes("escape");
         assert!(!window.update(|_, cx| palette.read(cx).is_visible()));
-    }
-
-    /// Escape travels the real key path: the workspace keymap resolves it to
-    /// Cancel only if the overlay left keyboard focus inside the workspace.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn escape_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        let (workspace, app_state, window) = new_workspace(cx);
-        open_code_tab(window, &workspace, &app_state);
-        open_approvals_overlay(window, &workspace);
-
-        window.simulate_keystrokes("escape");
-
-        assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "Escape must close the approvals overlay"
-        );
-    }
-
-    /// A click on the dimmed backdrop closes the overlay, while a click inside
-    /// the panel must leave it open.
-    #[cfg(feature = "mcp")]
-    #[gpui::test]
-    fn backdrop_click_closes_the_approvals_overlay(cx: &mut TestAppContext) {
-        use gpui::{Modifiers, point, px};
-
-        let (workspace, _app_state, window) = new_workspace(cx);
-        open_approvals_overlay(window, &workspace);
-
-        let viewport = window.update(|window, _| window.viewport_size());
-        assert!(
-            viewport.width > px(1080.0) && viewport.height > px(680.0),
-            "the test window must leave backdrop visible around the panel, got {viewport:?}"
-        );
-
-        let panel_center = point(viewport.width / 2.0, viewport.height / 2.0);
-        window.simulate_click(panel_center, Modifiers::none());
-        window.run_until_parked();
-
-        assert!(
-            approvals_overlay_is_open(window, &workspace),
-            "a click inside the panel must not close the overlay"
-        );
-
-        window.simulate_click(point(px(4.0), px(4.0)), Modifiers::none());
-        window.run_until_parked();
-
-        assert!(
-            !approvals_overlay_is_open(window, &workspace),
-            "a click on the backdrop must close the overlay"
-        );
     }
 
     fn toast_count(window: &mut VisualTestContext) -> usize {

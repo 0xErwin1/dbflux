@@ -357,6 +357,15 @@ impl ConfirmRunPhase {
             return;
         }
 
+        // Only one migration runs at a time, even across wizard tabs.
+        if another_migration_running(&self.app_state, cx) {
+            Toast::warning(dbflux_i18n::t!(
+                "document.migrate_wizard.already_running_in_tasks"
+            ))
+            .push(cx);
+            return;
+        }
+
         // The engine's destructive backstop is satisfied only for a plan that
         // actually contains destructive operations — and only then after the
         // user's explicit acknowledgment (which gates this button). A
@@ -588,6 +597,16 @@ struct RunResolution {
     toast_success: bool,
     summary: String,
     warnings: Vec<String>,
+}
+
+/// Whether a migration task is running anywhere in the app, whichever wizard
+/// tab started it.
+fn another_migration_running(app_state: &Entity<AppStateEntity>, cx: &App) -> bool {
+    app_state
+        .read(cx)
+        .running_tasks()
+        .iter()
+        .any(|task| task.kind == TaskKind::Migrate)
 }
 
 fn resolve_run_outcome(

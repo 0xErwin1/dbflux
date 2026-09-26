@@ -30,6 +30,9 @@ pub struct PendingExecution {
     pub plan: ExecutionPlan,
     pub created_at: i64,
     pub expires_at: Option<i64>,
+    /// Reason the person gave when rejecting, returned to the requesting agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -55,10 +58,21 @@ pub trait PendingExecutionStore: Send + Sync {
 
     fn get_pending(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError>;
 
+    /// Returns the entry with `id` whatever its status or expiry, so a caller
+    /// can report how a request was resolved.
+    fn get_execution(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError>;
+
     fn update_status(
         &mut self,
         id: Uuid,
         status: PendingStatus,
+    ) -> Result<Option<PendingExecution>, PendingStoreError>;
+
+    /// Marks the entry `Rejected` and stores the reason the person gave.
+    fn record_rejection(
+        &mut self,
+        id: Uuid,
+        reason: Option<&str>,
     ) -> Result<Option<PendingExecution>, PendingStoreError>;
 
     /// Returns only entries whose status is `Pending` AND whose `expires_at` is
@@ -116,6 +130,7 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
             plan: plan.clone(),
             created_at: now_epoch_ms(),
             expires_at,
+            rejection_reason: None,
         };
 
         self.entries.push(pending.clone());
@@ -148,6 +163,24 @@ impl PendingExecutionStore for InMemoryPendingExecutionStore {
             }
             None => Ok(None),
         }
+    }
+
+    fn get_execution(&self, id: Uuid) -> Result<Option<PendingExecution>, PendingStoreError> {
+        Ok(self.entries.iter().find(|entry| entry.id == id).cloned())
+    }
+
+    fn record_rejection(
+        &mut self,
+        id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<Option<PendingExecution>, PendingStoreError> {
+        let entry = self.entries.iter_mut().find(|entry| entry.id == id);
+
+        Ok(entry.map(|pending| {
+            pending.status = PendingStatus::Rejected;
+            pending.rejection_reason = reason.map(str::to_string);
+            pending.clone()
+        }))
     }
 
     fn list_pending(&self) -> Result<Vec<PendingExecution>, PendingStoreError> {

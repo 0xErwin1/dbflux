@@ -921,7 +921,6 @@ document:
       run: Run
       last_run: "last run %{seconds} s"
       new_tab: New tab
-      selection: Selection
       read_only: Read-only
       saved: Saved
       save: Save
@@ -1041,7 +1040,6 @@ document:
         body: "Dangerous statements ask for confirmation before they run."
     execution:
       toast:
-        select_query: Select query text to run
         enter_query: Enter a query to run
         no_active_connection: No active connection
         connection_not_found: Connection not found
@@ -1357,6 +1355,9 @@ document:
         chart_name: Chart name
       filter:
         open_in_builder: Open in builder
+        builder_notice: Rows come from the builder query
+        edit_in_builder: Edit in builder
+        reset_builder: Reset
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
@@ -1561,11 +1562,11 @@ document:
     execution_plan: "What it will run"
     approve: "Approve and run"
     reject: Reject
+    reject_reason_placeholder: "Reason (sent back to the agent when rejecting)"
     select_prompt: Select a pending request to review details.
     load_failed: "Failed to load pending execution %{id}: %{error}"
     title: "MCP approvals"
     subtitle: "agent calls that a policy parked for a person"
-    close: "Close"
     pending_count: "Pending · %{count}"
     list_hint: "move · decisions are written to the audit log"
     requested_by: "Requested by"
@@ -1970,6 +1971,8 @@ document:
         edit_locked: "Set Compression to None and View as to Auto, JSON or Text to edit"
   migrate_wizard:
     title: Migrate data
+    already_running: "A migration is already running. It was brought to the front; wait for it to finish before starting another one."
+    already_running_in_tasks: "A migration is already running in the Tasks panel. Wait for it to finish or cancel it before starting another one."
     task:
       one: "Migrate %{count} table"
       many: "Migrate %{count} tables"
@@ -2073,7 +2076,6 @@ document:
     footer:
       cancel_migration: "Cancel migration"
       referential_integrity_off: "Referential integrity is disabled until the run finishes"
-      run_in_background: "Run in background"
       back: Back
       continue: Continue
       loading: "Loading…"

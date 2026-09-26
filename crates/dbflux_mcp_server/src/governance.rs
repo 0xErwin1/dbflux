@@ -345,8 +345,9 @@ pub fn approval_required_message(
          waiting for their approval in DBFlux (Workspace > Pending Approvals). (2) Wait for the \
          user. Do not call approve_execution or reject_execution; they are always denied to MCP \
          clients. (3) To check the status, call get_pending_execution with \
-         {{\"pending_id\": \"{pending_id}\"}}: while it returns the execution, it is still \
-         waiting for a decision; once it is no longer found, it was approved, rejected or has \
+         {{\"pending_id\": \"{pending_id}\"}}: while its status is 'pending', it is still \
+         waiting for a decision; status 'rejected' means the user rejected it, and its 'reason' \
+         field carries what they wrote; once it is no longer found, it was approved or has \
          expired. (4) After the user approves it, repeat this exact call: the same tool \
          '{tool_id}' with identical arguments. It then runs once. If it was rejected or expired, \
          repeating it queues a new request instead of running."

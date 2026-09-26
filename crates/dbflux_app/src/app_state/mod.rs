@@ -2482,15 +2482,18 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
+    /// Rejects a pending MCP execution. `reason` is shown to the requesting
+    /// agent and written to the audit log.
     pub fn reject_mcp_pending_execution(
         &mut self,
         pending_id: &str,
+        reason: Option<&str>,
     ) -> Result<ApprovalOutcome, String> {
         self.mcp_runtime
             .reject_pending_execution_with_origin_mut(
                 pending_id,
                 "local",
-                None,
+                reason,
                 EventOrigin::local(),
             )
             .map_err(|error| error.to_string())

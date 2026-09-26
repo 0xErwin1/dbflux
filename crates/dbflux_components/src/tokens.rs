@@ -1043,7 +1043,9 @@ pub struct CollectionMetrics;
 impl CollectionMetrics {
     /// Query bar row: 50 px tall, 14 px side padding, 8 px gap. Each slot is a
     /// 32 px field with 10 px padding, 8 px between its keyword and its JSON,
-    /// 12.5 px mono text. Fixed slot widths: project 190, sort 200, limit 90.
+    /// 12.5 px mono text. Fixed slot widths: project 190, sort 200, limit 124.
+    /// The limit slot is wider than the board's 110 so its keyword, the
+    /// input's own 8 px side padding and a five-digit value fit unclipped.
     pub const QUERY_ROW_HEIGHT: Pixels = px(50.0);
     pub const QUERY_ROW_PADDING_X: Pixels = px(14.0);
     pub const QUERY_ROW_GAP: Pixels = px(8.0);
@@ -1053,7 +1055,7 @@ impl CollectionMetrics {
     pub const SLOT_FONT: Pixels = px(12.5);
     pub const PROJECT_SLOT_WIDTH: Pixels = px(190.0);
     pub const SORT_SLOT_WIDTH: Pixels = px(200.0);
-    pub const LIMIT_SLOT_WIDTH: Pixels = px(90.0);
+    pub const LIMIT_SLOT_WIDTH: Pixels = px(124.0);
     /// View row under the query bar: 42 px tall, 14 px side padding.
     pub const VIEW_ROW_HEIGHT: Pixels = px(42.0);
     pub const VIEW_ROW_PADDING_X: Pixels = px(14.0);
@@ -1161,6 +1163,10 @@ impl EditorMetrics {
     pub const LAST_RUN_FONT: Pixels = px(12.0);
     pub const LAST_RUN_ICON: Pixels = px(13.0);
     pub const LAST_RUN_GAP: Pixels = px(6.0);
+    /// Smallest height the results pane can be dragged to: the result tabs
+    /// (34), the view row (42), the grid header (40), one grid row (31) and
+    /// the grid footer (36), so the footer never slides out of view.
+    pub const RESULTS_MIN_HEIGHT: Pixels = px(183.0);
 }
 
 /// Geometry of the row inspector rail (AppByzTable, DSAppPlan "RowInspector").
@@ -1221,6 +1227,9 @@ impl KeyValueMetrics {
     /// 4 px each side.
     pub const TOOLBAR_DIVIDER_HEIGHT: Pixels = px(20.0);
     pub const TOOLBAR_DIVIDER_MARGIN_X: Pixels = px(4.0);
+    /// Narrowest the key pattern field shrinks to before the filter row
+    /// wraps its controls onto a second line. (220 px)
+    pub const PATTERN_MIN_WIDTH: Pixels = px(220.0);
     /// Key list column. (540 px)
     pub const KEY_LIST_WIDTH: Pixels = px(540.0);
     /// Key list header: 30 px, 11.5 px text.
@@ -1239,8 +1248,9 @@ impl KeyValueMetrics {
     /// TTL and size columns. (76 px, 66 px)
     pub const TTL_COLUMN: Pixels = px(76.0);
     pub const SIZE_COLUMN: Pixels = px(66.0);
-    /// Folder row: 7 px gap, 12 px chevron, 14 px folder icon, 11 px count
-    /// in a 140 px column.
+    /// Folder row: 13 px mono name, 7 px gap, 12 px chevron, 14 px folder
+    /// icon, 11 px count in a 140 px column.
+    pub const FOLDER_ROW_FONT: Pixels = px(13.0);
     pub const FOLDER_GAP: Pixels = px(7.0);
     pub const FOLDER_CHEVRON: Pixels = px(12.0);
     pub const FOLDER_ICON: Pixels = px(14.0);

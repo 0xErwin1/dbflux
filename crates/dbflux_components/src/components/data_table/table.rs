@@ -700,16 +700,22 @@ impl gpui::Render for DataTable {
                     // scroller that owns the handle is 1px tall and never captures the wheel,
                     // so the bar would otherwise stay transparent until the user navigates
                     // off-screen with the keyboard.
+                    //
+                    // The scrollbar lays itself out over its handle's viewport by default,
+                    // which here is the 1px phantom, so the bar would be clipped to a
+                    // single pixel. It takes this overlay strip as its viewport instead;
+                    // the strip spans the phantom's width, so the thumb math matches.
                     .child(
                         div()
                             .absolute()
                             .left_0()
-                            .right_0()
+                            .right(SCROLLBAR_WIDTH)
                             .bottom_0()
                             .h(SCROLLBAR_WIDTH)
                             .child(
                                 Scrollbar::horizontal(&horizontal_scroll_handle)
-                                    .mode(ScrollbarMode::Always),
+                                    .mode(ScrollbarMode::Always)
+                                    .viewport_from_layout(),
                             ),
                     )
             })

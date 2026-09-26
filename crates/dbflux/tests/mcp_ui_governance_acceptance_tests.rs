@@ -52,7 +52,7 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 
 #[test]
 fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
-    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
+    let governance_view = read_workspace_module("../dbflux_ui_document/src/governance");
     let workspace_actions = read_workspace_module("../dbflux_ui/src/ui/views/workspace/actions");
     let workspace_dispatch = read_workspace_module("../dbflux_ui/src/ui/views/workspace/dispatch");
     let workspace_mod = read_workspace_file("../dbflux_ui/src/ui/views/workspace/mod.rs");
@@ -73,7 +73,7 @@ fn ui_contains_approval_and_audit_controls_with_workspace_wiring() {
 }
 
 #[test]
-fn audit_workspace_actions_retarget_existing_document_and_close_governance_overlay() {
+fn audit_and_approvals_workspace_actions_open_document_tabs() {
     let audit_document = read_workspace_file("../dbflux_ui_document/src/audit/mod.rs");
     let workspace_actions = read_workspace_module("../dbflux_ui/src/ui/views/workspace/actions");
 
@@ -83,12 +83,15 @@ fn audit_workspace_actions_retarget_existing_document_and_close_governance_overl
     // Unified audit viewer clears MCP filter when opened generically.
     // After Arc 5 migration, the reset goes through the pane's set_category_filter closure.
     assert!(workspace_actions.contains("pane.set_category_filter"));
-    assert!(workspace_actions.contains("self.active_governance_panel = None;"));
+
+    // The approvals are a document tab, not a workspace overlay.
+    assert!(workspace_actions.contains("DocumentKey::McpApprovals"));
+    assert!(!workspace_actions.contains("active_governance_panel"));
 }
 
 #[test]
 fn approvals_view_surfaces_failures_instead_of_swallowing_them() {
-    let governance_view = read_workspace_file("../dbflux_ui_document/src/governance.rs");
+    let governance_view = read_workspace_module("../dbflux_ui_document/src/governance");
 
     assert!(!governance_view.contains("let _ = state.approve_mcp_pending_execution"));
     assert!(!governance_view.contains("let _ = state.reject_mcp_pending_execution"));

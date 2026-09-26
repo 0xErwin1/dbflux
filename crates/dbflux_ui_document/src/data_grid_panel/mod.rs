@@ -718,9 +718,12 @@ pub(crate) struct BuilderState {
     pub(crate) builder_panel: Option<Entity<QueryBuilderPanel>>,
     /// Subscriptions to `QueryBuilderPanel` events.
     pub(crate) _builder_subscriptions: Vec<Subscription>,
-    /// When `true`, the raw filter input is hidden because the builder owns
-    /// query composition for this panel.
+    /// When `true`, the raw filter input is hidden because an applied builder
+    /// spec owns query composition for this panel.
     pub(crate) filter_input_hidden: bool,
+    /// Whether the builder currently owns the inspector rail. The raw filter
+    /// input is hidden while it is open and comes back once it is closed.
+    pub(crate) builder_open: bool,
     /// Editable-safety binding for the last successfully executed builder SELECT.
     pub(crate) builder_editable_binding: Option<dbflux_core::EditableBinding>,
 }
@@ -1522,6 +1525,7 @@ impl DataGridPanel {
                 builder_panel: None,
                 _builder_subscriptions: Vec::new(),
                 filter_input_hidden: false,
+                builder_open: false,
                 builder_editable_binding: None,
             },
             collection,
@@ -2092,12 +2096,17 @@ impl DataGridPanel {
             // previously open. Builder takes precedence over the row inspector
             // because both share the same rail and the builder is the more
             // recent intentional surface for the user.
-            if let Some(panel) = self.builder.builder_panel.clone() {
+            if let Some(panel) = self
+                .builder
+                .builder_panel
+                .clone()
+                .filter(|_| self.builder.builder_open)
+            {
                 let view: AnyView = AnyView::from(panel);
                 cx.emit(DataGridEvent::OpenInspector {
                     title: "Query Builder".into(),
                     content: view,
-                    content_has_header: false,
+                    content_has_header: true,
                 });
             } else if self.inspector.value_panel_open {
                 // Re-read this grid's own cell. Reusing the cached content
@@ -2127,7 +2136,7 @@ impl DataGridPanel {
                 // content on screen.
                 cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_panel.is_some() || self.inspector.value_panel_open {
+        } else if self.builder.builder_open || self.inspector.value_panel_open {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -2146,6 +2155,63 @@ impl DataGridPanel {
         self.inspector.value_panel_open = false;
         self.pending.value_panel = None;
         self.pending.row_inspector_action = None;
+        self.mark_builder_closed();
+    }
+
+    /// Records that the builder no longer owns the inspector rail.
+    ///
+    /// A draft the user never ran is dropped from the read path, so the raw
+    /// filter that comes back drives the next reload instead of the unrun
+    /// draft. The draft itself stays in the builder panel for the next open.
+    fn mark_builder_closed(&mut self) {
+        self.builder.builder_open = false;
+
+        if !self.builder.filter_input_hidden {
+            self.builder.visual_select = None;
+        }
+    }
+
+    /// Whether the raw WHERE filter input is shown in the toolbar. It is hidden
+    /// while the builder is open or while an applied builder spec drives the
+    /// rows.
+    pub(crate) fn filter_input_visible(&self) -> bool {
+        !self.builder.filter_input_hidden && !self.builder.builder_open
+    }
+
+    /// Whether the filter row shows the "rows come from the builder query"
+    /// notice in place of the WHERE input: the builder is closed while a spec
+    /// it ran still drives the rows. A relational WHERE filter lowers to a
+    /// spec as well, but it keeps its own chip instead of this notice.
+    pub(crate) fn builder_notice_visible(&self) -> bool {
+        self.builder.filter_input_hidden
+            && !self.builder.builder_open
+            && !matches!(
+                self.builder.relational_filter_state,
+                filter_bar::RelationalFilterState::Active { .. }
+            )
+    }
+
+    /// Drops the builder spec and its panel, restores the WHERE filter and
+    /// reloads the rows through the plain table read.
+    ///
+    /// Returns `false` without changing anything when unsaved edits block
+    /// the reload.
+    pub(crate) fn reset_builder_query(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.reload_blocked_by_pending_edits(cx) {
+            return false;
+        }
+
+        self.clear_builder_draft_spec(cx);
+        self.builder.builder_panel = None;
+        self.builder._builder_subscriptions.clear();
+        self.builder.builder_open = false;
+        self.refresh(window, cx);
+
+        true
     }
 
     /// Whether the row inspector currently owns the shared rail for this grid.
@@ -2163,7 +2229,7 @@ impl DataGridPanel {
             return;
         }
 
-        if self.is_grouped_result() || self.builder.builder_panel.is_some() {
+        if self.is_grouped_result() || self.builder.builder_open {
             return;
         }
 
@@ -2226,7 +2292,7 @@ impl DataGridPanel {
     /// selection, so the rail shows the new table's cell instead of whatever
     /// the previous tab left there.
     pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
-        if open && self.builder.builder_panel.is_none() {
+        if open && !self.builder.builder_open {
             self.inspector.value_panel_open = true;
         } else if !open {
             self.inspector.value_panel_open = false;
@@ -2397,7 +2463,7 @@ impl DataGridPanel {
     }
 
     pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
-        if tracking && self.builder.builder_panel.is_none() && !self.is_grouped_result() {
+        if tracking && !self.builder.builder_open && !self.is_grouped_result() {
             self.inspector.follow_selection = true;
         } else if !tracking {
             self.clear_inspector_state(cx);
@@ -3967,9 +4033,16 @@ impl DataGridPanel {
 
             self.builder._builder_subscriptions = vec![run_sub];
             self.builder.builder_panel = Some(new_panel.clone());
-            self.builder.filter_input_hidden = true;
             new_panel
         };
+
+        if self.builder.visual_select.is_none()
+            && let Some(spec) = self.builder.builder_draft_spec.clone()
+        {
+            self.builder.visual_select = self.build_visual_select(&spec, cx).unwrap_or(None);
+        }
+
+        self.builder.builder_open = true;
 
         self.spawn_fk_fetch_for_builder(panel.clone(), profile_id, database, source_schema, cx);
 
@@ -3977,7 +4050,7 @@ impl DataGridPanel {
         cx.emit(DataGridEvent::OpenInspector {
             title: "Query Builder".into(),
             content: view,
-            content_has_header: false,
+            content_has_header: true,
         });
     }
 
@@ -4483,15 +4556,9 @@ impl DataGridPanel {
             }
 
             BuilderEvent::ResetRequested => {
-                if self.reload_blocked_by_pending_edits(cx) {
-                    return;
+                if self.reset_builder_query(window, cx) {
+                    cx.emit(DataGridEvent::CloseInspector);
                 }
-
-                self.clear_builder_draft_spec(cx);
-                cx.emit(DataGridEvent::CloseInspector);
-                self.builder.builder_panel = None;
-                self.builder._builder_subscriptions.clear();
-                self.refresh(window, cx);
             }
 
             BuilderEvent::OpenInEditorRequested => {
@@ -4499,7 +4566,9 @@ impl DataGridPanel {
             }
 
             BuilderEvent::CloseRequested => {
+                self.mark_builder_closed();
                 cx.emit(DataGridEvent::CloseInspector);
+                cx.notify();
             }
 
             BuilderEvent::SaveRequested { name } => {
@@ -10075,6 +10144,287 @@ mod tests {
             panel.handle_builder_event(&super::BuilderEvent::ResetRequested, window, cx);
 
             assert!(panel.builder.builder_draft_spec.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn closing_the_builder_restores_the_where_filter(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            assert!(panel.filter_input_visible());
+
+            panel.open_query_builder(window, cx);
+            assert!(
+                !panel.filter_input_visible(),
+                "the builder owns composition while it is open"
+            );
+
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.builder.visual_select = Some(dbflux_core::SelectQuery {
+                sql: "SELECT * FROM users".to_string(),
+                params: Vec::new(),
+            });
+
+            panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+
+            assert!(
+                panel.filter_input_visible(),
+                "closing the builder must bring the WHERE filter back"
+            );
+            assert!(
+                panel.builder.visual_select.is_none(),
+                "an unrun draft must not replace the raw filter on the next reload"
+            );
+            assert!(panel.builder.builder_panel.is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn dismissing_the_rail_restores_the_where_filter(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            assert!(!panel.filter_input_visible());
+
+            panel.clear_inspector_state(cx);
+
+            assert!(panel.filter_input_visible());
+        });
+    }
+
+    struct ShortGridHost {
+        panel: gpui::Entity<DataGridPanel>,
+    }
+
+    impl gpui::Render for ShortGridHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            gpui::div().size_full().child(
+                gpui::div()
+                    .debug_selector(|| "short-grid-host".to_string())
+                    .h(gpui::px(160.0))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(self.panel.clone()),
+            )
+        }
+    }
+
+    // Dragging the editor/results split down used to push the footer under
+    // the next bar while the rows kept their height.
+    #[gpui::test]
+    fn a_short_grid_keeps_its_footer_inside_the_pane(cx: &mut TestAppContext) {
+        let (_, window) = rendered_short_grid(cx);
+
+        let host = window
+            .debug_bounds("short-grid-host")
+            .expect("the host should render");
+        let footer = window
+            .debug_bounds("data-grid-footer")
+            .expect("the footer should render");
+
+        assert!(
+            footer.origin.y >= host.origin.y
+                && footer.origin.y + footer.size.height <= host.origin.y + host.size.height,
+            "footer {footer:?} must stay inside the pane {host:?}"
+        );
+    }
+
+    /// A table grid rendered inside a `ShortGridHost` window.
+    fn rendered_short_grid(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut gpui::VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: Some(2),
+                };
+
+                let panel = cx.new(|cx| {
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+                });
+                panel.update(cx, |panel, cx| {
+                    panel.set_result(keyed_result(&["1", "2"]), cx);
+                });
+                panel_handle.replace(Some(panel.clone()));
+
+                ShortGridHost { panel }
+            });
+
+            Root::new(host, window, cx)
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("the host should build its panel");
+
+        (panel, window)
+    }
+
+    /// Counts the builder rail openings `panel` emits from now on.
+    fn count_builder_openings(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut gpui::VisualTestContext,
+    ) -> (Rc<RefCell<usize>>, gpui::Subscription) {
+        let openings = Rc::new(RefCell::new(0));
+
+        let subscription = window.update(|_, app| {
+            let openings = openings.clone();
+            app.subscribe(panel, move |_, event: &DataGridEvent, _| {
+                if let DataGridEvent::OpenInspector {
+                    content_has_header, ..
+                } = event
+                {
+                    assert!(
+                        *content_has_header,
+                        "the builder draws the rail's only header"
+                    );
+                    *openings.borrow_mut() += 1;
+                }
+            })
+        });
+
+        (openings, subscription)
+    }
+
+    #[gpui::test]
+    fn builder_closed_with_its_button_stays_closed_across_tab_switches(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+        });
+
+        let (openings, _subscription) = count_builder_openings(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 0, "a closed builder must not reopen");
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.open_query_builder(window, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 1, "opening it again must still work");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            *openings.borrow(),
+            2,
+            "an open builder is re-mounted when its tab comes back"
+        );
+    }
+
+    #[gpui::test]
+    fn builder_dismissed_from_the_rail_stays_closed_across_tab_switches(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.clear_inspector_state(cx);
+        });
+
+        let (openings, _subscription) = count_builder_openings(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_active_tab(false, cx);
+                panel.set_active_tab(true, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(*openings.borrow(), 0);
+    }
+
+    #[gpui::test]
+    fn closing_the_builder_after_a_run_shows_the_notice_and_reset_restores_where(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, window) = rendered_short_grid(cx);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.open_query_builder(window, cx);
+                panel.apply_builder_draft_spec(make_test_spec(), cx);
+                panel.handle_builder_event(&super::BuilderEvent::CloseRequested, window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(
+                !panel.filter_input_visible(),
+                "the applied spec drives the rows, so the WHERE input gives way"
+            );
+            assert!(panel.builder_notice_visible());
+            assert!(panel.builder.builder_draft_spec.is_some());
+        });
+        assert!(
+            window.debug_bounds("builder-query-notice").is_some(),
+            "the filter row must say where the rows come from"
+        );
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.reset_builder_query(window, cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, _| {});
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(
+                panel.filter_input_visible(),
+                "Reset brings the WHERE input back"
+            );
+            assert!(!panel.builder_notice_visible());
+            assert!(panel.builder.builder_draft_spec.is_none());
+            assert!(panel.builder.builder_panel.is_none());
+        });
+        assert!(window.debug_bounds("builder-query-notice").is_none());
+    }
+
+    #[gpui::test]
+    fn the_notice_is_hidden_while_the_builder_is_open(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.open_query_builder(window, cx);
+            panel.apply_builder_draft_spec(make_test_spec(), cx);
+
+            assert!(!panel.builder_notice_visible());
+            assert!(!panel.filter_input_visible());
         });
     }
 

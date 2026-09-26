@@ -921,7 +921,6 @@ document:
       run: 실행
       last_run: "마지막 실행 %{seconds}초"
       new_tab: 새 탭
-      selection: 선택 영역
       read_only: 읽기 전용
       saved: 저장됨
       save: 저장
@@ -1041,7 +1040,6 @@ document:
         body: "위험한 구문은 실행 전에 확인을 요청합니다."
     execution:
       toast:
-        select_query: 실행할 쿼리 텍스트를 선택하세요
         enter_query: 실행할 쿼리를 입력하세요
         no_active_connection: 활성 연결이 없습니다
         connection_not_found: 연결을 찾을 수 없습니다
@@ -1357,6 +1355,9 @@ document:
         chart_name: 차트 이름
       filter:
         open_in_builder: 빌더에서 열기
+        builder_notice: 행은 빌더 쿼리에서 가져옵니다
+        edit_in_builder: 빌더에서 편집
+        reset_builder: 초기화
       toast:
         query_imported: 쿼리를 성공적으로 가져왔습니다
         mutation_queued: 변경 작업이 승인 대기열에 추가되었습니다.
@@ -1561,11 +1562,11 @@ document:
     execution_plan: "실행할 내용"
     approve: "승인 후 실행"
     reject: 거부
+    reject_reason_placeholder: "사유 (거부 시 에이전트에게 전달됨)"
     select_prompt: "세부 정보를 보려면 대기 중인 요청을 선택하세요."
     load_failed: "대기 중인 실행 %{id}을(를) 불러오지 못했습니다: %{error}"
     title: "MCP 승인"
     subtitle: "정책이 사람의 결정을 기다리도록 보류한 에이전트 호출"
-    close: "닫기"
     pending_count: "대기 중 · %{count}"
     list_hint: "이동 · 결정은 감사 로그에 기록됩니다"
     requested_by: "요청자"
@@ -1970,6 +1971,8 @@ document:
         edit_locked: "편집하려면 압축을 없음으로, 보기 형식을 자동, JSON 또는 텍스트로 설정하세요"
   migrate_wizard:
     title: 데이터 마이그레이션
+    already_running: "이미 실행 중인 마이그레이션이 있습니다. 해당 탭을 앞으로 가져왔습니다. 끝날 때까지 기다린 후 다른 마이그레이션을 시작하세요."
+    already_running_in_tasks: "작업 패널에서 이미 마이그레이션이 실행 중입니다. 끝날 때까지 기다리거나 취소한 후 다른 마이그레이션을 시작하세요."
     task:
       one: "테이블 %{count}개 마이그레이션"
       many: "테이블 %{count}개 마이그레이션"
@@ -2073,7 +2076,6 @@ document:
     footer:
       cancel_migration: "마이그레이션 취소"
       referential_integrity_off: "실행이 끝날 때까지 참조 무결성이 비활성화됩니다"
-      run_in_background: "백그라운드에서 실행"
       back: 뒤로
       continue: 계속
       loading: "불러오는 중…"

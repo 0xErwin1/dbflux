@@ -128,16 +128,6 @@ impl CodeDocument {
                         this.run_query_in_new_tab(window, cx);
                     })),
                 )
-                .child(
-                    Button::new(
-                        "run-selection-btn",
-                        dbflux_i18n::t!("document.code.toolbar.selection"),
-                    )
-                    .icon(AppIcon::Code)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.run_selected_query(window, cx);
-                    })),
-                )
             })
             .when(is_read_only, |el| {
                 el.child(
@@ -1109,7 +1099,7 @@ impl Render for CodeDocument {
                                 .child(
                                     resizable_panel()
                                         .size(px(200.0))
-                                        .size_range(px(100.0)..px(1000.0))
+                                        .size_range(EditorMetrics::RESULTS_MIN_HEIGHT..px(1000.0))
                                         .child(results_view),
                                 )
                                 .into_any_element()

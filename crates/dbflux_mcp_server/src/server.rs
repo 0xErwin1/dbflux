@@ -696,9 +696,10 @@ impl ServerHandler for DbFluxServer {
              Then: (1) tell the user that pending execution <pending_id> is waiting for their \
              approval in DBFlux (Workspace > Pending Approvals); (2) wait, and never call \
              approve_execution or reject_execution, which are always denied to MCP clients; \
-             (3) check the status with get_pending_execution: while it returns the execution, \
-             it is still waiting; (4) after the user approves it, repeat the identical call \
-             (same tool, same arguments) and it runs once. A rejected or expired call, or one \
+             (3) check the status with get_pending_execution: while its status is \"pending\", \
+             it is still waiting, and status \"rejected\" carries the user's reason; (4) after \
+             the user approves it, repeat the identical call (same tool, same arguments) and \
+             it runs once. A rejected or expired call, or one \
              repeated with different arguments, is queued again instead of running.",
         )
     }

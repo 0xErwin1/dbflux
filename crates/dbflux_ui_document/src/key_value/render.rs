@@ -174,9 +174,9 @@ impl Render for KeyValueDocument {
             .bulk_delete
             .as_ref()
             .map(|state| self.render_bulk_delete_modal(state, cx));
-        let bulk_menu = self
+        let bulk_menu_overlay = self
             .bulk_actions_open
-            .then(|| self.render_bulk_actions_menu(cx));
+            .then(|| self.render_bulk_actions_overlay(cx));
 
         let this_entity = cx.entity().clone();
 
@@ -225,7 +225,7 @@ impl Render for KeyValueDocument {
                     .child(value_pane),
             )
             .child(console)
-            .when_some(bulk_menu, |root, menu| root.child(menu))
+            .when_some(bulk_menu_overlay, |root, overlay| root.child(overlay))
             .when(self.new_key_modal.read(cx).is_visible(), |root| {
                 root.child(self.new_key_modal.clone())
             })
@@ -291,6 +291,9 @@ impl KeyValueDocument {
     }
 
     fn render_document_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let bulk_menu = self
+            .bulk_actions_open
+            .then(|| self.render_bulk_actions_menu(cx));
         let theme = cx.theme();
         let state = self.app_state.read(cx);
 
@@ -342,29 +345,29 @@ impl KeyValueDocument {
         )
         .variant(ButtonVariant::Primary);
 
-        div()
+        let actions = div()
             .flex()
             .flex_none()
             .items_center()
             .gap(KeyValueMetrics::TOOLBAR_GAP)
-            .h(KeyValueMetrics::TOOLBAR_HEIGHT)
-            .px(KeyValueMetrics::TOOLBAR_PADDING_X)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(breadcrumb)
-            .child(div().flex_1())
+            .ml_auto()
             .when(self.supports_bulk_delete(cx), |toolbar| {
                 toolbar.child(
-                    Button::new(
-                        "kv-bulk-actions",
-                        dbflux_i18n::t!("document.key_value.toolbar.bulk_actions"),
-                    )
-                    .icon(AppIcon::Layers)
-                    .selected(self.bulk_actions_open)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.bulk_actions_open = !this.bulk_actions_open;
-                        cx.notify();
-                    })),
+                    div()
+                        .relative()
+                        .child(
+                            Button::new(
+                                "kv-bulk-actions",
+                                dbflux_i18n::t!("document.key_value.toolbar.bulk_actions"),
+                            )
+                            .icon(AppIcon::Layers)
+                            .selected(self.bulk_actions_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.bulk_actions_open = !this.bulk_actions_open;
+                                cx.notify();
+                            })),
+                        )
+                        .when_some(bulk_menu, |anchor, menu| anchor.child(menu)),
                 )
             })
             .child(
@@ -378,7 +381,21 @@ impl KeyValueDocument {
                     cx.notify();
                 })),
             )
-            .child(refresh)
+            .child(refresh);
+
+        div()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .gap(KeyValueMetrics::TOOLBAR_GAP)
+            .min_h(KeyValueMetrics::TOOLBAR_HEIGHT)
+            .px(KeyValueMetrics::TOOLBAR_PADDING_X)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(div().flex_none().max_w_full().min_w_0().child(breadcrumb))
+            .child(actions)
     }
 
     fn render_filter_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -387,7 +404,7 @@ impl KeyValueDocument {
 
         let pattern_field = div()
             .flex_1()
-            .min_w_0()
+            .min_w(KeyValueMetrics::PATTERN_MIN_WIDTH)
             .font_family(AppFonts::MONO)
             .on_mouse_down(
                 MouseButton::Left,
@@ -464,25 +481,38 @@ impl KeyValueDocument {
         div()
             .flex()
             .flex_none()
+            .flex_wrap()
             .items_center()
             .gap(KeyValueMetrics::TOOLBAR_GAP)
-            .h(KeyValueMetrics::TOOLBAR_HEIGHT)
+            .min_h(KeyValueMetrics::TOOLBAR_HEIGHT)
             .px(KeyValueMetrics::TOOLBAR_PADDING_X)
+            .py(Spacing::XS)
             .border_b_1()
             .border_color(theme.border)
             .child(pattern_field)
-            .when_some(type_control, |row, control| row.child(control))
+            .when_some(type_control, |row, control| {
+                row.child(div().flex_none().child(control))
+            })
             .child(
-                vdivider(cx)
-                    .h(KeyValueMetrics::TOOLBAR_DIVIDER_HEIGHT)
-                    .mx(KeyValueMetrics::TOOLBAR_DIVIDER_MARGIN_X),
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(KeyValueMetrics::TOOLBAR_GAP)
+                    .child(
+                        vdivider(cx)
+                            .h(KeyValueMetrics::TOOLBAR_DIVIDER_HEIGHT)
+                            .mx(KeyValueMetrics::TOOLBAR_DIVIDER_MARGIN_X),
+                    )
+                    .child(layout_control),
             )
-            .child(layout_control)
     }
 
+    /// The Bulk actions menu, hung from the bottom-right corner of its
+    /// button so it follows the button when the toolbar wraps to a second
+    /// line, and kept inside the window.
     fn render_bulk_actions_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity().downgrade();
-        let dismiss_entity = entity.clone();
 
         let items = vec![
             MenuItem::new(dbflux_i18n::t!("document.key_value.bulk_delete.menu_item"))
@@ -499,28 +529,38 @@ impl KeyValueDocument {
             cx,
         );
 
-        deferred(
-            div()
-                .absolute()
-                .size_full()
-                .child(render_menu_overlay(
-                    "kv-bulk-actions-overlay",
-                    move |_, cx| {
-                        update_document(&dismiss_entity, cx, |this, cx| {
-                            this.bulk_actions_open = false;
-                            cx.notify();
-                        });
-                    },
-                ))
-                .child(
-                    div()
-                        .absolute()
-                        .top(KeyValueMetrics::TOOLBAR_HEIGHT)
-                        .right(KeyValueMetrics::TOOLBAR_PADDING_X)
-                        .occlude()
-                        .child(menu),
-                ),
-        )
+        // Above the dismiss overlay (priority 1), which covers the document.
+        div()
+            .absolute()
+            .top(relative(1.))
+            .right_0()
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(Anchor::TopRight)
+                        .offset(point(px(0.0), Spacing::XS))
+                        .snap_to_window()
+                        .child(div().occlude().child(menu)),
+                )
+                .with_priority(2),
+            )
+            .into_any_element()
+    }
+
+    /// Covers the document while the Bulk actions menu is open, so a click
+    /// anywhere else closes it.
+    fn render_bulk_actions_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+        let dismiss_entity = cx.entity().downgrade();
+
+        deferred(div().absolute().size_full().child(render_menu_overlay(
+            "kv-bulk-actions-overlay",
+            move |_, cx| {
+                update_document(&dismiss_entity, cx, |this, cx| {
+                    this.bulk_actions_open = false;
+                    cx.notify();
+                });
+            },
+        )))
         .with_priority(1)
         .into_any_element()
     }

@@ -115,10 +115,32 @@ pub(super) fn next_class_decision(decision: ClassDecision) -> ClassDecision {
 
 /// Per-class decisions of the policy being edited: a class in `allowed` is
 /// Allow, a class in `approval` is Ask, and a class in neither is Deny.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PolicyClassDraft {
     allowed: HashSet<String>,
     approval: HashSet<String>,
+}
+
+/// A new policy reads without asking (`metadata`, `read`) and sends every
+/// mutating class to approval, matching the built-in policies.
+impl Default for PolicyClassDraft {
+    fn default() -> Self {
+        let mut draft = Self {
+            allowed: HashSet::new(),
+            approval: HashSet::new(),
+        };
+
+        for class in CLASS_IDS {
+            let decision = if MUTATING_CLASS_IDS.contains(class) {
+                ClassDecision::Ask
+            } else {
+                ClassDecision::Allow
+            };
+            draft.set(class, decision);
+        }
+
+        draft
+    }
 }
 
 impl PolicyClassDraft {
@@ -183,9 +205,8 @@ impl PolicyClassDraft {
         (allowed, approval)
     }
 
-    pub(super) fn clear(&mut self) {
-        self.allowed.clear();
-        self.approval.clear();
+    pub(super) fn reset_to_new_policy(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -837,7 +858,7 @@ impl McpSection {
         self.selected_policy_id = None;
         self.input_policy_id
             .update(cx, |i, cx| i.set_value("", window, cx));
-        self.draft_policy_classes.clear();
+        self.draft_policy_classes.reset_to_new_policy();
         self.draft_policy_tools.clear();
     }
 
@@ -2356,8 +2377,8 @@ impl Render for McpSection {
 #[cfg(test)]
 mod form_row_tests {
     use super::{
-        McpFormField, McpSectionVariant, PolicyClassDraft, mcp_form_rows, mcp_is_input_field,
-        mcp_policy_class_ids, mcp_policy_tool_ids, next_class_decision,
+        CLASS_IDS, McpFormField, McpSectionVariant, PolicyClassDraft, mcp_form_rows,
+        mcp_is_input_field, mcp_policy_class_ids, mcp_policy_tool_ids, next_class_decision,
     };
     use dbflux_mcp::{MUTATING_CLASS_IDS, ToolPolicyDto};
     use dbflux_policy::ClassDecision;
@@ -2527,6 +2548,29 @@ mod form_row_tests {
         assert_eq!(draft.decision("write"), ClassDecision::Ask);
         assert_eq!(draft.decision("destructive"), ClassDecision::Deny);
         assert_eq!(draft.usable_count(), 3);
+    }
+
+    #[test]
+    fn new_policy_allows_reading_and_asks_for_every_mutating_class() {
+        let draft = PolicyClassDraft::default();
+
+        assert_eq!(draft.decision("metadata"), ClassDecision::Allow);
+        assert_eq!(draft.decision("read"), ClassDecision::Allow);
+        for class in MUTATING_CLASS_IDS {
+            assert_eq!(draft.decision(class), ClassDecision::Ask, "{class}");
+        }
+        for class in CLASS_IDS {
+            assert_ne!(draft.decision(class), ClassDecision::Deny, "{class}");
+        }
+    }
+
+    #[test]
+    fn resetting_an_edited_draft_restores_the_new_policy_defaults() {
+        let mut draft = PolicyClassDraft::from_policy(&legacy_policy());
+
+        draft.reset_to_new_policy();
+
+        assert_eq!(draft, PolicyClassDraft::default());
     }
 
     #[test]

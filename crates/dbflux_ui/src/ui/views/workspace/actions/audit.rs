@@ -14,8 +14,6 @@ impl Workspace {
         use crate::ui::document::AuditDocument;
         use crate::ui::document::DocumentKey;
 
-        self.active_governance_panel = None;
-
         // Check if an audit document is already open.
         let existing_id = self
             .tab_manager
@@ -135,41 +133,39 @@ impl Workspace {
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
     }
 
+    /// Opens the MCP approvals queue as a singleton document tab, or focuses
+    /// the tab that is already open. Focusing the document reloads its
+    /// pending list and hands it the keyboard for its j/k/a/r keys.
     #[cfg(feature = "mcp")]
     pub(in crate::ui::views::workspace) fn open_mcp_approvals(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.mcp_approvals_view.update(cx, |view, cx| {
-            view.refresh(cx);
-        });
+        use crate::ui::document::{DocumentKey, McpApprovalsView};
 
-        self.active_governance_panel = Some(super::GovernancePanel::Approvals);
+        let existing_id = self
+            .tab_manager
+            .read(cx)
+            .find_by_key(&DocumentKey::McpApprovals, cx);
 
-        // The view takes focus for its j/k/a/r keys; everything else it
-        // leaves to bubble up to the workspace keymap, so Escape still
-        // closes the overlay instead of reaching the editor underneath.
-        let approvals_focus = self.mcp_approvals_view.read(cx).focus_handle();
-        approvals_focus.focus(window, cx);
-        cx.notify();
-    }
+        match existing_id {
+            Some(id) => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.activate(id, cx);
+                });
+            }
+            None => {
+                let doc = cx.new(|cx| McpApprovalsView::new(self.app_state.clone(), window, cx));
+                let pane = McpApprovalsView::into_pane(doc, cx);
 
-    /// Hides the governance overlay and hands focus back to the panel that
-    /// owned it before the overlay opened. Shared by the header close button,
-    /// the backdrop click, and `Command::Cancel`. Does nothing when no
-    /// governance panel is open.
-    #[cfg(feature = "mcp")]
-    pub(in crate::ui::views::workspace) fn close_governance_panel(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.active_governance_panel.take().is_none() {
-            return;
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            }
         }
 
-        self.set_focus(self.focus_target, window, cx);
+        self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
     }
 
     #[cfg(feature = "mcp")]

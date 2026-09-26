@@ -191,7 +191,7 @@ crates/
       data_view.rs          # DataViewMode 抽象（表格与文档）
       data_view_trait.rs    # DataView trait（available_view_modes、focus_handle、active_context）
       chrome.rs             # 共享框架工具
-      governance.rs         # 用于待审批执行的 MCP 审批视图
+      governance/           # McpApprovalsView：用于待审批执行的 MCP 审批文档标签页（mod.rs、pane.rs）
       history_modal.rs      # 最近/已保存查询模态框
       add_member_modal.rs   # 用于添加 Redis set/list/sorted-set 成员的模态框
       new_key_modal.rs      # 用于创建新 Redis 键的模态框
@@ -918,7 +918,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - `preview_mutation` 严格只读；在 DBFlux 拥有安全的非变更 DDL 预览路径之前，不安全的 `preview_ddl` 有意不对外暴露
 
 **界面集成**：
-- `McpApprovalsView`（`crates/dbflux_ui_document/src/governance.rs`）用于审阅待审批执行
+- `McpApprovalsView`（`crates/dbflux_ui_document/src/governance/`）文档标签页，用于审阅待审批执行
 - 设置中的 `mcp_section.rs`（`crates/dbflux_ui_windows/src/settings/mcp_section.rs`）用于受信客户端、角色与策略
 - `AuditDocument`（`crates/dbflux_ui_document/src/audit/`）作为统一的事件查看器，既展示内部审计记录，也展示通过通用 `EventStreamTarget` 暴露的、由驱动程序支撑的外部事件流（界面中没有针对特定驱动程序的审计文档路径）
 - `LoginModal`（`crates/dbflux_ui/src/ui/overlays/login_modal.rs`）与 `SsoWizard`（`crates/dbflux_ui_base/src/sso_wizard.rs`，旧浮层路径处留有垫片）用于 AWS SSO 认证流程

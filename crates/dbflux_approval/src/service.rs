@@ -10,6 +10,28 @@ use crate::store::{
 /// Default approval TTL: 24 hours in milliseconds.
 pub const DEFAULT_APPROVAL_TTL_MS: i64 = 86_400_000;
 
+/// Longest rejection reason kept, in characters. Longer reasons are truncated.
+pub const MAX_REJECTION_REASON_CHARS: usize = 500;
+
+/// Trims the reason a person typed when rejecting, drops it when blank and
+/// caps it at [`MAX_REJECTION_REASON_CHARS`] characters.
+pub fn normalize_rejection_reason(reason: Option<&str>) -> Option<String> {
+    let trimmed = reason?.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(
+        trimmed
+            .chars()
+            .take(MAX_REJECTION_REASON_CHARS)
+            .collect::<String>()
+            .trim_end()
+            .to_string(),
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Approve,
@@ -76,6 +98,15 @@ impl ApprovalService {
         Ok(self.store.list_pending()?)
     }
 
+    /// Returns the execution with `pending_id` whatever its status, so a
+    /// requester can learn that it was rejected and why.
+    pub fn get_execution(
+        &self,
+        pending_id: Uuid,
+    ) -> Result<Option<PendingExecution>, ApprovalError> {
+        Ok(self.store.get_execution(pending_id)?)
+    }
+
     /// Uses the approval granted for `plan`, if one exists, so it cannot
     /// authorize a second call.
     pub fn consume_approved(
@@ -112,7 +143,13 @@ impl ApprovalService {
         })
     }
 
-    pub fn reject(&mut self, pending_id: Uuid) -> Result<RejectedExecution, ApprovalError> {
+    /// Rejects a pending execution. The reason is normalized with
+    /// [`normalize_rejection_reason`] and stored so the requester can read it.
+    pub fn reject(
+        &mut self,
+        pending_id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<RejectedExecution, ApprovalError> {
         let pending = self
             .store
             .get_pending(pending_id)?
@@ -122,9 +159,10 @@ impl ApprovalService {
             return Err(ApprovalError::InvalidTransition(pending_id));
         }
 
+        let reason = normalize_rejection_reason(reason);
         let updated = self
             .store
-            .update_status(pending_id, PendingStatus::Rejected)?
+            .record_rejection(pending_id, reason.as_deref())?
             .ok_or(ApprovalError::PendingNotFound(pending_id))?;
 
         Ok(RejectedExecution { pending: updated })
@@ -182,7 +220,7 @@ mod tests {
             .request_execution(&sample_plan())
             .expect("request_execution should succeed");
         service
-            .reject(pending.id)
+            .reject(pending.id, None)
             .expect("reject should succeed for pending record");
 
         let result = service.approve(pending.id);
@@ -312,13 +350,57 @@ mod tests {
         let rejected = service
             .request_execution(&sample_plan())
             .expect("request_execution should succeed");
-        service.reject(rejected.id).expect("reject should succeed");
+        service
+            .reject(rejected.id, None)
+            .expect("reject should succeed");
         assert!(
             service
                 .consume_approved(&sample_plan())
                 .expect("consume should succeed")
                 .is_none(),
             "a rejected plan must never authorize a call"
+        );
+    }
+
+    #[test]
+    fn reject_stores_the_reason_and_keeps_the_entry_readable() {
+        let mut service = service();
+
+        let pending = service
+            .request_execution(&sample_plan())
+            .expect("request_execution should succeed");
+        let rejected = service
+            .reject(pending.id, Some("  touches production rows  "))
+            .expect("reject should succeed");
+
+        assert_eq!(rejected.pending.status, PendingStatus::Rejected);
+        assert_eq!(
+            rejected.pending.rejection_reason.as_deref(),
+            Some("touches production rows")
+        );
+
+        let stored = service
+            .get_execution(pending.id)
+            .expect("get_execution should succeed")
+            .expect("a rejected entry stays readable until it is purged");
+        assert_eq!(stored.status, PendingStatus::Rejected);
+        assert_eq!(
+            stored.rejection_reason.as_deref(),
+            Some("touches production rows")
+        );
+    }
+
+    #[test]
+    fn rejection_reason_is_dropped_when_blank_and_capped_when_long() {
+        assert_eq!(super::normalize_rejection_reason(None), None);
+        assert_eq!(super::normalize_rejection_reason(Some("   ")), None);
+
+        let long_reason = "é".repeat(super::MAX_REJECTION_REASON_CHARS + 50);
+        let normalized = super::normalize_rejection_reason(Some(&long_reason))
+            .expect("a long reason is kept, truncated");
+        assert_eq!(
+            normalized.chars().count(),
+            super::MAX_REJECTION_REASON_CHARS
         );
     }
 }

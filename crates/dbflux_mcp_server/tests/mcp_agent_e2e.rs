@@ -686,6 +686,16 @@ async fn rejected_call_never_runs() {
         )
         .expect("a person should be able to reject the pending execution");
 
+    let status = agent
+        .call_json("get_pending_execution", json!({ "pending_id": pending_id }))
+        .await;
+    assert_eq!(status["status"], json!("rejected"));
+    assert_eq!(
+        status["reason"],
+        json!("not approved"),
+        "the agent should read the reason the person gave: {status}"
+    );
+
     expect_queued(agent.try_call("delete_records", delete_arguments).await);
 
     let counted = agent

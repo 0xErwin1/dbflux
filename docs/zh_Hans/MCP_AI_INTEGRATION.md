@@ -121,7 +121,7 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 | 脚本 | `execute_script` | computed | 对某个连接执行已保存的脚本。执行类别由脚本内容推导 |
 | 审批 | `request_execution` | admin | 把一次调用排队等待人工审批。批准后，以相同参数调用该工具本身即可执行一次 |
 | 审批 | `list_pending_executions` | read | 查看所有等待审批的执行 |
-| 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情 |
+| 审批 | `get_pending_execution` | read | 获取某个待审批执行的详情。被驳回的执行返回 `status: "rejected"` 以及审批人给出的原因 |
 | 审批 | `approve_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中批准 |
 | 审批 | `reject_execution` | — | 通过 MCP 调用时始终被拒绝。由人在 DBFlux 中驳回 |
 | 审计 | `query_audit_logs` | read | 搜索并筛选审计追踪 |
@@ -166,6 +166,8 @@ dbflux mcp --client-id <id> [--config-dir <path>]
 3. 智能体以相同参数再次调用同一工具。服务器找到与执行者、连接、工具及参数都匹配的批准记录，消耗它并执行该调用。该调用的 `mcp_authorize` 事件 outcome 为 `success`，并在 `details_json.pending_execution_id` 中注明所用的批准记录。
 
 一次批准只执行一次调用。再次重复调用会排入新的请求，修改任何参数也是如此。被驳回的调用永远不会执行。批准在调用排队 24 小时后失效。
+
+驳回之后，`get_pending_execution` 返回 `status: "rejected"` 以及 `reason` 字段，其中是审批人驳回时输入的文本（去除首尾空白，最多 500 个字符）；未填写时为 `null`。同一原因也会记录在 `mcp_reject_execution` 审计事件中。
 
 `request_execution` 显式地把调用排队，效果与在 Ask 下直接调用该工具相同。`request_execution`、`list_pending_executions` 与 `get_pending_execution` 只创建或读取队列条目，因此在 Ask 下它们直接执行，自身不会被排队。
 
@@ -223,6 +225,7 @@ MCP 客户端永远不能批准或驳回：无论策略如何设置，`approve_e
 5. **Workspace → 待审批项**
    - 审阅并批准或驳回被策略送去审批的调用。这是处理待审批执行的唯一位置。
    - `j` / `k` 在待处理的调用之间移动，`a` 批准所选调用，`r` 驳回它。已批准的调用会在智能体以相同参数再次调用时执行。每个决定都会写入审计日志。
+   - 底部的原因输入框会在驳回时发回给智能体。输入框获得焦点时，`r` 与 `a` 输入文字而不是做出决定。每次决定后输入框会被清空。
 
 6. **Workspace → 审计**
    - 按执行者/工具/决策/时间范围筛选，并导出 CSV/JSON。

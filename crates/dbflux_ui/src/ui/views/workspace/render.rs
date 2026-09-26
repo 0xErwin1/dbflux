@@ -4,10 +4,6 @@ use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-#[cfg(feature = "mcp")]
-use dbflux_components::primitives::{SurfaceRole, surface};
-#[cfg(feature = "mcp")]
-use dbflux_components::tokens::Borders;
 use dbflux_components::tokens::{HeaderMetrics, ShellMetrics};
 use gpui_component::IconName;
 use gpui_component::resizable::ResizablePanel;
@@ -604,9 +600,6 @@ impl Render for Workspace {
             .when(self.import_wizard.read(cx).is_visible(), |root| {
                 root.child(self.import_wizard.clone())
             })
-            .when(self.migrate_wizard.read(cx).is_visible(), |root| {
-                root.child(self.migrate_wizard.clone())
-            })
             .when(self.export_wizard.read(cx).is_visible(), |root| {
                 root.child(self.export_wizard.clone())
             })
@@ -667,71 +660,6 @@ impl Render for Workspace {
             })
             // Shutdown overlay (rendered above everything during shutdown)
             .child(self.shutdown_overlay.clone())
-            .when(cfg!(feature = "mcp"), |root| {
-                #[cfg(feature = "mcp")]
-                {
-                    root.when_some(self.active_governance_panel, |root, panel| {
-                        let workspace_for_backdrop = cx.entity().clone();
-
-                        let content = match panel {
-                            super::GovernancePanel::Approvals => {
-                                self.mcp_approvals_view.clone().into_any_element()
-                            }
-                        };
-
-                        let workspace_for_cancel = cx.entity().clone();
-
-                        // The overlay is a modal: the `Modal` key context keeps
-                        // the panels behind it from seeing the keys, and the
-                        // keymap's modal Escape closes it.
-                        root.child(
-                            div()
-                                .id("governance-overlay")
-                                .key_context(dbflux_components::modals::MODAL_KEY_CONTEXT)
-                                .on_action(
-                                    move |_: &dbflux_components::actions::Cancel, window, cx| {
-                                        workspace_for_cancel.update(cx, |workspace, cx| {
-                                            workspace.close_governance_panel(window, cx);
-                                        });
-                                    },
-                                )
-                                .absolute()
-                                .inset_0()
-                                .bg(theme.overlay.opacity(0.45))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    workspace_for_backdrop.update(cx, |workspace, cx| {
-                                        workspace.close_governance_panel(window, cx);
-                                    });
-                                })
-                                .child(
-                                    surface(SurfaceRole::Modal, cx)
-                                        .w(px(1080.0))
-                                        .h(px(680.0))
-                                        .flex()
-                                        .flex_col()
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation();
-                                        })
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_h_0()
-                                                .p(Borders::THIN)
-                                                .child(content),
-                                        ),
-                                ),
-                        )
-                    })
-                }
-                #[cfg(not(feature = "mcp"))]
-                {
-                    root
-                }
-            })
             .when(child_picker_open, |root| {
                 let sidebar_entity = self.sidebar.clone();
                 let focus_handle = self

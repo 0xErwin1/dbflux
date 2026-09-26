@@ -121,7 +121,7 @@ All six layers run inside the server process on every `tools/call` request. None
 | Scripts | `execute_script` | computed | Execute a saved script against a connection. Classification is derived from the script body |
 | Approval | `request_execution` | admin | Queue a call for approval by a person. Once approved, call the tool itself with the same arguments to run it once |
 | Approval | `list_pending_executions` | read | View all executions awaiting approval |
-| Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution |
+| Approval | `get_pending_execution` | read | Retrieve details of a specific pending execution. A rejected one returns `status: "rejected"` and the reason the person gave |
 | Approval | `approve_execution` | — | Always denied over MCP. A person approves in DBFlux |
 | Approval | `reject_execution` | — | Always denied over MCP. A person rejects in DBFlux |
 | Audit | `query_audit_logs` | read | Search and filter the audit trail |
@@ -166,6 +166,8 @@ An actor can hold several policies on a connection, directly and through roles. 
 3. The agent calls the same tool again with the same arguments. The server finds the approval that matches the actor, connection, tool and arguments, consumes it, and runs the call. The `mcp_authorize` event of that call has outcome `success` and names the approval in `details_json.pending_execution_id`.
 
 One approval runs one call. Repeating the call again queues a new request, and so does changing any argument. A rejected call never runs. An approval expires 24 hours after the call was queued.
+
+After a rejection, `get_pending_execution` returns `status: "rejected"` and a `reason` field with the text the person typed when rejecting, trimmed and capped at 500 characters, or `null` when they gave none. The same reason is recorded in the `mcp_reject_execution` audit event.
 
 `request_execution` queues a call explicitly, with the same result as calling the tool under Ask. `request_execution`, `list_pending_executions` and `get_pending_execution` only create or read queue entries, so under Ask they run without being queued themselves.
 
@@ -223,6 +225,7 @@ Configure governance in the DBFlux GUI before starting the MCP server.
 5. **Workspace → Pending Approvals**
    - Review and approve or reject the calls a policy sent to approval. This is the only place pending executions are resolved.
    - `j` / `k` move through the pending calls, `a` approves the selected one, and `r` rejects it. An approved call runs when the agent repeats it with the same arguments. Every decision is written to the audit log.
+   - The reason field in the footer is sent back to the agent when you reject. While it has focus, `r` and `a` type text instead of deciding. It is cleared after each decision.
 
 6. **Workspace → Audit**
    - Filter by actor/tool/decision/time range and export CSV/JSON.

@@ -247,16 +247,14 @@ impl Workspace {
         let sidebar_view = (!self.sidebar_dock.read(cx).is_collapsed())
             .then(|| self.sidebar.read(cx).active_tab());
 
-        let audit_active = self
+        let active_icon = self
             .tab_manager
             .read(cx)
             .active_tab()
-            .is_some_and(|tab| tab.meta_snapshot(cx).icon == DocumentIcon::Audit);
+            .map(|tab| tab.meta_snapshot(cx).icon);
 
-        #[cfg(feature = "mcp")]
-        let approvals_open = self.active_governance_panel.is_some();
-        #[cfg(not(feature = "mcp"))]
-        let approvals_open = false;
+        let audit_active = active_icon == Some(DocumentIcon::Audit);
+        let approvals_open = active_icon == Some(DocumentIcon::McpApprovals);
 
         RailState {
             sidebar_view,
@@ -299,13 +297,7 @@ impl Workspace {
             rail_ids::AUDIT => self.open_audit_viewer(window, cx),
             rail_ids::SETTINGS => self.open_settings(cx),
             #[cfg(feature = "mcp")]
-            rail_ids::APPROVALS => {
-                if self.active_governance_panel.is_some() {
-                    self.close_governance_panel(window, cx);
-                } else {
-                    self.open_mcp_approvals(window, cx);
-                }
-            }
+            rail_ids::APPROVALS => self.open_mcp_approvals(window, cx),
             _ => log::warn!("Unknown activity rail entry: {id}"),
         }
     }

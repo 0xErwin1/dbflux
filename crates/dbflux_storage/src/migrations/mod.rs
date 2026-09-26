@@ -178,6 +178,7 @@ impl MigrationRegistry {
         registry.register(mod_033_connection_profile_environment::MigrationImpl);
         registry.register(mod_034_cfg_tool_policy_approval_classes::MigrationImpl);
         registry.register(mod_035_cfg_keybinding_overrides::MigrationImpl);
+        registry.register(mod_036_app_pending_execution_rejection_reason::MigrationImpl);
         registry
     }
 
@@ -403,6 +404,7 @@ mod mod_032_cfg_update_settings;
 mod mod_033_connection_profile_environment;
 mod mod_034_cfg_tool_policy_approval_classes;
 mod mod_035_cfg_keybinding_overrides;
+mod mod_036_app_pending_execution_rejection_reason;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1108,6 +1110,7 @@ mod tests {
             "033_connection_profile_environment",
             "034_cfg_tool_policy_approval_classes",
             "035_cfg_keybinding_overrides",
+            "036_app_pending_execution_rejection_reason",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

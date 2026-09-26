@@ -91,6 +91,7 @@ mod connections;
 mod documents;
 mod dump_analysis;
 mod metrics;
+mod migrate;
 mod query;
 mod schema_diff;
 mod scripts;

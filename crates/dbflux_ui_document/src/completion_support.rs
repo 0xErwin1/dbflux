@@ -126,6 +126,11 @@ pub(crate) fn extract_identifier_prefix(source: &str, cursor: usize) -> (usize, 
 /// render as one-row fields. This reproduces the old single-line `InputState`
 /// contract: no gutter, no wrap, no editor chrome, and Enter submits instead
 /// of inserting a newline (Shift+Enter still does, if the field is ever grown).
+///
+/// A code editor reserves empty rows below its last line (half the viewport by
+/// default), which gives a one-line field a scroll range and lets the wheel
+/// push the text out of view. The reservation is turned off so the single line
+/// always fits the field.
 pub(crate) fn new_single_line_completion_state(
     window: &mut gpui::Window,
     cx: &mut gpui::Context<'_, EditorState>,
@@ -137,6 +142,7 @@ pub(crate) fn new_single_line_completion_state(
         .folding(false)
         .searchable(false)
         .submit_on_enter(true)
+        .scroll_beyond_last_line(Some(0))
         .placeholder(placeholder)
 }
 
@@ -282,6 +288,51 @@ mod single_line_editor_geometry_tests {
         assert!(
             (f32::from(caret_center) - f32::from(row_center)).abs() <= 1.0,
             "caret center {caret_center:?} is not centered in the row {row:?}"
+        );
+    }
+
+    // A code editor reserves empty rows below its last line, which gave the
+    // one-line field a vertical scroll range: the wheel pushed the text out.
+    #[gpui::test]
+    fn single_line_editor_does_not_scroll_vertically(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, window) = cx.add_window_view({
+            let state_holder = state_holder.clone();
+            move |window, cx| {
+                let harness = cx.new(|cx| GeometryHarness::new(window, cx));
+                state_holder.replace(Some(harness.read(cx).state.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+
+        let row = window
+            .debug_bounds("completion-row")
+            .expect("the row should render");
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("the harness should build its editor state");
+
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| state.set_value("{ status: 1 }", window, cx));
+        });
+        window.update(|_, _| {});
+
+        window.simulate_event(gpui::ScrollWheelEvent {
+            position: row.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-40.0))),
+            ..Default::default()
+        });
+        window.update(|_, _| {});
+
+        let offset = window.update(|_, cx| state.read(cx).scroll_offset());
+        assert_eq!(
+            offset.y,
+            px(0.0),
+            "a single-line field must not scroll vertically"
         );
     }
 }

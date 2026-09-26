@@ -921,7 +921,6 @@ document:
       run: 执行
       last_run: "上次运行 %{seconds} 秒"
       new_tab: 新建标签页
-      selection: 选区
       read_only: 只读
       saved: 已保存
       save: 保存
@@ -1041,7 +1040,6 @@ document:
         body: "危险语句在运行前会请求确认。"
     execution:
       toast:
-        select_query: 选择要执行的查询文本
         enter_query: 输入要执行的查询
         no_active_connection: 无活动连接
         connection_not_found: 未找到连接
@@ -1357,6 +1355,9 @@ document:
         chart_name: 图表名称
       filter:
         open_in_builder: 在构建器中打开
+        builder_notice: 行来自构建器查询
+        edit_in_builder: 在构建器中编辑
+        reset_builder: 重置
       toast:
         query_imported: 查询导入成功
         mutation_queued: 变更已排队等待审批。
@@ -1561,11 +1562,11 @@ document:
     execution_plan: "将要运行的内容"
     approve: "批准并运行"
     reject: 拒绝
+    reject_reason_placeholder: "原因（驳回时发送给智能体）"
     select_prompt: 选择一个待处理请求以查看详情。
     load_failed: "加载待处理执行 %{id} 失败：%{error}"
     title: "MCP 审批"
     subtitle: "被策略暂停、等待人工处理的代理调用"
-    close: "关闭"
     pending_count: "待处理 · %{count}"
     list_hint: "移动 · 决定会写入审计日志"
     requested_by: "请求者"
@@ -1970,6 +1971,8 @@ document:
         edit_locked: "要编辑，请将压缩设为“无”，并将查看方式设为自动、JSON 或文本"
   migrate_wizard:
     title: 迁移数据
+    already_running: "已有迁移正在运行，已切换到该标签页。请等待其完成后再开始新的迁移。"
+    already_running_in_tasks: "任务面板中已有迁移正在运行。请等待其完成或取消后再开始新的迁移。"
     task:
       one: "迁移 %{count} 张表"
       many: "迁移 %{count} 张表"
@@ -2073,7 +2076,6 @@ document:
     footer:
       cancel_migration: "取消迁移"
       referential_integrity_off: "在运行完成前参照完整性处于禁用状态"
-      run_in_background: "在后台运行"
       back: 返回
       continue: 继续
       loading: 加载中…

@@ -1,295 +1,139 @@
 pub use dbflux_components::icons::AppIcon;
 
-pub const ALL_ICONS: &[AppIcon] = &[
-    AppIcon::ChevronDown,
-    AppIcon::ChevronLeft,
-    AppIcon::ChevronRight,
-    AppIcon::ChevronUp,
-    AppIcon::Play,
-    AppIcon::SquarePlay,
-    AppIcon::Plus,
-    AppIcon::Power,
-    AppIcon::Save,
-    AppIcon::Delete,
-    AppIcon::Pencil,
-    AppIcon::Copy,
-    AppIcon::RefreshCcw,
-    AppIcon::RotateCcw,
-    AppIcon::Download,
-    AppIcon::Search,
-    AppIcon::Settings,
-    AppIcon::History,
-    AppIcon::Undo,
-    AppIcon::Redo,
-    AppIcon::X,
-    AppIcon::Eye,
-    AppIcon::EyeOff,
-    AppIcon::Loader,
-    AppIcon::Info,
-    AppIcon::Check,
-    AppIcon::CircleAlert,
-    AppIcon::CircleCheck,
-    AppIcon::CircleX,
-    AppIcon::TriangleAlert,
-    AppIcon::ExternalLink,
-    AppIcon::Globe,
-    AppIcon::Code,
-    AppIcon::Table,
-    AppIcon::Columns,
-    AppIcon::Rows3,
-    AppIcon::ArrowUp,
-    AppIcon::ArrowDown,
-    AppIcon::Star,
-    AppIcon::Clock,
-    AppIcon::Zap,
-    AppIcon::Hash,
-    AppIcon::Lock,
-    AppIcon::Layers,
-    AppIcon::Keyboard,
-    AppIcon::FingerprintPattern,
-    AppIcon::Maximize2,
-    AppIcon::Minimize2,
-    AppIcon::PanelBottomClose,
-    AppIcon::PanelBottomOpen,
-    AppIcon::FileSpreadsheet,
-    AppIcon::KeyRound,
-    AppIcon::Cable,
-    AppIcon::Link2,
-    AppIcon::CaseSensitive,
-    AppIcon::ScrollText,
-    AppIcon::ListFilter,
-    AppIcon::Tag,
-    AppIcon::Activity,
-    AppIcon::FileDown,
-    AppIcon::SquareFunction,
-    AppIcon::ArrowUpDown,
-    AppIcon::Plug,
-    AppIcon::Unplug,
-    AppIcon::Server,
-    AppIcon::HardDrive,
-    AppIcon::File,
-    AppIcon::FileCode,
-    AppIcon::Image,
-    AppIcon::Folder,
-    AppIcon::Box,
-    AppIcon::Boxes,
-    AppIcon::Braces,
-    AppIcon::SquareTerminal,
-    AppIcon::Parentheses,
-    AppIcon::Sigma,
-    AppIcon::Database,
-    AppIcon::Logs,
-    AppIcon::ChartSpline,
-    AppIcon::ChartArea,
-    AppIcon::ChartColumnBig,
-    AppIcon::ChartNoAxesColumn,
-    AppIcon::ChartBar,
-    AppIcon::ChartPie,
-    AppIcon::ChartNetwork,
-    AppIcon::BrainCircuit,
-    AppIcon::Bot,
-    AppIcon::Bell,
-    AppIcon::BrandPostgres,
-    AppIcon::BrandMysql,
-    AppIcon::BrandMariadb,
-    AppIcon::BrandSqlite,
-    AppIcon::BrandMongodb,
-    AppIcon::BrandRedis,
-    AppIcon::BrandClickhouse,
-    AppIcon::BrandTurso,
-    AppIcon::BrandLua,
-    AppIcon::BrandPython,
-    AppIcon::BrandBash,
-    AppIcon::BrandJavaScript,
-    AppIcon::BrandInfluxDb,
-    AppIcon::Clipboard,
-    AppIcon::Pin,
-    AppIcon::DbFlux,
-    AppIcon::Scale,
-    AppIcon::ArrowLeftRight,
-];
-
-/// Returns the embedded bytes for the given icon.
+/// Declares every embedded icon once, producing both `ALL_ICONS` (the list the
+/// asset source searches by path) and `embedded_bytes`.
 ///
-/// The `include_bytes!` paths are relative to this source file, which stays at
-/// `crates/dbflux_ui/src/ui/icons/mod.rs`. They must not change when `AppIcon`
-/// moves to `dbflux_components` because the icon resources live under
-/// `crates/dbflux_ui/resources/`.
-pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
-    match icon {
-        AppIcon::ChevronDown => {
-            include_bytes!("../../../../../resources/icons/ui/chevron-down.svg")
+/// Generating both from one table keeps them in lockstep: `embedded_bytes` is an
+/// exhaustive match, so adding an `AppIcon` variant without an entry here fails
+/// to compile instead of silently rendering an empty glyph at runtime.
+///
+/// File paths are relative to the workspace `resources/` directory.
+macro_rules! embedded_icons {
+    ($($icon:ident => $file:literal),* $(,)?) => {
+        pub const ALL_ICONS: &[AppIcon] = &[$(AppIcon::$icon),*];
+
+        /// Returns the embedded bytes for the given icon.
+        pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
+            match icon {
+                $(AppIcon::$icon => include_bytes!(concat!("../../../../../resources/", $file)),)*
+            }
         }
-        AppIcon::ChevronLeft => {
-            include_bytes!("../../../../../resources/icons/ui/chevron-left.svg")
-        }
-        AppIcon::ChevronRight => {
-            include_bytes!("../../../../../resources/icons/ui/chevron-right.svg")
-        }
-        AppIcon::ChevronUp => include_bytes!("../../../../../resources/icons/ui/chevron-up.svg"),
-        AppIcon::Play => include_bytes!("../../../../../resources/icons/ui/play.svg"),
-        AppIcon::SquarePlay => include_bytes!("../../../../../resources/icons/ui/square-play.svg"),
-        AppIcon::Plus => include_bytes!("../../../../../resources/icons/ui/plus.svg"),
-        AppIcon::Power => include_bytes!("../../../../../resources/icons/ui/power.svg"),
-        AppIcon::Save => include_bytes!("../../../../../resources/icons/ui/save.svg"),
-        AppIcon::Delete => include_bytes!("../../../../../resources/icons/ui/delete.svg"),
-        AppIcon::Pencil => include_bytes!("../../../../../resources/icons/ui/pencil.svg"),
-        AppIcon::Copy => include_bytes!("../../../../../resources/icons/ui/copy.svg"),
-        AppIcon::RefreshCcw => include_bytes!("../../../../../resources/icons/ui/refresh-ccw.svg"),
-        AppIcon::RotateCcw => include_bytes!("../../../../../resources/icons/ui/rotate-ccw.svg"),
-        AppIcon::Download => include_bytes!("../../../../../resources/icons/ui/download.svg"),
-        AppIcon::Search => include_bytes!("../../../../../resources/icons/ui/search.svg"),
-        AppIcon::Settings => include_bytes!("../../../../../resources/icons/ui/settings.svg"),
-        AppIcon::History => include_bytes!("../../../../../resources/icons/ui/history.svg"),
-        AppIcon::Undo => include_bytes!("../../../../../resources/icons/ui/undo.svg"),
-        AppIcon::Redo => include_bytes!("../../../../../resources/icons/ui/redo.svg"),
-        AppIcon::X => include_bytes!("../../../../../resources/icons/ui/x.svg"),
-        AppIcon::Eye => include_bytes!("../../../../../resources/icons/ui/eye.svg"),
-        AppIcon::EyeOff => include_bytes!("../../../../../resources/icons/ui/eye-off.svg"),
-        AppIcon::Loader => include_bytes!("../../../../../resources/icons/ui/loader.svg"),
-        AppIcon::Info => include_bytes!("../../../../../resources/icons/ui/info.svg"),
-        AppIcon::CircleAlert => {
-            include_bytes!("../../../../../resources/icons/ui/circle-alert.svg")
-        }
-        AppIcon::CircleCheck => {
-            include_bytes!("../../../../../resources/icons/ui/circle-check.svg")
-        }
-        AppIcon::CircleX => include_bytes!("../../../../../resources/icons/ui/circle-x.svg"),
-        AppIcon::Check => include_bytes!("../../../../../resources/icons/ui/check.svg"),
-        AppIcon::ExternalLink => {
-            include_bytes!("../../../../../resources/icons/ui/external-link.svg")
-        }
-        AppIcon::Globe => include_bytes!("../../../../../resources/icons/ui/globe.svg"),
-        AppIcon::TriangleAlert => {
-            include_bytes!("../../../../../resources/icons/ui/triangle-alert.svg")
-        }
-        AppIcon::Code => include_bytes!("../../../../../resources/icons/ui/code.svg"),
-        AppIcon::Table => include_bytes!("../../../../../resources/icons/ui/table.svg"),
-        AppIcon::Columns => include_bytes!("../../../../../resources/icons/ui/columns.svg"),
-        AppIcon::Rows3 => include_bytes!("../../../../../resources/icons/ui/rows-3.svg"),
-        AppIcon::ArrowUp => include_bytes!("../../../../../resources/icons/ui/arrow-up.svg"),
-        AppIcon::ArrowDown => include_bytes!("../../../../../resources/icons/ui/arrow-down.svg"),
-        AppIcon::Star => include_bytes!("../../../../../resources/icons/ui/star.svg"),
-        AppIcon::Clock => include_bytes!("../../../../../resources/icons/ui/clock.svg"),
-        AppIcon::Zap => include_bytes!("../../../../../resources/icons/ui/zap.svg"),
-        AppIcon::Hash => include_bytes!("../../../../../resources/icons/ui/hash.svg"),
-        AppIcon::Lock => include_bytes!("../../../../../resources/icons/ui/lock.svg"),
-        AppIcon::Layers => include_bytes!("../../../../../resources/icons/ui/layers.svg"),
-        AppIcon::Keyboard => include_bytes!("../../../../../resources/icons/ui/keyboard.svg"),
-        AppIcon::FingerprintPattern => {
-            include_bytes!("../../../../../resources/icons/ui/fingerprint-pattern.svg")
-        }
-        AppIcon::Maximize2 => include_bytes!("../../../../../resources/icons/ui/maximize-2.svg"),
-        AppIcon::Minimize2 => include_bytes!("../../../../../resources/icons/ui/minimize-2.svg"),
-        AppIcon::PanelBottomClose => {
-            include_bytes!("../../../../../resources/icons/ui/panel-bottom-close.svg")
-        }
-        AppIcon::PanelBottomOpen => {
-            include_bytes!("../../../../../resources/icons/ui/panel-bottom-open.svg")
-        }
-        AppIcon::FileSpreadsheet => {
-            include_bytes!("../../../../../resources/icons/ui/file-spreadsheet.svg")
-        }
-        AppIcon::KeyRound => include_bytes!("../../../../../resources/icons/ui/key-round.svg"),
-        AppIcon::Cable => include_bytes!("../../../../../resources/icons/ui/cable.svg"),
-        AppIcon::Link2 => include_bytes!("../../../../../resources/icons/ui/link-2.svg"),
-        AppIcon::CaseSensitive => {
-            include_bytes!("../../../../../resources/icons/ui/case-sensitive.svg")
-        }
-        AppIcon::ScrollText => include_bytes!("../../../../../resources/icons/ui/scroll-text.svg"),
-        AppIcon::ListFilter => include_bytes!("../../../../../resources/icons/ui/list-filter.svg"),
-        AppIcon::Tag => include_bytes!("../../../../../resources/icons/ui/tag.svg"),
-        AppIcon::Activity => include_bytes!("../../../../../resources/icons/ui/activity.svg"),
-        AppIcon::FileDown => include_bytes!("../../../../../resources/icons/ui/file-down.svg"),
-        AppIcon::SquareFunction => {
-            include_bytes!("../../../../../resources/icons/ui/square-function.svg")
-        }
-        AppIcon::ArrowUpDown => {
-            include_bytes!("../../../../../resources/icons/ui/arrow-up-down.svg")
-        }
-        AppIcon::Plug => include_bytes!("../../../../../resources/icons/ui/plug.svg"),
-        AppIcon::Unplug => include_bytes!("../../../../../resources/icons/ui/unplug.svg"),
-        AppIcon::Server => include_bytes!("../../../../../resources/icons/ui/server.svg"),
-        AppIcon::HardDrive => include_bytes!("../../../../../resources/icons/ui/hard-drive.svg"),
-        AppIcon::File => include_bytes!("../../../../../resources/icons/ui/file.svg"),
-        AppIcon::FileCode => {
-            include_bytes!("../../../../../resources/icons/ui/file-code-corner.svg")
-        }
-        AppIcon::Image => include_bytes!("../../../../../resources/icons/ui/image.svg"),
-        AppIcon::Folder => include_bytes!("../../../../../resources/icons/ui/folder.svg"),
-        AppIcon::Box => include_bytes!("../../../../../resources/icons/ui/box.svg"),
-        AppIcon::Boxes => include_bytes!("../../../../../resources/icons/ui/boxes.svg"),
-        AppIcon::Braces => include_bytes!("../../../../../resources/icons/ui/braces.svg"),
-        AppIcon::SquareTerminal => {
-            include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
-        }
-        AppIcon::Parentheses => {
-            include_bytes!("../../../../../resources/icons/ui/parentheses.svg")
-        }
-        AppIcon::Sigma => include_bytes!("../../../../../resources/icons/ui/sigma.svg"),
-        AppIcon::Database => include_bytes!("../../../../../resources/icons/ui/database.svg"),
-        AppIcon::DatabaseZap => {
-            include_bytes!("../../../../../resources/icons/ui/database-zap.svg")
-        }
-        AppIcon::ZoomIn => include_bytes!("../../../../../resources/icons/ui/zoom-in.svg"),
-        AppIcon::ZoomOut => include_bytes!("../../../../../resources/icons/ui/zoom-out.svg"),
-        AppIcon::Minus => include_bytes!("../../../../../resources/icons/ui/minus.svg"),
-        AppIcon::Grid3x3 => include_bytes!("../../../../../resources/icons/ui/grid-3x3.svg"),
-        AppIcon::Snowflake => include_bytes!("../../../../../resources/icons/ui/snowflake.svg"),
-        AppIcon::Scale => include_bytes!("../../../../../resources/icons/ui/scale.svg"),
-        AppIcon::ArrowLeftRight => {
-            include_bytes!("../../../../../resources/icons/ui/arrow-left-right.svg")
-        }
-        AppIcon::Clipboard => include_bytes!("../../../../../resources/icons/ui/clipboard.svg"),
-        AppIcon::Pin => include_bytes!("../../../../../resources/icons/ui/pin.svg"),
-        AppIcon::Logs => include_bytes!("../../../../../resources/icons/ui/logs.svg"),
-        AppIcon::ChartSpline => {
-            include_bytes!("../../../../../resources/icons/ui/chart-spline.svg")
-        }
-        AppIcon::ChartArea => include_bytes!("../../../../../resources/icons/ui/chart-area.svg"),
-        AppIcon::ChartColumnBig => {
-            include_bytes!("../../../../../resources/icons/ui/chart-column-big.svg")
-        }
-        AppIcon::ChartNoAxesColumn => {
-            include_bytes!("../../../../../resources/icons/ui/chart-no-axes-column.svg")
-        }
-        AppIcon::ChartBar => include_bytes!("../../../../../resources/icons/ui/chart-bar.svg"),
-        AppIcon::ChartPie => include_bytes!("../../../../../resources/icons/ui/chart-pie.svg"),
-        AppIcon::ChartNetwork => {
-            include_bytes!("../../../../../resources/icons/ui/chart-network.svg")
-        }
-        AppIcon::BrandPostgres => {
-            include_bytes!("../../../../../resources/icons/brand/postgresql.svg")
-        }
-        AppIcon::BrandMysql => include_bytes!("../../../../../resources/icons/brand/mysql.svg"),
-        AppIcon::BrandMariadb => {
-            include_bytes!("../../../../../resources/icons/brand/mariadb.svg")
-        }
-        AppIcon::BrandSqlite => include_bytes!("../../../../../resources/icons/brand/sqlite.svg"),
-        AppIcon::BrandMongodb => {
-            include_bytes!("../../../../../resources/icons/brand/mongodb.svg")
-        }
-        AppIcon::BrandRedis => include_bytes!("../../../../../resources/icons/brand/redis.svg"),
-        AppIcon::BrandClickhouse => {
-            include_bytes!("../../../../../resources/icons/brand/clickhouse.svg")
-        }
-        AppIcon::BrandTurso => include_bytes!("../../../../../resources/icons/brand/turso.svg"),
-        AppIcon::BrandLua => include_bytes!("../../../../../resources/icons/brand/lua.svg"),
-        AppIcon::BrandPython => include_bytes!("../../../../../resources/icons/brand/python.svg"),
-        AppIcon::BrandBash => include_bytes!("../../../../../resources/icons/brand/gnubash.svg"),
-        AppIcon::BrandJavaScript => {
-            include_bytes!("../../../../../resources/icons/brand/javascript.svg")
-        }
-        AppIcon::BrandInfluxDb => {
-            include_bytes!("../../../../../resources/icons/brand/influxdb.svg")
-        }
-        AppIcon::DbFlux => include_bytes!("../../../../../resources/branding/glyph.svg"),
-        AppIcon::BrainCircuit => {
-            include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
-        }
-        AppIcon::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
-        AppIcon::Bell => include_bytes!("../../../../../resources/icons/ui/bell.svg"),
-    }
+    };
+}
+
+embedded_icons! {
+    ChevronDown => "icons/ui/chevron-down.svg",
+    ChevronLeft => "icons/ui/chevron-left.svg",
+    ChevronRight => "icons/ui/chevron-right.svg",
+    ChevronUp => "icons/ui/chevron-up.svg",
+    Play => "icons/ui/play.svg",
+    SquarePlay => "icons/ui/square-play.svg",
+    Plus => "icons/ui/plus.svg",
+    Power => "icons/ui/power.svg",
+    Save => "icons/ui/save.svg",
+    Delete => "icons/ui/delete.svg",
+    Pencil => "icons/ui/pencil.svg",
+    Copy => "icons/ui/copy.svg",
+    RefreshCcw => "icons/ui/refresh-ccw.svg",
+    RotateCcw => "icons/ui/rotate-ccw.svg",
+    Download => "icons/ui/download.svg",
+    Search => "icons/ui/search.svg",
+    Settings => "icons/ui/settings.svg",
+    History => "icons/ui/history.svg",
+    Undo => "icons/ui/undo.svg",
+    Redo => "icons/ui/redo.svg",
+    X => "icons/ui/x.svg",
+    Eye => "icons/ui/eye.svg",
+    EyeOff => "icons/ui/eye-off.svg",
+    Loader => "icons/ui/loader.svg",
+    Info => "icons/ui/info.svg",
+    CircleAlert => "icons/ui/circle-alert.svg",
+    CircleCheck => "icons/ui/circle-check.svg",
+    CircleX => "icons/ui/circle-x.svg",
+    Check => "icons/ui/check.svg",
+    ExternalLink => "icons/ui/external-link.svg",
+    Globe => "icons/ui/globe.svg",
+    TriangleAlert => "icons/ui/triangle-alert.svg",
+    Code => "icons/ui/code.svg",
+    Table => "icons/ui/table.svg",
+    Columns => "icons/ui/columns.svg",
+    Rows3 => "icons/ui/rows-3.svg",
+    ArrowUp => "icons/ui/arrow-up.svg",
+    ArrowDown => "icons/ui/arrow-down.svg",
+    Star => "icons/ui/star.svg",
+    Clock => "icons/ui/clock.svg",
+    Zap => "icons/ui/zap.svg",
+    Hash => "icons/ui/hash.svg",
+    Lock => "icons/ui/lock.svg",
+    Layers => "icons/ui/layers.svg",
+    Keyboard => "icons/ui/keyboard.svg",
+    FingerprintPattern => "icons/ui/fingerprint-pattern.svg",
+    Maximize2 => "icons/ui/maximize-2.svg",
+    Minimize2 => "icons/ui/minimize-2.svg",
+    PanelBottomClose => "icons/ui/panel-bottom-close.svg",
+    PanelBottomOpen => "icons/ui/panel-bottom-open.svg",
+    FileSpreadsheet => "icons/ui/file-spreadsheet.svg",
+    KeyRound => "icons/ui/key-round.svg",
+    Cable => "icons/ui/cable.svg",
+    Link2 => "icons/ui/link-2.svg",
+    CaseSensitive => "icons/ui/case-sensitive.svg",
+    ScrollText => "icons/ui/scroll-text.svg",
+    ListFilter => "icons/ui/list-filter.svg",
+    Tag => "icons/ui/tag.svg",
+    Activity => "icons/ui/activity.svg",
+    FileDown => "icons/ui/file-down.svg",
+    SquareFunction => "icons/ui/square-function.svg",
+    ArrowUpDown => "icons/ui/arrow-up-down.svg",
+    Plug => "icons/ui/plug.svg",
+    Unplug => "icons/ui/unplug.svg",
+    Server => "icons/ui/server.svg",
+    HardDrive => "icons/ui/hard-drive.svg",
+    File => "icons/ui/file.svg",
+    FileCode => "icons/ui/file-code-corner.svg",
+    Image => "icons/ui/image.svg",
+    Folder => "icons/ui/folder.svg",
+    Box => "icons/ui/box.svg",
+    Boxes => "icons/ui/boxes.svg",
+    Braces => "icons/ui/braces.svg",
+    SquareTerminal => "icons/ui/square-terminal.svg",
+    Parentheses => "icons/ui/parentheses.svg",
+    Sigma => "icons/ui/sigma.svg",
+    Database => "icons/ui/database.svg",
+    DatabaseZap => "icons/ui/database-zap.svg",
+    ZoomIn => "icons/ui/zoom-in.svg",
+    ZoomOut => "icons/ui/zoom-out.svg",
+    Minus => "icons/ui/minus.svg",
+    Grid3x3 => "icons/ui/grid-3x3.svg",
+    Snowflake => "icons/ui/snowflake.svg",
+    Scale => "icons/ui/scale.svg",
+    ArrowLeftRight => "icons/ui/arrow-left-right.svg",
+    Clipboard => "icons/ui/clipboard.svg",
+    Pin => "icons/ui/pin.svg",
+    Logs => "icons/ui/logs.svg",
+    ChartSpline => "icons/ui/chart-spline.svg",
+    ChartArea => "icons/ui/chart-area.svg",
+    ChartColumnBig => "icons/ui/chart-column-big.svg",
+    ChartNoAxesColumn => "icons/ui/chart-no-axes-column.svg",
+    ChartBar => "icons/ui/chart-bar.svg",
+    ChartPie => "icons/ui/chart-pie.svg",
+    ChartNetwork => "icons/ui/chart-network.svg",
+    BrandPostgres => "icons/brand/postgresql.svg",
+    BrandMysql => "icons/brand/mysql.svg",
+    BrandMariadb => "icons/brand/mariadb.svg",
+    BrandSqlite => "icons/brand/sqlite.svg",
+    BrandMongodb => "icons/brand/mongodb.svg",
+    BrandRedis => "icons/brand/redis.svg",
+    BrandClickhouse => "icons/brand/clickhouse.svg",
+    BrandTurso => "icons/brand/turso.svg",
+    BrandLua => "icons/brand/lua.svg",
+    BrandPython => "icons/brand/python.svg",
+    BrandBash => "icons/brand/gnubash.svg",
+    BrandJavaScript => "icons/brand/javascript.svg",
+    BrandInfluxDb => "icons/brand/influxdb.svg",
+    DbFlux => "branding/glyph.svg",
+    BrainCircuit => "icons/ui/brain-circuit.svg",
+    Bot => "icons/ui/bot.svg",
+    Bell => "icons/ui/bell.svg",
 }
 
 #[cfg(test)]
@@ -306,6 +150,33 @@ mod tests {
         ] {
             assert!(ALL_ICONS.contains(&icon));
             assert!(embedded_bytes(icon).starts_with(b"<svg"));
+        }
+    }
+
+    #[test]
+    fn schema_toolbar_icons_are_registered() {
+        for icon in [
+            AppIcon::ZoomIn,
+            AppIcon::ZoomOut,
+            AppIcon::Grid3x3,
+            AppIcon::Minus,
+            AppIcon::Snowflake,
+            AppIcon::DatabaseZap,
+        ] {
+            assert!(ALL_ICONS.contains(&icon), "{icon:?} is not registered");
+        }
+    }
+
+    #[test]
+    fn every_registered_icon_has_a_unique_path_and_svg_bytes() {
+        let mut paths = std::collections::HashSet::new();
+
+        for icon in ALL_ICONS {
+            assert!(paths.insert(icon.path()), "duplicate path for {icon:?}");
+
+            let bytes = embedded_bytes(*icon);
+            let has_svg_root = bytes.windows(4).any(|window| window == b"<svg");
+            assert!(has_svg_root, "{icon:?} does not embed an SVG document");
         }
     }
 }

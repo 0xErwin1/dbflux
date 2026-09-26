@@ -171,7 +171,7 @@ fn render_header(
         )
         .child(
             Button::new("qb-hdr-close", "")
-                .icon(AppIcon::X)
+                .icon(AppIcon::CircleX)
                 .icon_only()
                 .tooltip(dbflux_i18n::t!("document.query_builder.chrome.close"))
                 .tab_stop(false)

@@ -146,7 +146,7 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado contra una conexión. La clasificación se deriva del cuerpo del script                     |
 | Aprobación      | `request_execution`       | admin                                  | Encola una llamada para que la apruebe una persona. Una vez aprobada, llama a la tool con los mismos argumentos para ejecutarla una vez |
 | Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
-| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica                                                           |
+| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica. Una rechazada devuelve `status: "rejected"` y el motivo |
 | Aprobación      | `approve_execution`       | —                                      | Siempre se deniega por MCP. Una persona aprueba en DBFlux                                                            |
 | Aprobación      | `reject_execution`        | —                                      | Siempre se deniega por MCP. Una persona rechaza en DBFlux                                                            |
 | Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
@@ -211,6 +211,11 @@ que ninguna otra policy asignada al actor la permita.
 Una aprobación ejecuta una llamada. Repetir la llamada otra vez encola una nueva
 solicitud, igual que cambiar cualquier argumento. Una llamada rechazada nunca se
 ejecuta. Una aprobación vence 24 horas después de encolarse la llamada.
+
+Tras un rechazo, `get_pending_execution` devuelve `status: "rejected"` y un
+campo `reason` con el texto que la persona escribió al rechazar, recortado y
+limitado a 500 caracteres, o `null` si no escribió ninguno. El mismo motivo queda
+registrado en el evento de auditoría `mcp_reject_execution`.
 
 `request_execution` encola una llamada de forma explícita, con el mismo resultado
 que llamar a la tool bajo Ask. `request_execution`, `list_pending_executions` y
@@ -303,6 +308,9 @@ Configura la governance en la GUI de DBFlux antes de arrancar el servidor MCP.
    - `j` / `k` recorren las llamadas pendientes, `a` aprueba la seleccionada y
      `r` la rechaza. Una llamada aprobada se ejecuta cuando el agente la repite
      con los mismos argumentos. Cada decisión se escribe en el audit log.
+   - El campo de motivo del pie se envía al agente al rechazar. Mientras tiene el
+     foco, `r` y `a` escriben texto en lugar de decidir. Se vacía tras cada
+     decisión.
 
 6. **Workspace → Audit**
    - Filtra por actor/tool/decisión/rango de tiempo y exporta CSV/JSON.

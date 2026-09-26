@@ -60,11 +60,13 @@ impl KeyValueDocument {
             )
             .child(
                 div()
+                    .flex_none()
                     .w(KeyValueMetrics::TTL_COLUMN)
                     .child(dbflux_i18n::t!("document.key_value.list.column_ttl")),
             )
             .child(
                 div()
+                    .flex_none()
                     .w(KeyValueMetrics::SIZE_COLUMN)
                     .child(dbflux_i18n::t!("document.key_value.list.column_size")),
             );
@@ -199,6 +201,7 @@ impl KeyValueDocument {
         dbflux_components::composites::ListRow::new(("kv-folder-row", row_index))
             .selected(is_cursor)
             .build(cx)
+            .w_full()
             .flex()
             .items_center()
             .h(KeyValueMetrics::LIST_ROW_HEIGHT)
@@ -206,6 +209,8 @@ impl KeyValueDocument {
             .pr(KeyValueMetrics::LIST_PADDING_RIGHT)
             .border_b_1()
             .border_color(theme.table_row_border)
+            .font_family(AppFonts::MONO)
+            .text_size(KeyValueMetrics::FOLDER_ROW_FONT)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
@@ -239,7 +244,8 @@ impl KeyValueDocument {
                     )
                     .child(
                         div()
-                            .font_family(AppFonts::MONO)
+                            .flex_1()
+                            .min_w_0()
                             .text_color(strong)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -249,10 +255,11 @@ impl KeyValueDocument {
             )
             .child(
                 div()
+                    .flex_none()
                     .w(KeyValueMetrics::FOLDER_COUNT_COLUMN)
                     .flex()
                     .justify_end()
-                    .font_family(AppFonts::MONO)
+                    .whitespace_nowrap()
                     .text_size(KeyValueMetrics::FOLDER_COUNT_FONT)
                     .text_color(theme.muted_foreground)
                     .child(folder_count_label(key_count, self.scan_complete())),
@@ -306,6 +313,7 @@ impl KeyValueDocument {
             match &self.rename_input {
                 Some(input) => div()
                     .flex_1()
+                    .min_w_0()
                     .child(Input::new(input).small().w_full())
                     .into_any_element(),
                 None => div().flex_1().into_any_element(),
@@ -325,6 +333,7 @@ impl KeyValueDocument {
         div()
             .id(("kv-key-row", row_index))
             .relative()
+            .w_full()
             .flex()
             .items_center()
             .h(KeyValueMetrics::LIST_ROW_HEIGHT)
@@ -382,14 +391,18 @@ impl KeyValueDocument {
             )
             .child(
                 div()
+                    .flex_none()
                     .w(KeyValueMetrics::TTL_COLUMN)
+                    .whitespace_nowrap()
                     .text_size(KeyValueMetrics::LIST_META_FONT)
                     .text_color(ttl_color)
                     .child(ttl_text),
             )
             .child(
                 div()
+                    .flex_none()
                     .w(KeyValueMetrics::SIZE_COLUMN)
+                    .whitespace_nowrap()
                     .text_size(KeyValueMetrics::LIST_META_FONT)
                     .text_color(theme.muted_foreground)
                     .child(size_text),
@@ -585,8 +598,16 @@ impl KeyValueDocument {
                     })),
                 )
             })
-            .child(div().flex_1())
-            .child(div().whitespace_nowrap().child(hint))
+            .child(
+                div().flex_1().min_w_0().flex().justify_end().child(
+                    div()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(hint),
+                ),
+            )
     }
 }
 

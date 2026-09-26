@@ -332,3 +332,51 @@ fn approval_given_by_one_process_is_consumed_by_another() {
         }
     }
 }
+
+#[test]
+fn record_rejection_stores_the_reason_for_the_requester() {
+    let rt = runtime();
+    let mut store = rt.pending_executions().expect("store should open");
+
+    let entry = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    let rejected = store
+        .record_rejection(entry.id, Some("wrong table"))
+        .expect("record_rejection should succeed")
+        .expect("entry should be found");
+
+    assert_eq!(rejected.status, PendingStatus::Rejected);
+    assert_eq!(rejected.rejection_reason.as_deref(), Some("wrong table"));
+
+    let fetched = store
+        .get_execution(entry.id)
+        .expect("get_execution should succeed")
+        .expect("a rejected entry stays readable");
+    assert_eq!(fetched.status, PendingStatus::Rejected);
+    assert_eq!(fetched.rejection_reason.as_deref(), Some("wrong table"));
+    assert!(
+        store
+            .get_pending(entry.id)
+            .expect("get_pending should succeed")
+            .is_none(),
+        "a rejected entry is no longer pending"
+    );
+}
+
+#[test]
+fn record_rejection_without_reason_keeps_it_empty() {
+    let rt = runtime();
+    let mut store = rt.pending_executions().expect("store should open");
+
+    let entry = store
+        .create_pending(&sample_plan(), None)
+        .expect("create_pending should succeed");
+    let rejected = store
+        .record_rejection(entry.id, None)
+        .expect("record_rejection should succeed")
+        .expect("entry should be found");
+
+    assert_eq!(rejected.status, PendingStatus::Rejected);
+    assert!(rejected.rejection_reason.is_none());
+}

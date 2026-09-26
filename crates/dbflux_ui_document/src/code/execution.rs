@@ -165,24 +165,6 @@ impl CodeDocument {
         self.run_query_impl(false, window, cx);
     }
 
-    pub fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(query) = self.selected_query(window, cx) else {
-            Toast::warning(dbflux_i18n::t!(
-                "document.code.execution.toast.select_query"
-            ))
-            .meta_right(now_hms())
-            .push(cx);
-            return;
-        };
-
-        if !self.supports_connection_context() {
-            self.run_script(window, cx);
-            return;
-        }
-
-        self.run_query_text(query, false, window, cx);
-    }
-
     fn run_query_impl(&mut self, in_new_tab: bool, window: &mut Window, cx: &mut Context<Self>) {
         // A selection always runs as-is, without the script confirmation.
         if let Some(query) = self.selected_query(window, cx) {
@@ -2667,7 +2649,6 @@ mod tests {
     #[test]
     fn execution_toast_keys_resolve_in_both_locales() {
         let keys = [
-            "document.code.execution.toast.select_query",
             "document.code.execution.toast.enter_query",
             "document.code.execution.toast.no_active_connection",
             "document.code.execution.toast.connection_not_found",

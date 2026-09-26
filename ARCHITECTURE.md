@@ -191,7 +191,7 @@ crates/
       data_view.rs          # DataViewMode abstraction (Table vs Document)
       data_view_trait.rs    # DataView trait (available_view_modes, focus_handle, active_context)
       chrome.rs             # Shared chrome utilities
-      governance.rs         # MCP approvals view for pending executions
+      governance/           # McpApprovalsView: MCP approvals document tab (mod.rs, pane.rs)
       history_modal.rs      # Recent/saved queries modal
       add_member_modal.rs   # Modal for adding Redis set/list/sorted-set members
       new_key_modal.rs      # Modal for creating new Redis keys
@@ -927,7 +927,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `preview_mutation` is strictly read-only; unsafe `preview_ddl` is intentionally not exposed until DBFlux has a safe non-mutating DDL preview path
 
 **UI Integration**:
-- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) for reviewing pending executions
+- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance/`) document tab for reviewing pending executions
 - `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) in Settings for trusted clients, roles, and policies
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) as the unified event viewer for both internal audit records and driver-backed external event streams exposed through generic `EventStreamTarget`s (no driver-specific audit document path in the UI)
 - `LoginModal` (`crates/dbflux_ui/src/ui/overlays/login_modal.rs`) and `SsoWizard` (`crates/dbflux_ui_base/src/sso_wizard.rs`, shim at old overlay path) for AWS SSO authentication flow

@@ -1,6 +1,6 @@
-use std::rc::Rc;
+mod pane;
 
-use dbflux_components::controls::{Button, ButtonVariant};
+use dbflux_components::controls::{Button, ButtonVariant, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
     Badge, BadgeTone, BannerBlock, BannerVariant, Chamfer, Icon, Kbd, Text,
@@ -18,45 +18,79 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
 use super::chrome::{detail_field, document_bar, document_subtitle, document_title};
+use super::handle::DocumentEvent;
 use super::syntax_runs::json_highlights;
+use super::types::{DocumentId, DocumentState};
 
-type CloseHandler = Rc<dyn Fn(&mut Window, &mut App)>;
-
-/// The MCP approvals view (P1Approvals): the pending agent calls on the
+/// The MCP approvals document (P1Approvals): the pending agent calls on the
 /// left, the selected call's context and payload on the right, and the
-/// Reject and Approve actions at the bottom.
+/// rejection reason with the Reject and Approve actions at the bottom.
+/// Opened as a singleton tab.
 pub struct McpApprovalsView {
+    id: DocumentId,
     app_state: Entity<AppStateEntity>,
     pending: Vec<PendingExecutionSummary>,
     selected_id: Option<String>,
     selected_detail: Option<PendingExecutionDetail>,
     status_message: Option<String>,
+    reject_reason: Entity<InputState>,
     focus_handle: FocusHandle,
-    on_close: Option<CloseHandler>,
+    _subscriptions: Vec<Subscription>,
 }
 
+impl EventEmitter<DocumentEvent> for McpApprovalsView {}
+
 impl McpApprovalsView {
-    pub fn new(app_state: Entity<AppStateEntity>, cx: &mut Context<Self>) -> Self {
-        Self {
+    pub fn new(
+        app_state: Entity<AppStateEntity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let runtime_events = cx.subscribe(
+            &app_state,
+            |this, _app_state, _event: &McpRuntimeEventRaised, cx| {
+                this.refresh(cx);
+            },
+        );
+
+        let reject_reason = cx.new(|cx| InputState::new(window, cx));
+
+        let mut view = Self {
+            id: DocumentId::new(),
             app_state,
             pending: Vec::new(),
             selected_id: None,
             selected_detail: None,
             status_message: None,
+            reject_reason,
             focus_handle: cx.focus_handle(),
-            on_close: None,
+            _subscriptions: vec![runtime_events],
+        };
+
+        view.refresh(cx);
+        view
+    }
+
+    pub fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    pub fn title(&self) -> String {
+        dbflux_i18n::t!("document.governance.title")
+    }
+
+    pub fn state(&self) -> DocumentState {
+        if self.status_message.is_some() {
+            DocumentState::Error
+        } else {
+            DocumentState::Clean
         }
     }
 
-    /// Adds a close button to the header that runs `on_close`, for a host
-    /// that shows the view as an overlay.
-    pub fn set_on_close(&mut self, on_close: impl Fn(&mut Window, &mut App) + 'static) {
-        self.on_close = Some(Rc::new(on_close));
-    }
-
-    /// Focus handle of the view, which takes the j/k/a/r keys while focused.
-    pub fn focus_handle(&self) -> FocusHandle {
-        self.focus_handle.clone()
+    /// Reloads the pending list and takes keyboard focus for the j/k/a/r keys.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -218,7 +252,12 @@ impl McpApprovalsView {
         Text::code(text)
     }
 
-    fn approve_selected(&mut self, cx: &mut Context<Self>) {
+    fn clear_reject_reason(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reject_reason
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
+    fn approve_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending_id) = self.selected_id.clone() else {
             return;
         };
@@ -243,18 +282,24 @@ impl McpApprovalsView {
             return;
         }
 
+        self.clear_reject_reason(window, cx);
         self.refresh(cx);
     }
 
-    fn reject_selected(&mut self, cx: &mut Context<Self>) {
+    /// Rejects the selected call with the typed reason, which the runtime
+    /// trims, caps and sends back to the agent.
+    fn reject_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending_id) = self.selected_id.clone() else {
             return;
         };
 
+        let reason = self.reject_reason.read(cx).value().to_string();
         let mut result: Result<(), String> = Ok(());
 
         self.app_state.update(cx, |state, cx| {
-            result = state.reject_mcp_pending_execution(&pending_id).map(|_| ());
+            result = state
+                .reject_mcp_pending_execution(&pending_id, Some(&reason))
+                .map(|_| ());
 
             if result.is_ok() {
                 for event in state.drain_mcp_runtime_events() {
@@ -271,21 +316,37 @@ impl McpApprovalsView {
             return;
         }
 
+        self.clear_reject_reason(window, cx);
         self.refresh(cx);
     }
 
-    fn handle_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let keystroke = &event.keystroke;
 
         if keystroke.modifiers.modified() {
             return;
         }
 
+        // Letters typed into the reason field are text, not shortcuts.
+        if self
+            .reject_reason
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            return;
+        }
+
         match keystroke.key.as_str() {
             "j" | "down" => self.move_selection(1, cx),
             "k" | "up" => self.move_selection(-1, cx),
-            "a" => self.approve_selected(cx),
-            "r" => self.reject_selected(cx),
+            "a" => self.approve_selected(window, cx),
+            "r" => self.reject_selected(window, cx),
             _ => return,
         }
 
@@ -294,15 +355,6 @@ impl McpApprovalsView {
 
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tint = ChromeColors::tint(cx.theme());
-
-        let close = self.on_close.clone().map(|on_close| {
-            Button::new("mcp-approvals-close", "")
-                .ghost()
-                .icon(AppIcon::X)
-                .icon_only()
-                .tooltip(dbflux_i18n::t!("document.governance.close"))
-                .on_click(move |_, window, cx| on_close(window, cx))
-        });
 
         document_bar(DocumentMetrics::HEADER_HEIGHT, cx)
             .child(document_title(
@@ -326,7 +378,6 @@ impl McpApprovalsView {
                     this.refresh(cx);
                 })),
             )
-            .children(close)
     }
 
     fn render_pending_row(
@@ -675,12 +726,26 @@ impl McpApprovalsView {
                     .flex()
                     .flex_shrink_0()
                     .items_center()
-                    .justify_end()
                     .gap(ApprovalsMetrics::TITLE_GAP)
                     .px(ApprovalsMetrics::DETAIL_PADDING_X)
                     .py(ApprovalsMetrics::FOOTER_PADDING_Y)
                     .border_t_1()
                     .border_color(theme.border)
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&self.reject_reason)
+                                .id("approval-reject-reason")
+                                .w_full()
+                                .placeholder(dbflux_i18n::t!(
+                                    "document.governance.reject_reason_placeholder"
+                                ))
+                                .prefix(
+                                    Icon::new(AppIcon::Pencil)
+                                        .size(ApprovalsMetrics::VALUE_ICON)
+                                        .color(theme.muted_foreground),
+                                ),
+                        ),
+                    )
                     .child(
                         Button::new(
                             "mcp-approval-reject",
@@ -689,8 +754,8 @@ impl McpApprovalsView {
                         .danger()
                         .icon(AppIcon::CircleX)
                         .kbd("r")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.reject_selected(cx);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.reject_selected(window, cx);
                         })),
                     )
                     .child(
@@ -701,8 +766,8 @@ impl McpApprovalsView {
                         .variant(ButtonVariant::Primary)
                         .icon(AppIcon::Check)
                         .kbd("a")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.approve_selected(cx);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.approve_selected(window, cx);
                         })),
                     ),
             )
@@ -768,6 +833,7 @@ mod tests {
     use dbflux_components::primitives::{BadgeTone, TextColorSelection, TextDefaultColor};
     use dbflux_components::typography::AppFonts;
     use dbflux_policy::ExecutionClassification;
+    use gpui::Focusable as _;
 
     #[test]
     fn pending_tool_names_use_the_code_role() {
@@ -821,6 +887,123 @@ mod tests {
             McpApprovalsView::waiting_label(0, 125 * minute),
             dbflux_i18n::t!("document.governance.waiting.hours", count = 2)
         );
+    }
+
+    fn approvals_view_with_one_pending_call(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<McpApprovalsView>,
+        gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        String,
+        &mut gpui::VisualTestContext,
+    ) {
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("isolated storage runtime");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let pending = app_state.update(cx, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-a".to_string(),
+                    "conn-a".to_string(),
+                    "delete_records".to_string(),
+                    ExecutionClassification::Destructive,
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a pending execution")
+        });
+
+        let (view, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| McpApprovalsView::new(app_state, window, cx)
+        });
+        window.run_until_parked();
+
+        (view, app_state, pending.id, window)
+    }
+
+    #[gpui::test]
+    fn shortcut_letters_type_into_the_reason_field(cx: &mut gpui::TestAppContext) {
+        let (view, app_state, pending_id, window) = approvals_view_with_one_pending_call(cx);
+
+        window.update(|window, cx| {
+            let reason_focus = view.read(cx).reject_reason.read(cx).focus_handle(cx);
+            reason_focus.focus(window, cx);
+        });
+        window.simulate_keystrokes("r a");
+        window.run_until_parked();
+
+        let typed = window.update(|_, cx| view.read(cx).reject_reason.read(cx).value().to_string());
+        assert_eq!(typed, "ra");
+
+        let still_pending = window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .list_mcp_pending_executions()
+                .expect("list pending executions")
+        });
+        assert!(
+            still_pending.iter().any(|entry| entry.id == pending_id),
+            "typing r or a in the reason field must neither reject nor approve"
+        );
+    }
+
+    #[gpui::test]
+    fn reject_sends_the_typed_reason_and_clears_the_field(cx: &mut gpui::TestAppContext) {
+        let (view, app_state, pending_id, window) = approvals_view_with_one_pending_call(cx);
+
+        window.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.reject_reason.update(cx, |input, cx| {
+                    input.set_value("wrong table", window, cx);
+                });
+                view.focus_handle.focus(window, cx);
+            });
+        });
+        window.simulate_keystrokes("r");
+        window.run_until_parked();
+
+        let (remaining, reason_left) = window.update(|_, cx| {
+            (
+                app_state
+                    .read(cx)
+                    .list_mcp_pending_executions()
+                    .expect("list pending executions"),
+                view.read(cx).reject_reason.read(cx).value().to_string(),
+            )
+        });
+        assert!(remaining.iter().all(|entry| entry.id != pending_id));
+        assert!(
+            reason_left.is_empty(),
+            "the field is cleared after a decision"
+        );
+
+        let rejections = window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .audit_service()
+                .query_extended(&dbflux_audit::query::AuditQueryFilter {
+                    action: Some(
+                        dbflux_core::observability::actions::MCP_REJECT_EXECUTION
+                            .as_str()
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                })
+                .expect("query the audit log")
+        });
+        assert_eq!(rejections.len(), 1);
+        assert_eq!(rejections[0].error_message.as_deref(), Some("wrong table"));
     }
 
     #[test]

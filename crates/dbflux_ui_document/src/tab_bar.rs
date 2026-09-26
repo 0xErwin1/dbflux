@@ -292,6 +292,8 @@ impl TabBar {
             super::types::DocumentIcon::Buckets => AppIcon::Box,
             super::types::DocumentIcon::ObjectBrowser => AppIcon::Folder,
             super::types::DocumentIcon::DumpAnalysis => AppIcon::HardDrive,
+            super::types::DocumentIcon::McpApprovals => AppIcon::Bot,
+            super::types::DocumentIcon::Migrate => AppIcon::ArrowUpDown,
         };
 
         let center_x = self.active_tab_center_x.clone();

@@ -120,6 +120,19 @@ pub enum DocumentKey {
     /// code document). Deduplicated by `path` — analyzing the same file a
     /// second time focuses the existing tab.
     DumpAnalysis { path: PathBuf },
+
+    /// The MCP approvals queue (singleton — at most one open at a time).
+    McpApprovals,
+
+    /// A Migrate-data wizard opened from a sidebar table selection.
+    /// Deduplicated by the source it was opened for — `(profile_id, database,
+    /// tables)` — so repeating the same Migrate action focuses the existing
+    /// tab (and a run it owns) instead of starting a second wizard.
+    MigrateWizard {
+        profile_id: Uuid,
+        database: Option<String>,
+        tables: Vec<dbflux_core::TableRef>,
+    },
 }
 
 #[cfg(test)]
