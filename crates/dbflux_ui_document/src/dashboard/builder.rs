@@ -278,7 +278,6 @@ pub(super) fn dashboard_toolbar(
                 "dash-save-as-editable",
                 dbflux_i18n::t!("document.dashboard.toolbar.save_as_editable"),
             )
-            .small()
             .icon(AppIcon::Save)
             .tooltip(dbflux_i18n::t!(
                 "document.dashboard.toolbar.save_as_editable_tooltip"
@@ -328,7 +327,6 @@ pub(super) fn dashboard_toolbar(
                 "dash-add-panel-toolbar",
                 dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
             )
-            .small()
             .icon(AppIcon::Plus)
             .on_click(move |event, window, app| on_add_panel(event, window, app))
             .into_any_element(),
@@ -391,7 +389,6 @@ fn build_custom_time_controls(
                 "dashboard-custom-time-apply",
                 dbflux_i18n::t!("document.dashboard.toolbar.apply"),
             )
-            .small()
             .icon(AppIcon::Check)
             .disabled(!can_apply)
             .on_click(on_apply),

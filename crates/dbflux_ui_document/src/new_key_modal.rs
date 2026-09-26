@@ -2,6 +2,7 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::form_navigation::{
     FormEditState, FormField, FormNavigation, subscribe_form_input,
 };
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
@@ -12,7 +13,6 @@ use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::{ActiveTheme, Sizable};
 
 // ---------------------------------------------------------------------------
@@ -991,32 +991,30 @@ impl Render for NewKeyModal {
                 .flex()
                 .justify_end()
                 .gap(Spacing::SM)
-                .child(focus_ring(
-                    cancel_focused,
-                    FocusShape::Rect,
-                    Some(ring_color),
-                    Button::new("new-key-cancel")
-                        .small()
-                        .label(dbflux_i18n::t!("document.key_value.new_key.cancel"))
-                        .with_variant(ButtonVariant::Ghost)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close(cx);
-                        })),
-                    cx,
-                ))
-                .child(focus_ring(
-                    create_focused,
-                    FocusShape::Rect,
-                    Some(ring_color),
-                    Button::new("new-key-create")
-                        .small()
-                        .label(dbflux_i18n::t!("document.key_value.new_key.create"))
-                        .with_variant(ButtonVariant::Primary)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.submit(window, cx);
-                        })),
-                    cx,
-                )),
+                .child(
+                    Button::new(
+                        "new-key-cancel",
+                        dbflux_i18n::t!("document.key_value.new_key.cancel"),
+                    )
+                    .ghost()
+                    .focused(cancel_focused)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close(cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        "new-key-create",
+                        dbflux_i18n::t!("document.key_value.new_key.create"),
+                    )
+                    .primary()
+                    .focused(create_focused)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.submit(window, cx);
+                    })),
+                ),
         );
 
         Modal::new(dbflux_i18n::t!("document.key_value.new_key.title"))

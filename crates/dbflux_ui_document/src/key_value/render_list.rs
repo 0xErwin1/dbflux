@@ -454,7 +454,6 @@ impl KeyValueDocument {
                             "kv-search-stop",
                             dbflux_i18n::t!("document.key_value.search.stop"),
                         )
-                        .small()
                         .icon(AppIcon::CircleX)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.stop_scan(cx);
@@ -465,7 +464,6 @@ impl KeyValueDocument {
                             "kv-search-whole-keyspace",
                             dbflux_i18n::t!("document.key_value.search.whole_keyspace"),
                         )
-                        .small()
                         .icon(AppIcon::Layers)
                         .disabled(self.scan_mode == super::pagination::ScanMode::WholeKeyspace)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -572,7 +570,7 @@ impl KeyValueDocument {
                         "kv-load-more",
                         dbflux_i18n::t!("document.key_value.footer.load_more"),
                     )
-                    .small()
+                    .inline()
                     .icon(AppIcon::ChevronDown)
                     .kbd("Ctrl J")
                     .disabled(!self.can_load_more_keys())

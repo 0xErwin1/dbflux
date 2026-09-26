@@ -168,7 +168,6 @@ pub fn render_columns(
                 )
                 .child(
                     Button::new("qb-add-col", dbflux_i18n::t!("document.shared.add"))
-                        .small()
                         .icon(AppIcon::Plus)
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(state) = this.add_column_input_state.clone() {

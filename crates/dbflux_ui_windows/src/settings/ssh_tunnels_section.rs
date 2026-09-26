@@ -344,7 +344,7 @@ impl SshTunnelsSection {
 
         Button::new(toggle_id, label)
             .ghost()
-            .small()
+            .inline()
             .icon(icon)
             .icon_only()
             .tab_stop(false)
@@ -495,7 +495,6 @@ impl SshTunnelsSection {
             ))
             .child(
                 Button::new("browse-ssh-key", dbflux_i18n::t!("ssh.browse"))
-                    .small()
                     .secondary()
                     .icon(AppIcon::Folder)
                     .focused(self.is_cursor_on(SshFormField::KeyBrowse))
@@ -587,7 +586,6 @@ impl SshTunnelsSection {
                 "new-ssh-tunnel",
                 dbflux_i18n::t!("settings.ssh_tunnels.new"),
             )
-            .small()
             .primary()
             .icon(AppIcon::Plus)
             .focused(is_new_button_focused)
@@ -599,7 +597,6 @@ impl SshTunnelsSection {
                 "import-ssh-tunnel",
                 dbflux_i18n::t!("settings.ssh_tunnels.action.import"),
             )
-            .small()
             .secondary()
             .icon(AppIcon::Download)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -778,7 +775,6 @@ impl SshTunnelsSection {
                         "export-ssh-tunnel",
                         dbflux_i18n::t!("settings.ssh_tunnels.action.export"),
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::ExternalLink)
                     .focused(self.is_cursor_on(SshFormField::ExportButton))
@@ -791,7 +787,6 @@ impl SshTunnelsSection {
                         "delete-ssh-tunnel",
                         dbflux_i18n::t!("settings.ssh_tunnels.action.delete"),
                     )
-                    .small()
                     .danger()
                     .icon(AppIcon::Delete)
                     .focused(self.is_cursor_on(SshFormField::DeleteButton))
@@ -815,7 +810,6 @@ impl SshTunnelsSection {
                     "test-ssh-tunnel",
                     dbflux_i18n::t!("settings.ssh_tunnels.action.test"),
                 )
-                .small()
                 .secondary()
                 .icon(AppIcon::Plug)
                 .focused(self.is_cursor_on(SshFormField::TestButton))
@@ -833,7 +827,6 @@ impl SshTunnelsSection {
                         dbflux_i18n::t!("ssh.create")
                     },
                 )
-                .small()
                 .primary()
                 .icon(AppIcon::Check)
                 .kbd("Ctrl S")

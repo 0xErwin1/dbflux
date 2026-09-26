@@ -1,3 +1,4 @@
+use crate::controls::Button;
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{SurfaceRole, Text, surface};
@@ -7,7 +8,6 @@ use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
 use gpui_component::ActiveTheme;
-use gpui_component::button::{Button, ButtonVariants};
 use std::time::Duration;
 
 /// Debug selector of the query preview text, for layout tests.
@@ -302,22 +302,25 @@ impl Render for ModalActiveQuery {
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Button::new("active-force-action")
-                    .label(force_btn_label)
+                Button::new("active-force-action", force_btn_label)
                     .ghost()
                     .on_click(on_force_disconnect),
             )
             .child(div().flex_1())
             .child(
-                Button::new("active-keep-waiting")
-                    .label(dbflux_i18n::t!("modals.active_query.keep_waiting"))
-                    .on_click(on_keep_waiting),
+                Button::new(
+                    "active-keep-waiting",
+                    dbflux_i18n::t!("modals.active_query.keep_waiting"),
+                )
+                .on_click(on_keep_waiting),
             )
             .child(
-                Button::new("active-cancel-query")
-                    .label(dbflux_i18n::t!("modals.active_query.cancel_query"))
-                    .danger()
-                    .on_click(on_cancel_query),
+                Button::new(
+                    "active-cancel-query",
+                    dbflux_i18n::t!("modals.active_query.cancel_query"),
+                )
+                .danger()
+                .on_click(on_cancel_query),
             );
 
         Modal::new(dbflux_i18n::t!("modals.active_query.title"))

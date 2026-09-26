@@ -1356,7 +1356,6 @@ impl McpSection {
         layout::inline_controls()
             .child(
                 Button::new("mcp-client-toggle-active", active_label)
-                    .small()
                     .secondary()
                     .icon(AppIcon::Power)
                     .focused(is_form_focused && field == McpFormField::ClientToggleActive)
@@ -1370,7 +1369,6 @@ impl McpSection {
                     "mcp-client-delete",
                     dbflux_i18n::t!("settings.mcp.action.delete"),
                 )
-                .small()
                 .danger()
                 .icon(AppIcon::Delete)
                 .focused(is_form_focused && field == McpFormField::DeleteButton)
@@ -1396,7 +1394,6 @@ impl McpSection {
         };
 
         Button::new("mcp-client-save", save_label)
-            .small()
             .primary()
             .icon(AppIcon::Check)
             .kbd("Ctrl S")
@@ -1425,7 +1422,6 @@ impl McpSection {
             self.mcp_focus == McpFocus::Form && self.mcp_form_field == McpFormField::DeleteButton;
 
         Button::new(delete_id, dbflux_i18n::t!("settings.mcp.action.delete"))
-            .small()
             .danger()
             .icon(AppIcon::Delete)
             .focused(is_focused)
@@ -1457,7 +1453,6 @@ impl McpSection {
         };
 
         Button::new("mcp-role-save", save_label)
-            .small()
             .primary()
             .icon(AppIcon::Check)
             .kbd("Ctrl S")
@@ -1488,7 +1483,6 @@ impl McpSection {
         };
 
         Button::new("mcp-policy-save", save_label)
-            .small()
             .primary()
             .icon(AppIcon::Check)
             .kbd("Ctrl S")

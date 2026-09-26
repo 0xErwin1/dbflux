@@ -401,7 +401,6 @@ impl AuditDocument {
             "audit-clear-btn",
             dbflux_i18n::t!("document.audit.filter.clear"),
         )
-        .small()
         .icon(AppIcon::CircleX)
         .focused(self.slot_has_ring(ToolbarSlot::Clear))
         .tab_stop(false)
@@ -555,7 +554,6 @@ impl AuditDocument {
             "audit-custom-time-apply",
             dbflux_i18n::t!("document.audit.filter.apply"),
         )
-        .small()
         .icon(AppIcon::Check)
         .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
         .disabled(!self.can_apply_custom_time_range(cx))
@@ -831,7 +829,6 @@ impl AuditDocument {
                         "audit-retry",
                         dbflux_i18n::t!("document.audit.filter.retry"),
                     )
-                    .small()
                     .icon(AppIcon::RefreshCcw)
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                 )
@@ -1277,7 +1274,6 @@ impl AuditDocument {
             "audit-detail-copy-json",
             dbflux_i18n::t!("document.audit.action.copy_json"),
         )
-        .small()
         .icon(AppIcon::Copy)
         .tab_stop(false)
         .on_click({
@@ -1293,7 +1289,6 @@ impl AuditDocument {
                 "audit-detail-filter-correlation",
                 dbflux_i18n::t!("document.audit.action.filter_by_correlation"),
             )
-            .small()
             .icon(AppIcon::ListFilter)
             .tab_stop(false)
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1307,7 +1302,6 @@ impl AuditDocument {
                     "audit-detail-open-approval",
                     dbflux_i18n::t!("document.audit.action.open_approval"),
                 )
-                .small()
                 .primary()
                 .icon(AppIcon::Bot)
                 .tab_stop(false)
@@ -1486,7 +1480,6 @@ impl AuditDocument {
                     "audit-export-trigger",
                     dbflux_i18n::t!("document.audit.menu.export"),
                 )
-                .small()
                 .icon(AppIcon::FileSpreadsheet)
                 .trailing_icon(AppIcon::ChevronDown)
                 .tab_stop(false)

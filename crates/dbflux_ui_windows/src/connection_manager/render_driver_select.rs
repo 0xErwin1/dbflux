@@ -316,7 +316,6 @@ impl ConnectionManagerWindow {
 
         let mut cta = Button::new("cm-driver-configure", cta_label)
             .primary()
-            .small()
             .icon(AppIcon::ChevronRight)
             .kbd("↵");
         if cta_disabled {
@@ -342,7 +341,6 @@ impl ConnectionManagerWindow {
                     "cm-driver-import",
                     dbflux_i18n::t!("connection_manager.driver_select.import_from_file"),
                 )
-                .small()
                 .secondary()
                 .icon(AppIcon::Download)
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -354,7 +352,6 @@ impl ConnectionManagerWindow {
                     "cm-driver-import-external",
                     dbflux_i18n::t!("connection_manager.driver_select.import_from_client"),
                 )
-                .small()
                 .secondary()
                 .icon(AppIcon::ArrowLeftRight)
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -367,7 +364,6 @@ impl ConnectionManagerWindow {
                     "cm-driver-cancel",
                     dbflux_i18n::t!("connection_manager.driver_select.cancel"),
                 )
-                .small()
                 .secondary()
                 .kbd("Esc")
                 .on_click(cx.listener(|_, _, window, cx| {

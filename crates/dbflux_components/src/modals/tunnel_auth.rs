@@ -240,7 +240,7 @@ impl Render for ModalTunnelAuth {
             .suffix(
                 Button::new("tunnel-auth-reveal", toggle_label)
                     .ghost()
-                    .small()
+                    .inline()
                     .icon(toggle_icon)
                     .icon_only()
                     .tab_stop(false)

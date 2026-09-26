@@ -51,7 +51,6 @@ impl Sidebar {
             .child(div().flex_1())
             .child(
                 Button::new("sidebar-add", add_label)
-                    .small()
                     .icon(AppIcon::Plus)
                     .icon_size(ShellMetrics::SIDEBAR_FILTER_ICON)
                     .icon_only()
@@ -68,7 +67,6 @@ impl Sidebar {
             )
             .child(
                 Button::new("sidebar-filter", dbflux_i18n::t!("sidebar.header.filter"))
-                    .small()
                     .icon(AppIcon::ListFilter)
                     .icon_size(ShellMetrics::SIDEBAR_FILTER_ICON)
                     .icon_only()

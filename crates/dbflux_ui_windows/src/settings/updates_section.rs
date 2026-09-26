@@ -242,7 +242,6 @@ impl UpdatesSection {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         Button::new(id, label)
-            .small()
             .secondary()
             .icon(icon)
             .focused(self.is_at(row))
@@ -491,7 +490,6 @@ impl SettingsSection for UpdatesSection {
     ) -> Option<AnyElement> {
         Some(
             Button::new("updates-save", dbflux_i18n::t!("updates.settings.save"))
-                .small()
                 .primary()
                 .icon(AppIcon::Save)
                 .kbd("Ctrl S")

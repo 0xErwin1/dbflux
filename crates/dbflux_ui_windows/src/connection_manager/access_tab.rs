@@ -116,7 +116,6 @@ impl ConnectionManagerWindow {
                                                     dbflux_i18n::t!("access.manage"),
                                                 )
                                                 .ghost()
-                                                .small()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.open_auth_profiles_settings(cx);
                                                 })),
@@ -143,7 +142,6 @@ impl ConnectionManagerWindow {
                                                     dbflux_i18n::t!("access.login"),
                                                 )
                                                 .ghost()
-                                                .small()
                                                 .disabled(!login_enabled)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.login_selected_auth_profile(cx);
@@ -171,7 +169,6 @@ impl ConnectionManagerWindow {
                                                     dbflux_i18n::t!("access.refresh"),
                                                 )
                                                 .ghost()
-                                                .small()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_auth_profile_statuses(cx);
                                                 })),
@@ -314,7 +311,6 @@ impl ConnectionManagerWindow {
                                             dbflux_i18n::t!("access.manage"),
                                         )
                                         .ghost()
-                                        .small()
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
                                                 this.open_auth_profiles_settings(cx);
@@ -342,7 +338,6 @@ impl ConnectionManagerWindow {
                                             dbflux_i18n::t!("access.login"),
                                         )
                                         .ghost()
-                                        .small()
                                         .disabled(!login_enabled)
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
@@ -371,7 +366,6 @@ impl ConnectionManagerWindow {
                                             dbflux_i18n::t!("access.refresh"),
                                         )
                                         .ghost()
-                                        .small()
                                         .on_click(
                                             cx.listener(|this, _, _, cx| {
                                                 this.refresh_auth_profile_statuses(cx);
@@ -549,7 +543,6 @@ impl ConnectionManagerWindow {
                             proxy_clear_focused,
                             div().child(
                                 Button::new("clear-proxy", dbflux_i18n::t!("access.clear"))
-                                    .small()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.clear_proxy_selection(cx);
@@ -607,7 +600,6 @@ impl ConnectionManagerWindow {
                                     "proxy-edit-in-settings",
                                     dbflux_i18n::t!("access.edit_in_settings"),
                                 )
-                                .small()
                                 .ghost()
                                 .icon(AppIcon::ExternalLink),
                             ),
@@ -711,7 +703,6 @@ impl ConnectionManagerWindow {
                                             "clear-ssh-tunnel",
                                             dbflux_i18n::t!("access.clear"),
                                         )
-                                        .small()
                                         .ghost()
                                         .on_click(
                                             cx.listener(|this, _, window, cx| {
@@ -788,7 +779,6 @@ impl ConnectionManagerWindow {
                                         "ssh-edit-in-settings",
                                         dbflux_i18n::t!("access.edit_in_settings"),
                                     )
-                                    .small()
                                     .ghost()
                                     .icon(AppIcon::ExternalLink),
                                 ),
@@ -897,7 +887,6 @@ impl ConnectionManagerWindow {
                 div().child(
                     Button::new("test-ssh", dbflux_i18n::t!("access.test_ssh"))
                         .icon(AppIcon::ExternalLink)
-                        .small()
                         .ghost()
                         .disabled(ssh_test_status == TestStatus::Testing)
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -938,7 +927,6 @@ impl ConnectionManagerWindow {
                                 dbflux_i18n::t!("access.save_as_tunnel"),
                             )
                             .icon(AppIcon::Plus)
-                            .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.save_current_ssh_as_tunnel(cx);
@@ -1164,7 +1152,6 @@ impl ConnectionManagerWindow {
                                             "browse-ssh-key",
                                             dbflux_i18n::t!("ssh.browse"),
                                         )
-                                        .small()
                                         .ghost()
                                         .on_click(
                                             cx.listener(|this, _, window, cx| {

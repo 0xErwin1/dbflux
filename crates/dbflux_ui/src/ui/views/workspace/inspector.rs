@@ -248,7 +248,6 @@ impl Render for WorkspaceInspector {
                         "workspace-inspector-close",
                         dbflux_i18n::t!("document.data.row_inspector.action.close"),
                     )
-                    .small()
                     .icon(AppIcon::CircleX)
                     .icon_only()
                     .tab_stop(false)

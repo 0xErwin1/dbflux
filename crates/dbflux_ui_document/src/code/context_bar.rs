@@ -1737,7 +1737,6 @@ impl CodeDocument {
                                 "ctx-time-range-apply",
                                 dbflux_i18n::t!("document.code.context_bar.apply"),
                             )
-                            .small()
                             .disabled(!can_apply)
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {

@@ -2,6 +2,7 @@ use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::components::form_navigation::{
     FormEditState, FormField, FormNavigation, subscribe_form_input,
 };
+use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::Modal;
@@ -12,7 +13,6 @@ use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::KeyType;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::{ActiveTheme, Sizable};
 
 // ---------------------------------------------------------------------------
@@ -577,36 +577,30 @@ impl Render for AddMemberModal {
                 .flex()
                 .justify_end()
                 .gap(Spacing::SM)
-                .child(focus_ring(
-                    cancel_focused,
-                    FocusShape::Rect,
-                    Some(ring_color),
-                    Button::new("add-member-cancel")
-                        .small()
-                        .label(dbflux_i18n::t!(
-                            "document.key_value.add_member_modal.cancel"
-                        ))
-                        .with_variant(ButtonVariant::Ghost)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close(cx);
-                        })),
-                    cx,
-                ))
-                .child(focus_ring(
-                    submit_focused,
-                    FocusShape::Rect,
-                    Some(ring_color),
-                    Button::new("add-member-submit")
-                        .small()
-                        .label(dbflux_i18n::t!(
-                            "document.key_value.add_member_modal.submit"
-                        ))
-                        .with_variant(ButtonVariant::Primary)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.submit(window, cx);
-                        })),
-                    cx,
-                )),
+                .child(
+                    Button::new(
+                        "add-member-cancel",
+                        dbflux_i18n::t!("document.key_value.add_member_modal.cancel"),
+                    )
+                    .ghost()
+                    .focused(cancel_focused)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close(cx);
+                    })),
+                )
+                .child(
+                    Button::new(
+                        "add-member-submit",
+                        dbflux_i18n::t!("document.key_value.add_member_modal.submit"),
+                    )
+                    .primary()
+                    .focused(submit_focused)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.submit(window, cx);
+                    })),
+                ),
         );
 
         Modal::new(self.title())

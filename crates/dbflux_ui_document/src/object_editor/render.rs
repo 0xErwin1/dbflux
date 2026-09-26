@@ -106,7 +106,6 @@ impl ObjectEditorDocument {
                 "object-editor-find",
                 dbflux_i18n::t!("document.object_browser.editor.footer.find"),
             )
-            .small()
             .icon(AppIcon::Search)
             .kbd(keycap_text(FIND_SHORTCUT_HINT))
             .tab_stop(false)
@@ -120,7 +119,6 @@ impl ObjectEditorDocument {
                 "object-editor-discard",
                 dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
             )
-            .small()
             .icon(AppIcon::RotateCcw)
             .disabled(!can_act)
             .tab_stop(false)
@@ -138,7 +136,6 @@ impl ObjectEditorDocument {
                     dbflux_i18n::t!("document.object_browser.editor.footer.save")
                 },
             )
-            .small()
             .primary()
             .icon(if is_saving {
                 AppIcon::Loader
@@ -221,7 +218,6 @@ impl ObjectEditorDocument {
                 "object-editor-load-anyway",
                 dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
             )
-            .small()
             .icon(AppIcon::Download)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| {

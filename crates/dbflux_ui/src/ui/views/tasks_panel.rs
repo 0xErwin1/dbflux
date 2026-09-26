@@ -252,7 +252,6 @@ impl TasksPanel {
                     "tasks-clear-finished",
                     dbflux_i18n::t!("tasks_panel.clear_finished"),
                 )
-                .small()
                 .icon(AppIcon::CircleX)
                 .disabled(finished == 0)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -381,7 +380,6 @@ impl TasksPanel {
                                     SharedString::from(format!("cancel-task-button-{task_id}")),
                                     dbflux_i18n::t!("tasks_panel.cancel"),
                                 )
-                                .small()
                                 .icon(AppIcon::X)
                                 .icon_size(ShellMetrics::TASK_CHEVRON)
                                 .icon_only()
@@ -402,7 +400,6 @@ impl TasksPanel {
                                     SharedString::from(format!("dismiss-task-button-{task_id}")),
                                     dbflux_i18n::t!("tasks_panel.dismiss"),
                                 )
-                                .small()
                                 .ghost()
                                 .icon(AppIcon::X)
                                 .icon_size(ShellMetrics::TASK_CHEVRON)

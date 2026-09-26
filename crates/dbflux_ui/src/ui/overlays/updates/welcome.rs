@@ -283,7 +283,6 @@ impl WelcomeDialog {
                     "welcome-get-started",
                     dbflux_i18n::t!("updates.welcome.get_started"),
                 )
-                .small()
                 .primary()
                 .icon(AppIcon::ChevronRight)
                 .kbd("Enter")

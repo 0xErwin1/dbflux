@@ -130,7 +130,7 @@ impl ConnectionManagerWindow {
 
             Button::new("toggle-password", toggle_label)
                 .ghost()
-                .small()
+                .inline()
                 .icon(icon)
                 .icon_only()
                 .tab_stop(false)
@@ -333,7 +333,6 @@ impl ConnectionManagerWindow {
                             "test-connection",
                             dbflux_i18n::t!("connection_manager.action.test_connection"),
                         )
-                        .small()
                         .secondary()
                         .icon(AppIcon::Plug)
                         .focused(test_focused)
@@ -348,7 +347,6 @@ impl ConnectionManagerWindow {
                             "footer-cancel",
                             dbflux_i18n::t!("connection_manager.driver_select.cancel"),
                         )
-                        .small()
                         .secondary()
                         .on_click(cx.listener(|_, _, window, cx| {
                             cx.emit(DismissEvent);
@@ -360,7 +358,6 @@ impl ConnectionManagerWindow {
                             "save-connection",
                             dbflux_i18n::t!("connection_manager.action.save"),
                         )
-                        .small()
                         .primary()
                         .icon(AppIcon::Check)
                         .kbd("Ctrl S")
@@ -534,7 +531,6 @@ impl ConnectionManagerWindow {
                         dbflux_i18n::t!("connection_manager.action.copy"),
                     )
                     .ghost()
-                    .small()
                     .icon(AppIcon::Copy)
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(message_to_copy.clone()));
@@ -732,7 +728,6 @@ impl ConnectionManagerWindow {
                             "browse-file-path",
                             dbflux_i18n::t!("connection_manager.action.browse"),
                         )
-                        .small()
                         .secondary()
                         .icon(AppIcon::Folder)
                         .focused(browse_focused)
@@ -1232,7 +1227,6 @@ impl ConnectionManagerWindow {
 
         Button::new(toggle_id, label)
             .ghost()
-            .small()
             .icon(icon)
             .icon_only()
             .tab_stop(false)

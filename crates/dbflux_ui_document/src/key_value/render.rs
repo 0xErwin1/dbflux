@@ -360,7 +360,6 @@ impl KeyValueDocument {
                         "kv-bulk-actions",
                         dbflux_i18n::t!("document.key_value.toolbar.bulk_actions"),
                     )
-                    .small()
                     .icon(AppIcon::Layers)
                     .selected(self.bulk_actions_open)
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -374,7 +373,6 @@ impl KeyValueDocument {
                     "kv-new-key",
                     dbflux_i18n::t!("document.key_value.toolbar.new_key"),
                 )
-                .small()
                 .icon(AppIcon::Plus)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.pending_open_new_key_modal = true;
@@ -680,7 +678,6 @@ impl KeyValueDocument {
                                         "kv-bulk-stop-scan",
                                         dbflux_i18n::t!("document.key_value.bulk_delete.stop"),
                                     )
-                                    .small()
                                     .ghost()
                                     .on_click(cx.listener(
                                         |this, _, _, cx| {
@@ -777,7 +774,6 @@ impl KeyValueDocument {
                         dbflux_i18n::t!("document.key_value.bulk_delete.export")
                     },
                 )
-                .small()
                 .icon(if exporting {
                     AppIcon::Loader
                 } else if exported {
@@ -795,7 +791,6 @@ impl KeyValueDocument {
                     "kv-bulk-cancel",
                     dbflux_i18n::t!("document.key_value.bulk_delete.cancel"),
                 )
-                .small()
                 .disabled(deleting)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_bulk_delete(window, cx);
@@ -809,7 +804,6 @@ impl KeyValueDocument {
                         count = group_thousands(match_count)
                     ),
                 )
-                .small()
                 .danger()
                 .icon(if deleting {
                     AppIcon::Loader

@@ -22,11 +22,11 @@ impl Heights {
     pub const HEADER: Pixels = px(40.0);
     pub const TOOLBAR: Pixels = px(32.0);
     pub const TAB: Pixels = px(36.0);
-    pub const INPUT: Pixels = px(32.0);
-    pub const BUTTON: Pixels = px(28.0);
-    /// Standard inline control height (input, dropdown, button) when packed
-    /// into a toolbar/filter bar. Use this to keep heterogeneous controls aligned.
-    pub const CONTROL: Pixels = px(28.0);
+    pub const INPUT: Pixels = px(30.0);
+    pub const BUTTON: Pixels = px(30.0);
+    /// Standard control height (input, dropdown, button) when packed into a
+    /// toolbar or filter bar. Use this to keep heterogeneous controls aligned.
+    pub const CONTROL: Pixels = px(30.0);
     pub const ICON_SM: Pixels = px(16.0);
     pub const ICON_MD: Pixels = px(20.0);
     pub const ICON_LG: Pixels = px(24.0);
@@ -82,11 +82,13 @@ pub struct ChamferCut;
 impl ChamferCut {
     /// Keycaps, badges, counters (4 px).
     pub const KEYCAP: Pixels = px(4.0);
-    /// Controls 28–32 px tall: buttons, selects, icon buttons (6 px).
+    /// Controls 24–30 px tall: buttons, selects, icon buttons (6 px).
     pub const CONTROL: Pixels = px(6.0);
     /// Inputs, document tabs (top-left only), segmented controls (8 px).
     pub const INPUT: Pixels = px(8.0);
-    /// Menus, large buttons, popovers, toasts, overlays (12 px).
+    /// Large 44 px buttons (10 px).
+    pub const LARGE_CONTROL: Pixels = px(10.0);
+    /// Menus, popovers, toasts, overlays (12 px).
     pub const OVERLAY: Pixels = px(12.0);
     /// Cards (14 px).
     pub const CARD: Pixels = px(14.0);
@@ -253,42 +255,51 @@ impl HeaderMetrics {
     pub const LABEL_FONT: Pixels = px(10.0);
 }
 
-/// Geometry of `controls::Button` and `composites::SplitButton`, taken from
-/// the DSApp "Buttons" row and the DSStates board.
+/// Geometry of `controls::Button` and `composites::SplitButton`. The default
+/// size matches the 30 px buttons of the DSApp "Buttons" row, the
+/// AppByzTable and AppByzEditor toolbars and the P1SettingsGeneral footer;
+/// the inline size follows the small row buttons of the key-value boards
+/// ("Scan more", "Load more") shrunk to 24 px; the large size is kept for
+/// the rare call-to-action a board draws at 44 px.
 pub struct ButtonMetrics;
 
 impl ButtonMetrics {
-    /// Toolbar and dense-form buttons.
-    pub const HEIGHT_SM: Pixels = px(28.0);
-    /// Default buttons (DSStates).
-    pub const HEIGHT_MD: Pixels = px(32.0);
+    /// Default buttons: toolbars, footers, dialogs and forms. Same height as
+    /// inputs and selects.
+    pub const HEIGHT: Pixels = px(30.0);
+    /// Inline buttons inside table rows, list rows, chips and card rows.
+    pub const HEIGHT_INLINE: Pixels = px(24.0);
     /// Large call-to-action buttons.
-    pub const HEIGHT_LG: Pixels = px(44.0);
+    pub const HEIGHT_LARGE: Pixels = px(44.0);
 
-    /// Width of an icon-only button per size: the DSApp icon buttons are two
-    /// pixels wider than tall, DSStates draws the 32 px ghost icon 40 wide,
-    /// and the large one is square.
-    pub const ICON_ONLY_WIDTH_SM: Pixels = px(30.0);
-    pub const ICON_ONLY_WIDTH_MD: Pixels = px(40.0);
-    pub const ICON_ONLY_WIDTH_LG: Pixels = px(44.0);
+    /// Width of an icon-only button per size: the toolbar icon buttons are
+    /// 32 wide on a 30 px height; inline and large ones are square.
+    pub const ICON_ONLY_WIDTH: Pixels = px(32.0);
+    pub const ICON_ONLY_WIDTH_INLINE: Pixels = px(24.0);
+    pub const ICON_ONLY_WIDTH_LARGE: Pixels = px(44.0);
 
-    /// Horizontal padding of a labeled button (small and medium).
+    /// Horizontal padding of a labeled button per size.
     pub const PADDING_X: Pixels = px(12.0);
-    /// Horizontal padding of a large labeled button.
-    pub const PADDING_X_LG: Pixels = px(16.0);
+    pub const PADDING_X_INLINE: Pixels = px(10.0);
+    pub const PADDING_X_LARGE: Pixels = px(16.0);
     /// Left padding of a split button's main action, whose only cut is the
     /// top-left corner.
     pub const SPLIT_MAIN_PADDING_LEFT: Pixels = px(14.0);
-    /// Gap between icon, label, and trailing keycap.
+    /// Gap between icon, label, and trailing keycap per size.
     pub const GAP: Pixels = px(8.0);
+    pub const GAP_INLINE: Pixels = px(6.0);
 
-    pub const FONT_SM: Pixels = px(12.5);
-    pub const FONT_MD: Pixels = px(13.0);
+    /// Label size per size.
+    pub const FONT: Pixels = px(12.5);
+    pub const FONT_INLINE: Pixels = px(12.0);
+    pub const FONT_LARGE: Pixels = px(13.0);
 
-    /// Icon leading a label.
+    /// Icon leading a label, per size.
     pub const ICON: Pixels = px(15.0);
-    /// Icon of an icon-only button.
+    pub const ICON_INLINE: Pixels = px(12.0);
+    /// Icon of an icon-only button, per size.
     pub const ICON_ONLY: Pixels = px(16.0);
+    pub const ICON_ONLY_INLINE: Pixels = px(13.0);
 
     /// Width of a split button's menu segment.
     pub const SPLIT_MENU_WIDTH: Pixels = px(26.0);

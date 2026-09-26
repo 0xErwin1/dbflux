@@ -274,7 +274,6 @@ impl ObjectBrowserDocument {
             let key = key.to_string();
 
             Button::new("object-browser-open-in-editor", "")
-                .small()
                 .icon(AppIcon::Maximize2)
                 .icon_only()
                 .tooltip(dbflux_i18n::t!(
@@ -290,7 +289,6 @@ impl ObjectBrowserDocument {
             let key = key.to_string();
 
             Button::new("object-browser-open-external", "")
-                .small()
                 .icon(AppIcon::ExternalLink)
                 .icon_only()
                 .tooltip(dbflux_i18n::t!(
@@ -331,7 +329,6 @@ impl ObjectBrowserDocument {
             .children(open_external)
             .child(
                 Button::new("object-browser-preview-close", "")
-                    .small()
                     .icon(AppIcon::X)
                     .icon_only()
                     .tooltip(dbflux_i18n::t!(
@@ -618,7 +615,6 @@ impl ObjectBrowserDocument {
             "object-browser-load-anyway",
             dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
         )
-        .small()
         .icon(AppIcon::Download)
         .tab_stop(false)
         .on_click(cx.listener(move |this, _, _, cx| {
@@ -864,7 +860,7 @@ impl ObjectBrowserDocument {
         let theme = cx.theme();
 
         let action = |id: &'static str, icon: AppIcon, label: String| {
-            Button::new(id, label).small().icon(icon).tab_stop(false)
+            Button::new(id, label).icon(icon).tab_stop(false)
         };
 
         div()

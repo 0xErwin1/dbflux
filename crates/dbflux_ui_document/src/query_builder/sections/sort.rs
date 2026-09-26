@@ -80,7 +80,7 @@ pub fn render_sort(
                     dbflux_i18n::t!("document.query_builder.sort.move_up"),
                 )
                 .ghost()
-                .small()
+                .inline()
                 .icon(AppIcon::ChevronUp)
                 .icon_only()
                 .disabled(!can_move_up)
@@ -96,7 +96,7 @@ pub fn render_sort(
                     dbflux_i18n::t!("document.query_builder.sort.move_down"),
                 )
                 .ghost()
-                .small()
+                .inline()
                 .icon(AppIcon::ChevronDown)
                 .icon_only()
                 .disabled(!can_move_down)
@@ -110,7 +110,7 @@ pub fn render_sort(
                     dbflux_i18n::t!("document.query_builder.filters.remove"),
                 )
                 .ghost()
-                .small()
+                .inline()
                 .icon(AppIcon::CircleX)
                 .icon_only()
                 .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -134,9 +134,8 @@ pub fn render_sort(
                         .w_full(),
                 )
                 .child(
-                    Button::new("qb-add-sort", dbflux_i18n::t!("document.shared.add"))
-                        .small()
-                        .on_click(cx.listener(|this, _event, _window, cx| {
+                    Button::new("qb-add-sort", dbflux_i18n::t!("document.shared.add")).on_click(
+                        cx.listener(|this, _event, _window, cx| {
                             if let Some(state) = this.add_sort_input_state.clone() {
                                 let text = state.read(cx).value().trim().to_string();
                                 if text.is_empty() {
@@ -151,7 +150,8 @@ pub fn render_sort(
                                     s.set_value("", _window, cx);
                                 });
                             }
-                        })),
+                        }),
+                    ),
                 ),
         );
     }
@@ -200,7 +200,7 @@ fn render_sort_key_only(
                 .child(
                     Button::new("qb-sortkey-dir", dir_label)
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             let next = match this.sort_key_direction() {
                                 VisualSortDirection::Asc => VisualSortDirection::Desc,

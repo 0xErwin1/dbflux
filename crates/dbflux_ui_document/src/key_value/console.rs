@@ -601,7 +601,6 @@ impl super::KeyValueDocument {
                                 "kv-console-run-anyway",
                                 dbflux_i18n::t!("document.key_value.console.run_anyway"),
                             )
-                            .small()
                             .danger()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.confirm_console_command(cx);
@@ -612,7 +611,6 @@ impl super::KeyValueDocument {
                                 "kv-console-cancel",
                                 dbflux_i18n::t!("document.key_value.console.cancel"),
                             )
-                            .small()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.cancel_console_command(cx);
                             })),

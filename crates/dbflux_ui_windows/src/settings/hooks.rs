@@ -1312,7 +1312,6 @@ impl HooksSection {
 
         let toolbar = layout::master_list_toolbar(vec![
             Button::new("new-hook", dbflux_i18n::t!("settings.hooks.list.new"))
-                .small()
                 .primary()
                 .icon(AppIcon::Plus)
                 .focused(is_new_button_focused)
@@ -1431,7 +1430,7 @@ impl HooksSection {
                                         SharedString::from(format!("delete-protected-{}", row_id)),
                                         dbflux_i18n::t!("hooks.action.delete"),
                                     )
-                                    .small()
+                                    .inline()
                                     .danger()
                                     .icon(AppIcon::Delete)
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1781,7 +1780,6 @@ impl HooksSection {
                         "open-script-app",
                         dbflux_i18n::t!("settings.hooks.form.open_in_app"),
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::FileCode)
                     .focused(self.is_cursor_on(HookFormField::OpenInApp))
@@ -1794,7 +1792,6 @@ impl HooksSection {
                         "open-script-editor",
                         dbflux_i18n::t!("settings.hooks.form.open_in_editor"),
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::ExternalLink)
                     .focused(self.is_cursor_on(HookFormField::OpenInEditor))
@@ -2006,7 +2003,6 @@ impl HooksSection {
 
         Some(
             Button::new("delete-hook", dbflux_i18n::t!("hooks.action.delete"))
-                .small()
                 .danger()
                 .icon(AppIcon::Delete)
                 .focused(self.is_cursor_on(HookFormField::DeleteButton))
@@ -2028,7 +2024,6 @@ impl HooksSection {
                 dbflux_i18n::t!("hooks.action.create")
             },
         )
-        .small()
         .primary()
         .icon(AppIcon::Check)
         .kbd("Ctrl S")

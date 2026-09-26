@@ -529,7 +529,7 @@ impl ToastHost {
 
         let close_button = Button::new(("toast-close", toast_id), "Dismiss")
             .ghost()
-            .small()
+            .inline()
             .icon(AppIcon::CircleX)
             .icon_only()
             .icon_size(Feedback::TOAST_CLOSE_ICON)
@@ -668,7 +668,7 @@ impl ToastHost {
 
             for (idx, action) in toast.actions.iter().take(MAX_ACTIONS).enumerate() {
                 let button_id: SharedString = format!("toast-action-{}-{}", toast_id, idx).into();
-                let mut button = Button::new(button_id, action.label.clone()).small();
+                let mut button = Button::new(button_id, action.label.clone()).inline();
                 if action.primary {
                     button = button.primary();
                 }

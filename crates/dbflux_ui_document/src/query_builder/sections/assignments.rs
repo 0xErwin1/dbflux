@@ -108,6 +108,7 @@ pub fn render_assignments(
         // Kind-cycle button
         row_div = row_div.child(
             Button::new(("qb-assign-kind", row_ix), kind_label)
+                .inline()
                 .variant(kind_variant)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     if let Some(state) = this.mutation_state.as_mut()
@@ -124,6 +125,7 @@ pub fn render_assignments(
         // Remove button
         row_div = row_div.child(
             Button::new(("qb-assign-rm", row_ix), "×")
+                .inline()
                 .variant(ButtonVariant::Ghost)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     if let Some(state) = this.mutation_state.as_mut()

@@ -1,3 +1,4 @@
+use crate::controls::Button;
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
 use crate::primitives::{Icon, SurfaceRole, Text, surface};
@@ -7,7 +8,6 @@ use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
-use gpui_component::button::{Button, ButtonVariants};
 
 /// Debug selector of the box that shows the connection name, for layout tests.
 pub const DELETE_CONNECTION_NAME_SELECTOR: &str = "delete-connection-name";
@@ -161,15 +161,19 @@ impl Render for ModalDeleteConnection {
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Button::new("delete-conn-cancel")
-                    .label(dbflux_i18n::t!("modals.delete_connection.cancel"))
-                    .on_click(on_cancel),
+                Button::new(
+                    "delete-conn-cancel",
+                    dbflux_i18n::t!("modals.delete_connection.cancel"),
+                )
+                .on_click(on_cancel),
             )
             .child(
-                Button::new("delete-conn-confirm")
-                    .label(dbflux_i18n::t!("modals.delete_connection.confirm"))
-                    .danger()
-                    .on_click(on_confirm),
+                Button::new(
+                    "delete-conn-confirm",
+                    dbflux_i18n::t!("modals.delete_connection.confirm"),
+                )
+                .danger()
+                .on_click(on_confirm),
             );
 
         Modal::new(dbflux_i18n::t!("modals.delete_connection.title"))

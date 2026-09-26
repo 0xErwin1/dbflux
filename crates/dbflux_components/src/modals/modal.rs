@@ -495,7 +495,7 @@ impl RenderOnce for Modal {
                 .child(
                     Button::new(MODAL_CLOSE_ID, "")
                         .ghost()
-                        .small()
+                        .inline()
                         .icon(AppIcon::CircleX)
                         .icon_size(ModalMetrics::CLOSE_ICON)
                         .icon_only()

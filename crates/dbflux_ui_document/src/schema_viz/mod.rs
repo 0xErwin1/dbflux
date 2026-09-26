@@ -2772,7 +2772,6 @@ impl SchemaVizDocument {
                     "schema-export",
                     dbflux_i18n::t!("document.schema_viz.toolbar.export"),
                 )
-                .small()
                 .icon(AppIcon::FileDown)
                 .trailing_icon(AppIcon::ChevronDown)
                 .selected(self.export_menu_open)
@@ -2829,7 +2828,6 @@ impl SchemaVizDocument {
                     "schema-zoom-out",
                     dbflux_i18n::t!("document.schema_viz.toolbar.zoom_out"),
                 )
-                .small()
                 .icon(AppIcon::ZoomOut)
                 .icon_only()
                 .disabled(self.zoom <= 0.25)
@@ -2867,7 +2865,6 @@ impl SchemaVizDocument {
                     "schema-zoom-in",
                     dbflux_i18n::t!("document.schema_viz.toolbar.zoom_in"),
                 )
-                .small()
                 .icon(AppIcon::ZoomIn)
                 .icon_only()
                 .disabled(self.zoom >= 4.0)
@@ -2882,7 +2879,6 @@ impl SchemaVizDocument {
                     "schema-fit",
                     dbflux_i18n::t!("document.schema_viz.toolbar.fit"),
                 )
-                .small()
                 .icon(AppIcon::Maximize2)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -2895,7 +2891,6 @@ impl SchemaVizDocument {
                     "schema-arrange",
                     dbflux_i18n::t!("document.schema_viz.toolbar.arrange"),
                 )
-                .small()
                 .icon(AppIcon::Grid3x3)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {

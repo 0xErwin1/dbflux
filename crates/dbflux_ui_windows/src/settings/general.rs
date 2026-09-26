@@ -878,7 +878,6 @@ impl GeneralSection {
             "save-general",
             dbflux_i18n::t!("settings.general.save.button"),
         )
-        .small()
         .primary()
         .icon(AppIcon::Save)
         .kbd("Ctrl S")

@@ -301,7 +301,6 @@ impl ObjectBrowserDocument {
         document_bar(DocumentMetrics::HEADER_HEIGHT_TALL, cx)
             .child(
                 Button::new("object-browser-up", "")
-                    .small()
                     .icon(AppIcon::ChevronUp)
                     .icon_only()
                     .disabled(at_root)
@@ -320,7 +319,6 @@ impl ObjectBrowserDocument {
                     "object-browser-upload",
                     dbflux_i18n::t!("document.object_browser.toolbar.upload"),
                 )
-                .small()
                 .icon(AppIcon::ArrowUp)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -332,7 +330,6 @@ impl ObjectBrowserDocument {
                     "object-browser-new-folder",
                     dbflux_i18n::t!("document.object_browser.toolbar.new_folder"),
                 )
-                .small()
                 .icon(AppIcon::Folder)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -344,7 +341,6 @@ impl ObjectBrowserDocument {
                     "object-browser-refresh",
                     dbflux_i18n::t!("document.object_browser.toolbar.refresh"),
                 )
-                .small()
                 .primary()
                 .icon(if is_loading {
                     AppIcon::Loader
@@ -664,7 +660,6 @@ impl ObjectBrowserDocument {
                 "object-browser-retry",
                 dbflux_i18n::t!("document.object_browser.status.retry"),
             )
-            .small()
             .icon(AppIcon::RefreshCcw)
             .tab_stop(false)
             .on_click(cx.listener(|this, _, _, cx| {

@@ -800,7 +800,6 @@ impl ConfirmRunPhase {
                         "migrate-confirm-start",
                         dbflux_i18n::t!("document.migrate_wizard.confirm.start_migration"),
                     )
-                    .small()
                     .primary()
                     .disabled(!start_enabled)
                     .on_click(cx.listener(|this, _event, _window, cx| this.on_start_migration(cx))),
@@ -832,7 +831,7 @@ impl ConfirmRunPhase {
                         SharedString::from(format!("migrate-reorder-up-{index}")),
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.up"),
                     )
-                    .small()
+                    .inline()
                     .ghost()
                     .disabled(index == 0)
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -844,7 +843,7 @@ impl ConfirmRunPhase {
                         SharedString::from(format!("migrate-reorder-down-{index}")),
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.down"),
                     )
-                    .small()
+                    .inline()
                     .ghost()
                     .disabled(is_last)
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -871,7 +870,6 @@ impl ConfirmRunPhase {
                         "migrate-reorder-accept",
                         dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.accept"),
                     )
-                    .small()
                     .primary()
                     .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
                 ),

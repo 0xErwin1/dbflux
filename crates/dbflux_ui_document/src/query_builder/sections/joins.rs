@@ -59,7 +59,7 @@ pub fn render_joins(
                 .child(
                     Button::new("qb-dismiss-fk-banner", "✕")
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             this.dismiss_fk_banner(cx);
                         })),
@@ -115,7 +115,7 @@ pub fn render_joins(
         header = header.child(
             Button::new(("qb-rm-join", i), "✕")
                 .ghost()
-                .small()
+                .inline()
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.remove_join(i, cx);
                 })),
@@ -187,7 +187,7 @@ pub fn render_joins(
             dbflux_i18n::t!("document.query_builder.joins.add_join"),
         )
         .ghost()
-        .small()
+        .inline()
         .on_click(cx.listener(move |this, _event, _window, cx| {
             this.add_join(&source_alias.clone(), cx);
         })),
@@ -260,7 +260,7 @@ fn render_join_tree(
             row.child(
                 Button::new(("qb-rm-join-node", id as usize), "✕")
                     .ghost()
-                    .small()
+                    .inline()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.remove_join_node(join_idx, path_for_rm.clone(), cx);
                     })),
@@ -292,7 +292,7 @@ fn render_join_tree(
                         op_label,
                     )
                     .ghost()
-                    .small()
+                    .inline()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_join_group_op(join_idx, path_for_toggle.clone(), cx);
                     })),
@@ -303,7 +303,7 @@ fn render_join_tree(
                         dbflux_i18n::t!("document.query_builder.joins.add_condition"),
                     )
                     .ghost()
-                    .small()
+                    .inline()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.add_join_condition(join_idx, path_for_add_pred.clone(), cx);
                     })),
@@ -314,7 +314,7 @@ fn render_join_tree(
                         dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
                     )
                     .ghost()
-                    .small()
+                    .inline()
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.add_join_subgroup(join_idx, path_for_add_grp.clone(), cx);
                     })),
@@ -324,7 +324,7 @@ fn render_join_tree(
                 header = header.child(
                     Button::new(node_id_seed("qb-join-grp-rm", join_idx, &path_for_rm), "✕")
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.remove_join_node(join_idx, path_for_rm.clone(), cx);
                         })),

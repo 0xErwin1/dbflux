@@ -1,4 +1,5 @@
 use crate::components::json_editor_view;
+use crate::controls::Button;
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
 use crate::modals::modal::{Modal, ModalFocus, ModalVariant};
@@ -9,8 +10,6 @@ use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::Sizable;
-use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_component::input::{Editor, EditorState};
 
 /// Event emitted when the user clicks "Import" with valid JSON.
@@ -320,18 +319,20 @@ impl Render for ModalImportDashboard {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("import-dashboard-format")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.format"))
-                            .small()
-                            .with_variant(ButtonVariant::Ghost)
-                            .on_click(on_format),
+                        Button::new(
+                            "import-dashboard-format",
+                            dbflux_i18n::t!("modals.import_dashboard.format"),
+                        )
+                        .ghost()
+                        .on_click(on_format),
                     )
                     .child(
-                        Button::new("import-dashboard-compact")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.compact"))
-                            .small()
-                            .with_variant(ButtonVariant::Ghost)
-                            .on_click(on_compact),
+                        Button::new(
+                            "import-dashboard-compact",
+                            dbflux_i18n::t!("modals.import_dashboard.compact"),
+                        )
+                        .ghost()
+                        .on_click(on_compact),
                     ),
             )
             .child(
@@ -340,15 +341,19 @@ impl Render for ModalImportDashboard {
                     .items_center()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("import-dashboard-cancel")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.cancel"))
-                            .on_click(on_cancel),
+                        Button::new(
+                            "import-dashboard-cancel",
+                            dbflux_i18n::t!("modals.import_dashboard.cancel"),
+                        )
+                        .on_click(on_cancel),
                     )
                     .child(
-                        Button::new("import-dashboard-save")
-                            .label(dbflux_i18n::t!("modals.import_dashboard.confirm"))
-                            .with_variant(ButtonVariant::Primary)
-                            .on_click(on_save),
+                        Button::new(
+                            "import-dashboard-save",
+                            dbflux_i18n::t!("modals.import_dashboard.confirm"),
+                        )
+                        .primary()
+                        .on_click(on_save),
                     ),
             );
 

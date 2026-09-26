@@ -823,7 +823,6 @@ impl ServicesSection {
 
         let toolbar = layout::master_list_toolbar(vec![
             Button::new("new-service", new_service_button_label())
-                .small()
                 .primary()
                 .icon(AppIcon::Plus)
                 .focused(is_new_button_focused)
@@ -1002,7 +1001,6 @@ impl ServicesSection {
                 "delete-service",
                 dbflux_i18n::t!("settings.rpc_services.action.delete"),
             )
-            .small()
             .danger()
             .icon(AppIcon::Delete)
             .focused(self.svc_cursor_on(ServiceFormRow::DeleteButton, 0))
@@ -1024,7 +1022,6 @@ impl ServicesSection {
                 dbflux_i18n::t!("settings.rpc_services.action.create")
             },
         )
-        .small()
         .primary()
         .icon(AppIcon::Check)
         .kbd("Ctrl S")
@@ -1151,7 +1148,7 @@ impl ServicesSection {
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         Button::new(id, dbflux_i18n::t!("settings.rpc_services.action.remove"))
-            .small()
+            .inline()
             .ghost()
             .icon(AppIcon::X)
             .icon_only()
@@ -1167,7 +1164,6 @@ impl ServicesSection {
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
         Button::new(id, label)
-            .small()
             .secondary()
             .icon(AppIcon::Plus)
             .focused(focused)

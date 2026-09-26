@@ -489,7 +489,6 @@ impl ChartDocument {
                                 "chart-custom-time-apply",
                                 dbflux_i18n::t!("document.chart.shell.custom_range.apply"),
                             )
-                            .small()
                             .icon(AppIcon::Check)
                             .disabled(!can_apply)
                             .tab_stop(false)

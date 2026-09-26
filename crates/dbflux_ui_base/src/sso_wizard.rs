@@ -582,7 +582,6 @@ impl SsoWizard {
                 .child(
                     div().flex().child(
                         Button::new("sso-wizard-discover-accounts", discover_label)
-                            .small()
                             .icon(AppIcon::RefreshCcw)
                             .disabled(self.accounts_loading)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -677,7 +676,6 @@ impl SsoWizard {
                 .child(
                     div().flex().child(
                         Button::new("sso-wizard-discover-roles", discover_label)
-                            .small()
                             .icon(AppIcon::RefreshCcw)
                             .disabled(self.roles_loading)
                             .on_click(cx.listener(|this, _, _, cx| {

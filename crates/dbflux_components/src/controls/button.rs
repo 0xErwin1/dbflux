@@ -39,55 +39,79 @@ impl ButtonVariant {
     }
 }
 
-/// Height of a [`Button`].
+/// Height of a [`Button`] (canonical sizes, canvas v43).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ButtonSize {
-    /// 28 px: toolbars and dense rows.
-    Small,
-    /// 32 px.
+    /// 24 px, cut 6: inside table rows, list rows, chips and card rows.
+    Inline,
+    /// 30 px, cut 6: toolbars, footers, dialogs and forms. Same height as
+    /// inputs and selects.
     #[default]
-    Medium,
-    /// 44 px, cut 12.
+    Regular,
+    /// 44 px, cut 10: a call-to-action a board draws large.
     Large,
 }
 
 impl ButtonSize {
     pub fn height(self) -> Pixels {
         match self {
-            Self::Small => ButtonMetrics::HEIGHT_SM,
-            Self::Medium => ButtonMetrics::HEIGHT_MD,
-            Self::Large => ButtonMetrics::HEIGHT_LG,
+            Self::Inline => ButtonMetrics::HEIGHT_INLINE,
+            Self::Regular => ButtonMetrics::HEIGHT,
+            Self::Large => ButtonMetrics::HEIGHT_LARGE,
         }
     }
 
     pub fn icon_only_width(self) -> Pixels {
         match self {
-            Self::Small => ButtonMetrics::ICON_ONLY_WIDTH_SM,
-            Self::Medium => ButtonMetrics::ICON_ONLY_WIDTH_MD,
-            Self::Large => ButtonMetrics::ICON_ONLY_WIDTH_LG,
+            Self::Inline => ButtonMetrics::ICON_ONLY_WIDTH_INLINE,
+            Self::Regular => ButtonMetrics::ICON_ONLY_WIDTH,
+            Self::Large => ButtonMetrics::ICON_ONLY_WIDTH_LARGE,
         }
     }
 
-    /// Controls up to 32 px take the control cut; large buttons the overlay
-    /// cut (Foundations, "Cut depth by size").
     pub fn cut(self) -> Pixels {
         match self {
-            Self::Small | Self::Medium => ChamferCut::CONTROL,
-            Self::Large => ChamferCut::OVERLAY,
+            Self::Inline | Self::Regular => ChamferCut::CONTROL,
+            Self::Large => ChamferCut::LARGE_CONTROL,
         }
     }
 
     pub fn font_size(self) -> Pixels {
         match self {
-            Self::Small => ButtonMetrics::FONT_SM,
-            Self::Medium | Self::Large => ButtonMetrics::FONT_MD,
+            Self::Inline => ButtonMetrics::FONT_INLINE,
+            Self::Regular => ButtonMetrics::FONT,
+            Self::Large => ButtonMetrics::FONT_LARGE,
         }
     }
 
-    fn padding_x(self) -> Pixels {
+    pub fn padding_x(self) -> Pixels {
         match self {
-            Self::Small | Self::Medium => ButtonMetrics::PADDING_X,
-            Self::Large => ButtonMetrics::PADDING_X_LG,
+            Self::Inline => ButtonMetrics::PADDING_X_INLINE,
+            Self::Regular => ButtonMetrics::PADDING_X,
+            Self::Large => ButtonMetrics::PADDING_X_LARGE,
+        }
+    }
+
+    pub fn gap(self) -> Pixels {
+        match self {
+            Self::Inline => ButtonMetrics::GAP_INLINE,
+            Self::Regular | Self::Large => ButtonMetrics::GAP,
+        }
+    }
+
+    /// Icon leading a label.
+    pub fn icon(self) -> Pixels {
+        match self {
+            Self::Inline => ButtonMetrics::ICON_INLINE,
+            Self::Regular | Self::Large => ButtonMetrics::ICON,
+        }
+    }
+
+    /// Icon of an icon-only button.
+    pub fn icon_only_icon(self) -> Pixels {
+        match self {
+            Self::Inline => ButtonMetrics::ICON_ONLY_INLINE,
+            Self::Regular | Self::Large => ButtonMetrics::ICON_ONLY,
         }
     }
 }
@@ -241,12 +265,13 @@ impl Button {
         self
     }
 
-    /// 28 px tall, the toolbar size.
-    pub fn small(self) -> Self {
-        self.size(ButtonSize::Small)
+    /// 24 px tall, for buttons inside table rows, list rows, chips and card
+    /// rows.
+    pub fn inline(self) -> Self {
+        self.size(ButtonSize::Inline)
     }
 
-    /// 44 px tall with the overlay cut.
+    /// 44 px tall with a 10 px cut.
     pub fn large(self) -> Self {
         self.size(ButtonSize::Large)
     }
@@ -257,7 +282,8 @@ impl Button {
         self
     }
 
-    /// Overrides the icon size (15 px beside a label, 16 px icon-only).
+    /// Overrides the icon size (by default 15 px beside a label and 16 px
+    /// icon-only; 12 and 13 px inline).
     pub fn icon_size(mut self, size: Pixels) -> Self {
         self.icon_size = Some(size);
         self
@@ -415,9 +441,9 @@ impl RenderOnce for Button {
         }
 
         let icon_size = icon_size.unwrap_or(if icon_only {
-            ButtonMetrics::ICON_ONLY
+            size.icon_only_icon()
         } else {
-            ButtonMetrics::ICON
+            size.icon()
         });
 
         let mut button = div()
@@ -427,7 +453,7 @@ impl RenderOnce for Button {
             .flex_shrink_0()
             .items_center()
             .justify_center()
-            .gap(ButtonMetrics::GAP)
+            .gap(size.gap())
             .h(size.height())
             .font_family(AppFonts::INTERFACE)
             .font_weight(FontWeight::SEMIBOLD)
@@ -515,17 +541,78 @@ impl RenderOnce for Button {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tokens::ChamferCut;
+    use gpui::px;
 
     #[test]
-    fn sizes_map_to_the_board_heights_and_cuts() {
-        assert_eq!(ButtonSize::Small.height(), ButtonMetrics::HEIGHT_SM);
-        assert_eq!(ButtonSize::Medium.height(), ButtonMetrics::HEIGHT_MD);
-        assert_eq!(ButtonSize::Large.height(), ButtonMetrics::HEIGHT_LG);
+    fn default_size_is_the_thirty_pixel_control() {
+        assert_eq!(ButtonSize::default(), ButtonSize::Regular);
+        assert_eq!(
+            Button::new("save", "Save").current_size(),
+            ButtonSize::Regular
+        );
+        assert_eq!(
+            Button::new("save", "Save").inline().current_size(),
+            ButtonSize::Inline
+        );
+        assert_eq!(ButtonSize::Regular.height(), Fields::HEIGHT);
+    }
 
-        assert_eq!(ButtonSize::Small.cut(), ChamferCut::CONTROL);
-        assert_eq!(ButtonSize::Medium.cut(), ChamferCut::CONTROL);
-        assert_eq!(ButtonSize::Large.cut(), ChamferCut::OVERLAY);
+    #[test]
+    fn size_table_matches_the_canonical_sizes() {
+        let table = [
+            (
+                ButtonSize::Inline,
+                24.0,
+                24.0,
+                6.0,
+                10.0,
+                6.0,
+                12.0,
+                12.0,
+                13.0,
+            ),
+            (
+                ButtonSize::Regular,
+                30.0,
+                32.0,
+                6.0,
+                12.0,
+                8.0,
+                12.5,
+                15.0,
+                16.0,
+            ),
+            (
+                ButtonSize::Large,
+                44.0,
+                44.0,
+                10.0,
+                16.0,
+                8.0,
+                13.0,
+                15.0,
+                16.0,
+            ),
+        ];
+
+        for (size, height, icon_width, cut, padding, gap, font, icon, icon_only) in table {
+            assert_eq!(size.height(), px(height), "{size:?} height");
+            assert_eq!(
+                size.icon_only_width(),
+                px(icon_width),
+                "{size:?} icon width"
+            );
+            assert_eq!(size.cut(), px(cut), "{size:?} cut");
+            assert_eq!(size.padding_x(), px(padding), "{size:?} padding");
+            assert_eq!(size.gap(), px(gap), "{size:?} gap");
+            assert_eq!(size.font_size(), px(font), "{size:?} font");
+            assert_eq!(size.icon(), px(icon), "{size:?} icon");
+            assert_eq!(
+                size.icon_only_icon(),
+                px(icon_only),
+                "{size:?} icon-only icon"
+            );
+        }
     }
 
     #[test]
@@ -625,13 +712,11 @@ mod tests {
                 .child(
                     div().debug_selector(|| "first-button".to_string()).child(
                         Button::new("first", "First")
-                            .small()
                             .on_click(move |_, _, _| first_clicks.borrow_mut().push("first")),
                     ),
                 )
                 .child(
                     Button::new("second", "Second")
-                        .small()
                         .icon_only()
                         .on_click(move |_, _, _| second_clicks.borrow_mut().push("second")),
                 )
@@ -687,6 +772,17 @@ mod tests {
         window.run_until_parked();
 
         (harness, clicks, window)
+    }
+
+    #[gpui::test]
+    fn default_button_renders_thirty_pixels_tall(cx: &mut gpui::TestAppContext) {
+        let (_harness, _clicks, window) = open_toolbar(cx);
+
+        let first = window
+            .debug_bounds("first-button")
+            .expect("the first button is laid out");
+
+        assert_eq!(first.size.height, ButtonMetrics::HEIGHT);
     }
 
     #[gpui::test]

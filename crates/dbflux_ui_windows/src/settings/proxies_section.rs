@@ -394,7 +394,7 @@ impl ProxiesSection {
 
         let password_toggle = Button::new("toggle-proxy-password", toggle_label)
             .ghost()
-            .small()
+            .inline()
             .icon(toggle_icon)
             .icon_only()
             .tab_stop(false)
@@ -469,7 +469,6 @@ impl ProxiesSection {
 
         let toolbar = layout::master_list_toolbar(vec![
             Button::new("new-proxy", dbflux_i18n::t!("settings.proxies.new"))
-                .small()
                 .primary()
                 .icon(AppIcon::Plus)
                 .focused(is_new_button_focused)
@@ -481,7 +480,6 @@ impl ProxiesSection {
                 "import-proxy",
                 dbflux_i18n::t!("settings.proxies.action.import"),
             )
-            .small()
             .secondary()
             .icon(AppIcon::Download)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -646,7 +644,6 @@ impl ProxiesSection {
                         "export-proxy",
                         dbflux_i18n::t!("settings.proxies.action.export"),
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::ExternalLink)
                     .focused(self.is_cursor_on(ProxyFormField::ExportButton))
@@ -659,7 +656,6 @@ impl ProxiesSection {
                         "delete-proxy",
                         dbflux_i18n::t!("settings.proxies.action.delete"),
                     )
-                    .small()
                     .danger()
                     .icon(AppIcon::Delete)
                     .focused(self.is_cursor_on(ProxyFormField::DeleteButton))
@@ -684,7 +680,6 @@ impl ProxiesSection {
                 dbflux_i18n::t!("settings.proxies.action.create")
             },
         )
-        .small()
         .primary()
         .icon(AppIcon::Check)
         .kbd("Ctrl S")

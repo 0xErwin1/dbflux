@@ -1330,7 +1330,6 @@ impl ExportBundleModal {
 
             let toggle = Button::new("export-passphrase-eye", "")
                 .ghost()
-                .small()
                 .icon(eye_icon)
                 .icon_only()
                 .on_click({
@@ -1399,7 +1398,6 @@ impl ExportBundleModal {
             dbflux_i18n::t!("connection_manager.action.browse"),
         )
         .ghost()
-        .small()
         .icon(AppIcon::Folder)
         .icon_only()
         .on_click(move |_event, _window, cx| {

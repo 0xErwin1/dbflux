@@ -408,7 +408,6 @@ impl SettingsCoordinator {
             .child(div().flex_1())
             .child(
                 Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
-                    .small()
                     .secondary()
                     .kbd("Ctrl W")
                     .on_click(cx.listener(|this, _, window, _cx| {

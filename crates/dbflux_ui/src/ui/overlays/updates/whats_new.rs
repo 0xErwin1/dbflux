@@ -183,7 +183,6 @@ impl WhatsNewDialog {
                     "whats-new-full-changelog",
                     dbflux_i18n::t!("updates.whats_new.full_changelog"),
                 )
-                .small()
                 .secondary()
                 .icon(AppIcon::ExternalLink)
                 .on_click(|_, _, cx| cx.open_url(updates::FULL_CHANGELOG_URL)),
@@ -193,7 +192,6 @@ impl WhatsNewDialog {
                     "whats-new-close-button",
                     dbflux_i18n::t!("updates.whats_new.close"),
                 )
-                .small()
                 .primary()
                 .kbd("Esc")
                 .on_click(cx.listener(|this, _, _, cx| this.close(cx))),

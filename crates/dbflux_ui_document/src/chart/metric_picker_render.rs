@@ -324,7 +324,6 @@ fn render_dimensions_section(
                         "metric-picker-dim-retry",
                         dbflux_i18n::t!("document.chart.metric_picker.dimensions.retry"),
                     )
-                    .small()
                     .on_click(cx.listener(|shell, _, _, cx| {
                         if let Some(picker) = &mut shell.metric_picker {
                             picker.dimensions_state = DimensionsState::NotFetched;
@@ -450,7 +449,6 @@ fn render_config_footer(state: &MetricPickerState, cx: &mut Context<ChartShell>)
                 dbflux_i18n::t!("document.chart.metric_picker.apply"),
             )
             .primary()
-            .small()
             .on_click(cx.listener(|shell, _, _, cx| {
                 if let Some(picker) = &mut shell.metric_picker {
                     // Flush any pending Custom… inputs so the click path

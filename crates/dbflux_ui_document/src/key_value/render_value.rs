@@ -247,7 +247,6 @@ impl KeyValueDocument {
                     "kv-copy-key",
                     dbflux_i18n::t!("document.key_value.context_menu.copy_key"),
                 )
-                .small()
                 .icon(AppIcon::Copy)
                 .icon_only()
                 .on_click(move |_, _, cx| {
@@ -259,7 +258,6 @@ impl KeyValueDocument {
             .when(is_structured, |header| {
                 header.child(
                     Button::new("kv-add-member", add_label)
-                        .small()
                         .icon(AppIcon::Plus)
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(key_type) = this.selected_key_type() {
@@ -274,7 +272,6 @@ impl KeyValueDocument {
                     "kv-copy-command",
                     dbflux_i18n::t!("document.key_value.context_menu.copy_as_command"),
                 )
-                .small()
                 .icon(AppIcon::Code)
                 .icon_only()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -286,7 +283,6 @@ impl KeyValueDocument {
                     "kv-rename-key",
                     dbflux_i18n::t!("document.key_value.context_menu.rename"),
                 )
-                .small()
                 .icon(AppIcon::Pencil)
                 .icon_only()
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -298,7 +294,6 @@ impl KeyValueDocument {
                     "kv-reload-value",
                     dbflux_i18n::t!("document.key_value.value.reload"),
                 )
-                .small()
                 .icon(AppIcon::RefreshCcw)
                 .icon_only()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -310,7 +305,6 @@ impl KeyValueDocument {
                     "kv-delete-key",
                     dbflux_i18n::t!("document.key_value.render.delete_confirm.delete"),
                 )
-                .small()
                 .danger()
                 .icon(AppIcon::Delete)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -527,7 +521,6 @@ impl KeyValueDocument {
                             size = format_size(super::decode::VALUE_PREVIEW_BYTES)
                         ),
                     )
-                    .small()
                     .icon(AppIcon::Eye)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.preview_value_prefix(cx);
@@ -539,7 +532,6 @@ impl KeyValueDocument {
                     "kv-load-anyway",
                     dbflux_i18n::t!("document.key_value.render.gate.load_anyway"),
                 )
-                .small()
                 .primary()
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.load_selected_value_without_limit(cx);
@@ -965,7 +957,6 @@ impl KeyValueDocument {
                         "kv-edit-value",
                         dbflux_i18n::t!("document.key_value.value.edit"),
                     )
-                    .small()
                     .primary()
                     .icon(AppIcon::Pencil)
                     .kbd("Enter")
@@ -1207,7 +1198,6 @@ impl KeyValueDocument {
                             count = super::collection_panes::ZSET_PAGE_SIZE
                         ),
                     )
-                    .small()
                     .icon(if loading {
                         AppIcon::Loader
                     } else {
@@ -1494,7 +1484,7 @@ impl KeyValueDocument {
                         "kv-stream-load-more",
                         dbflux_i18n::t!("document.key_value.stream.load_more"),
                     )
-                    .small()
+                    .inline()
                     .icon(if loading {
                         AppIcon::Loader
                     } else {
@@ -1846,7 +1836,6 @@ impl KeyValueDocument {
                                 "kv-stream-view-pending",
                                 dbflux_i18n::t!("document.key_value.stream.view_pending"),
                             )
-                            .small()
                             .icon(AppIcon::Eye)
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -1859,7 +1848,6 @@ impl KeyValueDocument {
                                 "kv-stream-claim",
                                 dbflux_i18n::t!("document.key_value.stream.claim"),
                             )
-                            .small()
                             .icon(AppIcon::ArrowLeftRight)
                             .selected(claim_open)
                             .on_click(cx.listener(
@@ -1886,7 +1874,6 @@ impl KeyValueDocument {
                                     "kv-stream-claim-confirm",
                                     dbflux_i18n::t!("document.key_value.stream.claim_confirm"),
                                 )
-                                .small()
                                 .primary()
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
@@ -1899,7 +1886,6 @@ impl KeyValueDocument {
                                     "kv-stream-claim-cancel",
                                     dbflux_i18n::t!("document.key_value.console.cancel"),
                                 )
-                                .small()
                                 .ghost()
                                 .on_click(cx.listener(
                                     |this, _, _, cx| {
@@ -2138,7 +2124,6 @@ impl KeyValueDocument {
                             "kv-expiry-cancel",
                             dbflux_i18n::t!("document.key_value.console.cancel"),
                         )
-                        .small()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.close_expiry_editor(window, cx);
                         })),
@@ -2148,7 +2133,6 @@ impl KeyValueDocument {
                             "kv-expiry-apply",
                             dbflux_i18n::t!("document.key_value.expiry.apply"),
                         )
-                        .small()
                         .primary()
                         .icon(AppIcon::Check)
                         .kbd("Enter")

@@ -103,7 +103,6 @@ fn render_action_button(
 
     div().id(element_id).child(
         button
-            .small()
             .icon(AppIcon::Plus)
             .focused(action.focused)
             .disabled(!action.enabled)

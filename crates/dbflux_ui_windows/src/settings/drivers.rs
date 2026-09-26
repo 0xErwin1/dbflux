@@ -889,7 +889,6 @@ impl DriversSection {
             "save-driver-settings",
             dbflux_i18n::t!("settings.drivers.action.save"),
         )
-        .small()
         .primary()
         .icon(AppIcon::Save)
         .kbd("Ctrl S")

@@ -349,7 +349,7 @@ impl LoginModal {
                 dbflux_i18n::t!("login.action.copy_url"),
             )
             .ghost()
-            .small()
+            .inline()
             .icon(AppIcon::Copy)
             .icon_only()
             .tab_stop(false)

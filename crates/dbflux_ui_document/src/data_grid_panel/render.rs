@@ -891,7 +891,6 @@ fn builder_button(
         "open-builder-btn",
         dbflux_i18n::t!("document.data.grid.toolbar.builder"),
     )
-    .small()
     .icon(AppIcon::ListFilter)
     .tab_stop(false)
     .on_click(on_click)
@@ -922,7 +921,6 @@ fn refresh_split(
     SplitButton::new(
         "refresh-action-btn",
         Button::new("refresh-action", label)
-            .small()
             .primary()
             .icon(icon)
             .focused(focused)
@@ -1164,7 +1162,6 @@ impl DataGridPanel {
 
                 d.child(
                     Button::new("view-toggle-btn", mode.label())
-                        .small()
                         .ghost()
                         .icon(view_icon)
                         .tooltip(tooltip)
@@ -1254,7 +1251,6 @@ impl DataGridPanel {
                     "undo-btn",
                     dbflux_i18n::t!("document.data.grid.edit_bar.undo"),
                 )
-                .small()
                 .icon(AppIcon::Undo)
                 .icon_only()
                 .disabled(!controls.can_undo)
@@ -1268,7 +1264,6 @@ impl DataGridPanel {
                     "redo-btn",
                     dbflux_i18n::t!("document.data.grid.edit_bar.redo"),
                 )
-                .small()
                 .icon(AppIcon::Redo)
                 .icon_only()
                 .disabled(!controls.can_redo)
@@ -1282,7 +1277,6 @@ impl DataGridPanel {
                     "save-btn",
                     dbflux_i18n::t!("document.data.grid.edit_bar.save"),
                 )
-                .small()
                 .variant(if has_changes {
                     ButtonVariant::Primary
                 } else {
@@ -1306,7 +1300,6 @@ impl DataGridPanel {
                     "revert-btn",
                     dbflux_i18n::t!("document.data.grid.edit_bar.revert"),
                 )
-                .small()
                 .ghost()
                 .icon(AppIcon::RotateCcw)
                 .disabled(!has_changes)
@@ -1664,7 +1657,6 @@ impl DataGridPanel {
                             "data-grid-chart-time-range-apply",
                             dbflux_i18n::t!("document.data.chart_dock.toolbar.apply"),
                         )
-                        .small()
                         .disabled(!can_apply)
                         .on_click(move |_, _, cx| {
                             panel_clone.update(cx, |p, cx| {
@@ -2116,10 +2108,10 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        use dbflux_components::controls::Button;
         use dbflux_components::controls::Input;
         use dbflux_components::primitives::Text;
         use gpui_component::Sizable;
-        use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
 
         let name_input = self
             .pending_collection_chart_save
@@ -2158,21 +2150,27 @@ impl DataGridPanel {
                             .gap(Spacing::XXS)
                             .justify_end()
                             .child(
-                                Button::new("cancel-collection-chart-save")
-                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.cancel"))
-                                    .small()
-                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                Button::new(
+                                    "cancel-collection-chart-save",
+                                    dbflux_i18n::t!("document.data.chart_dock.save.cancel"),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
                                         this.cancel_collection_chart_save(cx);
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                Button::new("confirm-collection-chart-save")
-                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.save"))
-                                    .small()
-                                    .with_variant(ButtonVariant::Primary)
-                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                Button::new(
+                                    "confirm-collection-chart-save",
+                                    dbflux_i18n::t!("document.data.chart_dock.save.save"),
+                                )
+                                .primary()
+                                .on_click(cx.listener(
+                                    |this, _, _window, cx| {
                                         this.confirm_collection_chart_save(cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     ),
             )
@@ -3475,7 +3473,6 @@ impl DataGridPanel {
                 d.child(
                     Button::new("record-mode-toggle", crate::labels::record_view_label())
                         .ghost()
-                        .small()
                         .icon(AppIcon::Columns)
                         .selected(record_mode)
                         .tab_stop(false)
@@ -3577,7 +3574,6 @@ impl DataGridPanel {
                     "export-trigger",
                     dbflux_i18n::t!("document.data.grid.export.trigger"),
                 )
-                .small()
                 .icon(AppIcon::FileSpreadsheet)
                 .trailing_icon(AppIcon::ChevronDown)
                 .tab_stop(false)

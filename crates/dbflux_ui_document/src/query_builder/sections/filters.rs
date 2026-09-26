@@ -110,7 +110,7 @@ pub fn render_filters_for_target(
                             dbflux_i18n::t!("document.query_builder.filters.add_filter"),
                         )
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.add_predicate_for(
@@ -129,7 +129,7 @@ pub fn render_filters_for_target(
                             dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
                         )
                         .ghost()
-                        .small()
+                        .inline()
                         .on_click(cx.listener(
                             move |this, _event, _window, cx| {
                                 this.add_group_for(target, vec![], cx);
@@ -436,7 +436,7 @@ fn remove_button(
 
     Button::new(id, dbflux_i18n::t!("document.query_builder.filters.remove"))
         .ghost()
-        .small()
+        .inline()
         .icon(AppIcon::CircleX)
         .icon_only()
         .tab_stop(false)

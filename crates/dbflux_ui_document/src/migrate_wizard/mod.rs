@@ -1391,7 +1391,7 @@ impl MigrateWizard {
                     dbflux_i18n::t!("document.migrate_wizard.footer.close"),
                 )
                 .ghost()
-                .small()
+                .inline()
                 .icon(AppIcon::CircleX)
                 .icon_size(ModalMetrics::CLOSE_ICON)
                 .icon_only()

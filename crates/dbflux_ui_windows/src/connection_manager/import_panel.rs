@@ -1154,7 +1154,6 @@ impl ImportConnectionsPanel {
             dbflux_i18n::t!("connection_manager.action.browse"),
         )
         .ghost()
-        .small()
         .icon(AppIcon::Folder)
         .icon_only()
         .on_click(move |_event, _window, cx| {
@@ -1218,7 +1217,6 @@ impl ImportConnectionsPanel {
 
             let toggle = Button::new("import-passphrase-eye", "")
                 .ghost()
-                .small()
                 .icon(eye_icon)
                 .icon_only()
                 .on_click({
@@ -1278,7 +1276,6 @@ impl ImportConnectionsPanel {
             dbflux_i18n::t!("connection_manager.action.browse"),
         )
         .ghost()
-        .small()
         .icon(AppIcon::Folder)
         .icon_only()
         .on_click(move |_event, _window, cx| {
@@ -1321,7 +1318,6 @@ impl ImportConnectionsPanel {
                 dbflux_i18n::t!("connection_manager.action.browse"),
             )
             .ghost()
-            .small()
             .icon(AppIcon::Folder)
             .icon_only()
             .on_click(move |_event, _window, cx| {

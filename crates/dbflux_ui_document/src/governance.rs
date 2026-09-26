@@ -297,7 +297,6 @@ impl McpApprovalsView {
 
         let close = self.on_close.clone().map(|on_close| {
             Button::new("mcp-approvals-close", "")
-                .small()
                 .ghost()
                 .icon(AppIcon::X)
                 .icon_only()
@@ -322,7 +321,6 @@ impl McpApprovalsView {
                     "mcp-approvals-refresh",
                     dbflux_i18n::t!("document.governance.refresh"),
                 )
-                .small()
                 .icon(AppIcon::RefreshCcw)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.refresh(cx);
@@ -688,7 +686,6 @@ impl McpApprovalsView {
                             "mcp-approval-reject",
                             dbflux_i18n::t!("document.governance.reject"),
                         )
-                        .small()
                         .danger()
                         .icon(AppIcon::CircleX)
                         .kbd("r")
@@ -701,7 +698,6 @@ impl McpApprovalsView {
                             "mcp-approval-approve",
                             dbflux_i18n::t!("document.governance.approve"),
                         )
-                        .small()
                         .variant(ButtonVariant::Primary)
                         .icon(AppIcon::Check)
                         .kbd("a")

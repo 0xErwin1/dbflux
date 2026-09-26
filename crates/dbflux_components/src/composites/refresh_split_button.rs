@@ -54,7 +54,6 @@ pub fn refresh_split_button(
     };
 
     let main = Button::new("refresh-action", refresh_label)
-        .small()
         .icon(refresh_icon)
         .focused(focused)
         .on_click(move |_, window, cx| on_refresh(window, cx));

@@ -96,7 +96,6 @@ impl CodeDocument {
             .when(!is_read_only, |el| {
                 el.child(
                     Button::new("run-query-btn", run_label)
-                        .small()
                         .icon(run_icon)
                         .variant(if is_executing {
                             ButtonVariant::Danger
@@ -120,7 +119,6 @@ impl CodeDocument {
                         "run-in-new-tab-btn",
                         dbflux_i18n::t!("document.code.toolbar.new_tab"),
                     )
-                    .small()
                     .icon(AppIcon::SquarePlay)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_query_in_new_tab(window, cx);
@@ -131,7 +129,6 @@ impl CodeDocument {
                         "run-selection-btn",
                         dbflux_i18n::t!("document.code.toolbar.selection"),
                     )
-                    .small()
                     .icon(AppIcon::Code)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.run_selected_query(window, cx);
@@ -152,7 +149,6 @@ impl CodeDocument {
                 el.child(toolbar_divider(&theme)).child(SplitButton::new(
                     "sql-refresh-split",
                     Button::new("sql-refresh-action", refresh_label)
-                        .small()
                         .icon(refresh_icon)
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.runner.is_primary_active() {
@@ -226,7 +222,6 @@ impl CodeDocument {
                         "toolbar-save-btn",
                         dbflux_i18n::t!("document.code.toolbar.save"),
                     )
-                    .small()
                     .icon(AppIcon::Save)
                     .icon_only()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -245,7 +240,6 @@ impl CodeDocument {
                         "toolbar-format-btn",
                         dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
                     )
-                    .small()
                     .icon(AppIcon::Zap)
                     .icon_only()
                     .disabled(true),
@@ -258,7 +252,6 @@ impl CodeDocument {
                         "toolbar-history-btn",
                         dbflux_i18n::t!("document.code.toolbar.query_history"),
                     )
-                    .small()
                     .icon(AppIcon::History)
                     .icon_only()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -282,7 +275,6 @@ impl CodeDocument {
                         "toolbar-explain-btn",
                         dbflux_i18n::t!("document.code.toolbar.explain_query"),
                     )
-                    .small()
                     .icon(AppIcon::Info)
                     .icon_only()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -297,7 +289,6 @@ impl CodeDocument {
                         "toolbar-chart-btn",
                         dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
                     )
-                    .small()
                     .icon(AppIcon::ChartColumnBig)
                     .icon_only()
                     .on_click(cx.listener(|this, _, _window, cx| {

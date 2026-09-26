@@ -433,7 +433,6 @@ impl TabBar {
             .child(
                 Button::new("new-tab-btn", dbflux_i18n::t!("document.tabs.new"))
                     .ghost()
-                    .small()
                     .icon(AppIcon::Plus)
                     .icon_only()
                     .on_click(cx.listener(|_this, _event, _window, cx| {

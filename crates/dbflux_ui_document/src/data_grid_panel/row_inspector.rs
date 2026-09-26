@@ -505,7 +505,6 @@ impl RowInspectorContent {
             .child(div().flex_1())
             .child(
                 Button::new("row-inspector-pin", pin_label)
-                    .small()
                     .icon(AppIcon::Pin)
                     .icon_only()
                     .selected(self.pinned)
@@ -519,7 +518,6 @@ impl RowInspectorContent {
                     "row-inspector-close",
                     dbflux_i18n::t!("document.data.row_inspector.action.close"),
                 )
-                .small()
                 .icon(AppIcon::CircleX)
                 .icon_only()
                 .tab_stop(false)
@@ -547,7 +545,6 @@ impl RowInspectorContent {
                     "row-inspector-edit",
                     dbflux_i18n::t!("document.data.row_inspector.action.edit"),
                 )
-                .small()
                 .icon(AppIcon::Pencil)
                 .disabled(!can_edit)
                 .tab_stop(false)
@@ -560,7 +557,6 @@ impl RowInspectorContent {
                     "row-inspector-duplicate",
                     dbflux_i18n::t!("document.data.row_inspector.action.duplicate"),
                 )
-                .small()
                 .icon(AppIcon::Copy)
                 .disabled(!can_edit)
                 .tab_stop(false)
@@ -574,7 +570,6 @@ impl RowInspectorContent {
                     "row-inspector-delete",
                     dbflux_i18n::t!("document.data.row_inspector.action.delete"),
                 )
-                .small()
                 .danger()
                 .icon(AppIcon::Delete)
                 .disabled(!can_edit)

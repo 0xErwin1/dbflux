@@ -272,6 +272,21 @@ mod tests {
     }
 
     #[gpui::test]
+    fn control_is_as_tall_as_a_field(cx: &mut TestAppContext) {
+        assert_eq!(
+            Fields::SEGMENT_HEIGHT + Fields::SEGMENT_TRACK_PADDING * 2.0,
+            Fields::HEIGHT
+        );
+
+        let (_host, window) = open_segments(None, cx);
+        let track = window
+            .debug_bounds("segments")
+            .expect("the control is laid out");
+
+        assert_eq!(track.size.height, Fields::HEIGHT);
+    }
+
+    #[gpui::test]
     fn marker_follows_the_roving_item_not_the_selection(cx: &mut TestAppContext) {
         let (_host, window) = open_segments(None, cx);
         window.simulate_keystrokes("right");

@@ -188,7 +188,6 @@ impl BucketsTableDocument {
             "buckets-refresh",
             dbflux_i18n::t!("document.buckets_table.toolbar.refresh"),
         )
-        .small()
         .primary()
         .icon(if is_loading {
             AppIcon::Loader
@@ -213,7 +212,6 @@ impl BucketsTableDocument {
                     "buckets-new",
                     dbflux_i18n::t!("document.buckets_table.toolbar.new_bucket"),
                 )
-                .small()
                 .icon(AppIcon::Plus)
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -399,7 +397,6 @@ impl BucketsTableDocument {
             "buckets-browse",
             dbflux_i18n::t!("document.buckets_table.details.browse"),
         )
-        .small()
         .primary()
         .icon(AppIcon::ChevronRight)
         .tab_stop(false)
@@ -466,7 +463,6 @@ impl BucketsTableDocument {
                         dbflux_i18n::t!("document.buckets_table.details.calculate_size")
                     },
                 )
-                .small()
                 .icon(if estimate_pending {
                     AppIcon::Loader
                 } else {

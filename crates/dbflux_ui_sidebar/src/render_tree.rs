@@ -1176,7 +1176,6 @@ fn render_failure_slice(
             SharedString::from(format!("connect-failure-{name}-{profile_id}-{slice}")),
             label,
         )
-        .small()
         .icon(icon)
         .icon_size(ShellMetrics::FAILURE_ACTION_ICON)
         .icon_only()

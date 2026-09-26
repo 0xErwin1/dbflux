@@ -1935,7 +1935,6 @@ impl AuthProfilesSection {
                     "auth-login-open-browser",
                     dbflux_i18n::t!("settings.auth_profiles.open_browser"),
                 )
-                .small()
                 .primary()
                 .icon(AppIcon::ExternalLink)
                 .on_click(cx.listener(move |_this, _, _, cx| {
@@ -1947,7 +1946,6 @@ impl AuthProfilesSection {
                     "auth-login-copy-url",
                     dbflux_i18n::t!("settings.auth_profiles.copy_url"),
                 )
-                .small()
                 .secondary()
                 .icon(AppIcon::Copy)
                 .on_click(cx.listener(move |_this, _, _, cx| {
@@ -1959,7 +1957,6 @@ impl AuthProfilesSection {
                     "auth-login-cancel",
                     dbflux_i18n::t!("settings.auth_profiles.cancel"),
                 )
-                .small()
                 .danger()
                 .on_click(cx.listener(|this, _, _, cx| {
                     // Ask the active provider to abort whatever
@@ -2147,7 +2144,6 @@ impl AuthProfilesSection {
                 "new-auth-profile",
                 dbflux_i18n::t!("settings.auth_profiles.new_profile"),
             )
-            .small()
             .primary()
             .icon(AppIcon::Plus)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -2159,7 +2155,6 @@ impl AuthProfilesSection {
                 "import-auth-profile",
                 dbflux_i18n::t!("settings.auth_profiles.import"),
             )
-            .small()
             .secondary()
             .icon(AppIcon::Download)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -2504,7 +2499,6 @@ impl AuthProfilesSection {
                                 "edit-reload-profile",
                                 dbflux_i18n::t!("settings.auth_profiles.reload"),
                             )
-                            .small()
                             .secondary()
                             .icon(AppIcon::RefreshCcw)
                             .on_click(cx.listener(
@@ -2616,7 +2610,6 @@ impl AuthProfilesSection {
                             dbflux_i18n::t!("settings.auth_profiles.login_action")
                         },
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::RefreshCcw)
                     .focused(login_focused)
@@ -2680,7 +2673,6 @@ impl AuthProfilesSection {
                         "export-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.export"),
                     )
-                    .small()
                     .secondary()
                     .icon(AppIcon::ExternalLink)
                     .focused(self.is_cursor_on(AuthFormField::ExportButton))
@@ -2693,7 +2685,6 @@ impl AuthProfilesSection {
                         "delete-auth-profile",
                         dbflux_i18n::t!("settings.auth_profiles.delete"),
                     )
-                    .small()
                     .danger()
                     .icon(AppIcon::Delete)
                     .focused(self.is_cursor_on(AuthFormField::DeleteButton))
@@ -2715,7 +2706,6 @@ impl AuthProfilesSection {
                     "cancel-auth-profile",
                     dbflux_i18n::t!("settings.auth_profiles.cancel"),
                 )
-                .small()
                 .secondary()
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let Some(selected_id) = this.selected_profile_id {
@@ -2737,7 +2727,6 @@ impl AuthProfilesSection {
                         dbflux_i18n::t!("settings.auth_profiles.create")
                     },
                 )
-                .small()
                 .primary()
                 .icon(AppIcon::Check)
                 .kbd("Ctrl S")

@@ -148,7 +148,6 @@ fn render_header(
             Button::new("qb-hdr-save", "")
                 .icon(AppIcon::Save)
                 .icon_only()
-                .small()
                 .tooltip(dbflux_i18n::t!("document.query_builder.chrome.save"))
                 .tab_stop(false)
                 .on_click(cx.listener(|this, _event, _window, cx| {
@@ -163,7 +162,6 @@ fn render_header(
             Button::new("qb-hdr-reset", "")
                 .icon(AppIcon::RotateCcw)
                 .icon_only()
-                .small()
                 .tooltip(dbflux_i18n::t!("document.query_builder.chrome.reset"))
                 .tab_stop(false)
                 .on_click(cx.listener(|_this, _event, _window, cx| {
@@ -175,7 +173,6 @@ fn render_header(
             Button::new("qb-hdr-close", "")
                 .icon(AppIcon::X)
                 .icon_only()
-                .small()
                 .tooltip(dbflux_i18n::t!("document.query_builder.chrome.close"))
                 .tab_stop(false)
                 .on_click(cx.listener(|_this, _event, _window, cx| {
@@ -778,7 +775,6 @@ fn render_footer(
                             dbflux_i18n::t!("document.query_builder.status.open_in_editor"),
                         )
                         .icon(AppIcon::ExternalLink)
-                        .small()
                         .on_click(cx.listener(
                             |_this, _event, _window, cx| {
                                 use crate::query_builder::events::BuilderEvent;
@@ -792,7 +788,6 @@ fn render_footer(
                     Button::new("qb-run", run_label)
                         .icon(AppIcon::Play)
                         .primary()
-                        .small()
                         .kbd(RUN_SHORTCUT_HINT)
                         .disabled(!is_runnable)
                         .on_click(cx.listener(move |this, _event, _window, cx| {

@@ -214,7 +214,6 @@ pub fn render_chart_toolbar(
         "chart-toolbar-stats",
         dbflux_i18n::t!("document.chart.toolbar.stats"),
     )
-    .small()
     .icon(AppIcon::Sigma)
     .selected(is_stats_active)
     .tab_stop(false)
@@ -225,7 +224,6 @@ pub fn render_chart_toolbar(
             "chart-toolbar-save",
             dbflux_i18n::t!("document.chart.toolbar.save_chart"),
         )
-        .small()
         .icon(AppIcon::Save)
         .tab_stop(false)
         .on_click(move |_, window, cx| on_save(window, cx))
