@@ -1,0 +1,913 @@
+---
+import Glyph from '../Glyph.astro';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing.core;
+
+type Kind = 'grid' | 'tree' | 'keys' | 'events' | 'range' | 'objects';
+
+/**
+ * Each built-in driver's `DriverMetadata`, as declared in its crate.
+ *
+ * `category` and `query_language` are the enum variants the driver sets.
+ * CloudWatch declares its editor language per source query mode, and the
+ * default mode is Logs Insights, so that is the language shown. `kind` is the
+ * view the UI derives from those declarations, never from the driver id.
+ */
+const DRIVERS: readonly {
+  name: string;
+  icon: string;
+  category: string;
+  language: string;
+  kind: Kind;
+  viewIcon: string;
+  tone: string;
+  phone: boolean;
+}[] = [
+  {
+    name: 'PostgreSQL',
+    icon: 'brand/postgresql',
+    category: 'Relational',
+    language: 'Sql',
+    kind: 'grid',
+    viewIcon: 'table',
+    tone: 'var(--link)',
+    phone: true,
+  },
+  {
+    name: 'SQLite',
+    icon: 'brand/sqlite',
+    category: 'Relational',
+    language: 'Sql',
+    kind: 'grid',
+    viewIcon: 'table',
+    tone: 'var(--link)',
+    phone: true,
+  },
+  {
+    name: 'MongoDB',
+    icon: 'brand/mongodb',
+    category: 'Document',
+    language: 'MongoQuery',
+    kind: 'tree',
+    viewIcon: 'braces',
+    tone: 'var(--success)',
+    phone: true,
+  },
+  {
+    name: 'DynamoDB',
+    icon: 'braces',
+    category: 'Document',
+    language: 'Custom("DynamoDB")',
+    kind: 'tree',
+    viewIcon: 'braces',
+    tone: 'var(--success)',
+    phone: false,
+  },
+  {
+    name: 'Redis',
+    icon: 'brand/redis',
+    category: 'KeyValue',
+    language: 'RedisCommands',
+    kind: 'keys',
+    viewIcon: 'key-round',
+    tone: 'var(--violet)',
+    phone: true,
+  },
+  {
+    name: 'CloudWatch',
+    icon: 'logs',
+    category: 'LogStream',
+    language: 'CloudWatchLogsInsightsQl',
+    kind: 'events',
+    viewIcon: 'logs',
+    tone: 'var(--danger)',
+    phone: true,
+  },
+  {
+    name: 'InfluxDB',
+    icon: 'brand/influxdb',
+    category: 'TimeSeries',
+    language: 'InfluxQuery',
+    kind: 'range',
+    viewIcon: 'chart-spline',
+    tone: 'var(--accent-fill)',
+    phone: false,
+  },
+  {
+    name: 'S3',
+    icon: 'boxes',
+    category: 'ObjectStorage',
+    language: 'Custom("S3")',
+    kind: 'objects',
+    viewIcon: 'boxes',
+    tone: 'var(--text)',
+    phone: true,
+  },
+];
+---
+
+<section class="core shell" data-core>
+  <div class="core__head">
+    <div class="core__title">
+      <p class="eyebrow">{strings.eyebrow}</p>
+      <h2 class="display display--section">{strings.title}</h2>
+    </div>
+    <p class="core__body">{strings.body}</p>
+  </div>
+
+  <div class="core__grid">
+    <div class="core__list" role="radiogroup" aria-label={strings.eyebrow}>
+      {
+        DRIVERS.map((driver, index) => (
+          <button
+            type="button"
+            role="radio"
+            class:list={['core__chip c7', { 'core__chip--wide-only': !driver.phone }]}
+            aria-checked={index === 0 ? 'true' : 'false'}
+            data-core-pick={index}
+            style={`--tone: ${driver.tone}`}
+          >
+            <Glyph name={driver.icon} size={16} class="core__chip-icon" />
+            {driver.name}
+            <span class="core__grow" />
+            <span class="core__chip-category mono">{driver.category}</span>
+          </button>
+        ))
+      }
+      <div class="core__more c7">
+        <Glyph name="plug" size={16} />
+        <span>{strings.rpc_more}</span>
+      </div>
+    </div>
+
+    <div class="core__stage core__stage--meta">
+      <div class="core__link" aria-hidden="true">
+        <span class="core__travel" data-travel></span>
+      </div>
+      <div class="core__meta card c18">
+        <div class="core__meta-head">
+          <span class="core__meta-title">
+            <Glyph name="layers" size={15} />
+            <span class="x">DriverMetadata</span>
+          </span>
+          <span class="mono core__crate">dbflux_core</span>
+        </div>
+        <dl class="core__fields mono">
+          <div class="core__field core__field--driver">
+            <dt>driver</dt>
+            <dd>
+              {
+                DRIVERS.map((driver, index) => (
+                  <span class="core__value" data-core-item={index} hidden={index !== 0}>
+                    <Glyph name={driver.icon} size={16} />
+                    {driver.name}
+                  </span>
+                ))
+              }
+            </dd>
+          </div>
+          <div class="core__field">
+            <dt>category</dt>
+            <dd class="core__category">
+              {
+                DRIVERS.map((driver, index) => (
+                  <span data-core-item={index} hidden={index !== 0}>
+                    {driver.category}
+                  </span>
+                ))
+              }
+            </dd>
+          </div>
+          <div class="core__field">
+            <dt>query_language</dt>
+            <dd class="core__language">
+              {
+                DRIVERS.map((driver, index) => (
+                  <span data-core-item={index} hidden={index !== 0}>
+                    {driver.language}
+                  </span>
+                ))
+              }
+            </dd>
+          </div>
+          <div class="core__field core__field--last">
+            <dt>
+              <span class="core__label-full">{strings.view_chosen}</span>
+              <span class="core__label-short">{strings.view_short}</span>
+            </dt>
+            <dd class="core__view">
+              {
+                DRIVERS.map((driver, index) => (
+                  <span class="core__value" data-core-item={index} hidden={index !== 0}>
+                    <Glyph name={driver.viewIcon} size={15} />
+                    {strings.views[driver.kind]}
+                  </span>
+                ))
+              }
+            </dd>
+          </div>
+        </dl>
+        <p class="core__note">
+          <Glyph name="plug" size={16} style="margin-top: 2px" />
+          <span>{strings.note}</span>
+        </p>
+      </div>
+    </div>
+
+    <div class="core__stage core__stage--view">
+      <div class="core__link" aria-hidden="true">
+        <span class="core__travel core__travel--late" data-travel></span>
+      </div>
+      <div class="core__view-card card c18" aria-hidden="true">
+        {
+          DRIVERS.map((driver, index) => (
+            <div class="core__view-head" data-core-item={index} hidden={index !== 0}>
+              <Glyph name={driver.viewIcon} size={15} class="core__view-icon" />
+              <span class="x">{strings.views[driver.kind]}</span>
+              <span class="core__grow" />
+              <span class="mono core__view-driver">{driver.name}</span>
+            </div>
+          ))
+        }
+
+        <div class="core__body-grid mono" data-core-kind="grid">
+          <div class="core__table core__table--head" style="--cols: 70px 1fr 90px">
+            <span>id</span><span>email</span><span>plan</span>
+          </div>
+          <div class="core__table" style="--cols: 70px 1fr 90px">
+            <span>1041</span><span>ana@northwind.io</span><span class="core__tint">team</span>
+          </div>
+          <div class="core__table core__table--selected" style="--cols: 70px 1fr 90px">
+            <span>1042</span><span>k.tanaka@fjord.dev</span><span>solo</span>
+          </div>
+          <div class="core__table" style="--cols: 70px 1fr 90px">
+            <span>1043</span><span>priya@tessellate.ai</span><span class="core__tint">team</span>
+          </div>
+          <div class="core__table" style="--cols: 70px 1fr 90px">
+            <span>1044</span><span>jon@brightline.io</span><span>solo</span>
+          </div>
+        </div>
+
+        <div class="core__body-tree mono" data-core-kind="tree" hidden>
+          <div>
+            <span class="core__muted">▾</span>
+            <span class="core__strong">_id</span>:
+            <span class="core__ok">"66f0c2a1"</span>
+          </div>
+          <div class="core__indent-1">
+            <span class="core__strong">customer</span>: <span class="core__ok"
+              >"ana@northwind.io"</span
+            >
+          </div>
+          <div class="core__indent-1">
+            <span class="core__muted">▾</span>
+            <span class="core__strong">items</span>
+            <span class="core__muted">[2]</span>
+          </div>
+          <div class="core__indent-2">
+            <span class="core__muted">▸</span>
+            <span class="core__strong">0</span>
+            <span class="core__muted">{'{ sku, qty }'}</span>
+          </div>
+          <div class="core__indent-2">
+            <span class="core__muted">▸</span>
+            <span class="core__strong">1</span>
+            <span class="core__muted">{'{ sku, qty }'}</span>
+          </div>
+          <div class="core__indent-1">
+            <span class="core__strong">status</span>: <span class="core__ok">"failed"</span>
+          </div>
+        </div>
+
+        <div class="core__body-grid mono" data-core-kind="keys" hidden>
+          <div class="core__table core__table--head" style="--cols: 1fr 70px 70px">
+            <span>key</span><span>type</span><span>ttl</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 70px 70px">
+            <span>session:9f2c</span><span class="core__violet">hash</span><span>3600</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 70px 70px">
+            <span>queue:email</span><span class="core__link-text">list</span><span>—</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 70px 70px">
+            <span>rate:api:ana</span><span class="core__ok">string</span><span>60</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 70px 70px">
+            <span>leaderboard</span><span class="core__tint">zset</span><span>—</span>
+          </div>
+        </div>
+
+        <div class="core__body-log mono" data-core-kind="events" hidden>
+          <div>
+            <span class="core__muted">14:02:11</span>
+            <span class="core__danger">ERROR</span> payment declined id=48213
+          </div>
+          <div>
+            <span class="core__muted">14:02:09</span>
+            <span class="core__link-text">INFO</span> retry scheduled attempt=2
+          </div>
+          <div>
+            <span class="core__muted">14:01:58</span>
+            <span class="core__link-text">INFO</span> order created id=48213
+          </div>
+          <div>
+            <span class="core__muted">14:01:40</span>
+            <span class="core__tint">WARN</span> slow upstream 1.8s
+          </div>
+          <div>
+            <span class="core__muted">14:01:22</span>
+            <span class="core__link-text">INFO</span> order paid id=48190
+          </div>
+        </div>
+
+        <div class="core__body-range" data-core-kind="range" hidden>
+          <div class="core__ranges mono">
+            <span class="c5 core__range core__range--on">1h</span>
+            <span class="c5 core__range">6h</span>
+            <span class="c5 core__range">24h</span>
+            <span class="c5 core__range">7d</span>
+          </div>
+          <svg width="100%" height="200" viewBox="0 0 400 200" preserveAspectRatio="none">
+            <path
+              d="M0 150 L40 140 L80 152 L120 110 L160 118 L200 70 L240 88 L280 60 L320 96 L360 40 L400 58"
+              fill="none"
+              stroke="var(--accent-fill)"
+              stroke-width="2.5"></path>
+            <path
+              d="M0 180 L40 172 L80 176 L120 160 L160 166 L200 150 L240 158 L280 140 L320 150 L360 132 L400 138"
+              fill="none"
+              stroke="var(--link)"
+              stroke-width="2"></path>
+          </svg>
+        </div>
+
+        <div class="core__body-grid mono" data-core-kind="objects" hidden>
+          <div class="core__crumb">
+            assets-prod <span>/</span> exports <span>/</span>
+            <span class="core__strong">2026-09</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 80px">
+            <span><span class="core__tint">▸</span> daily/</span><span>—</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 80px">
+            <span>orders-0922.csv</span><span>18.4 MB</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 80px">
+            <span>orders-0921.csv</span><span>17.9 MB</span>
+          </div>
+          <div class="core__table" style="--cols: 1fr 80px">
+            <span>manifest.json</span><span>2 KB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script is:inline define:vars={{ kinds: DRIVERS.map((driver) => driver.kind) }}>
+  const section = document.querySelector('[data-core]');
+
+  if (section) {
+    const picks = Array.from(section.querySelectorAll('[data-core-pick]'));
+
+    const select = (index) => {
+      picks.forEach((pick) => {
+        pick.setAttribute('aria-checked', String(pick.dataset.corePick === String(index)));
+      });
+      section.querySelectorAll('[data-core-item]').forEach((element) => {
+        element.hidden = element.dataset.coreItem !== String(index);
+      });
+      section.querySelectorAll('[data-core-kind]').forEach((element) => {
+        element.hidden = element.dataset.coreKind !== kinds[index];
+      });
+      section.querySelectorAll('[data-travel]').forEach((element) => {
+        element.style.animationName = 'none';
+        void element.offsetWidth;
+        element.style.animationName = '';
+      });
+    };
+
+    picks.forEach((pick) => {
+      pick.addEventListener('click', () => select(Number(pick.dataset.corePick)));
+    });
+  }
+</script>
+
+<style>
+  .core {
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+    padding-top: 96px;
+    padding-bottom: 22px;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  .core__head {
+    display: flex;
+    align-items: flex-end;
+    gap: 64px;
+  }
+
+  .core__title {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    width: 620px;
+    flex-shrink: 0;
+  }
+
+  .core__body {
+    max-width: 460px;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .core__grid {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+    min-height: 520px;
+  }
+
+  .core__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .core__chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 14px;
+    border: 0;
+    background: var(--panel);
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 0.15s,
+      color 0.15s;
+  }
+
+  .core__chip:hover {
+    background: var(--raised-hover);
+  }
+
+  .core__chip :global(.core__chip-icon) {
+    color: var(--tone);
+  }
+
+  .core__chip[aria-checked='true'] {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+  }
+
+  .core__chip[aria-checked='true'] :global(.core__chip-icon) {
+    color: var(--accent-on);
+  }
+
+  .core__grow {
+    flex-grow: 1;
+  }
+
+  .core__chip-category {
+    font-size: 10.5px;
+    opacity: 0.7;
+  }
+
+  .core__more {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 14px;
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    color: var(--text-muted);
+    font-size: 13.5px;
+  }
+
+  .core__stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    padding-left: 48px;
+  }
+
+  .core__link {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 48px;
+    height: 2px;
+    background: var(--border);
+  }
+
+  .core__travel {
+    position: absolute;
+    top: -6px;
+    width: 14px;
+    height: 14px;
+    background: var(--accent-fill);
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    animation: travel 0.9s cubic-bezier(0.5, 0, 0.2, 1) both;
+  }
+
+  .core__travel--late {
+    animation-delay: 0.5s;
+  }
+
+  .core__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    width: 100%;
+    padding: 30px;
+  }
+
+  .core__meta-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .core__meta-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+  }
+
+  .core__meta-title .x {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .core__crate {
+    font-size: 11px;
+    color: var(--text-faint);
+  }
+
+  .core__fields {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .core__field {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 12px;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .core__field--last {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .core__field dt {
+    color: var(--text-muted);
+  }
+
+  .core__field dd {
+    margin: 0;
+    min-width: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .core__value {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .core__field--driver dd {
+    color: var(--text-strong);
+  }
+
+  .core__category {
+    color: var(--accent);
+  }
+
+  .core__language {
+    color: var(--link);
+  }
+
+  .core__view {
+    color: var(--success);
+  }
+
+  .core__label-short {
+    display: none;
+  }
+
+  .core__note {
+    display: flex;
+    gap: 10px;
+    margin: 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+
+  .core__view-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 360px;
+    overflow: hidden;
+  }
+
+  .core__view-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    flex-shrink: 0;
+    padding: 0 18px;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .core__view-head :global(.core__view-icon) {
+    color: var(--accent);
+  }
+
+  .core__view-head .x {
+    font-weight: 800;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-strong);
+  }
+
+  .core__view-driver {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .core__body-grid {
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+  }
+
+  .core__table {
+    display: grid;
+    grid-template-columns: var(--cols);
+    align-items: center;
+    height: 30px;
+    padding: 0 16px;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .core__table span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .core__table--head {
+    height: 32px;
+    color: var(--text-strong);
+    border-bottom-color: var(--border-strong);
+  }
+
+  .core__table--selected {
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+  }
+
+  .core__crumb {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 16px;
+    color: var(--text-muted);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .core__body-tree {
+    padding: 16px 18px;
+    font-size: 12.5px;
+    line-height: 26px;
+  }
+
+  .core__indent-1 {
+    padding-left: 18px;
+  }
+
+  .core__indent-2 {
+    padding-left: 36px;
+  }
+
+  .core__body-log {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 16px;
+    font-size: 12px;
+    line-height: 28px;
+    white-space: pre;
+  }
+
+  .core__body-range {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 18px;
+  }
+
+  .core__ranges {
+    display: flex;
+    gap: 6px;
+  }
+
+  .core__range {
+    padding: 4px 8px;
+    background: var(--raised);
+    font-size: 11px;
+  }
+
+  .core__range--on {
+    background: var(--accent-fill);
+    color: var(--accent-on);
+  }
+
+  .core__muted {
+    color: var(--text-muted);
+  }
+
+  .core__strong {
+    color: var(--text-strong);
+  }
+
+  .core__ok {
+    color: var(--success);
+  }
+
+  .core__tint {
+    color: var(--accent);
+  }
+
+  .core__violet {
+    color: var(--violet);
+  }
+
+  .core__link-text {
+    color: var(--link);
+  }
+
+  .core__danger {
+    color: var(--danger);
+  }
+
+  @media (max-width: 1180px) {
+    .core__head {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .core__title {
+      width: auto;
+    }
+
+    .core__grid {
+      grid-template-columns: 260px minmax(0, 1fr);
+      row-gap: 24px;
+      min-height: 0;
+    }
+
+    .core__stage--view {
+      grid-column: 2;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .core__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .core__stage,
+    .core__stage--view {
+      grid-column: 1;
+      padding-left: 0;
+    }
+
+    .core__link {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .core {
+      gap: 18px;
+      padding-top: 56px;
+      padding-bottom: 0;
+    }
+
+    .core__head {
+      gap: 18px;
+    }
+
+    .core__title {
+      gap: 18px;
+    }
+
+    .core__title .display {
+      font-size: 34px;
+    }
+
+    .core__body,
+    .core__stage--view,
+    .core__meta-head,
+    .core__field--driver,
+    .core__note,
+    .core__chip-category,
+    .core__grow,
+    .core__chip--wide-only {
+      display: none;
+    }
+
+    .core__grid {
+      row-gap: 18px;
+    }
+
+    .core__list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .core__chip,
+    .core__more {
+      height: 38px;
+      padding: 0 12px;
+      gap: 8px;
+      font-size: 13px;
+      clip-path: polygon(
+        6px 0,
+        100% 0,
+        100% calc(100% - 6px),
+        calc(100% - 6px) 100%,
+        0 100%,
+        0 6px
+      );
+    }
+
+    .core__more {
+      grid-column: span 2;
+    }
+
+    .core__meta {
+      gap: 12px;
+      padding: 18px;
+      clip-path: polygon(
+        14px 0,
+        100% 0,
+        100% calc(100% - 14px),
+        calc(100% - 14px) 100%,
+        0 100%,
+        0 14px
+      );
+    }
+
+    .core__fields {
+      gap: 12px;
+      font-size: 13px;
+    }
+
+    .core__field {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .core__label-full {
+      display: none;
+    }
+
+    .core__label-short {
+      display: inline;
+    }
+  }
+</style>

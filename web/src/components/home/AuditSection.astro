@@ -1,0 +1,233 @@
+---
+import Glyph from '../Glyph.astro';
+import { CURRENT, productVersion } from '../../data/versions';
+import { DEFAULT_LOCALE, dictionary } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).landing.audit;
+
+type Category = 'Mcp' | 'Query' | 'Hook' | 'Connection' | 'Script' | 'Config' | 'System';
+type Outcome = 'success' | 'pending' | 'failure';
+
+const CATEGORY: Readonly<Record<Category, { icon: string; tone: string }>> = {
+  Mcp: { icon: 'bot', tone: 'var(--link)' },
+  Query: { icon: 'play', tone: 'var(--text-strong)' },
+  Hook: { icon: 'plug', tone: 'var(--violet)' },
+  Connection: { icon: 'database', tone: 'var(--success)' },
+  Script: { icon: 'square-terminal', tone: 'var(--violet)' },
+  Config: { icon: 'key-round', tone: 'var(--text)' },
+  System: { icon: 'zap', tone: 'var(--text-muted)' },
+};
+
+const OUTCOME: Readonly<Record<Outcome, string>> = {
+  success: 'var(--success)',
+  pending: 'var(--accent)',
+  failure: 'var(--danger)',
+};
+
+/**
+ * An illustrative tail of the audit log. Categories, action identifiers and
+ * outcomes are the real vocabulary from `docs/AUDIT.md` and
+ * `dbflux_core::observability::actions`; query text appears the way the
+ * default `capture_query_text = false` stores it, as a fingerprint.
+ */
+const EVENTS: readonly [string, Category, string, Outcome, string][] = [
+  ['14:02:11', 'Mcp', 'mcp_tool_execute', 'success', 'select_data  client=claude-desktop'],
+  ['14:02:09', 'Query', 'query_execute', 'success', '[FINGERPRINT:1d77c0e2a41b9f3e]  main-pg'],
+  ['14:01:58', 'Mcp', 'mcp_authorize', 'pending', 'update_records  ask  role=analyst'],
+  ['14:01:40', 'Hook', 'hook_execute', 'success', 'vpn-up  1.2 s'],
+  ['14:01:33', 'Connection', 'connection_connect', 'success', 'main-pg  via SSH tunnel'],
+  ['14:00:52', 'Mcp', 'mcp_authorize', 'failure', 'drop_table  denied by policy'],
+  ['14:00:17', 'Script', 'script_execute', 'success', 'nightly-report.lua'],
+  ['13:59:48', 'Config', 'config_update', 'success', 'staging-pg  ssh_host'],
+  [
+    '13:59:02',
+    'Query',
+    'query_execute_failed',
+    'failure',
+    '[FINGERPRINT:ab3177fd90c2e415]  syntax error',
+  ],
+  ['13:58:40', 'Mcp', 'mcp_tool_execute', 'success', 'list_tables  client=claude-desktop'],
+  ['13:58:11', 'Mcp', 'mcp_approve_execution', 'success', 'update_records  by you'],
+  ['13:57:30', 'System', 'system_startup', 'success', `v${productVersion(CURRENT.id)}`],
+];
+---
+
+<section class="audit shell">
+  <div class="audit__copy">
+    <p class="eyebrow eyebrow--ok">{strings.eyebrow}</p>
+    <h2 class="display display--compact">{strings.title}</h2>
+    <p class="audit__body">{strings.body}</p>
+    <ul class="audit__points">
+      <li><Glyph name="fingerprint-pattern" size={18} />{strings.fingerprint}</li>
+      <li><Glyph name="eye-off" size={18} />{strings.redacted}</li>
+      <li><Glyph name="hard-drive" size={18} />{strings.local}</li>
+    </ul>
+  </div>
+
+  <div class="audit__log card c18" aria-hidden="true">
+    <div class="audit__row audit__row--head mono">
+      <span>time</span><span>category</span><span>action</span><span>outcome</span><span
+        >detail</span
+      >
+    </div>
+    <div class="audit__viewport">
+      <div class="audit__tail">
+        {
+          [0, 1].map(() =>
+            EVENTS.map(([time, category, action, outcome, detail]) => (
+              <div class="audit__row mono">
+                <span class="audit__muted">{time}</span>
+                <span class="audit__category" style={`color: ${CATEGORY[category].tone}`}>
+                  <Glyph name={CATEGORY[category].icon} size={13} />
+                  {category}
+                </span>
+                <span class="audit__action">{action}</span>
+                <span style={`color: ${OUTCOME[outcome]}`}>{outcome}</span>
+                <span class="audit__muted audit__detail">{detail}</span>
+              </div>
+            )),
+          )
+        }
+      </div>
+    </div>
+    <div class="audit__fade"></div>
+  </div>
+</section>
+
+<style>
+  .audit {
+    display: grid;
+    grid-template-columns: 480px minmax(0, 1fr);
+    gap: 72px;
+    padding-top: 96px;
+    padding-bottom: 84px;
+  }
+
+  .audit__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .audit__body {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .audit__points {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 15px;
+  }
+
+  .audit__points li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .audit__points :global(svg) {
+    color: var(--success);
+  }
+
+  .audit__log {
+    position: relative;
+    height: 480px;
+    overflow: hidden;
+  }
+
+  .audit__row {
+    display: grid;
+    grid-template-columns: 90px 120px 190px 110px minmax(0, 1fr);
+    align-items: center;
+    height: 36px;
+    padding: 0 22px;
+    font-size: 12px;
+    border-bottom: var(--bw) solid var(--row-line);
+  }
+
+  .audit__row--head {
+    position: relative;
+    z-index: 1;
+    height: 40px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--panel);
+    border-bottom-color: var(--border-strong);
+  }
+
+  .audit__viewport {
+    position: absolute;
+    inset: 40px 0 0;
+    overflow: hidden;
+  }
+
+  .audit__tail {
+    animation: tail 26s linear infinite;
+  }
+
+  .audit__muted {
+    color: var(--text-muted);
+  }
+
+  .audit__category {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .audit__action {
+    color: var(--text-strong);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .audit__detail {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .audit__fade {
+    position: absolute;
+    inset: auto 0 0;
+    height: 120px;
+    background: linear-gradient(transparent, var(--panel));
+  }
+
+  @media (max-width: 1180px) {
+    .audit {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 40px;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .audit__row {
+      grid-template-columns: 70px 100px minmax(0, 1fr) 70px;
+      padding: 0 14px;
+    }
+
+    .audit__row > :last-child {
+      display: none;
+    }
+  }
+
+  /* The phone layout drops the audit section, as the board does. */
+  @media (max-width: 640px) {
+    .audit {
+      display: none;
+    }
+  }
+</style>

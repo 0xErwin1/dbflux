@@ -1,5 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
+import Glyph from './Glyph.astro';
 import { pathsForVersion } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import {
@@ -48,45 +49,29 @@ const targets = VERSIONS.map((candidate) => {
 <div class="picker" data-version-picker>
   <button
     type="button"
-    class="picker__button"
+    class="picker__button c8"
     aria-expanded="false"
     aria-controls="version-menu"
+    title={`${build.version} · ${build.commit} · ${build.date}`}
     data-version-toggle
   >
-    <span class="picker__label">{t(locale, 'versions.label')}</span>
-    <span class="picker__value">{versionLabel(version)}</span>
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2.2"
-      stroke-linecap="square"
-      aria-hidden="true"
-    >
-      <path d="M5 9l7 7 7-7"></path>
-    </svg>
+    <Glyph name="history" size={15} class="picker__icon" />
+    <span class="picker__label x">{t(locale, 'versions.label')}</span>
+    <span class="picker__value mono">{versionLabel(version)}</span>
+    <Glyph name="chevron-down" size={12} class="picker__chev" />
   </button>
 
-  <p class="picker__build">
-    <span>{build.version}</span>
-    <span aria-hidden="true">&middot;</span>
-    <code>{build.commit}</code>
-    <span aria-hidden="true">&middot;</span>
-    <time datetime={build.date}>{build.date}</time>
-  </p>
-
-  <ul class="picker__menu" id="version-menu" hidden>
+  <ul class="picker__menu c8" id="version-menu" hidden>
     {
       targets.map((target) => (
         <li>
           <a
+            class="c4"
             href={target.href}
             aria-current={target.version.id === version.id ? 'true' : undefined}
             data-version-link={target.version.id}
           >
-            <span>{versionLabel(target.version)}</span>
+            <span class="mono">{versionLabel(target.version)}</span>
             {!target.exact && target.version.id !== version.id && (
               <span class="picker__tag" title={t(locale, 'versions.index_tag_title')}>
                 {t(locale, 'versions.index_tag')}
@@ -105,76 +90,60 @@ const targets = VERSIONS.map((candidate) => {
 <style>
   .picker {
     position: relative;
-    margin: var(--s-5) var(--s-4) 0;
+    margin-right: 24px;
   }
 
   .picker__button {
     width: 100%;
     display: flex;
     align-items: center;
-    gap: var(--s-3);
-    min-height: 34px;
-    padding: var(--s-3) var(--s-4);
-    background: var(--panel);
-    border: var(--bw) solid var(--border-interactive);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    gap: 10px;
+    height: 40px;
+    padding: 0 14px;
+    border: 0;
+    background: var(--raised);
+    color: var(--text-muted);
     text-align: left;
     cursor: pointer;
-    transition: border-color var(--t-instant) linear;
+    transition: box-shadow var(--t-instant) linear;
   }
 
-  .picker__button:hover {
-    border-color: var(--accent);
+  .picker__button:hover,
+  .picker__button[aria-expanded='true'] {
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
   .picker__label {
-    font-size: var(--fs-label);
-    letter-spacing: 0.14em;
+    font-weight: 800;
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--text-muted);
   }
 
   .picker__value {
     flex-grow: 1;
+    font-size: 13px;
     color: var(--text-strong);
   }
 
-  .picker__button svg {
-    color: var(--text-muted);
+  .picker__button :global(.picker__chev) {
     transition: transform 160ms var(--ease-std);
   }
 
-  .picker__button[aria-expanded='true'] svg {
+  .picker__button[aria-expanded='true'] :global(.picker__chev) {
     transform: rotate(180deg);
-  }
-
-  .picker__build {
-    display: flex;
-    gap: var(--s-2);
-    margin: var(--s-2) 0 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    color: var(--text-muted);
-  }
-
-  .picker__build code {
-    font-size: inherit;
-    color: var(--text);
   }
 
   .picker__menu {
     position: absolute;
     inset-inline: 0;
-    top: calc(100% + 2px);
+    top: calc(100% + 4px);
     z-index: var(--z-dropdown);
     list-style: none;
     margin: 0;
-    padding: 0;
+    padding: 6px 0;
     background: var(--raised);
-    border: var(--bw) solid var(--border-interactive);
-    box-shadow: var(--shadow-lg);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 
   .picker__menu[hidden] {
@@ -186,31 +155,28 @@ const targets = VERSIONS.map((candidate) => {
     align-items: center;
     justify-content: space-between;
     gap: var(--s-4);
-    padding: var(--s-3) var(--s-4);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-    transition:
-      background 120ms linear,
-      color 120ms linear;
+    height: 32px;
+    margin: 0 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    color: var(--text);
+    transition: background 120ms linear;
   }
 
   .picker__menu a:hover {
-    background: var(--panel);
+    background: var(--raised-hover);
     color: var(--text-strong);
-    text-decoration: none;
   }
 
   .picker__menu a[aria-current='true'] {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
     color: var(--text-strong);
-    box-shadow: inset 2px 0 0 0 var(--accent);
   }
 
   .picker__tag {
-    font-size: var(--fs-label);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
     color: var(--text-muted);
-    border: var(--bw) solid var(--border);
-    padding: 1px 5px;
   }
 </style>
 

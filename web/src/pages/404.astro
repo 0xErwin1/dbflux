@@ -29,14 +29,14 @@ const locale = localeFromPathname(Astro.url.pathname);
 >
   <section class="miss">
     <p class="eyebrow">404</p>
-    <h1>{t(locale, 'notfound.title')}</h1>
+    <h1 class="display display--section">{t(locale, 'notfound.title')}</h1>
     <p class="miss__lede">{t(locale, 'notfound.lede')}</p>
 
     <div class="miss__actions">
-      <a class="btn btn--primary" href={docsUrl('', '', locale)}
+      <a class="btn btn--primary c10" href={docsUrl('', '', locale)}
         >{t(locale, 'notfound.docs_button')}</a
       >
-      <a class="btn btn--secondary" href={siteUrl('', locale)}
+      <a class="btn btn--secondary c10" href={siteUrl('', locale)}
         >{t(locale, 'notfound.home_button')}</a
       >
     </div>
@@ -59,18 +59,15 @@ const locale = localeFromPathname(Astro.url.pathname);
   .miss {
     max-width: 640px;
     margin-inline: auto;
-    padding: var(--s-9) var(--s-8);
+    padding: var(--s-9) var(--gutter);
     display: flex;
     flex-direction: column;
     gap: var(--s-5);
   }
 
-  h1 {
-    font-size: var(--fs-h1);
-  }
-
   .miss__lede {
     margin: 0;
+    font-size: 17px;
   }
 
   .miss__actions {

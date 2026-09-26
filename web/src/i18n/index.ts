@@ -37,11 +37,13 @@ export const LOCALE_NAMES = Object.fromEntries(
  */
 export interface Dictionary {
   nav: {
-    features: string;
     drivers: string;
+    keyboard: string;
+    governance: string;
+    compare: string;
     docs: string;
     about: string;
-    github: string;
+    source: string;
     download: string;
     menu: string;
     language: string;
@@ -49,20 +51,21 @@ export interface Dictionary {
     theme_system: string;
     theme_light: string;
     theme_dark: string;
-    theme_mirage: string;
   };
   footer: {
     product: string;
-    features: string;
     drivers: string;
     releases: string;
+    changelog: string;
     docs: string;
     usage: string;
     connecting: string;
     mcp: string;
+    driver_authoring: string;
     project: string;
     about: string;
     contributing: string;
+    compare: string;
     source: string;
     trademark: string;
     privacy: string;
@@ -104,6 +107,8 @@ export interface Dictionary {
     report_issue: string;
     not_translated: string;
     view_in_english: string;
+    previous: string;
+    next: string;
   };
   docs_index: {
     title: string;
@@ -112,79 +117,225 @@ export interface Dictionary {
     unfiled_body: string;
   };
   landing: {
-    title: string;
+    eyebrow: string;
+    title_1: string;
+    title_2: string;
+    title_3: string;
     lede: string;
-    download_linux: string;
-    download_macos: string;
-    download_windows: string;
-    view_source: string;
-    platforms_meta: string;
-    hero_caption: string;
-    hero_alt: string;
-    drivers_eyebrow: string;
-    drivers_link: string;
-    drivers_note: string;
-    features_eyebrow: string;
-    feature: {
-      editor: { title: string; body: string };
-      grid: { title: string; body: string };
-      charts: { title: string; body: string };
-      hooks: { title: string; body: string };
-      reach: { title: string; body: string };
-      audit: { title: string; body: string };
+    lede_short: string;
+    read_docs: string;
+    console: {
+      search: string;
+      dialect: string;
+      run: string;
+      executing: string;
+      result_grid: string;
+      pick_hint: string;
+      connected: string;
+      audit_log: string;
+      tasks: string;
     };
-    keyboard_eyebrow: string;
-    keyboard_title: string;
-    keyboard_body: string;
-    keyboard_link: string;
-    shortcut: {
-      new_query: string;
-      command_palette: string;
+    drivers_label: string;
+    and_more: string;
+    core: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      rpc_more: string;
+      note: string;
+      view_chosen: string;
+      view_short: string;
+      views: {
+        grid: string;
+        tree: string;
+        keys: string;
+        events: string;
+        range: string;
+        objects: string;
+      };
+    };
+    keyboard: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      mac_note: string;
+      link: string;
+      placeholder: string;
+      palette_label: string;
+      count: string;
+      empty: string;
+      ran: string;
+      hint: string;
+    };
+    commands: {
+      palette: string;
+      new_tab: string;
+      run: string;
+      run_new_tab: string;
       open_script: string;
-      new_connection: string;
+      saved_queries: string;
+      audit: string;
+      sidebar: string;
+      focus_sidebar: string;
+      focus_editor: string;
+      focus_results: string;
+      close_tab: string;
+      comment: string;
+      save: string;
     };
-    governance_eyebrow: string;
-    governance_title: string;
-    governance_body: string;
-    audit_eyebrow: string;
-    audit_title: string;
-    audit_body: string;
-    docs_eyebrow: string;
-    docs_link: string;
-    doc_card: {
-      usage: { title: string; body: string };
-      connecting: { title: string; body: string };
-      mcp: { title: string; body: string };
+    governance: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      outcome: string;
+      example: string;
+      stage: {
+        agent: string;
+        classify: string;
+        policy: string;
+        approval: string;
+        execute: string;
+        audit: string;
+      };
+      note: {
+        agent: string;
+        classify: string;
+        policy: string;
+        approval: string;
+        execute: string;
+        audit: string;
+      };
+      hint: {
+        schema: string;
+        read: string;
+        write: string;
+        destructive: string;
+      };
+      verdict: {
+        allowed: string;
+        waits: string;
+        denied: string;
+      };
+      detail: {
+        metadata: string;
+        read: string;
+        write: string;
+        destructive: string;
+      };
+    };
+    audit: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      fingerprint: string;
+      redacted: string;
+      local: string;
+    };
+    compare: {
+      eyebrow: string;
+      title: string;
+      body: string;
+      feature: string;
+      why: string;
+      leads: string;
+      reviewed: string;
+      legend: {
+        included: string;
+        limited: string;
+        paid: string;
+        none: string;
+        unknown: string;
+      };
+      edition: {
+        community: string;
+        commercial: string;
+        free_trial: string;
+      };
+      row: {
+        open_source: string;
+        limits: string;
+        builder: string;
+        charts: string;
+        s3: string;
+        mcp: string;
+        builder_short: string;
+        s3_short: string;
+      };
+      cell: {
+        included: string;
+        none: string;
+        no: string;
+        not_reviewed: string;
+        paid_licence: string;
+        lite_up: string;
+        paid_editions: string;
+        paid_editions_beta: string;
+        beta: string;
+        beta_macos: string;
+        tabs_limit: string;
+        with_roles: string;
+        mcp_dbeaver: string;
+        mcp_dbgate: string;
+      };
+      gain: {
+        dbeaver: string;
+        datagrip: string;
+        tableplus: string;
+        beekeeper: string;
+        dbgate: string;
+      };
+      keep: {
+        dbeaver: string;
+        datagrip: string;
+        tableplus: string;
+        beekeeper: string;
+        dbgate: string;
+      };
+    };
+    rules: {
+      eyebrow: string;
+      r1_title: string;
+      r1_body: string;
+      r2_title: string;
+      r2_body: string;
+      r3_title: string;
+      r3_body: string;
+      r4_title: string;
+      r4_body: string;
     };
   };
   install: {
+    eyebrow: string;
+    title: string;
+    body: string;
     all_downloads: string;
     copy: string;
     copied: string;
-    copy_fallback: string;
-    hint: {
-      tarball: string;
-      aur: string;
-      deb: string;
-      appimage: string;
+    copy_command: string;
+    platforms_label: string;
+    note: {
+      linux: string;
+      arch: string;
       nix: string;
-      dmg: string;
-      installer: string;
-      portable: string;
-    };
-    steps: {
-      dmg: [string, string, string];
-      installer: [string, string, string];
-      portable: [string, string, string];
+      macos: string;
+      windows: string;
     };
   };
   about: {
     page_title: string;
     page_description: string;
+    eyebrow: string;
     h1: string;
-    intro_p1: string;
-    intro_p2: string;
-    intro_p3: string;
+    lede: string;
+    p1: string;
+    p2: string;
+    card_body: string;
+    options_eyebrow: string;
+    option: {
+      one: { label: string; title: string; body: string };
+      two: { label: string; title: string; body: string };
+      three: { label: string; title: string; body: string };
+    };
     principles_eyebrow: string;
     principle: {
       p01: { title: string; body: string };
@@ -192,22 +343,20 @@ export interface Dictionary {
       p03: { title: string; body: string };
       p04: { title: string; body: string };
     };
-    layers_eyebrow: string;
+    arch_eyebrow: string;
+    arch_title: string;
+    arch_body: string;
+    arch_link: string;
+    authoring_link: string;
     layer: {
-      ui: { detail: string };
-      app: { detail: string };
-      core: { detail: string };
-      drivers: { detail: string };
-    };
-    muted_links: {
-      prefix: string;
-      architecture: string;
-      middle: string;
-      driver_authoring: string;
-      suffix: string;
+      ui: { name: string; detail: string };
+      app: { name: string; detail: string };
+      core: { name: string; detail: string };
+      drivers: { name: string; detail: string };
     };
     maintainer_title: string;
     maintainer_body: string;
+    maintainer_link: string;
     contribute_title: string;
     contribute_body: string;
     contribute_link: string;
@@ -275,9 +424,9 @@ export function sectionTitle(locale: Locale, id: string): string {
 /**
  * The full dictionary for a locale, typed as `Dictionary`.
  *
- * `t()` only resolves string leaves — `install.steps.*` are tuples, not
- * strings, so a caller that needs one of those arrays reads it directly off
- * this object instead.
+ * `t()` only resolves string leaves, so a caller that needs a whole group of
+ * strings (the landing page's demo data, for one) reads it directly off this
+ * object instead.
  */
 export function dictionary(locale: Locale): Dictionary {
   return DICTIONARIES[locale];

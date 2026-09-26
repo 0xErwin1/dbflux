@@ -79,12 +79,7 @@ const xDefaultHref =
         let preference = 'system';
         try {
           const stored = localStorage.getItem(key);
-          if (
-            stored === 'light' ||
-            stored === 'dark' ||
-            stored === 'mirage' ||
-            stored === 'system'
-          ) {
+          if (stored === 'light' || stored === 'dark' || stored === 'system') {
             preference = stored;
           }
         } catch {
@@ -135,7 +130,7 @@ const xDefaultHref =
     />
     <link
       rel="preload"
-      href="/fonts/ibm-plex-sans-latin-400-normal.woff2"
+      href="/fonts/archivo-latin-wdth-normal.woff2"
       as="font"
       type="font/woff2"
       crossorigin
@@ -145,7 +140,11 @@ const xDefaultHref =
     <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
     <SiteNav current={current} locale={locale} />
     <main id="main"><slot /></main>
-    <SiteFooter locale={locale} showLanguagePicker={showLanguagePicker} />
+    <SiteFooter
+      locale={locale}
+      showLanguagePicker={showLanguagePicker}
+      wordmark={current === 'home'}
+    />
     <BackToTop />
     <Mermaid />
     <SearchDialog indexUrl={searchIndex} locale={locale} />

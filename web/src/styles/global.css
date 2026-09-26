@@ -18,17 +18,20 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--fs-body);
-  line-height: var(--lh-body);
+  /* The boards set no line height on running chrome; paragraphs set their own. */
+  line-height: normal;
   -webkit-font-smoothing: antialiased;
+  /* Full-bleed bands are wider than the viewport by design; clip, never scroll. */
+  overflow-x: clip;
 }
 
 h1,
 h2,
 h3,
 h4 {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   color: var(--text-strong);
-  line-height: var(--lh-tight);
+  line-height: 1.2;
   font-weight: 700;
   margin: 0;
 }
@@ -40,7 +43,6 @@ a {
 
 a:hover {
   color: var(--link-hover);
-  text-decoration: underline;
 }
 
 /*
@@ -61,6 +63,10 @@ img {
   display: block;
 }
 
+button {
+  font: inherit;
+}
+
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
@@ -74,10 +80,8 @@ img {
 /*
  * Scrollbars, matching the desktop client.
  *
- * The platform default is a pale chunky bar that reads as a seam across a dark
- * page, and it appears on the docs rail, on every code block wide enough to
- * scroll, and on the search results. `scrollbar-color` covers Firefox and
- * current Chrome; the -webkit- rules cover the rest.
+ * `scrollbar-color` covers Firefox and current Chrome; the -webkit- rules cover
+ * the rest.
  */
 * {
   scrollbar-width: thin;
@@ -110,15 +114,317 @@ img {
 
 code,
 pre,
-kbd {
+kbd,
+.mono {
   font-family: var(--font-mono);
 }
 
-/* Shiki emits all Ayu color sets as custom properties when defaultColor is false. */
+/* Display type: the client's "Archivo Expanded" is Archivo at full width. */
+.x {
+  font-family: var(--font-display);
+  font-stretch: var(--stretch-display);
+}
+
+/*
+ * Chamfers. Every control and card cuts its top-left and bottom-right corner
+ * by the number in the class name. A 1px border on a chamfered box is an inset
+ * shadow, because a real border would be clipped away along the diagonals.
+ */
+.c4 {
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+}
+
+.c5 {
+  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+}
+
+.c6 {
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+
+.c7 {
+  clip-path: polygon(7px 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%, 0 7px);
+}
+
+.c8 {
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+
+.c10 {
+  clip-path: polygon(
+    10px 0,
+    100% 0,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    0 100%,
+    0 10px
+  );
+}
+
+.c12 {
+  clip-path: polygon(
+    12px 0,
+    100% 0,
+    100% calc(100% - 12px),
+    calc(100% - 12px) 100%,
+    0 100%,
+    0 12px
+  );
+}
+
+.c14 {
+  clip-path: polygon(
+    14px 0,
+    100% 0,
+    100% calc(100% - 14px),
+    calc(100% - 14px) 100%,
+    0 100%,
+    0 14px
+  );
+}
+
+.c18 {
+  clip-path: polygon(
+    18px 0,
+    100% 0,
+    100% calc(100% - 18px),
+    calc(100% - 18px) 100%,
+    0 100%,
+    0 18px
+  );
+}
+
+/* A clip-path also clips the focus outline, so chamfered controls draw it inside. */
+.c4:focus-visible,
+.c5:focus-visible,
+.c6:focus-visible,
+.c7:focus-visible,
+.c8:focus-visible,
+.c10:focus-visible,
+.c12:focus-visible,
+.c14:focus-visible,
+.c18:focus-visible {
+  outline: 2px solid var(--text-strong);
+  outline-offset: -4px;
+}
+
+.ico {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  overflow: visible;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--s-5);
+  top: -100px;
+  z-index: calc(var(--z-nav) + 1);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  font-size: var(--fs-small);
+  padding: var(--s-4) var(--s-5);
+  transition: top var(--t-instant) var(--ease-std);
+}
+
+/* focus-visible, not focus: programmatic focus (closing devtools, dialog
+   returns) must not slide the link in — only real keyboard navigation. */
+.skip-link:focus-visible {
+  top: var(--s-5);
+}
+
+.shell {
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Section label: a skewed byzantium tab followed by an expanded caps label. */
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: var(--stretch-display);
+  font-weight: 800;
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: var(--ls-label);
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.eyebrow::before {
+  content: '';
+  flex-shrink: 0;
+  width: 14px;
+  height: 8px;
+  background: var(--accent-fill);
+  transform: skewX(-30deg);
+}
+
+.eyebrow--link {
+  color: var(--link);
+}
+
+.eyebrow--link::before {
+  background: var(--link);
+}
+
+.eyebrow--ok {
+  color: var(--success);
+}
+
+.eyebrow--ok::before {
+  background: var(--success);
+}
+
+/* Display headings: expanded, heaviest weight, capitals. */
+.display {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: var(--stretch-display);
+  font-weight: 900;
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.display--hero {
+  font-size: var(--fs-display);
+  line-height: 0.9;
+  letter-spacing: -0.01em;
+}
+
+.display--section {
+  font-size: clamp(2.125rem, 1.4rem + 2.35vw, 3.5rem);
+}
+
+.display--compact {
+  font-size: clamp(2.125rem, 1.4rem + 1.8vw, 3rem);
+}
+
+.display em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 26px;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    filter var(--t-instant) linear,
+    background var(--t-instant) linear;
+}
+
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn--primary {
+  background: var(--accent-fill);
+  color: var(--accent-on);
+  font-family: var(--font-display);
+  font-stretch: var(--stretch-display);
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.btn--primary:hover {
+  color: var(--accent-on);
+}
+
+.btn--secondary {
+  background: var(--raised);
+  color: var(--text-strong);
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.btn--secondary:hover {
+  color: var(--text-strong);
+}
+
+/* A link with a trailing chevron that nudges forward on hover. */
+.go {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-stretch: var(--stretch-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--link);
+}
+
+.go--plain {
+  font-family: var(--font-sans);
+  font-stretch: normal;
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.go .go__chev {
+  transition: transform var(--t-quick);
+}
+
+.go:hover .go__chev {
+  transform: translateX(3px);
+}
+
+.card {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.lift {
+  transition:
+    transform var(--t-quick) var(--ease-out),
+    box-shadow var(--t-quick);
+}
+
+.lift:hover {
+  transform: translateY(-3px);
+}
+
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 3px 7px;
+  background: var(--raised);
+  color: var(--text-strong);
+  box-shadow: inset 0 -2px 0 var(--border-strong);
+}
+
+/* Shiki emits both Ayu color sets as custom properties when defaultColor is false. */
 html:not([data-theme]) .astro-code,
 html[data-theme='dark'] .astro-code {
   color: var(--shiki-dark) !important;
-  background-color: var(--shiki-dark-bg) !important;
+  background-color: var(--panel) !important;
 }
 
 html:not([data-theme]) .astro-code span,
@@ -131,7 +437,7 @@ html[data-theme='dark'] .astro-code span {
 
 html[data-theme='light'] .astro-code {
   color: var(--shiki-light) !important;
-  background-color: var(--shiki-light-bg) !important;
+  background-color: var(--panel) !important;
 }
 
 html[data-theme='light'] .astro-code span {
@@ -141,22 +447,9 @@ html[data-theme='light'] .astro-code span {
   text-decoration: var(--shiki-light-text-decoration) !important;
 }
 
-html[data-theme='mirage'] .astro-code {
-  color: var(--shiki-mirage) !important;
-  background-color: var(--shiki-mirage-bg) !important;
-}
-
-html[data-theme='mirage'] .astro-code span {
-  color: var(--shiki-mirage) !important;
-  font-style: var(--shiki-mirage-font-style) !important;
-  font-weight: var(--shiki-mirage-font-weight) !important;
-  text-decoration: var(--shiki-mirage-text-decoration) !important;
-}
-
 @media (prefers-color-scheme: light) {
   html:not([data-theme]) .astro-code {
     color: var(--shiki-light) !important;
-    background-color: var(--shiki-light-bg) !important;
   }
 
   html:not([data-theme]) .astro-code span {
@@ -167,100 +460,10 @@ html[data-theme='mirage'] .astro-code span {
   }
 }
 
-.skip-link {
-  position: absolute;
-  left: var(--s-5);
-  top: -100px;
-  z-index: calc(var(--z-nav) + 1);
-  background: var(--bg);
-  color: var(--text);
-  border: var(--bw) solid var(--border-interactive);
-  font-family: var(--font-mono);
-  font-size: var(--fs-small);
-  padding: var(--s-4) var(--s-5);
-  transition: top var(--t-instant) var(--ease-std);
-}
-
-/* focus-visible, not focus: programmatic focus (closing devtools, dialog
-   returns) must not slide the link in — only real keyboard navigation. */
-.skip-link:focus-visible {
-  top: var(--s-5);
-  text-decoration: none;
-}
-
-.shell {
-  max-width: var(--content-max);
-  margin-inline: auto;
-  padding-inline: var(--s-8);
-}
-
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: var(--fs-label);
-  letter-spacing: var(--ls-label);
-  text-transform: uppercase;
-  color: var(--accent);
-  margin: 0;
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--s-3);
-  min-height: var(--control-h);
-  padding: var(--s-4) var(--s-6);
-  font-family: var(--font-mono);
-  font-size: var(--fs-small);
-  border: var(--bw) solid transparent;
-  cursor: pointer;
-  transition:
-    background var(--t-instant) linear,
-    border-color var(--t-instant) linear,
-    color var(--t-instant) linear,
-    transform var(--t-instant) var(--ease-out);
-}
-
-.btn:hover {
-  text-decoration: none;
-}
-
-.btn--primary {
-  background: var(--accent);
-  color: var(--accent-on);
-  font-weight: 700;
-}
-
-.btn--primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-on);
-  transform: translateY(-1px);
-}
-
-.btn--primary:active {
-  background: var(--accent-active);
-  transform: none;
-}
-
-.btn--secondary {
-  border-color: var(--border-interactive);
-  color: var(--text);
-}
-
-.btn--secondary:hover {
-  border-color: var(--accent);
-  color: var(--text-strong);
-}
-
-/*
- * Section entrance. Scroll-driven where the browser supports view() timelines,
- * and a plain load animation everywhere else. `both` keeps the end state visible
- * either way, so no content depends on the animation running.
- */
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(18px);
+    transform: translateY(14px);
   }
   to {
     opacity: 1;
@@ -268,6 +471,77 @@ html[data-theme='mirage'] .astro-code span {
   }
 }
 
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes tail {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+
+@keyframes rowin {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes travel {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 14px);
+  }
+}
+
+@keyframes strike {
+  0% {
+    transform: translateX(-140%) skewX(-18deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateX(420%) skewX(-18deg);
+    opacity: 0;
+  }
+}
+
+.rise {
+  animation: rise var(--t-entrance) var(--ease-out) both;
+}
+
+/*
+ * Section entrance. Scroll-driven where the browser supports view() timelines,
+ * and a plain load animation everywhere else. `both` keeps the end state visible
+ * either way, so no content depends on the animation running.
+ */
 .reveal {
   animation: rise var(--t-entrance) var(--ease-out) both;
 }
@@ -275,7 +549,7 @@ html[data-theme='mirage'] .astro-code span {
 @supports (animation-timeline: view()) {
   .reveal {
     animation-timeline: view();
-    animation-range: entry 0% cover 26%;
+    animation-range: entry 0% cover 22%;
   }
 }
 
@@ -290,14 +564,15 @@ html[data-theme='mirage'] .astro-code span {
   }
 }
 
-@media (max-width: 1024px) {
-  .shell {
-    padding-inline: var(--s-7);
+@media (max-width: 1100px) {
+  :root {
+    --gutter: 40px;
   }
 }
 
 @media (max-width: 640px) {
-  .shell {
-    padding-inline: var(--s-6);
+  :root {
+    --gutter: 16px;
+    --nav-h: 60px;
   }
 }

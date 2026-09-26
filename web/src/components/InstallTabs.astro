@@ -1,411 +1,432 @@
 ---
-import { DEFAULT_LOCALE, dictionary, t } from '../i18n';
+import Glyph from './Glyph.astro';
+import { REPO } from '../data/nav';
+import { DEFAULT_LOCALE, dictionary } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Props {
   locale?: Locale;
 }
 
-interface Method {
-  readonly id: string;
-  readonly platform: 'linux' | 'macos' | 'windows';
+const { locale = DEFAULT_LOCALE } = Astro.props;
+const strings = dictionary(locale).install;
+
+const RELEASES = `${REPO}/releases`;
+
+interface Platform {
+  readonly id: keyof typeof strings.note;
   readonly label: string;
-  /** A single command the reader can copy. */
+  readonly icon: string;
+  /** A command to paste, or release assets to download. */
   readonly command?: string;
-  /** Numbered steps, for the platforms where installing is not one line. */
-  readonly steps?: readonly string[];
-  readonly hint: string;
+  readonly files?: readonly string[];
 }
 
-const { locale = DEFAULT_LOCALE } = Astro.props;
-const strings = dictionary(locale);
-
-const RELEASES = 'https://github.com/0xErwin1/dbflux/releases';
-
 /**
- * Commands come from `docs/INSTALL.md`. Any change there has to land here in
- * the same commit — a stale install line is the most expensive typo on the
- * site. Steps and hints are translated in `src/i18n/{en,es}.ts`.
+ * Commands and asset names come from `docs/INSTALL.md`. Any change there has
+ * to land here in the same commit — a stale install line is the most expensive
+ * typo on the site. Assets link through `releases/latest/download/`, the same
+ * stable URLs `docs/INSTALL.md` uses for the Linux packages.
  */
-const METHODS: readonly Method[] = [
+const PLATFORMS: readonly Platform[] = [
   {
-    id: 'tarball',
-    platform: 'linux',
-    label: 'Tarball',
+    id: 'linux',
+    label: 'Linux',
+    icon: 'square-terminal',
     command:
       'curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash',
-    hint: strings.install.hint.tarball,
   },
-  {
-    id: 'aur',
-    platform: 'linux',
-    label: 'AUR',
-    command: 'paru -S dbflux',
-    hint: strings.install.hint.aur,
-  },
-  {
-    id: 'deb',
-    platform: 'linux',
-    label: 'deb / rpm',
-    command: 'sudo dpkg -i dbflux-linux-amd64.deb',
-    hint: strings.install.hint.deb,
-  },
-  {
-    id: 'appimage',
-    platform: 'linux',
-    label: 'AppImage',
-    command: 'chmod +x dbflux-linux-amd64.AppImage && ./dbflux-linux-amd64.AppImage',
-    hint: strings.install.hint.appimage,
-  },
+  { id: 'arch', label: 'Arch', icon: 'square-terminal', command: 'paru -S dbflux' },
   {
     id: 'nix',
-    platform: 'linux',
     label: 'Nix',
+    icon: 'layers',
     command: 'nix profile install github:0xErwin1/dbflux',
-    hint: strings.install.hint.nix,
   },
   {
-    id: 'dmg',
-    platform: 'macos',
-    label: 'DMG',
-    steps: strings.install.steps.dmg,
-    hint: strings.install.hint.dmg,
+    id: 'macos',
+    label: 'macOS',
+    icon: 'download',
+    files: ['dbflux-macos-arm64.dmg', 'dbflux-macos-amd64.dmg'],
   },
   {
-    id: 'installer',
-    platform: 'windows',
-    label: 'Installer',
-    steps: strings.install.steps.installer,
-    hint: strings.install.hint.installer,
-  },
-  {
-    id: 'portable',
-    platform: 'windows',
-    label: 'Portable',
-    steps: strings.install.steps.portable,
-    hint: strings.install.hint.portable,
+    id: 'windows',
+    label: 'Windows',
+    icon: 'download',
+    files: ['dbflux-windows-amd64-setup.exe', 'dbflux-windows-amd64.zip'],
   },
 ];
-
-const PLATFORMS = [
-  { id: 'linux', label: 'Linux' },
-  { id: 'macos', label: 'macOS' },
-  { id: 'windows', label: 'Windows' },
-] as const;
 ---
 
-<div class="install" data-install>
-  <div class="install__head">
-    <div class="install__platforms" role="tablist" aria-label="Platform">
+<section id="install" class="install shell">
+  <div class="install__copy">
+    <p class="eyebrow">{strings.eyebrow}</p>
+    <h2 class="display display--compact">{strings.title}</h2>
+    <p class="install__body">{strings.body}</p>
+    <a class="go" href={RELEASES} rel="noopener">
+      {strings.all_downloads}
+      <Glyph name="external-link" size={13} class="go__chev" />
+    </a>
+  </div>
+
+  <div class="install__card c18" data-install>
+    <div class="install__tabs" role="tablist" aria-label={strings.platforms_label}>
       {
         PLATFORMS.map((platform, index) => (
           <button
             type="button"
             role="tab"
+            id={`install-tab-${platform.id}`}
+            class="install__tab"
             aria-selected={index === 0 ? 'true' : 'false'}
+            aria-controls={`install-panel-${platform.id}`}
             tabindex={index === 0 ? 0 : -1}
-            data-platform-tab={platform.id}
+            data-install-tab={platform.id}
           >
+            <Glyph name={platform.icon} size={15} />
             {platform.label}
           </button>
         ))
       }
     </div>
-    <a class="install__releases" href={RELEASES} rel="noopener"
-      >{t(locale, 'install.all_downloads')}</a
-    >
-  </div>
 
-  <div class="install__methods" role="tablist" aria-label="Installation method">
     {
-      METHODS.map((method, index) => (
-        <button
-          type="button"
-          role="tab"
-          aria-selected={index === 0 ? 'true' : 'false'}
-          tabindex={index === 0 ? 0 : -1}
-          data-method-tab={method.id}
-          data-method-platform={method.platform}
-          hidden={method.platform !== 'linux'}
+      PLATFORMS.map((platform, index) => (
+        <div
+          class="install__panel"
+          role="tabpanel"
+          id={`install-panel-${platform.id}`}
+          aria-labelledby={`install-tab-${platform.id}`}
+          data-install-panel={platform.id}
+          data-copy-text={platform.command ?? platform.files?.join('\n')}
+          hidden={index !== 0}
         >
-          {method.label}
-        </button>
+          <div class="install__lines">
+            {platform.command && (
+              <div class="install__line mono">
+                <span class="install__prompt">$</span>
+                <span class="install__command">{platform.command}</span>
+              </div>
+            )}
+            {platform.files?.map((file) => (
+              <a
+                class="install__line install__file mono"
+                href={`${RELEASES}/latest/download/${file}`}
+                rel="noopener"
+              >
+                <Glyph name="file-down" size={17} style="margin-top: 3px" />
+                <span>{file}</span>
+              </a>
+            ))}
+          </div>
+          <div class="install__foot">
+            <span class="install__note">{strings.note[platform.id]}</span>
+            <button type="button" class="install__copy-button c7" data-install-copy>
+              <Glyph name="copy" size={14} class="install__copy-idle" />
+              <Glyph name="check" size={14} class="install__copy-done" />
+              <span class="install__label-idle install__label-short">{strings.copy}</span>
+              <span class="install__label-idle install__label-long">{strings.copy_command}</span>
+              <span class="install__label-done">{strings.copied}</span>
+            </button>
+          </div>
+        </div>
       ))
     }
   </div>
-
-  {
-    METHODS.map((method, index) => (
-      <div class="install__panel" data-method-panel={method.id} hidden={index !== 0}>
-        {method.command && (
-          <div class="install__cmd">
-            <code>
-              <span class="prompt">$</span> {method.command}
-            </code>
-            <button type="button" class="install__copy" data-copy={method.command}>
-              {t(locale, 'install.copy')}
-            </button>
-          </div>
-        )}
-        {method.steps && (
-          <ol class="install__steps">
-            {method.steps.map((step) => (
-              <li>{step}</li>
-            ))}
-          </ol>
-        )}
-        <p class="install__hint">{method.hint}</p>
-      </div>
-    ))
-  }
-</div>
+</section>
 
 <style>
   .install {
-    background: var(--panel);
-    border: var(--bw) solid var(--border);
+    display: grid;
+    grid-template-columns: 420px minmax(0, 1fr);
+    gap: 72px;
+    padding-top: 72px;
+    padding-bottom: 120px;
   }
 
-  .install__head {
-    display: flex;
-    align-items: stretch;
-    background: var(--bg);
-    border-bottom: var(--bw) solid var(--border);
-  }
-
-  .install__platforms,
-  .install__methods {
-    display: flex;
-    overflow-x: auto;
-  }
-
-  .install__methods {
-    border-bottom: var(--bw) solid var(--border);
-  }
-
-  .install__platforms button,
-  .install__methods button {
-    flex-shrink: 0;
-    background: none;
-    border: 0;
-    border-right: var(--bw) solid var(--border);
-    padding: var(--s-4) var(--s-6);
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition:
-      color var(--t-instant) linear,
-      background var(--t-instant) linear;
-  }
-
-  .install__platforms button:hover,
-  .install__methods button:hover {
-    color: var(--text-strong);
-  }
-
-  .install__platforms button[aria-selected='true'] {
-    color: var(--text-strong);
-    background: var(--panel);
-    box-shadow: inset 0 -2px 0 0 var(--accent);
-  }
-
-  .install__methods button[aria-selected='true'] {
-    color: var(--text-strong);
-    background: var(--raised);
-    box-shadow: inset 0 -2px 0 0 var(--accent);
-  }
-
-  .install__platforms button[hidden],
-  .install__methods button[hidden] {
-    display: none;
-  }
-
-  .install__releases {
-    margin-left: auto;
-    align-self: center;
-    padding-inline: var(--s-6);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    white-space: nowrap;
-  }
-
-  .install__panel {
-    padding: var(--s-6);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-4);
-  }
-
-  /* `display: flex` above outranks the UA rule for [hidden], so the inactive
-     panels have to be hidden explicitly or every method renders at once. */
-  .install__panel[hidden] {
-    display: none;
-  }
-
-  .install__cmd {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-5);
-  }
-
-  .install__cmd code {
-    font-size: var(--fs-code);
-    line-height: var(--lh-code);
-    color: var(--text-strong);
-    word-break: break-all;
-  }
-
-  .prompt {
-    color: var(--text-muted);
-  }
-
-  .install__steps {
-    margin: 0;
-    padding-left: var(--s-6);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-3);
-    font-size: var(--fs-small);
-    line-height: 1.65;
-  }
-
-  .install__steps::marker,
-  .install__steps li::marker {
-    color: var(--accent);
-    font-family: var(--font-mono);
+  [hidden] {
+    display: none !important;
   }
 
   .install__copy {
-    flex-shrink: 0;
-    background: none;
-    border: var(--bw) solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 22px;
+  }
+
+  .install__body {
+    margin: 0;
+    font-size: 16px;
+    line-height: 1.65;
+  }
+
+  .install__card {
+    align-self: start;
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .install__tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .install__tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 48px;
+    padding: 0 22px;
+    border: 0;
+    background: transparent;
     color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    padding: var(--s-2) var(--s-4);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
     transition:
-      color 130ms linear,
-      border-color 130ms linear;
+      background 0.15s,
+      color 0.15s;
   }
 
-  .install__copy:hover {
+  .install__tab:hover {
+    background: var(--raised-hover);
+  }
+
+  .install__tab[aria-selected='true'] {
+    background: var(--raised);
+    color: var(--text-strong);
+    box-shadow: inset 0 -3px 0 var(--accent-fill);
+  }
+
+  .install__lines {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 120px;
+    padding: 28px 26px 12px;
+  }
+
+  .install__line {
+    display: flex;
+    gap: 12px;
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: var(--text-strong);
+  }
+
+  .install__command {
+    overflow-wrap: anywhere;
+  }
+
+  .install__prompt {
     color: var(--accent);
-    border-color: var(--accent);
+    user-select: none;
   }
 
-  .install__hint {
-    margin: 0;
-    font-size: var(--fs-small);
+  .install__file {
+    align-self: flex-start;
+    color: var(--link);
+  }
+
+  .install__file:hover {
+    color: var(--link-hover);
+  }
+
+  .install__foot {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 26px 24px;
+  }
+
+  .install__note {
+    flex-grow: 1;
+    font-size: 13.5px;
     color: var(--text-muted);
+  }
+
+  .install__copy-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 16px;
+    border: 0;
+    background: var(--raised);
+    color: var(--text-strong);
+    font-size: 12.5px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .install__copy-button:hover {
+    filter: brightness(1.08);
+  }
+
+  .install__copy-button[data-copied] {
+    background: var(--success);
+    color: var(--bg);
+  }
+
+  .install__copy-button :global(.install__copy-done),
+  .install__label-done,
+  .install__label-long,
+  .install__copy-button[data-copied] :global(.install__copy-idle),
+  .install__copy-button[data-copied] .install__label-idle {
+    display: none;
+  }
+
+  .install__copy-button[data-copied] :global(.install__copy-done),
+  .install__copy-button[data-copied] .install__label-done {
+    display: inline;
+  }
+
+  @media (max-width: 1180px) {
+    .install {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 40px;
+    }
   }
 
   @media (max-width: 640px) {
-    .install__cmd {
-      flex-direction: column;
-      align-items: stretch;
-      gap: var(--s-4);
+    .install {
+      gap: 14px;
+      padding-top: 56px;
+      padding-bottom: 48px;
     }
 
     .install__copy {
-      min-height: var(--tap-min);
+      gap: 14px;
     }
 
-    .install__releases {
+    .install__copy > :not(.eyebrow),
+    .install__tabs,
+    .install__note {
+      display: none;
+    }
+
+    .install__card {
+      background: none;
+      box-shadow: none;
+      clip-path: none;
+    }
+
+    .install__lines {
+      min-height: 0;
+      padding: 16px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--border);
+      clip-path: polygon(
+        14px 0,
+        100% 0,
+        100% calc(100% - 14px),
+        calc(100% - 14px) 100%,
+        0 100%,
+        0 14px
+      );
+    }
+
+    .install__line {
+      gap: 0;
+      font-size: 12.5px;
+      word-break: break-all;
+    }
+
+    .install__prompt {
+      margin-right: 1ch;
+    }
+
+    .install__foot {
+      padding: 14px 0 0;
+    }
+
+    .install__copy-button {
+      flex-grow: 1;
+      height: 44px;
+      font-size: 15px;
+      font-weight: 600;
+      clip-path: polygon(
+        8px 0,
+        100% 0,
+        100% calc(100% - 8px),
+        calc(100% - 8px) 100%,
+        0 100%,
+        0 8px
+      );
+    }
+
+    .install__copy-button :global(svg) {
+      width: 16px;
+      height: 16px;
+    }
+
+    .install__label-short {
+      display: none;
+    }
+
+    .install__label-long {
+      display: inline;
+    }
+
+    .install__copy-button[data-copied] .install__label-long {
       display: none;
     }
   }
 </style>
 
 <script>
-  const platformTabs = Array.from(
-    document.querySelectorAll<HTMLButtonElement>('[data-platform-tab]'),
-  );
-  const methodTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-method-tab]'));
-  const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-method-panel]'));
+  const root = document.querySelector<HTMLElement>('[data-install]');
 
-  if (platformTabs.length > 0) {
-    const selectMethod = (id: string) => {
-      for (const tab of methodTabs) {
-        const active = tab.dataset.methodTab === id;
-        tab.setAttribute('aria-selected', String(active));
-        tab.tabIndex = active ? 0 : -1;
-      }
+  if (root) {
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-install-tab]'));
+    const panels = Array.from(root.querySelectorAll<HTMLElement>('[data-install-panel]'));
 
-      for (const panel of panels) {
-        panel.hidden = panel.dataset.methodPanel !== id;
-      }
+    const select = (tab: HTMLButtonElement, focus = false) => {
+      tabs.forEach((other) => {
+        const active = other === tab;
+
+        other.setAttribute('aria-selected', String(active));
+        other.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.dataset.installPanel !== tab.dataset.installTab;
+      });
+      if (focus) tab.focus();
     };
 
-    const selectPlatform = (platform: string) => {
-      for (const tab of platformTabs) {
-        const active = tab.dataset.platformTab === platform;
-        tab.setAttribute('aria-selected', String(active));
-        tab.tabIndex = active ? 0 : -1;
-      }
-
-      const visible = methodTabs.filter((tab) => tab.dataset.methodPlatform === platform);
-
-      for (const tab of methodTabs) {
-        tab.hidden = tab.dataset.methodPlatform !== platform;
-      }
-
-      if (visible[0]?.dataset.methodTab) selectMethod(visible[0].dataset.methodTab);
-    };
-
-    for (const tab of platformTabs) {
-      tab.addEventListener('click', () => selectPlatform(tab.dataset.platformTab ?? 'linux'));
-    }
-
-    for (const tab of methodTabs) {
-      tab.addEventListener('click', () => selectMethod(tab.dataset.methodTab ?? ''));
-
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(tab));
       tab.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
 
         event.preventDefault();
-        const visible = methodTabs.filter((candidate) => !candidate.hidden);
-        const position = visible.indexOf(tab);
         const step = event.key === 'ArrowRight' ? 1 : -1;
-        const next = visible[(position + step + visible.length) % visible.length];
+        const next = tabs[(index + step + tabs.length) % tabs.length];
 
-        selectMethod(next.dataset.methodTab ?? '');
-        next.focus();
+        if (next) select(next, true);
       });
-    }
+    });
 
-    // Open on the reader's own platform. Defaulting everyone to Linux sends a
-    // Mac visitor looking for a tab before they find anything they can run.
-    const agent = navigator.userAgent;
-    const guess = /Mac|iPhone|iPad/.test(agent) ? 'macos' : /Win/.test(agent) ? 'windows' : 'linux';
+    panels.forEach((panel) => {
+      const button = panel.querySelector<HTMLButtonElement>('[data-install-copy]');
+      let timer = 0;
 
-    if (guess !== 'linux') selectPlatform(guess);
+      button?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(panel.dataset.copyText ?? '');
+        } catch (error) {
+          console.warn('Copy to clipboard failed', error);
+          return;
+        }
 
-    // Keep the hero's call to action honest about where it is sending the reader.
-    const cta = document.querySelector<HTMLAnchorElement>('[data-download-cta]');
-    const LABELS: Record<string, string> = {
-      linux: 'Download for Linux',
-      macos: 'Download for macOS',
-      windows: 'Download for Windows',
-    };
-
-    if (cta) cta.textContent = LABELS[guess];
-  }
-
-  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-copy]')) {
-    button.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(button.dataset.copy ?? '');
-        button.textContent = 'copied';
-      } catch {
-        button.textContent = 'press ctrl+c';
-      }
-
-      window.setTimeout(() => {
-        button.textContent = 'copy';
-      }, 1600);
+        window.clearTimeout(timer);
+        button.setAttribute('data-copied', '');
+        timer = window.setTimeout(() => button.removeAttribute('data-copied'), 1600);
+      });
     });
   }
 </script>

@@ -1,8 +1,9 @@
 ---
-import Icon from './Icon.astro';
+import Glyph from './Glyph.astro';
 import BrandMark from './BrandMark.astro';
 import { REPO } from '../data/nav';
 import { docsUrl, siteUrl } from '../data/site';
+import { CURRENT, productVersion } from '../data/versions';
 import { localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
 
@@ -13,17 +14,33 @@ interface Props {
 
 const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
 
+const home = siteUrl('', locale);
+
 const LINKS = [
-  { href: `${siteUrl('', locale)}#features`, label: t(locale, 'nav.features'), key: 'features' },
-  { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
-  { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), key: 'docs' },
-  { href: siteUrl('about/', locale), label: t(locale, 'nav.about'), key: 'about' },
+  { href: `${home}#drivers`, label: t(locale, 'nav.drivers'), icon: 'database', key: 'drivers' },
+  { href: `${home}#keyboard`, label: t(locale, 'nav.keyboard'), icon: 'keyboard', key: 'keyboard' },
+  {
+    href: `${home}#governance`,
+    label: t(locale, 'nav.governance'),
+    icon: 'bot',
+    key: 'governance',
+  },
+  {
+    href: `${home}#compare`,
+    label: t(locale, 'nav.compare'),
+    icon: 'arrow-left-right',
+    key: 'compare',
+  },
+  { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), icon: 'file-text', key: 'docs' },
+  { href: siteUrl('about/', locale), label: t(locale, 'nav.about'), icon: 'layers', key: 'about' },
 ] as const;
+
+const version = productVersion(CURRENT.id);
 ---
 
 <header class="nav" data-nav>
   <div class="nav__inner">
-    <a class="nav__brand" href={siteUrl('', locale)}>
+    <a class="nav__brand x" href={home}>
       <BrandMark size={28} />
       <span>DBFlux</span>
     </a>
@@ -37,40 +54,43 @@ const LINKS = [
               class="nav__link"
               aria-current={current === link.key ? 'page' : undefined}
             >
+              <Glyph name={link.icon} size={15} />
               {link.label}
             </a>
           ))
         }
+        <a class="nav__link nav__link--sheet-only" href={REPO} rel="noopener">
+          <Glyph name="github" size={15} />
+          {t(locale, 'nav.source')}
+        </a>
       </div>
     </nav>
 
-    <div class="nav__utilities">
-      <a
-        class="nav__github"
-        href={REPO}
-        rel="noopener"
-        aria-label={t(locale, 'nav.github')}
-        data-tooltip={t(locale, 'nav.github')}
-      >
-        <Icon name="github" size={18} />
-      </a>
-      <a class="btn btn--primary nav__cta" href={`${siteUrl('', locale)}#install`}>
-        {t(locale, 'nav.download')}
-      </a>
-    </div>
+    <span class="nav__spacer"></span>
 
-    <div class="nav__actions">
-      <button
-        class="nav__toggle"
-        type="button"
-        data-nav-toggle
-        aria-expanded="false"
-        aria-controls="nav-sheet"
-      >
-        <span class="visually-hidden">{t(locale, 'nav.menu')}</span>
-        <Icon name="menu" size={20} />
-      </button>
-    </div>
+    <span class="nav__version mono">v{version}</span>
+    <a class="nav__source c7" href={REPO} rel="noopener">
+      <Glyph name="github" size={16} />
+      {t(locale, 'nav.source')}
+    </a>
+    <a class="nav__cta x c7" href={`${home}#install`}>
+      <Glyph name="download" size={15} />
+      {t(locale, 'nav.download')}
+    </a>
+    <a class="nav__cta-square c8" href={`${home}#install`} aria-label={t(locale, 'nav.download')}>
+      <Glyph name="download" size={18} />
+    </a>
+
+    <button
+      class="nav__toggle c8"
+      type="button"
+      data-nav-toggle
+      aria-expanded="false"
+      aria-controls="nav-sheet"
+    >
+      <span class="visually-hidden">{t(locale, 'nav.menu')}</span>
+      <Glyph name="rows-3" size={18} />
+    </button>
   </div>
 </header>
 
@@ -79,168 +99,143 @@ const LINKS = [
     position: sticky;
     top: 0;
     z-index: var(--z-nav);
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(8px);
+    background: var(--bg);
     border-bottom: var(--bw) solid var(--border);
   }
 
   .nav__inner {
     display: flex;
     align-items: center;
-    gap: var(--s-7);
+    gap: 32px;
     max-width: var(--content-max);
-    min-height: var(--nav-h);
+    height: var(--nav-h);
     margin-inline: auto;
-    padding-inline: var(--s-8);
+    padding-inline: var(--gutter);
   }
 
   .nav__brand {
     display: flex;
     align-items: center;
-    gap: var(--s-3);
-    font-family: var(--font-mono);
-    font-size: 0.9375rem;
-    font-weight: 700;
+    gap: 10px;
+    font-weight: 900;
+    font-size: 17px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
     color: var(--text-strong);
   }
 
   .nav__brand:hover {
-    text-decoration: none;
-  }
-
-  .nav__brand :global(svg) {
-    color: var(--accent);
+    color: var(--text-strong);
   }
 
   .nav__panel {
     display: flex;
-    flex: 1;
     align-items: center;
-  }
-
-  .nav__links,
-  .nav__utilities,
-  .nav__actions {
-    display: flex;
-    align-items: center;
+    margin-left: 20px;
   }
 
   .nav__links {
-    gap: var(--s-6);
-  }
-
-  .nav__utilities {
-    gap: var(--s-4);
+    display: flex;
+    gap: 28px;
+    font-size: 14px;
+    font-weight: 500;
   }
 
   .nav__link {
-    position: relative;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
+    display: flex;
+    align-items: center;
+    gap: 7px;
     color: var(--text);
-    padding-bottom: 3px;
     transition: color var(--t-instant) linear;
   }
 
-  .nav__link::after {
-    position: absolute;
-    right: 0;
-    bottom: -1px;
-    left: 0;
-    height: 1px;
-    background: var(--accent);
-    content: '';
-    transform: scaleX(0);
-    transform-origin: left;
-    transition: transform var(--t-quick) var(--ease-std);
-  }
-
-  .nav__link:hover {
-    color: var(--text-strong);
-    text-decoration: none;
-  }
-
-  .nav__link:hover::after,
-  .nav__link[aria-current='page']::after {
-    transform: scaleX(1);
-  }
-
+  .nav__link:hover,
   .nav__link[aria-current='page'] {
     color: var(--text-strong);
   }
 
-  .nav__github {
-    position: relative;
-    display: grid;
-    width: 32px;
-    height: 32px;
-    place-items: center;
-    color: var(--text);
+  .nav__link[aria-current='page'] {
+    box-shadow: 0 3px 0 var(--accent-fill);
   }
 
-  .nav__github:hover {
+  .nav__link--sheet-only {
+    display: none;
+  }
+
+  .nav__spacer {
+    flex-grow: 1;
+  }
+
+  .nav__version {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .nav__source {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 14px;
+    background: var(--raised);
     color: var(--text-strong);
-    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
   }
 
-  .nav__github::after {
-    position: absolute;
-    z-index: var(--z-tooltip);
-    bottom: calc(100% + var(--s-2));
-    left: 50%;
-    width: max-content;
-    max-width: 12rem;
-    padding: var(--s-2) var(--s-3);
-    background: var(--text-strong);
-    color: var(--bg);
-    content: attr(data-tooltip);
-    font-family: var(--font-mono);
-    font-size: var(--fs-label);
-    opacity: 0;
-    pointer-events: none;
-    transform: translate(-50%, 2px);
-    transition:
-      opacity var(--t-instant) linear,
-      transform var(--t-instant) var(--ease-std);
-  }
-
-  .nav__github:hover::after,
-  .nav__github:focus-visible::after {
-    opacity: 1;
-    transform: translate(-50%, 0);
+  .nav__source:hover {
+    background: var(--raised-hover);
+    color: var(--text-strong);
   }
 
   .nav__cta {
-    padding: var(--s-2) var(--s-5);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 18px;
+    background: var(--accent-fill);
+    color: var(--accent-on);
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
   }
 
+  .nav__cta:hover {
+    color: var(--accent-on);
+    filter: brightness(1.08);
+  }
+
+  .nav__cta-square,
   .nav__toggle {
     display: none;
-    width: var(--tap-min);
-    height: var(--tap-min);
     align-items: center;
     justify-content: center;
+    width: var(--tap-min);
+    height: var(--tap-min);
     padding: 0;
-    background: none;
     border: 0;
-    color: var(--text);
     cursor: pointer;
   }
 
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+  .nav__cta-square {
+    background: var(--accent-fill);
+    color: var(--accent-on);
   }
 
-  @media (max-width: 1050px) {
+  .nav__cta-square:hover {
+    color: var(--accent-on);
+  }
+
+  .nav__toggle {
+    background: var(--raised);
+    color: var(--text-strong);
+  }
+
+  @media (max-width: 1180px) {
     .nav__inner {
-      flex-wrap: nowrap;
-      gap: 0;
-      padding-inline: var(--s-7);
+      gap: 12px;
     }
 
     .nav__panel {
@@ -248,10 +243,11 @@ const LINKS = [
       position: absolute;
       top: 100%;
       inset-inline: 0;
+      margin: 0;
       max-height: calc(100dvh - var(--nav-h));
       overflow-y: auto;
       background: var(--panel);
-      border-top: var(--bw) solid var(--border);
+      border-bottom: var(--bw) solid var(--border);
     }
 
     .nav__panel[data-open] {
@@ -261,39 +257,23 @@ const LINKS = [
     .nav__links {
       flex: 1;
       flex-direction: column;
-      align-items: stretch;
       gap: 0;
+      font-size: 15px;
     }
 
-    .nav__links .nav__link {
-      display: flex;
-      align-items: center;
-      min-height: var(--tap-min);
-      padding: var(--s-5) var(--s-6);
-      border-bottom: var(--bw) solid var(--border);
-      font-size: var(--fs-body);
+    .nav__link {
+      gap: 12px;
+      min-height: 52px;
+      padding: 0 var(--gutter);
+      border-top: var(--bw) solid var(--row-line);
     }
 
-    .nav__links .nav__link::after {
-      display: none;
-    }
-
-    .nav__links .nav__link:hover {
+    .nav__link:hover {
       background: var(--raised);
     }
 
-    .nav__utilities {
-      margin-left: auto;
-    }
-
-    .nav__github {
-      width: var(--tap-min);
-      height: var(--tap-min);
-    }
-
-    .nav__cta {
-      min-height: var(--tap-min);
-      padding-inline: var(--s-4);
+    .nav__link[aria-current='page'] {
+      box-shadow: inset 3px 0 0 var(--accent-fill);
     }
 
     .nav__toggle {
@@ -301,7 +281,7 @@ const LINKS = [
     }
   }
 
-  @media (min-width: 1051px) {
+  @media (min-width: 1181px) {
     .nav__panel {
       display: flex !important;
     }
@@ -309,24 +289,29 @@ const LINKS = [
 
   @media (max-width: 640px) {
     .nav__inner {
-      padding-inline: var(--s-4);
+      gap: 10px;
     }
 
-    .nav__github::after {
-      left: auto;
-      right: 0;
-      transform: translate(0, 2px);
+    .nav__brand {
+      font-size: 15px;
+      letter-spacing: 0;
     }
 
-    .nav__github:hover::after,
-    .nav__github:focus-visible::after {
-      transform: translate(0, 0);
+    .nav__version,
+    .nav__source,
+    .nav__cta {
+      display: none;
+    }
+
+    .nav__link--sheet-only,
+    .nav__cta-square {
+      display: flex;
     }
   }
 </style>
 
 <script>
-  const breakpoint = window.matchMedia('(max-width: 1050px)');
+  const breakpoint = window.matchMedia('(max-width: 1180px)');
   const toggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
   const panel = document.querySelector<HTMLElement>('#nav-sheet');
 
@@ -356,6 +341,9 @@ const LINKS = [
     toggle.addEventListener('click', () => {
       if (panel.hasAttribute('data-open')) close();
       else open();
+    });
+    panel.addEventListener('click', (event) => {
+      if (event.target instanceof Element && event.target.closest('a')) close();
     });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && panel.hasAttribute('data-open')) close(true);
