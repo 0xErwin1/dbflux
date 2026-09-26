@@ -65,7 +65,14 @@ export type CompareRowId =
   | 'query_plan'
   | 's3'
   | 'mcp'
-  | 'import_connections';
+  | 'import_connections'
+  | 'commercial_use'
+  | 'diagram'
+  | 'schema_diff'
+  | 'query_log'
+  | 'data_compare'
+  | 'command_palette'
+  | 'ai_approval';
 
 export interface CompareRow {
   readonly id: CompareRowId;
@@ -83,9 +90,15 @@ const included: CompareCell = ['included', { key: 'included' }];
 const notReviewed: CompareCell = ['unknown', { key: 'not_reviewed' }];
 const notYet: CompareCell = ['none', { key: 'not_yet' }];
 
+const notAvailable: CompareCell = ['none', { key: 'not_available' }];
+const notIncluded: CompareCell = ['none', { key: 'not_included' }];
+
 const BEEKEEPER_README =
   'https://raw.githubusercontent.com/beekeeper-studio/beekeeper-studio/master/README.md';
 const TABLEPLUS_CHANGELOG = 'https://tableplus.com/blog/2017/02/changelogs.html';
+const DATAGRIP_LICENSING =
+  'https://blog.jetbrains.com/datagrip/2025/10/01/datagrip-is-now-free-for-non-commercial-use/';
+const DBGATE_TEAM_PREMIUM = 'https://www.dbgate.io/editions/team-premium/';
 
 const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
   open_source: {
@@ -123,10 +136,7 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     },
     sources: [
       { client: 'dbeaver', href: 'https://dbeaver.io/' },
-      {
-        client: 'datagrip',
-        href: 'https://blog.jetbrains.com/datagrip/2025/10/01/datagrip-is-now-free-for-non-commercial-use/',
-      },
+      { client: 'datagrip', href: DATAGRIP_LICENSING },
       { client: 'tableplus', href: 'https://tableplus.com/pricing' },
       { client: 'beekeeper', href: 'https://www.beekeeperstudio.io/pricing' },
       { client: 'dbgate', href: 'https://dbgate.io/pricing/' },
@@ -209,13 +219,17 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     dbflux: included,
     clients: {
       dbeaver: ['paid', { key: 'lite_up' }],
-      datagrip: notReviewed,
+      datagrip: notAvailable,
       tableplus: notReviewed,
       beekeeper: notReviewed,
       dbgate: ['paid', { text: 'Premium' }],
     },
     sources: [
       { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Visual-Query-Builder/' },
+      {
+        client: 'datagrip',
+        href: 'https://youtrack.jetbrains.com/issue/DBE-3897/Visual-Query-Builder',
+      },
       {
         client: 'dbgate',
         href: 'https://docs.dbgate.io/dbgate/sql-and-queries/query-designer/index.html',
@@ -282,12 +296,23 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     dbflux: included,
     clients: {
       dbeaver: ['paid', { text: 'Ultimate' }],
-      datagrip: notReviewed,
+      datagrip: ['included', { key: 'big_data_tools' }],
       tableplus: notReviewed,
       beekeeper: notReviewed,
       dbgate: notReviewed,
     },
-    sources: [{ client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Cloud-Storage/' }],
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Cloud-Storage/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/big-data-tools-aws-s3.html',
+      },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/big-data-tools-minio.html',
+        detail: 'MinIO',
+      },
+    ],
   },
   mcp: {
     id: 'mcp',
@@ -325,6 +350,138 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
       dbgate: notReviewed,
     },
     sources: [],
+  },
+  commercial_use: {
+    id: 'commercial_use',
+    label: { key: 'commercial_use' },
+    icon: 'file-text',
+    dbflux: included,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: ['paid', { key: 'paid_licence' }],
+      tableplus: notReviewed,
+      beekeeper: notReviewed,
+      dbgate: notReviewed,
+    },
+    sources: [
+      { client: 'datagrip', href: DATAGRIP_LICENSING },
+      {
+        client: 'datagrip',
+        href: 'https://sales.jetbrains.com/hc/en-gb/articles/18950890312210-The-free-non-commercial-licensing-FAQ',
+        detail: 'FAQ',
+      },
+    ],
+  },
+  diagram: {
+    id: 'diagram',
+    label: { key: 'diagram' },
+    icon: 'chart-network',
+    dbflux: included,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: notReviewed,
+      tableplus: ['limited', { key: 'community_plugin' }],
+      beekeeper: ['paid', { key: 'paid_editions' }],
+      dbgate: notReviewed,
+    },
+    sources: [
+      { client: 'tableplus', href: 'https://github.com/TablePlus/diagram-plugin' },
+      {
+        client: 'beekeeper',
+        href: 'https://docs.beekeeperstudio.io/user_guide/entity-relationship-diagrams-erd/',
+      },
+    ],
+  },
+  schema_diff: {
+    id: 'schema_diff',
+    label: { key: 'schema_diff' },
+    icon: 'copy',
+    dbflux: included,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: notReviewed,
+      tableplus: notAvailable,
+      beekeeper: notReviewed,
+      dbgate: ['paid', { text: 'Premium' }],
+    },
+    sources: [
+      { client: 'tableplus', href: 'https://github.com/TablePlus/TablePlus/issues/3232' },
+      { client: 'dbgate', href: 'https://docs.dbgate.io/dbgate/database-operations/index.html' },
+    ],
+  },
+  query_log: {
+    id: 'query_log',
+    label: { key: 'query_log' },
+    icon: 'scroll-text',
+    dbflux: ['included', { key: 'audit_log' }],
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: ['included', { key: 'sql_log' }],
+      tableplus: ['included', { key: 'console_log' }],
+      beekeeper: notReviewed,
+      dbgate: ['paid', { text: 'Team Premium' }],
+    },
+    sources: [
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/find-recent-queries-and-files.html',
+      },
+      {
+        client: 'tableplus',
+        href: 'https://docs.tableplus.com/gui-tools/the-interface/console-log.md',
+      },
+      { client: 'dbgate', href: DBGATE_TEAM_PREMIUM },
+    ],
+  },
+  data_compare: {
+    id: 'data_compare',
+    label: { key: 'data_compare' },
+    icon: 'arrow-left-right',
+    dbflux: notYet,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: included,
+      tableplus: notReviewed,
+      beekeeper: notReviewed,
+      dbgate: notReviewed,
+    },
+    sources: [
+      { client: 'datagrip', href: 'https://www.jetbrains.com/help/datagrip/compare-data.html' },
+    ],
+  },
+  command_palette: {
+    id: 'command_palette',
+    label: { key: 'command_palette' },
+    icon: 'search',
+    dbflux: included,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: notReviewed,
+      tableplus: ['limited', { key: 'objects_only' }],
+      beekeeper: notReviewed,
+      dbgate: included,
+    },
+    sources: [
+      { client: 'tableplus', href: 'https://docs.tableplus.com/gui-tools/open-anything.md' },
+      { client: 'dbgate', href: 'https://www.dbgate.io/features/interface/' },
+    ],
+  },
+  ai_approval: {
+    id: 'ai_approval',
+    label: { key: 'ai_approval' },
+    icon: 'clock-check',
+    dbflux: ['included', { key: 'per_policy' }],
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: notReviewed,
+      tableplus: notReviewed,
+      beekeeper: ['paid', { key: 'paid_editions' }],
+      dbgate: ['paid', { text: 'Premium' }],
+    },
+    sources: [
+      { client: 'beekeeper', href: 'https://docs.beekeeperstudio.io/user_guide/sql-ai-shell/' },
+      { client: 'dbgate', href: DBGATE_TEAM_PREMIUM },
+    ],
   },
 };
 
@@ -380,54 +537,258 @@ export const COMPARE_MOBILE_ROWS: readonly {
   { label: { key: 's3_short' }, icon: 'boxes', dbflux: 'included', dbeaver: 'paid' },
 ];
 
-/** Clients with a page of their own under `/compare/`. */
-export const COMPARE_PAGES: Readonly<Partial<Record<ClientId, string>>> = {
-  dbeaver: 'compare/dbeaver/',
+type VsStrings = Dictionary['compare_page']['vs'];
+
+export type VsColumn = keyof VsStrings['column'];
+export type VsGain = 'builder' | 'redis' | 'aws' | 'governance';
+export type VsGap = keyof VsStrings['gap'];
+export type VsTerm = keyof VsStrings['term'];
+
+/** One row of a per-client table: DBFlux first, then one cell per column of that client. */
+export interface VsRow {
+  readonly row: CompareRow;
+  readonly cells: readonly CompareCell[];
+}
+
+/**
+ * One client's page under `/compare/`.
+ *
+ * `columns` names the client's editions or licences in the order the table
+ * shows them, and every row carries one cell per column. A cell equal to what
+ * the full comparison shows for that client reads it from the shared row, so
+ * the two pages cannot disagree about the compared edition.
+ *
+ * `gaps` lists only what DBFlux lacks and this client has, per its own
+ * documentation. `terms` maps the client's own UI names to DBFlux's.
+ */
+export interface VsPage {
+  readonly client: ClientId;
+  readonly path: string;
+  /** The vendor page the editions or licences were read from. */
+  readonly editionsSource: string;
+  readonly columns: readonly VsColumn[];
+  readonly rows: readonly VsRow[];
+  readonly gains: readonly VsGain[];
+  readonly gaps: readonly VsGap[];
+  readonly terms: readonly { from: string; to: VsTerm }[];
+}
+
+const vsRow = (id: CompareRowId, ...cells: CompareCell[]): VsRow => ({ row: ROWS[id], cells });
+
+const compared = (id: CompareRowId, client: ClientId): CompareCell => ROWS[id].clients[client];
+
+/**
+ * DBeaver: Community, and the cheapest paid DBeaver edition that has the
+ * feature. "Not included" in Community follows from each vendor page saying
+ * the feature is available in the listed paid editions only.
+ */
+const DBEAVER_PAGE: VsPage = {
+  client: 'dbeaver',
+  path: 'compare/dbeaver/',
+  editionsSource: 'https://dbeaver.com/edition/',
+  columns: ['dbeaver_community', 'dbeaver_paid'],
+  rows: (['mongodb', 'redis', 'dynamodb', 'builder', 'charts', 's3'] as const).map((id) =>
+    vsRow(id, notIncluded, compared(id, 'dbeaver')),
+  ),
+  gains: ['builder', 'redis', 'aws'],
+  gaps: ['table_editor', 'formats', 'query_plan', 'users', 'backup', 'data_compare'],
+  terms: [
+    { from: 'Database Navigator', to: 'sidebar' },
+    { from: 'SQL Editor', to: 'query_tab' },
+    { from: 'ER Diagram', to: 'diagram' },
+    { from: 'Data Transfer', to: 'transfer' },
+    { from: 'Schema Compare', to: 'schema_diff' },
+  ],
 };
 
 /**
- * The DBeaver page's edition table: DBFlux, DBeaver Community, and the cheapest
- * paid DBeaver edition that has the feature. "Not included" in Community
- * follows from each vendor page saying the feature is available in the listed
- * paid editions only.
+ * DataGrip: one feature set under two licences. The non-commercial licence has
+ * every feature of the commercial one, so the difference is who may use it
+ * for what, and the features DataGrip has in both columns are shown as such.
  */
-export const DBEAVER_EDITION_ROWS: readonly {
-  row: CompareRow;
-  community: CompareCell;
-  paid: CompareCell;
-}[] = rows(['mongodb', 'redis', 'dynamodb', 'builder', 'charts', 's3']).map((row) => ({
-  row,
-  community: ['none', { key: 'not_included' }],
-  paid: row.clients.dbeaver,
-}));
-
-export const DBEAVER_EDITIONS_SOURCE = 'https://dbeaver.com/edition/';
-
-type VsStrings = Dictionary['compare_page']['vs_dbeaver'];
+const DATAGRIP_PAGE: VsPage = {
+  client: 'datagrip',
+  path: 'compare/datagrip/',
+  editionsSource: DATAGRIP_LICENSING,
+  columns: ['datagrip_noncommercial', 'datagrip_commercial'],
+  rows: [
+    vsRow(
+      'commercial_use',
+      ['none', { key: 'noncommercial_only' }],
+      compared('commercial_use', 'datagrip'),
+    ),
+    vsRow('open_source', ['none', { key: 'no' }], compared('open_source', 'datagrip')),
+    ...(
+      [
+        'mongodb',
+        'redis',
+        'dynamodb',
+        'builder',
+        'charts',
+        's3',
+        'mcp',
+        'query_log',
+        'data_compare',
+      ] as const
+    ).map((id) => vsRow(id, compared(id, 'datagrip'), compared(id, 'datagrip'))),
+  ],
+  gains: ['builder', 'governance', 'aws'],
+  gaps: ['data_compare', 'query_plan'],
+  terms: [
+    { from: 'Database Explorer', to: 'sidebar' },
+    { from: 'Query console', to: 'query_tab' },
+    { from: 'Diagrams', to: 'diagram' },
+    { from: 'Import/Export', to: 'transfer' },
+    { from: 'Compare Structure', to: 'schema_diff' },
+    { from: 'Query history', to: 'history' },
+    { from: 'Query files', to: 'saved' },
+    { from: 'Use SSH tunnel', to: 'ssh' },
+    { from: 'Find Action', to: 'palette' },
+    { from: 'Startup script', to: 'no_equivalent' },
+  ],
+};
 
 /**
- * What DBFlux does not do today that a DBeaver user may rely on.
- *
- * Each entry was checked against the repository: only what is missing is
- * listed, and nothing here carries a release target.
+ * TablePlus: the free version is a trial without a time limit, and paid
+ * licences are perpetual. Features are split by platform rather than by plan,
+ * so a fact found only in the macOS changelog is labelled macOS.
  */
-export const DBEAVER_GAPS: readonly { id: keyof VsStrings['gap']; icon: string }[] = [
-  { id: 'table_editor', icon: 'table' },
-  { id: 'formats', icon: 'file-down' },
-  { id: 'query_plan', icon: 'layers' },
-  { id: 'users', icon: 'key-round' },
-  { id: 'backup', icon: 'hard-drive' },
-  { id: 'data_compare', icon: 'arrow-left-right' },
-];
+const TABLEPLUS_PAGE: VsPage = {
+  client: 'tableplus',
+  path: 'compare/tableplus/',
+  editionsSource: 'https://tableplus.com/pricing',
+  columns: ['tableplus_trial', 'tableplus_paid'],
+  rows: [
+    vsRow('limits', compared('limits', 'tableplus'), ['included', { key: 'none' }]),
+    ...(
+      [
+        'open_source',
+        'mongodb',
+        'redis',
+        'dynamodb',
+        'diagram',
+        'schema_diff',
+        'mcp',
+        'query_log',
+        'command_palette',
+      ] as const
+    ).map((id) => vsRow(id, compared(id, 'tableplus'), compared(id, 'tableplus'))),
+  ],
+  gains: ['builder', 'governance', 'aws'],
+  gaps: ['formats', 'backup'],
+  terms: [
+    { from: 'Left sidebar', to: 'sidebar' },
+    { from: 'Query Editor', to: 'query_tab' },
+    { from: 'File > Import, File > Export', to: 'transfer' },
+    { from: 'History', to: 'history' },
+    { from: 'Favorite', to: 'saved' },
+    { from: 'Use SSH key', to: 'ssh' },
+    { from: 'Open Anything', to: 'palette' },
+  ],
+};
 
-/** DBeaver's names for things, and where the same thing lives in DBFlux. */
-export const DBEAVER_TERMS: readonly { from: string; to: keyof VsStrings['term'] }[] = [
-  { from: 'Database Navigator', to: 'sidebar' },
-  { from: 'SQL Editor', to: 'query_tab' },
-  { from: 'ER Diagram', to: 'diagram' },
-  { from: 'Data Transfer', to: 'transfer' },
-  { from: 'Schema Compare', to: 'schema_diff' },
-];
+/**
+ * Beekeeper Studio: Community under GPLv3, and paid editions. Its README says
+ * which databases need a paid edition without naming the plan, so those cells
+ * say "Paid editions".
+ */
+const BEEKEEPER_PAGE: VsPage = {
+  client: 'beekeeper',
+  path: 'compare/beekeeper/',
+  editionsSource: BEEKEEPER_README,
+  columns: ['beekeeper_community', 'beekeeper_paid'],
+  rows: [
+    vsRow('open_source', compared('open_source', 'beekeeper'), [
+      'none',
+      { key: 'commercial_licence' },
+    ]),
+    vsRow('mongodb', notIncluded, compared('mongodb', 'beekeeper')),
+    vsRow('redis', compared('redis', 'beekeeper'), compared('redis', 'beekeeper')),
+    vsRow('dynamodb', notIncluded, compared('dynamodb', 'beekeeper')),
+    vsRow('diagram', notIncluded, compared('diagram', 'beekeeper')),
+    vsRow('table_editor', compared('table_editor', 'beekeeper'), included),
+    vsRow('ai_approval', notIncluded, ['paid', { text: 'AI Shell' }]),
+  ],
+  gains: ['builder', 'governance', 'aws'],
+  gaps: ['table_editor', 'backup'],
+  terms: [
+    { from: 'Saved connections', to: 'sidebar' },
+    { from: 'SQL Editor', to: 'query_tab' },
+    { from: 'Open ER Diagram', to: 'diagram' },
+    { from: 'Data Import, Data Export', to: 'transfer' },
+    { from: 'Query history', to: 'history' },
+    { from: 'Saved Queries', to: 'saved' },
+    { from: 'SSH Tunnel', to: 'ssh' },
+    { from: 'Quick Search', to: 'palette' },
+    { from: 'Cloud Workspaces', to: 'no_equivalent' },
+  ],
+};
+
+/** DbGate: Community under GPL-3.0, Premium for one user, and Team Premium. */
+const DBGATE_PAGE: VsPage = {
+  client: 'dbgate',
+  path: 'compare/dbgate/',
+  editionsSource: 'https://dbgate.io/pricing/',
+  columns: ['dbgate_community', 'dbgate_premium', 'dbgate_team'],
+  rows: [
+    vsRow('mongodb', compared('mongodb', 'dbgate'), included, included),
+    vsRow('redis', compared('redis', 'dbgate'), included, included),
+    vsRow('dynamodb', notIncluded, included, included),
+    vsRow('builder', notIncluded, included, included),
+    vsRow('charts', notIncluded, included, included),
+    vsRow('schema_diff', notIncluded, included, included),
+    vsRow(
+      'mcp',
+      compared('mcp', 'dbgate'),
+      ['unknown', { key: 'not_stated' }],
+      ['included', { key: 'mcp_dbgate_team' }],
+    ),
+    vsRow('query_log', notIncluded, notIncluded, ['included', { key: 'user_actions' }]),
+    vsRow('command_palette', compared('command_palette', 'dbgate'), included, included),
+    vsRow(
+      'ai_approval',
+      notIncluded,
+      ['included', { key: 'db_chat' }],
+      ['included', { key: 'db_chat' }],
+    ),
+  ],
+  gains: ['builder', 'governance', 'aws'],
+  gaps: ['table_editor', 'formats', 'backup'],
+  terms: [
+    { from: 'CONNECTIONS', to: 'sidebar' },
+    { from: 'SQL editor', to: 'query_tab' },
+    { from: 'ER diagrams', to: 'diagram' },
+    { from: 'Export & import', to: 'transfer' },
+    { from: 'Compare & deploy models', to: 'schema_diff' },
+    { from: 'Saved queries', to: 'saved' },
+    { from: 'Use SSH tunnel', to: 'ssh' },
+    { from: 'Command palette', to: 'palette' },
+    { from: 'Perspectives, Maps', to: 'no_equivalent' },
+  ],
+};
+
+/** Every client's page, in the order the comparison lists the clients. */
+export const VS_PAGES: Readonly<Record<ClientId, VsPage>> = {
+  dbeaver: DBEAVER_PAGE,
+  datagrip: DATAGRIP_PAGE,
+  tableplus: TABLEPLUS_PAGE,
+  beekeeper: BEEKEEPER_PAGE,
+  dbgate: DBGATE_PAGE,
+};
+
+/** Clients with a page of their own under `/compare/`. */
+export const COMPARE_PAGES: Readonly<Partial<Record<ClientId, string>>> = Object.fromEntries(
+  COMPARE_CLIENTS.map((client) => [client.id, VS_PAGES[client.id].path]),
+);
+
+export const GAP_ICON: Readonly<Record<VsGap, string>> = {
+  table_editor: 'table',
+  formats: 'file-down',
+  query_plan: 'layers',
+  users: 'key-round',
+  backup: 'hard-drive',
+  data_compare: 'arrow-left-right',
+};
 
 export const TONE_ICON: Readonly<Record<CompareTone, string>> = {
   included: 'circle-check',

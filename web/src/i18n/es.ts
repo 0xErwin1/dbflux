@@ -236,6 +236,13 @@ export const es: Dictionary = {
         table_editor: 'Editor de tablas y restricciones',
         query_plan: 'Visualizador de planes de consulta',
         import_connections: 'Importa conexiones de',
+        commercial_use: 'Trabajo pagado sin costo',
+        diagram: 'Diagrama de esquema',
+        schema_diff: 'Diferencia de esquema',
+        query_log: 'Registro de consultas y auditoría',
+        data_compare: 'Comparación de datos',
+        command_palette: 'Paleta de comandos para acciones',
+        ai_approval: 'Pregunta antes de que una IA ejecute una consulta',
       },
       row_note: {
         limits: 'En la edición comparada',
@@ -266,6 +273,20 @@ export const es: Dictionary = {
         mcp_dbgate: 'Solo lectura, build Docker',
         not_yet: 'Todavía no',
         not_included: 'No incluido',
+        not_available: 'No disponible',
+        not_stated: 'No se indica',
+        big_data_tools: 'Plugin Big Data Tools',
+        noncommercial_only: 'Solo uso no comercial',
+        commercial_licence: 'Licencia comercial',
+        audit_log: 'Registro de auditoría, filtrable y exportable',
+        sql_log: 'Archivo de registro SQL',
+        console_log: 'Console log, si está activado',
+        user_actions: 'Inicios de sesión y acciones de usuarios',
+        objects_only: 'Encuentra objetos, no acciones',
+        community_plugin: 'Plugin de la comunidad',
+        per_policy: 'Cuando una política lo exige',
+        mcp_dbgate_team: 'Ejecuta consultas y escrituras',
+        db_chat: 'DB chat, con tu permiso',
       },
       gain: {
         dbeaver:
@@ -345,33 +366,32 @@ export const es: Dictionary = {
     read_comparison: 'Leer la comparación',
     feedback: '¿Ves algo desactualizado? Abre un issue y la fila se corrige con su fuente.',
     feedback_link: 'Abrir un issue',
-    vs_dbeaver: {
-      page_title: 'Una alternativa gratuita y de código abierto a DBeaver',
-      page_description:
-        'MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son de pago en DBeaver y forman parte de la única versión gratuita de DBFlux. Qué ganas, qué falta todavía y cómo traer tus conexiones.',
+    vs: {
       crumb: 'Comparar',
-      h1: 'Una alternativa gratuita y de código abierto a DBeaver.',
-      lede: 'DBeaver Community es gratuito y de código abierto, y es un buen cliente. La diferencia está en dónde cae la línea entre ediciones: MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son funciones PRO en DBeaver y parte de la única versión gratuita de DBFlux.',
       download: 'Descargar DBFlux',
-      bring: 'Trae tus conexiones de DBeaver',
       on_page: 'En esta página',
       toc: {
-        edition: 'Por edición',
         gain: 'Qué ganas',
         gaps: 'Lo que aún no reemplaza',
         moving: 'Cómo migrar',
       },
-      meta: 'DBFlux {version} · ediciones de DBeaver a {editions} · última revisión {date}',
-      edition_title: 'Por edición',
-      edition_body:
-        'DBeaver ofrece una edición Community gratuita y ediciones de escritorio de pago (Lite, Enterprise, Ultimate). Cada fila indica la edición más barata de DBeaver que incluye la función.',
       col_feature: 'Función',
-      col_community: 'DBeaver Community',
-      col_paid: 'Ediciones de pago de DBeaver',
       sources: 'Fuentes:',
-      editions_page: 'ediciones',
       dynamodb_note:
         'DynamoDB en DBFlux ejecuta operaciones nativas, sin PartiQL ni transacciones.',
+      column: {
+        dbeaver_community: 'DBeaver Community',
+        dbeaver_paid: 'Ediciones de pago de DBeaver',
+        datagrip_noncommercial: 'DataGrip no comercial (gratis)',
+        datagrip_commercial: 'DataGrip comercial (de pago)',
+        tableplus_trial: 'Prueba gratuita de TablePlus',
+        tableplus_paid: 'Licencia de pago de TablePlus',
+        beekeeper_community: 'Beekeeper Community',
+        beekeeper_paid: 'Ediciones de pago de Beekeeper',
+        dbgate_community: 'DbGate Community',
+        dbgate_premium: 'DbGate Premium',
+        dbgate_team: 'DbGate Team Premium',
+      },
       gain_title: 'Qué ganas',
       gain: {
         builder: {
@@ -389,6 +409,11 @@ export const es: Dictionary = {
           body: 'Ejecuta Logs Insights sobre CloudWatch, abre después el bucket de S3 donde escribió el proceso, previsualiza un archivo y edítalo en el sitio.',
           link: 'Drivers de CloudWatch y S3',
         },
+        governance: {
+          title: 'Clientes de IA bajo tus reglas',
+          body: 'Un cliente MCP recibe solo las herramientas que su rol permite. Cada petición se clasifica como lectura, escritura o cambio destructivo, se comprueba contra la política de esa conexión, espera tu aprobación cuando la política lo indica y queda en el registro de auditoría.',
+          link: 'Gobernanza de IA y MCP',
+        },
       },
       mockup: {
         columns: 'Columnas',
@@ -398,10 +423,11 @@ export const es: Dictionary = {
         keys: 'claves',
         preview_first: 'Previsualizar primero',
         unsaved: 'sin guardar',
+        pending: 'Pendiente',
+        approve: 'Aprobar',
+        reject: 'Rechazar',
       },
       gaps_title: 'Lo que DBFlux aún no reemplaza',
-      gaps_body:
-        'Si tu día depende de alguna de estas funciones, deja DBeaver instalado por ahora. Todas faltan hoy en DBFlux.',
       not_yet: 'Todavía no',
       gap: {
         table_editor: {
@@ -437,11 +463,7 @@ export const es: Dictionary = {
       step: {
         install: {
           title: 'Instala DBFlux',
-          body: 'Hay builds para Linux, macOS y Windows en la página de descarga. Nada toca tu instalación de DBeaver.',
-        },
-        import: {
-          title: 'Importa tus conexiones de DBeaver',
-          body: 'En el gestor de conexiones, elige Importar desde otro cliente y selecciona el data-sources.json de tu workspace. Añade credentials-config.json para llevar las contraseñas guardadas al llavero del sistema. Las conexiones de PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB y Redis se importan sin sus ajustes de SSH y SSL, y cada entrada que DBFlux no puede convertir aparece con el motivo.',
+          body: 'Hay builds para Linux, macOS y Windows en la página de descarga. Nada toca tu instalación de {name}.',
         },
         query: {
           title: 'Abre una pestaña de consulta',
@@ -455,6 +477,110 @@ export const es: Dictionary = {
         diagram: 'Diagrama de esquema',
         transfer: 'Exportar, importar, migrar',
         schema_diff: 'Diferencia de esquema',
+        history: 'Historial de consultas',
+        saved: 'Consultas guardadas',
+        ssh: 'Perfiles de túnel SSH, pestaña Acceso',
+        palette: 'Paleta de comandos',
+        no_equivalent: 'Sin equivalente',
+      },
+      others_title: 'Comparar con otros',
+    },
+    vs_client: {
+      dbeaver: {
+        page_title: 'Una alternativa gratuita y de código abierto a DBeaver',
+        page_description:
+          'MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son de pago en DBeaver y forman parte de la única versión gratuita de DBFlux. Qué ganas, qué falta todavía y cómo traer tus conexiones.',
+        h1: 'Una alternativa gratuita y de código abierto a DBeaver.',
+        lede: 'DBeaver Community es gratuito y de código abierto, y es un buen cliente. La diferencia está en dónde cae la línea entre ediciones: MongoDB, Redis, DynamoDB, el constructor visual de consultas y los gráficos son funciones PRO en DBeaver y parte de la única versión gratuita de DBFlux.',
+        bring: 'Trae tus conexiones de DBeaver',
+        meta: 'DBFlux {version} · ediciones de DBeaver a {editions} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'DBeaver ofrece una edición Community gratuita y ediciones de escritorio de pago (Lite, Enterprise, Ultimate). Cada fila indica la edición más barata de DBeaver que incluye la función.',
+        editions_page: 'ediciones',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DBeaver instalado por ahora. Todas faltan hoy en DBFlux.',
+        step: {
+          title: 'Importa tus conexiones de DBeaver',
+          body: 'En el gestor de conexiones, elige Importar desde otro cliente y selecciona el data-sources.json de tu workspace. Añade credentials-config.json para llevar las contraseñas guardadas al llavero del sistema. Las conexiones de PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB y Redis se importan sin sus ajustes de SSH y SSL, y cada entrada que DBFlux no puede convertir aparece con el motivo.',
+        },
+      },
+      datagrip: {
+        page_title:
+          'Una alternativa de código abierto a DataGrip, gratuita para el trabajo comercial',
+        page_description:
+          'DataGrip es gratuito solo para uso no comercial. DBFlux es de código abierto y gratuito para cualquier trabajo. Las dos licencias lado a lado, las funciones que DataGrip tiene en ambas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa de código abierto a DataGrip, gratuita para el trabajo comercial.',
+        lede: 'DataGrip es un IDE de bases de datos muy completo y, desde octubre de 2025, es gratuito para uso no comercial con todas las funciones de la versión de pago. El trabajo por el que te pagan sigue necesitando una licencia comercial. DBFlux es de código abierto y gratuito para cualquier uso, y tiene un constructor visual de consultas, que DataGrip no tiene. DataGrip va por delante en comparación de datos, análisis de código SQL y cantidad de motores soportados.',
+        bring: 'Cómo migrar desde DataGrip',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por licencia',
+        edition_body:
+          'DataGrip tiene un único conjunto de funciones bajo dos licencias. La licencia no comercial es gratuita, incluye todas las funciones de la comercial y se renueva cada año. El trabajo por el que te pagan necesita la licencia comercial, una suscripción de pago. Cuando DataGrip tiene una función, las dos columnas lo indican.',
+        editions_page: 'licencias',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DataGrip instalado por ahora. DataGrip tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer el dataSources.xml de DataGrip ni su exportación de ajustes, así que añade cada conexión en el gestor de conexiones. DataGrip deja las contraseñas fuera de esa exportación salvo que formen parte de una URL JDBC, así que tendrías que volver a escribirlas de todos modos.',
+        },
+      },
+      tableplus: {
+        page_title: 'Una alternativa gratuita y de código abierto a TablePlus',
+        page_description:
+          'La versión gratuita de TablePlus es una prueba limitada a dos pestañas, dos ventanas y dos filtros avanzados a la vez. DBFlux es de código abierto y no tiene esos límites. Las licencias lado a lado, qué ganas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa gratuita y de código abierto a TablePlus.',
+        lede: 'TablePlus es un cliente nativo rápido que se vende con licencia perpetua. Su versión gratuita es una prueba sin límite de tiempo que mantiene abiertas dos pestañas, dos ventanas y dos filtros avanzados a la vez. DBFlux es de código abierto y no tiene esos límites. TablePlus documenta MCP y DynamoDB para su aplicación de macOS, y esas filas dicen macOS.',
+        bring: 'Cómo migrar desde TablePlus',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por licencia',
+        edition_body:
+          'TablePlus vende licencias perpetuas con un año de actualizaciones, empezando por Basic como compra única. Sus funciones se reparten por plataforma y no por plan, así que las dos columnas solo difieren en los límites de la prueba.',
+        editions_page: 'precios',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja TablePlus instalado por ahora. TablePlus tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer los archivos .tableplusconnection que exporta TablePlus, así que añade cada conexión en el gestor de conexiones.',
+        },
+      },
+      beekeeper: {
+        page_title: 'Una alternativa gratuita y de código abierto a Beekeeper Studio',
+        page_description:
+          'MongoDB, DynamoDB y el diagrama ER están en las ediciones de pago de Beekeeper Studio y forman parte de la única versión gratuita de DBFlux. Qué ganas, qué falta todavía y cómo importar tus conexiones de Beekeeper.',
+        h1: 'Una alternativa gratuita y de código abierto a Beekeeper Studio.',
+        lede: 'Beekeeper Studio Community es gratuito y de código abierto bajo GPLv3, sin límite de conexiones ni de pestañas, y es un buen cliente. La diferencia está en dónde cae la línea entre ediciones: MongoDB, DynamoDB y el diagrama ER están en las ediciones de pago de Beekeeper y forman parte de la única versión gratuita de DBFlux. Beekeeper Community edita tablas desde un formulario, algo que DBFlux aún no hace.',
+        bring: 'Trae tus conexiones de Beekeeper',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'Beekeeper Studio ofrece una edición Community gratuita bajo GPLv3 y ediciones de pago bajo una licencia comercial. Su README marca qué bases de datos necesitan una edición de pago sin nombrar el plan, así que esas filas dicen Ediciones de pago.',
+        editions_page: 'README',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja Beekeeper Studio instalado por ahora. Beekeeper tiene ambas y DBFlux todavía no.',
+        step: {
+          title: 'Importa tus conexiones de Beekeeper',
+          body: 'En el gestor de conexiones, elige Importar desde otro cliente y selecciona el app.db de Beekeeper Studio. Las conexiones de PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB y Redis se importan sin sus ajustes de SSH y SSL, y cada entrada que DBFlux no puede convertir aparece con el motivo. Beekeeper cifra las contraseñas guardadas con una clave que no sale de su propia instalación, así que vuelve a escribirlas después de importar.',
+        },
+      },
+      dbgate: {
+        page_title: 'Una alternativa gratuita y de código abierto a DbGate',
+        page_description:
+          'El diseñador de consultas, los gráficos, DynamoDB y la comparación de esquemas son funciones de DbGate Premium y forman parte de la única versión gratuita de DBFlux. Las ediciones lado a lado, qué ganas y lo que DBFlux aún no reemplaza.',
+        h1: 'Una alternativa gratuita y de código abierto a DbGate.',
+        lede: 'DbGate Community es gratuito y de código abierto bajo GPL-3.0, incluye MongoDB, Redis y una paleta de comandos, y también funciona como aplicación web. El diseñador de consultas, los gráficos, DynamoDB y la comparación de esquemas son funciones Premium en DbGate, y su registro de auditoría es de Team Premium. En DBFlux forman parte de la única versión gratuita. DBFlux es una aplicación de escritorio y no tiene versión web.',
+        bring: 'Cómo migrar desde DbGate',
+        meta: 'DBFlux {version} · última revisión {date}',
+        edition_title: 'Por edición',
+        edition_body:
+          'DbGate ofrece Community bajo GPL-3.0, Premium para un usuario en el escritorio y Team Premium para equipos, con aplicación web, administración y proveedores de identidad. Cada columna indica qué incluye esa edición.',
+        editions_page: 'precios',
+        gaps_body:
+          'Si tu día depende de alguna de estas funciones, deja DbGate instalado por ahora. DbGate las tiene y DBFlux todavía no.',
+        step: {
+          title: 'Vuelve a crear tus conexiones',
+          body: 'DBFlux no puede leer las exportaciones de conexiones de DbGate, así que añade cada conexión en el gestor de conexiones.',
+        },
       },
     },
   },

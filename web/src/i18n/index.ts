@@ -27,6 +27,99 @@ export const LOCALE_NAMES = Object.fromEntries(
   LOCALE_REGISTRY.map(({ id, name }) => [id, name]),
 ) as Record<Locale, string>;
 
+/** Strings every per-client comparison page shares. */
+export interface VsSharedStrings {
+  crumb: string;
+  download: string;
+  on_page: string;
+  toc: {
+    gain: string;
+    gaps: string;
+    moving: string;
+  };
+  col_feature: string;
+  sources: string;
+  dynamodb_note: string;
+  column: {
+    dbeaver_community: string;
+    dbeaver_paid: string;
+    datagrip_noncommercial: string;
+    datagrip_commercial: string;
+    tableplus_trial: string;
+    tableplus_paid: string;
+    beekeeper_community: string;
+    beekeeper_paid: string;
+    dbgate_community: string;
+    dbgate_premium: string;
+    dbgate_team: string;
+  };
+  gain_title: string;
+  gain: {
+    builder: { title: string; body: string; link: string };
+    redis: { title: string; body: string; link: string };
+    aws: { title: string; body: string; link: string };
+    governance: { title: string; body: string; link: string };
+  };
+  mockup: {
+    columns: string;
+    joins: string;
+    filters: string;
+    run: string;
+    keys: string;
+    preview_first: string;
+    unsaved: string;
+    pending: string;
+    approve: string;
+    reject: string;
+  };
+  gaps_title: string;
+  not_yet: string;
+  gap: {
+    table_editor: { name: string; detail: string };
+    formats: { name: string; detail: string };
+    query_plan: { name: string; detail: string };
+    users: { name: string; detail: string };
+    backup: { name: string; detail: string };
+    data_compare: { name: string; detail: string };
+  };
+  moving_title: string;
+  step: {
+    /** `{name}` is the client being replaced. */
+    install: { title: string; body: string };
+    query: { title: string; body: string };
+  };
+  where_title: string;
+  term: {
+    sidebar: string;
+    query_tab: string;
+    diagram: string;
+    transfer: string;
+    schema_diff: string;
+    history: string;
+    saved: string;
+    ssh: string;
+    palette: string;
+    no_equivalent: string;
+  };
+  others_title: string;
+}
+
+/** Strings one per-client comparison page owns. */
+export interface VsClientStrings {
+  page_title: string;
+  page_description: string;
+  h1: string;
+  lede: string;
+  bring: string;
+  /** `{version}`, `{date}`, and for DBeaver `{editions}`. */
+  meta: string;
+  edition_title: string;
+  edition_body: string;
+  editions_page: string;
+  gaps_body: string;
+  step: { title: string; body: string };
+}
+
 /**
  * The complete shape of every chrome string the site renders.
  *
@@ -264,6 +357,13 @@ export interface Dictionary {
         table_editor: string;
         query_plan: string;
         import_connections: string;
+        commercial_use: string;
+        diagram: string;
+        schema_diff: string;
+        query_log: string;
+        data_compare: string;
+        command_palette: string;
+        ai_approval: string;
       };
       row_note: {
         limits: string;
@@ -294,6 +394,20 @@ export interface Dictionary {
         mcp_dbgate: string;
         not_yet: string;
         not_included: string;
+        not_available: string;
+        not_stated: string;
+        big_data_tools: string;
+        noncommercial_only: string;
+        commercial_licence: string;
+        audit_log: string;
+        sql_log: string;
+        console_log: string;
+        user_actions: string;
+        objects_only: string;
+        community_plugin: string;
+        per_policy: string;
+        mcp_dbgate_team: string;
+        db_chat: string;
       };
       gain: {
         dbeaver: string;
@@ -364,70 +478,13 @@ export interface Dictionary {
     read_comparison: string;
     feedback: string;
     feedback_link: string;
-    vs_dbeaver: {
-      page_title: string;
-      page_description: string;
-      crumb: string;
-      h1: string;
-      lede: string;
-      download: string;
-      bring: string;
-      on_page: string;
-      toc: {
-        edition: string;
-        gain: string;
-        gaps: string;
-        moving: string;
-      };
-      meta: string;
-      edition_title: string;
-      edition_body: string;
-      col_feature: string;
-      col_community: string;
-      col_paid: string;
-      sources: string;
-      editions_page: string;
-      dynamodb_note: string;
-      gain_title: string;
-      gain: {
-        builder: { title: string; body: string; link: string };
-        redis: { title: string; body: string; link: string };
-        aws: { title: string; body: string; link: string };
-      };
-      mockup: {
-        columns: string;
-        joins: string;
-        filters: string;
-        run: string;
-        keys: string;
-        preview_first: string;
-        unsaved: string;
-      };
-      gaps_title: string;
-      gaps_body: string;
-      not_yet: string;
-      gap: {
-        table_editor: { name: string; detail: string };
-        formats: { name: string; detail: string };
-        query_plan: { name: string; detail: string };
-        users: { name: string; detail: string };
-        backup: { name: string; detail: string };
-        data_compare: { name: string; detail: string };
-      };
-      moving_title: string;
-      step: {
-        install: { title: string; body: string };
-        import: { title: string; body: string };
-        query: { title: string; body: string };
-      };
-      where_title: string;
-      term: {
-        sidebar: string;
-        query_tab: string;
-        diagram: string;
-        transfer: string;
-        schema_diff: string;
-      };
+    vs: VsSharedStrings;
+    vs_client: {
+      dbeaver: VsClientStrings;
+      datagrip: VsClientStrings;
+      tableplus: VsClientStrings;
+      beekeeper: VsClientStrings;
+      dbgate: VsClientStrings;
     };
   };
   about: {

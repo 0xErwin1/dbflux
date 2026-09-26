@@ -234,6 +234,13 @@ export const zh_Hans: Dictionary = {
         table_editor: '表与约束编辑器',
         query_plan: '查询计划可视化',
         import_connections: '可导入连接的来源',
+        commercial_use: '商业工作免费使用',
+        diagram: 'Schema 关系图',
+        schema_diff: 'Schema 差异',
+        query_log: '查询与审计日志',
+        data_compare: '数据对比',
+        command_palette: '查找操作的命令面板',
+        ai_approval: 'AI 执行查询前先询问',
       },
       row_note: {
         limits: '以所对比版本为准',
@@ -264,6 +271,20 @@ export const zh_Hans: Dictionary = {
         mcp_dbgate: '只读，Docker 版',
         not_yet: '尚未提供',
         not_included: '不包含',
+        not_available: '不提供',
+        not_stated: '未说明',
+        big_data_tools: 'Big Data Tools 插件',
+        noncommercial_only: '仅限非商业用途',
+        commercial_licence: '商业许可',
+        audit_log: '审计日志，可筛选、可导出',
+        sql_log: 'SQL 日志文件',
+        console_log: 'Console log，开启时',
+        user_actions: '登录与用户操作',
+        objects_only: '只查找对象，不查找操作',
+        community_plugin: '社区插件',
+        per_policy: '策略要求时',
+        mcp_dbgate_team: '可执行查询和写入',
+        db_chat: 'DB chat，经你许可',
       },
       gain: {
         dbeaver: '无需升级付费版本即可使用 MongoDB、Redis、DynamoDB、查询构建器和图表。',
@@ -336,32 +357,31 @@ export const zh_Hans: Dictionary = {
     read_comparison: '阅读对比',
     feedback: '发现过时的内容？提交一个 issue，该行会连同来源一起修正。',
     feedback_link: '提交 issue',
-    vs_dbeaver: {
-      page_title: '免费开源的 DBeaver 替代品',
-      page_description:
-        'MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中需要付费，在 DBFlux 中都包含在同一个免费版本里。你能得到什么、还缺什么，以及如何迁移连接。',
+    vs: {
       crumb: '对比',
-      h1: '免费开源的 DBeaver 替代品。',
-      lede: 'DBeaver Community 免费且开源，是一个好客户端。区别在于版本之间的界线：MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中是 PRO 功能，在 DBFlux 中则属于同一个免费版本。',
       download: '下载 DBFlux',
-      bring: '迁移你的 DBeaver 连接',
       on_page: '本页内容',
       toc: {
-        edition: '按版本',
         gain: '你能得到什么',
         gaps: '尚未取代的部分',
         moving: '迁移过来',
       },
-      meta: 'DBFlux {version} · DBeaver 版本信息截至 {editions} · 最后审阅 {date}',
-      edition_title: '按版本',
-      edition_body:
-        'DBeaver 提供免费的 Community 版和付费桌面版（Lite、Enterprise、Ultimate）。每一行列出包含该功能的最便宜的 DBeaver 版本。',
       col_feature: '功能',
-      col_community: 'DBeaver Community',
-      col_paid: 'DBeaver 付费版本',
       sources: '来源：',
-      editions_page: '版本',
       dynamodb_note: 'DBFlux 中的 DynamoDB 执行原生操作，不提供 PartiQL 和事务。',
+      column: {
+        dbeaver_community: 'DBeaver Community',
+        dbeaver_paid: 'DBeaver 付费版本',
+        datagrip_noncommercial: 'DataGrip 非商业许可（免费）',
+        datagrip_commercial: 'DataGrip 商业许可（付费）',
+        tableplus_trial: 'TablePlus 免费试用',
+        tableplus_paid: 'TablePlus 付费许可',
+        beekeeper_community: 'Beekeeper Community',
+        beekeeper_paid: 'Beekeeper 付费版本',
+        dbgate_community: 'DbGate Community',
+        dbgate_premium: 'DbGate Premium',
+        dbgate_team: 'DbGate Team Premium',
+      },
       gain_title: '你能得到什么',
       gain: {
         builder: {
@@ -379,6 +399,11 @@ export const zh_Hans: Dictionary = {
           body: '对 CloudWatch 运行 Logs Insights，然后打开任务写入的 S3 存储桶，预览文件并直接编辑。',
           link: 'CloudWatch 与 S3 驱动',
         },
+        governance: {
+          title: '按你的规则使用 AI 客户端',
+          body: 'MCP 客户端只能使用其角色允许的工具。每个请求都会被归类为读取、写入或破坏性变更，按该连接的策略检查，在策略要求时等待你审批，并写入审计日志。',
+          link: 'AI 与 MCP 治理',
+        },
       },
       mockup: {
         columns: '列',
@@ -388,9 +413,11 @@ export const zh_Hans: Dictionary = {
         keys: '个键',
         preview_first: '先预览',
         unsaved: '未保存',
+        pending: '待审批',
+        approve: '批准',
+        reject: '拒绝',
       },
       gaps_title: 'DBFlux 尚未取代的部分',
-      gaps_body: '如果你的日常工作依赖其中某一项，暂时保留 DBeaver。这些功能目前 DBFlux 都还没有。',
       not_yet: '尚未提供',
       gap: {
         table_editor: {
@@ -423,11 +450,7 @@ export const zh_Hans: Dictionary = {
       step: {
         install: {
           title: '安装 DBFlux',
-          body: '下载页提供 Linux、macOS 和 Windows 版本。不会改动你的 DBeaver 配置。',
-        },
-        import: {
-          title: '导入你的 DBeaver 连接',
-          body: '在连接管理器中选择“从另一个客户端导入”，然后选择工作区的 data-sources.json。再添加 credentials-config.json，已保存的密码会存入系统密钥环。PostgreSQL、MySQL、MariaDB、SQLite、SQL Server、MongoDB 和 Redis 连接会被导入，但不含 SSH 和 SSL 设置；DBFlux 无法转换的条目会连同原因一起列出。',
+          body: '下载页提供 Linux、macOS 和 Windows 版本。不会改动你的 {name} 配置。',
         },
         query: {
           title: '打开查询标签页',
@@ -441,6 +464,109 @@ export const zh_Hans: Dictionary = {
         diagram: 'Schema 关系图',
         transfer: '导出、导入、迁移',
         schema_diff: 'Schema 差异',
+        history: '查询历史',
+        saved: '已保存的查询',
+        ssh: 'SSH 隧道配置，访问标签页',
+        palette: '命令面板',
+        no_equivalent: '无对应功能',
+      },
+      others_title: '与其他客户端对比',
+    },
+    vs_client: {
+      dbeaver: {
+        page_title: '免费开源的 DBeaver 替代品',
+        page_description:
+          'MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中需要付费，在 DBFlux 中都包含在同一个免费版本里。你能得到什么、还缺什么，以及如何迁移连接。',
+        h1: '免费开源的 DBeaver 替代品。',
+        lede: 'DBeaver Community 免费且开源，是一个好客户端。区别在于版本之间的界线：MongoDB、Redis、DynamoDB、可视化查询构建器和图表在 DBeaver 中是 PRO 功能，在 DBFlux 中则属于同一个免费版本。',
+        bring: '迁移你的 DBeaver 连接',
+        meta: 'DBFlux {version} · DBeaver 版本信息截至 {editions} · 最后审阅 {date}',
+        edition_title: '按版本',
+        edition_body:
+          'DBeaver 提供免费的 Community 版和付费桌面版（Lite、Enterprise、Ultimate）。每一行列出包含该功能的最便宜的 DBeaver 版本。',
+        editions_page: '版本',
+        gaps_body:
+          '如果你的日常工作依赖其中某一项，暂时保留 DBeaver。这些功能目前 DBFlux 都还没有。',
+        step: {
+          title: '导入你的 DBeaver 连接',
+          body: '在连接管理器中选择“从另一个客户端导入”，然后选择工作区的 data-sources.json。再添加 credentials-config.json，已保存的密码会存入系统密钥环。PostgreSQL、MySQL、MariaDB、SQLite、SQL Server、MongoDB 和 Redis 连接会被导入，但不含 SSH 和 SSL 设置；DBFlux 无法转换的条目会连同原因一起列出。',
+        },
+      },
+      datagrip: {
+        page_title: '可免费用于商业工作的开源 DataGrip 替代品',
+        page_description:
+          'DataGrip 仅对非商业用途免费。DBFlux 是开源的，任何工作都可免费使用。两种许可的对比、DataGrip 在两种许可下都提供的功能，以及 DBFlux 尚未取代的部分。',
+        h1: '可免费用于商业工作的开源 DataGrip 替代品。',
+        lede: 'DataGrip 是一款功能完善的数据库 IDE，自 2025 年 10 月起对非商业用途免费，并包含付费版的全部功能。有报酬的工作仍然需要商业许可。DBFlux 是开源的，任何用途都免费，并且提供 DataGrip 没有的可视化查询构建器。在数据对比、SQL 代码分析和支持的引擎数量上，DataGrip 更胜一筹。',
+        bring: '从 DataGrip 迁移',
+        meta: 'DBFlux {version} · 最后审阅 {date}',
+        edition_title: '按许可',
+        edition_body:
+          'DataGrip 在两种许可下提供同一套功能。非商业许可免费，包含商业许可的全部功能，每年续期。有报酬的工作需要商业许可，即付费订阅。DataGrip 具备的功能，两列都会标明。',
+        editions_page: '许可说明',
+        gaps_body:
+          '如果你的日常工作依赖其中某一项，暂时保留 DataGrip。DataGrip 两项都有，DBFlux 目前还没有。',
+        step: {
+          title: '重新创建连接',
+          body: 'DBFlux 无法读取 DataGrip 的 dataSources.xml 或其设置导出文件，请在连接管理器中逐个添加连接。除非密码写在 JDBC URL 中，DataGrip 的导出不包含密码，所以无论如何都需要重新输入。',
+        },
+      },
+      tableplus: {
+        page_title: '免费开源的 TablePlus 替代品',
+        page_description:
+          'TablePlus 的免费版本是一个试用版，同时最多打开 2 个标签页、2 个窗口和 2 个高级筛选。DBFlux 是开源的，没有这些限制。许可对比、你能得到什么，以及 DBFlux 尚未取代的部分。',
+        h1: '免费开源的 TablePlus 替代品。',
+        lede: 'TablePlus 是一款以永久许可出售的快速原生客户端。它的免费版本是没有时间限制的试用版，同时最多打开 2 个标签页、2 个窗口和 2 个高级筛选。DBFlux 是开源的，没有这些限制。TablePlus 针对其 macOS 应用记录了 MCP 和 DynamoDB，对应的行标注为 macOS。',
+        bring: '从 TablePlus 迁移',
+        meta: 'DBFlux {version} · 最后审阅 {date}',
+        edition_title: '按许可',
+        edition_body:
+          'TablePlus 出售包含一年更新的永久许可，最低一档是一次性购买的 Basic。它的功能按平台而不是按方案划分，所以两列只在试用限制上不同。',
+        editions_page: '价格',
+        gaps_body:
+          '如果你的日常工作依赖其中某一项，暂时保留 TablePlus。TablePlus 两项都有，DBFlux 目前还没有。',
+        step: {
+          title: '重新创建连接',
+          body: 'DBFlux 无法读取 TablePlus 导出的 .tableplusconnection 文件，请在连接管理器中逐个添加连接。',
+        },
+      },
+      beekeeper: {
+        page_title: '免费开源的 Beekeeper Studio 替代品',
+        page_description:
+          'MongoDB、DynamoDB 和 ER 图在 Beekeeper Studio 中属于付费版本，在 DBFlux 中都包含在同一个免费版本里。你能得到什么、还缺什么，以及如何导入 Beekeeper 连接。',
+        h1: '免费开源的 Beekeeper Studio 替代品。',
+        lede: 'Beekeeper Studio Community 基于 GPLv3 免费开源，不限制连接数和标签页数，是一个好客户端。区别在于版本之间的界线：MongoDB、DynamoDB 和 ER 图在 Beekeeper 中属于付费版本，在 DBFlux 中则属于同一个免费版本。Beekeeper Community 可以通过表单编辑表，DBFlux 目前还不行。',
+        bring: '导入你的 Beekeeper 连接',
+        meta: 'DBFlux {version} · 最后审阅 {date}',
+        edition_title: '按版本',
+        edition_body:
+          'Beekeeper Studio 提供基于 GPLv3 的免费 Community 版，以及采用商业许可的付费版本。它的 README 标明了哪些数据库需要付费版本，但没有写明具体方案，所以这些行写的是付费版本。',
+        editions_page: 'README',
+        gaps_body:
+          '如果你的日常工作依赖其中某一项，暂时保留 Beekeeper Studio。Beekeeper 两项都有，DBFlux 目前还没有。',
+        step: {
+          title: '导入你的 Beekeeper 连接',
+          body: '在连接管理器中选择“从另一个客户端导入”，然后选择 Beekeeper Studio 的 app.db。PostgreSQL、MySQL、MariaDB、SQLite、SQL Server、MongoDB 和 Redis 连接会被导入，但不含 SSH 和 SSL 设置；DBFlux 无法转换的条目会连同原因一起列出。Beekeeper 用只保存在其本地安装中的密钥加密已保存的密码，所以导入后请重新输入密码。',
+        },
+      },
+      dbgate: {
+        page_title: '免费开源的 DbGate 替代品',
+        page_description:
+          '查询设计器、图表、DynamoDB 和 Schema 对比是 DbGate Premium 的功能，在 DBFlux 中都包含在同一个免费版本里。版本对比、你能得到什么，以及 DBFlux 尚未取代的部分。',
+        h1: '免费开源的 DbGate 替代品。',
+        lede: 'DbGate Community 基于 GPL-3.0 免费开源，包含 MongoDB、Redis 和命令面板，也可以作为 Web 应用运行。查询设计器、图表、DynamoDB 和 Schema 对比在 DbGate 中是 Premium 功能，审计日志属于 Team Premium。在 DBFlux 中它们都属于同一个免费版本。DBFlux 是桌面应用，没有 Web 版本。',
+        bring: '从 DbGate 迁移',
+        meta: 'DBFlux {version} · 最后审阅 {date}',
+        edition_title: '按版本',
+        edition_body:
+          'DbGate 提供基于 GPL-3.0 的 Community 版、面向单个桌面用户的 Premium 版，以及面向团队、带 Web 应用、管理功能和身份提供方的 Team Premium 版。每一列说明该版本包含的内容。',
+        editions_page: '价格',
+        gaps_body:
+          '如果你的日常工作依赖其中某一项，暂时保留 DbGate。这些功能 DbGate 都有，DBFlux 目前还没有。',
+        step: {
+          title: '重新创建连接',
+          body: 'DBFlux 无法读取 DbGate 的连接导出文件，请在连接管理器中逐个添加连接。',
+        },
       },
     },
   },

@@ -3,29 +3,37 @@ import Glyph from '../Glyph.astro';
 import BrandMark from '../BrandMark.astro';
 import GainMockup from './GainMockup.astro';
 import {
+  COMPARE_CLIENTS,
   COMPARE_REVIEWED,
   DBEAVER_EDITIONS_AS_OF,
-  DBEAVER_EDITIONS_SOURCE,
-  DBEAVER_EDITION_ROWS,
-  DBEAVER_GAPS,
-  DBEAVER_TERMS,
+  GAP_ICON,
   TONE_ICON,
+  VS_PAGES,
 } from '../../data/compare';
-import type { CompareCell, CompareRow } from '../../data/compare';
+import type { ClientId, CompareCell, CompareRow, VsGain } from '../../data/compare';
 import { docsUrl, siteUrl } from '../../data/site';
 import { CURRENT, productVersion } from '../../data/versions';
 import { DEFAULT_LOCALE, dictionary } from '../../i18n';
 import type { Locale } from '../../i18n';
 
+/**
+ * One client's comparison page: an edition or licence table, what DBFlux
+ * adds, what it does not replace yet, and how to move over. Everything that
+ * differs between clients comes from `VS_PAGES` and the client's strings.
+ */
 interface Props {
+  client: ClientId;
   locale?: Locale;
 }
 
-const { locale = DEFAULT_LOCALE } = Astro.props;
+const { client, locale = DEFAULT_LOCALE } = Astro.props;
 const dict = dictionary(locale);
-const strings = dict.compare_page.vs_dbeaver;
+const strings = dict.compare_page.vs;
+const own = dict.compare_page.vs_client[client];
 const shared = dict.landing.compare;
 const version = productVersion(CURRENT.id);
+const page = VS_PAGES[client];
+const name = COMPARE_CLIENTS.find((entry) => entry.id === client)?.name ?? client;
 
 const cellText = ([, value]: CompareCell) => ('key' in value ? shared.cell[value.key] : value.text);
 
@@ -33,7 +41,7 @@ const rowLabel = (label: CompareRow['label']) =>
   'key' in label ? shared.row[label.key] : label.text;
 
 const TOC = [
-  { href: '#edition', icon: 'table', label: strings.toc.edition },
+  { href: '#edition', icon: 'table', label: own.edition_title },
   { href: '#gain', icon: 'zap', label: strings.toc.gain },
   { href: '#gaps', icon: 'flag', label: strings.toc.gaps },
   { href: '#moving', icon: 'arrow-left-right', label: strings.toc.moving },
@@ -41,28 +49,36 @@ const TOC = [
 
 const usage = docsUrl('usage', '', locale);
 
-const GAINS = [
-  {
-    kind: 'builder',
-    icon: 'square-function',
-    href: `${usage}#visual-query-builder`,
-    ...strings.gain.builder,
-  },
-  { kind: 'redis', icon: 'brand/redis', href: `${usage}#key-value-view`, ...strings.gain.redis },
-  { kind: 'aws', icon: 'logs', href: docsUrl('drivers', '', locale), ...strings.gain.aws },
-] as const;
+const GAIN_LINKS: Readonly<Record<VsGain, { icon: string; href: string }>> = {
+  builder: { icon: 'square-function', href: `${usage}#visual-query-builder` },
+  redis: { icon: 'brand/redis', href: `${usage}#key-value-view` },
+  aws: { icon: 'logs', href: docsUrl('drivers', '', locale) },
+  governance: { icon: 'bot', href: docsUrl('mcp_ai_integration', '', locale) },
+};
+
+const GAINS = page.gains.map((kind) => ({ kind, ...GAIN_LINKS[kind], ...strings.gain[kind] }));
 
 const STEPS = [
-  { icon: 'download', ...strings.step.install },
-  { icon: 'arrow-left-right', ...strings.step.import },
+  {
+    icon: 'download',
+    title: strings.step.install.title,
+    body: strings.step.install.body.replace('{name}', name),
+  },
+  { icon: 'arrow-left-right', ...own.step },
   { icon: 'file', ...strings.step.query },
 ];
 
-/** Each row's DBeaver documentation page, the source for its edition. */
-const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
-  label: rowLabel(row.label),
-  href: row.sources.find((source) => source.client === 'dbeaver')?.href,
-})).filter((source): source is { label: string; href: string } => Boolean(source.href));
+/** Each row's vendor pages for this client, the sources for its cells. */
+const SOURCES = page.rows.flatMap(({ row }) =>
+  row.sources
+    .filter((source) => source.client === client)
+    .map((source) => ({
+      label: source.detail ? `${rowLabel(row.label)} (${source.detail})` : rowLabel(row.label),
+      href: source.href,
+    })),
+);
+
+const OTHERS = COMPARE_CLIENTS.filter((entry) => entry.id !== client);
 ---
 
 <div class="vs">
@@ -71,10 +87,10 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
       <nav class="vs__crumbs" aria-label={strings.crumb}>
         <a href={siteUrl('compare/', locale)}>{strings.crumb}</a>
         <Glyph name="chevron-right" size={13} />
-        <span aria-current="page">DBeaver</span>
+        <span aria-current="page">{name}</span>
       </nav>
-      <h1 class="display vs__h1">{strings.h1}</h1>
-      <p class="vs__lede">{strings.lede}</p>
+      <h1 class="display vs__h1">{own.h1}</h1>
+      <p class="vs__lede">{own.lede}</p>
       <div class="vs__actions">
         <a class="vs__button vs__button--primary x c10" href={`${siteUrl('', locale)}#install`}>
           <Glyph name="download" size={17} />
@@ -82,7 +98,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
         </a>
         <a class="vs__button vs__button--secondary c10" href="#moving">
           <Glyph name="arrow-left-right" size={17} />
-          {strings.bring}
+          {own.bring}
         </a>
       </div>
     </div>
@@ -99,7 +115,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
       }
       <span class="vs__toc-meta">
         {
-          strings.meta
+          own.meta
             .replace('{version}', version)
             .replace('{editions}', DBEAVER_EDITIONS_AS_OF)
             .replace('{date}', COMPARE_REVIEWED)
@@ -109,12 +125,12 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
   </section>
 
   <section id="edition" class="vs__block shell reveal">
-    <p class="eyebrow">{strings.edition_title}</p>
-    <p class="vs__body">{strings.edition_body}</p>
+    <p class="eyebrow">{own.edition_title}</p>
+    <p class="vs__body">{own.edition_body}</p>
     <div class="vs__frame card c18">
       <div class="vs__scroll">
-        <table class="vs__table">
-          <caption class="visually-hidden">{strings.edition_title}</caption>
+        <table class:list={['vs__table', { 'vs__table--wide': page.columns.length > 2 }]}>
+          <caption class="visually-hidden">{own.edition_title}</caption>
           <thead>
             <tr>
               <th scope="col" class="vs__feature x">{strings.col_feature}</th>
@@ -124,17 +140,18 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
                   DBFlux {version}
                 </span>
               </th>
-              <th scope="col" class="vs__col">
-                <span class="vs__col-inner">{strings.col_community}</span>
-              </th>
-              <th scope="col" class="vs__col">
-                <span class="vs__col-inner">{strings.col_paid}</span>
-              </th>
+              {
+                page.columns.map((column) => (
+                  <th scope="col" class="vs__col">
+                    <span class="vs__col-inner">{strings.column[column]}</span>
+                  </th>
+                ))
+              }
             </tr>
           </thead>
           <tbody class="reveal-group">
             {
-              DBEAVER_EDITION_ROWS.map(({ row, community, paid }) => (
+              page.rows.map(({ row, cells }) => (
                 <tr>
                   <th scope="row" class="vs__name">
                     <span class="vs__name-inner">
@@ -142,7 +159,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
                       {rowLabel(row.label)}
                     </span>
                   </th>
-                  {[row.dbflux, community, paid].map((cell, index) => (
+                  {[row.dbflux, ...cells].map((cell, index) => (
                     <td
                       class:list={['vs__cell', { 'vs__cell--dbflux': index === 0 }]}
                       data-verdict={cell[0]}
@@ -162,7 +179,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     </div>
     <p class="vs__sources">
       {strings.sources}{' '}
-      <a href={DBEAVER_EDITIONS_SOURCE} rel="noopener">{strings.editions_page}</a>
+      <a href={page.editionsSource} rel="noopener">{own.editions_page}</a>
       {
         SOURCES.map((source) => (
           <>
@@ -202,15 +219,15 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
 
   <section id="gaps" class="vs__block shell">
     <p class="eyebrow reveal">{strings.gaps_title}</p>
-    <p class="vs__body reveal">{strings.gaps_body}</p>
+    <p class="vs__body reveal">{own.gaps_body}</p>
     <ul class="vs__gaps reveal-group">
       {
-        DBEAVER_GAPS.map((gap) => (
+        page.gaps.map((gap) => (
           <li class="vs__gap card c10">
-            <Glyph name={gap.icon} size={20} class="vs__gap-icon" />
+            <Glyph name={GAP_ICON[gap]} size={20} class="vs__gap-icon" />
             <span class="vs__gap-text">
-              <span class="vs__gap-name">{strings.gap[gap.id].name}</span>
-              <span class="vs__gap-detail">{strings.gap[gap.id].detail}</span>
+              <span class="vs__gap-name">{strings.gap[gap].name}</span>
+              <span class="vs__gap-detail">{strings.gap[gap].detail}</span>
             </span>
             <span class="vs__badge" data-verdict="none">
               <Glyph name={TONE_ICON.none} size={13} class="verdict-icon" />
@@ -252,7 +269,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
       </p>
       <dl>
         {
-          DBEAVER_TERMS.map((term) => (
+          page.terms.map((term) => (
             <div class="vs__term">
               <dt>{term.from}</dt>
               <Glyph name="chevron-right" size={14} class="vs__term-arrow" />
@@ -261,6 +278,32 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
           ))
         }
       </dl>
+    </div>
+  </section>
+
+  <section class="vs__others shell">
+    <p class="eyebrow reveal">{strings.others_title}</p>
+    <div class="vs__other-list reveal-group">
+      {
+        OTHERS.map((other) => (
+          <a class="vs__other card c14 lift" href={siteUrl(VS_PAGES[other.id].path, locale)}>
+            <span class="vs__other-title x">vs {other.name}</span>
+            <span class="vs__other-text">{shared.gain[other.id]}</span>
+            <span class="go go--plain vs__other-go">
+              {dict.compare_page.read_comparison}
+              <Glyph name="chevron-right" size={14} class="go__chev" />
+            </span>
+          </a>
+        ))
+      }
+      <a class="vs__other vs__other--all card c14 lift" href={siteUrl('compare/', locale)}>
+        <span class="vs__other-title x">{shared.full}</span>
+        <span class="vs__other-text">{dict.compare_page.meta_body}</span>
+        <span class="go go--plain vs__other-go">
+          {dict.compare_page.read_comparison}
+          <Glyph name="chevron-right" size={14} class="go__chev" />
+        </span>
+      </a>
     </div>
   </section>
 </div>
@@ -418,6 +461,14 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     min-width: 760px;
     border-collapse: collapse;
     table-layout: fixed;
+  }
+
+  .vs__table--wide {
+    min-width: 1080px;
+  }
+
+  .vs__table--wide .vs__col {
+    width: 220px;
   }
 
   .vs__table th,
@@ -703,6 +754,53 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     color: var(--text-muted);
   }
 
+  .vs__others {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-bottom: 88px;
+  }
+
+  .vs__other-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+  }
+
+  .vs__other {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 22px;
+    color: var(--text);
+  }
+
+  .vs__other:hover {
+    color: var(--text);
+  }
+
+  .vs__other-title {
+    color: var(--text-strong);
+    font-weight: 900;
+    font-size: 18px;
+    line-height: 1.05;
+    text-transform: uppercase;
+  }
+
+  .vs__other-text {
+    flex-grow: 1;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .vs__other-go {
+    font-size: 13.5px;
+  }
+
+  .vs__other--all {
+    background: var(--raised);
+  }
+
   @media (max-width: 1180px) {
     .vs__intro {
       flex-direction: column;
@@ -763,6 +861,14 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
       min-width: 620px;
     }
 
+    .vs__table--wide {
+      min-width: 800px;
+    }
+
+    .vs__table--wide .vs__col {
+      width: 160px;
+    }
+
     .vs__col {
       width: 160px;
     }
@@ -778,6 +884,10 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
 
     .vs__moving {
       padding-top: 56px;
+      padding-bottom: 56px;
+    }
+
+    .vs__others {
       padding-bottom: 56px;
     }
 

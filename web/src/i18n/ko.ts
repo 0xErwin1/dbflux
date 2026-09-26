@@ -236,6 +236,13 @@ export const ko: Dictionary = {
         table_editor: '테이블 및 제약 조건 편집기',
         query_plan: '쿼리 실행 계획 시각화',
         import_connections: '연결 가져오기 대상',
+        commercial_use: '업무용 무료 사용',
+        diagram: '스키마 다이어그램',
+        schema_diff: '스키마 차이',
+        query_log: '쿼리 및 감사 로그',
+        data_compare: '데이터 비교',
+        command_palette: '동작을 찾는 명령 팔레트',
+        ai_approval: 'AI가 쿼리를 실행하기 전 확인',
       },
       row_note: {
         limits: '비교한 에디션 기준',
@@ -266,6 +273,20 @@ export const ko: Dictionary = {
         mcp_dbgate: '읽기 전용, Docker 빌드',
         not_yet: '아직 없음',
         not_included: '포함 안 됨',
+        not_available: '제공 안 됨',
+        not_stated: '명시 안 됨',
+        big_data_tools: 'Big Data Tools 플러그인',
+        noncommercial_only: '비상업적 사용만',
+        commercial_licence: '상업 라이선스',
+        audit_log: '감사 로그, 필터링 및 내보내기 가능',
+        sql_log: 'SQL 로그 파일',
+        console_log: 'Console log, 켰을 때',
+        user_actions: '로그인과 사용자 동작',
+        objects_only: '객체만 찾고 동작은 찾지 않음',
+        community_plugin: '커뮤니티 플러그인',
+        per_policy: '정책이 요구할 때',
+        mcp_dbgate_team: '쿼리 실행과 쓰기',
+        db_chat: 'DB chat, 사용자 허락 후',
       },
       gain: {
         dbeaver: '유료 에디션 없이 MongoDB, Redis, DynamoDB, 쿼리 빌더, 차트를 씁니다.',
@@ -343,32 +364,31 @@ export const ko: Dictionary = {
     read_comparison: '비교 읽기',
     feedback: '오래된 내용을 발견했나요? 이슈를 열면 해당 행을 출처와 함께 고칩니다.',
     feedback_link: '이슈 열기',
-    vs_dbeaver: {
-      page_title: '무료 오픈 소스 DBeaver 대안',
-      page_description:
-        'MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서 유료이고 DBFlux에서는 하나의 무료 빌드에 들어 있습니다. 얻는 것, 아직 없는 것, 연결을 옮기는 방법.',
+    vs: {
       crumb: '비교',
-      h1: '무료 오픈 소스 DBeaver 대안.',
-      lede: 'DBeaver Community는 무료 오픈 소스이고 좋은 클라이언트입니다. 차이는 에디션 사이의 경계에 있습니다. MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서는 PRO 기능이고 DBFlux에서는 하나의 무료 빌드에 포함됩니다.',
       download: 'DBFlux 다운로드',
-      bring: 'DBeaver 연결 가져오기',
       on_page: '이 페이지에서',
       toc: {
-        edition: '에디션별',
         gain: '얻는 것',
         gaps: '아직 대체하지 못하는 것',
         moving: '옮겨 오기',
       },
-      meta: 'DBFlux {version} · DBeaver 에디션 기준 {editions} · 마지막 검토 {date}',
-      edition_title: '에디션별',
-      edition_body:
-        'DBeaver는 무료 Community 에디션과 유료 데스크톱 에디션(Lite, Enterprise, Ultimate)을 제공합니다. 각 행에는 해당 기능을 포함하는 가장 저렴한 DBeaver 에디션을 적었습니다.',
       col_feature: '기능',
-      col_community: 'DBeaver Community',
-      col_paid: 'DBeaver 유료 에디션',
       sources: '출처:',
-      editions_page: '에디션',
       dynamodb_note: 'DBFlux의 DynamoDB는 PartiQL이나 트랜잭션 없이 네이티브 작업을 실행합니다.',
+      column: {
+        dbeaver_community: 'DBeaver Community',
+        dbeaver_paid: 'DBeaver 유료 에디션',
+        datagrip_noncommercial: 'DataGrip 비상업용 (무료)',
+        datagrip_commercial: 'DataGrip 상업용 (유료)',
+        tableplus_trial: 'TablePlus 무료 체험판',
+        tableplus_paid: 'TablePlus 유료 라이선스',
+        beekeeper_community: 'Beekeeper Community',
+        beekeeper_paid: 'Beekeeper 유료 에디션',
+        dbgate_community: 'DbGate Community',
+        dbgate_premium: 'DbGate Premium',
+        dbgate_team: 'DbGate Team Premium',
+      },
       gain_title: '얻는 것',
       gain: {
         builder: {
@@ -386,6 +406,11 @@ export const ko: Dictionary = {
           body: 'CloudWatch에서 Logs Insights를 실행한 뒤, 작업이 기록한 S3 버킷을 열어 파일을 미리 보고 그 자리에서 편집합니다.',
           link: 'CloudWatch 및 S3 드라이버',
         },
+        governance: {
+          title: '내 규칙 안에서 움직이는 AI 클라이언트',
+          body: 'MCP 클라이언트는 역할이 허용하는 도구만 받습니다. 각 요청은 읽기, 쓰기, 파괴적 변경으로 분류되고, 해당 연결의 정책으로 검사되며, 정책이 요구하면 승인을 기다리고, 감사 로그에 기록됩니다.',
+          link: 'AI 및 MCP 거버넌스',
+        },
       },
       mockup: {
         columns: '열',
@@ -395,10 +420,11 @@ export const ko: Dictionary = {
         keys: '키',
         preview_first: '먼저 미리 보기',
         unsaved: '저장 안 됨',
+        pending: '대기 중',
+        approve: '승인',
+        reject: '거부',
       },
       gaps_title: 'DBFlux가 아직 대체하지 못하는 것',
-      gaps_body:
-        '하루 업무가 이 중 하나에 달려 있다면 당분간 DBeaver를 설치해 두세요. 모두 지금 DBFlux에 없는 기능입니다.',
       not_yet: '아직 없음',
       gap: {
         table_editor: {
@@ -434,11 +460,7 @@ export const ko: Dictionary = {
       step: {
         install: {
           title: 'DBFlux 설치',
-          body: 'Linux, macOS, Windows 빌드는 다운로드 페이지에 있습니다. DBeaver 설정은 건드리지 않습니다.',
-        },
-        import: {
-          title: 'DBeaver 연결 가져오기',
-          body: '연결 관리자에서 다른 클라이언트에서 가져오기를 고르고 작업 공간의 data-sources.json을 선택합니다. credentials-config.json을 추가하면 저장된 비밀번호가 시스템 키링으로 옮겨집니다. PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB, Redis 연결을 SSH와 SSL 설정 없이 가져오며, DBFlux가 변환하지 못한 항목은 이유와 함께 표시됩니다.',
+          body: 'Linux, macOS, Windows 빌드는 다운로드 페이지에 있습니다. {name} 설정은 건드리지 않습니다.',
         },
         query: {
           title: '쿼리 탭 열기',
@@ -452,6 +474,109 @@ export const ko: Dictionary = {
         diagram: '스키마 다이어그램',
         transfer: '내보내기, 가져오기, 마이그레이션',
         schema_diff: '스키마 차이',
+        history: '쿼리 기록',
+        saved: '저장된 쿼리',
+        ssh: 'SSH 터널 프로필, 접근 탭',
+        palette: '명령 팔레트',
+        no_equivalent: '대응 기능 없음',
+      },
+      others_title: '다른 클라이언트와 비교',
+    },
+    vs_client: {
+      dbeaver: {
+        page_title: '무료 오픈 소스 DBeaver 대안',
+        page_description:
+          'MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서 유료이고 DBFlux에서는 하나의 무료 빌드에 들어 있습니다. 얻는 것, 아직 없는 것, 연결을 옮기는 방법.',
+        h1: '무료 오픈 소스 DBeaver 대안.',
+        lede: 'DBeaver Community는 무료 오픈 소스이고 좋은 클라이언트입니다. 차이는 에디션 사이의 경계에 있습니다. MongoDB, Redis, DynamoDB, 시각적 쿼리 빌더와 차트는 DBeaver에서는 PRO 기능이고 DBFlux에서는 하나의 무료 빌드에 포함됩니다.',
+        bring: 'DBeaver 연결 가져오기',
+        meta: 'DBFlux {version} · DBeaver 에디션 기준 {editions} · 마지막 검토 {date}',
+        edition_title: '에디션별',
+        edition_body:
+          'DBeaver는 무료 Community 에디션과 유료 데스크톱 에디션(Lite, Enterprise, Ultimate)을 제공합니다. 각 행에는 해당 기능을 포함하는 가장 저렴한 DBeaver 에디션을 적었습니다.',
+        editions_page: '에디션',
+        gaps_body:
+          '하루 업무가 이 중 하나에 달려 있다면 당분간 DBeaver를 설치해 두세요. 모두 지금 DBFlux에 없는 기능입니다.',
+        step: {
+          title: 'DBeaver 연결 가져오기',
+          body: '연결 관리자에서 다른 클라이언트에서 가져오기를 고르고 작업 공간의 data-sources.json을 선택합니다. credentials-config.json을 추가하면 저장된 비밀번호가 시스템 키링으로 옮겨집니다. PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB, Redis 연결을 SSH와 SSL 설정 없이 가져오며, DBFlux가 변환하지 못한 항목은 이유와 함께 표시됩니다.',
+        },
+      },
+      datagrip: {
+        page_title: '업무에도 무료인 오픈 소스 DataGrip 대안',
+        page_description:
+          'DataGrip은 비상업적 사용에만 무료입니다. DBFlux는 오픈 소스이고 어떤 업무에도 무료입니다. 두 라이선스 비교, DataGrip이 두 라이선스 모두에서 제공하는 기능, DBFlux가 아직 대체하지 못하는 것.',
+        h1: '업무에도 무료인 오픈 소스 DataGrip 대안.',
+        lede: 'DataGrip은 기능이 풍부한 데이터베이스 IDE이고, 2025년 10월부터 유료 버전의 모든 기능을 갖춘 채 비상업적 사용에 무료입니다. 대가를 받는 업무에는 여전히 상업 라이선스가 필요합니다. DBFlux는 오픈 소스이고 어떤 용도로든 무료이며, DataGrip에는 없는 시각적 쿼리 빌더가 있습니다. 데이터 비교, SQL 코드 분석, 지원하는 엔진 수에서는 DataGrip이 앞섭니다.',
+        bring: 'DataGrip에서 옮겨 오기',
+        meta: 'DBFlux {version} · 마지막 검토 {date}',
+        edition_title: '라이선스별',
+        edition_body:
+          'DataGrip은 하나의 기능 세트를 두 라이선스로 제공합니다. 비상업용 라이선스는 무료이고, 상업용 라이선스의 모든 기능을 포함하며, 매년 갱신됩니다. 대가를 받는 업무에는 유료 구독인 상업용 라이선스가 필요합니다. DataGrip에 있는 기능은 두 열 모두에 표시했습니다.',
+        editions_page: '라이선스',
+        gaps_body:
+          '하루 업무가 이 중 하나에 달려 있다면 당분간 DataGrip을 설치해 두세요. DataGrip에는 둘 다 있고 DBFlux에는 아직 없습니다.',
+        step: {
+          title: '연결 다시 만들기',
+          body: 'DBFlux는 DataGrip의 dataSources.xml이나 설정 내보내기 파일을 읽지 못하므로 연결 관리자에서 연결을 하나씩 추가합니다. DataGrip은 JDBC URL에 포함된 경우가 아니면 내보내기에 비밀번호를 넣지 않으므로, 어차피 비밀번호는 다시 입력해야 합니다.',
+        },
+      },
+      tableplus: {
+        page_title: '무료 오픈 소스 TablePlus 대안',
+        page_description:
+          'TablePlus의 무료 버전은 한 번에 탭 2개, 창 2개, 고급 필터 2개로 제한된 체험판입니다. DBFlux는 오픈 소스이고 이런 제한이 없습니다. 라이선스 비교, 얻는 것, DBFlux가 아직 대체하지 못하는 것.',
+        h1: '무료 오픈 소스 TablePlus 대안.',
+        lede: 'TablePlus는 영구 라이선스로 판매되는 빠른 네이티브 클라이언트입니다. 무료 버전은 기간 제한이 없는 체험판으로, 한 번에 탭 2개, 창 2개, 고급 필터 2개까지만 열 수 있습니다. DBFlux는 오픈 소스이고 이런 제한이 없습니다. TablePlus는 MCP와 DynamoDB를 macOS 앱에 대해 문서화하고 있으며, 해당 행에는 macOS라고 적었습니다.',
+        bring: 'TablePlus에서 옮겨 오기',
+        meta: 'DBFlux {version} · 마지막 검토 {date}',
+        edition_title: '라이선스별',
+        edition_body:
+          'TablePlus는 1년간의 업데이트가 포함된 영구 라이선스를 판매하며, 가장 낮은 단계는 일회성 구매인 Basic입니다. 기능은 요금제가 아니라 플랫폼에 따라 나뉘므로 두 열은 체험판 제한만 다릅니다.',
+        editions_page: '가격',
+        gaps_body:
+          '하루 업무가 이 중 하나에 달려 있다면 당분간 TablePlus를 설치해 두세요. TablePlus에는 둘 다 있고 DBFlux에는 아직 없습니다.',
+        step: {
+          title: '연결 다시 만들기',
+          body: 'DBFlux는 TablePlus가 내보내는 .tableplusconnection 파일을 읽지 못하므로 연결 관리자에서 연결을 하나씩 추가합니다.',
+        },
+      },
+      beekeeper: {
+        page_title: '무료 오픈 소스 Beekeeper Studio 대안',
+        page_description:
+          'MongoDB, DynamoDB, ER 다이어그램은 Beekeeper Studio의 유료 에디션에 있고 DBFlux에서는 하나의 무료 빌드에 들어 있습니다. 얻는 것, 아직 없는 것, Beekeeper 연결을 가져오는 방법.',
+        h1: '무료 오픈 소스 Beekeeper Studio 대안.',
+        lede: 'Beekeeper Studio Community는 GPLv3 기반의 무료 오픈 소스이고, 연결이나 탭 수 제한이 없는 좋은 클라이언트입니다. 차이는 에디션 사이의 경계에 있습니다. MongoDB, DynamoDB, ER 다이어그램은 Beekeeper에서는 유료 에디션에 있고 DBFlux에서는 하나의 무료 빌드에 포함됩니다. Beekeeper Community는 양식으로 테이블을 편집할 수 있지만 DBFlux는 아직 그렇지 못합니다.',
+        bring: 'Beekeeper 연결 가져오기',
+        meta: 'DBFlux {version} · 마지막 검토 {date}',
+        edition_title: '에디션별',
+        edition_body:
+          'Beekeeper Studio는 GPLv3 기반의 무료 Community 에디션과 상업 라이선스의 유료 에디션을 제공합니다. README는 유료 에디션이 필요한 데이터베이스를 표시하지만 요금제 이름은 밝히지 않으므로, 해당 행에는 유료 에디션이라고 적었습니다.',
+        editions_page: 'README',
+        gaps_body:
+          '하루 업무가 이 중 하나에 달려 있다면 당분간 Beekeeper Studio를 설치해 두세요. Beekeeper에는 둘 다 있고 DBFlux에는 아직 없습니다.',
+        step: {
+          title: 'Beekeeper 연결 가져오기',
+          body: '연결 관리자에서 다른 클라이언트에서 가져오기를 고르고 Beekeeper Studio의 app.db를 선택합니다. PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, MongoDB, Redis 연결을 SSH와 SSL 설정 없이 가져오며, DBFlux가 변환하지 못한 항목은 이유와 함께 표시됩니다. Beekeeper는 저장된 비밀번호를 해당 설치에만 있는 키로 암호화하므로 가져온 뒤 비밀번호를 다시 입력하세요.',
+        },
+      },
+      dbgate: {
+        page_title: '무료 오픈 소스 DbGate 대안',
+        page_description:
+          '쿼리 디자이너, 차트, DynamoDB, 스키마 비교는 DbGate Premium 기능이고 DBFlux에서는 하나의 무료 빌드에 들어 있습니다. 에디션 비교, 얻는 것, DBFlux가 아직 대체하지 못하는 것.',
+        h1: '무료 오픈 소스 DbGate 대안.',
+        lede: 'DbGate Community는 GPL-3.0 기반의 무료 오픈 소스이고, MongoDB, Redis, 명령 팔레트를 포함하며 웹 앱으로도 실행됩니다. 쿼리 디자이너, 차트, DynamoDB, 스키마 비교는 DbGate의 Premium 기능이고, 감사 로그는 Team Premium에 있습니다. DBFlux에서는 모두 하나의 무료 빌드에 포함됩니다. DBFlux는 데스크톱 앱이며 웹 빌드는 없습니다.',
+        bring: 'DbGate에서 옮겨 오기',
+        meta: 'DBFlux {version} · 마지막 검토 {date}',
+        edition_title: '에디션별',
+        edition_body:
+          'DbGate는 GPL-3.0 기반의 Community, 데스크톱 사용자 한 명을 위한 Premium, 웹 앱과 관리 기능, ID 공급자를 갖춘 팀용 Team Premium을 제공합니다. 각 열에는 해당 에디션에 포함된 것을 적었습니다.',
+        editions_page: '가격',
+        gaps_body:
+          '하루 업무가 이 중 하나에 달려 있다면 당분간 DbGate를 설치해 두세요. DbGate에는 있고 DBFlux에는 아직 없습니다.',
+        step: {
+          title: '연결 다시 만들기',
+          body: 'DBFlux는 DbGate의 연결 내보내기 파일을 읽지 못하므로 연결 관리자에서 연결을 하나씩 추가합니다.',
+        },
       },
     },
   },

@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import type { AstroIntegration } from 'astro';
+import { COMPARE_CLIENTS } from '../data/compare';
 import { DOCS_MODE, docsPath, docsUrl, siteUrl } from '../data/site';
 import { CURRENT, VERSIONS } from '../data/versions';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
@@ -19,7 +20,11 @@ import { DEFAULT_LOCALE, LOCALES } from '../i18n';
  * thing: the page moved, permanently, to there.
  */
 /** Landing pages other than the home page, as paths without slashes at either end. */
-const SITE_PAGES = ['about', 'compare', 'compare/dbeaver'] as const;
+const SITE_PAGES = [
+  'about',
+  'compare',
+  ...COMPARE_CLIENTS.map((client) => `compare/${client.id}`),
+] as const;
 
 function rules(): string[] {
   if (DOCS_MODE === 'site') {
