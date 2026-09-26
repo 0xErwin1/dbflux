@@ -2435,4 +2435,82 @@ mod tests {
             );
         });
     }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    fn detailed_event(id: i64) -> super::AuditEventDto {
+        super::AuditEventDto {
+            id,
+            actor_id: "claude-desktop".to_string(),
+            tool_id: "select_data".to_string(),
+            decision: "allow".to_string(),
+            reason: None,
+            profile_id: None,
+            classification: Some("read".to_string()),
+            duration_ms: Some(12),
+            created_at: "2026-01-01 00:00:00".to_string(),
+            created_at_epoch_ms: 1_767_225_600_000 + id,
+            level: Some("info".to_string()),
+            category: Some("mcp".to_string()),
+            action: Some("select_data".to_string()),
+            outcome: Some("pending".to_string()),
+            actor_type: Some("mcp_client".to_string()),
+            source_id: Some("mcp".to_string()),
+            summary: Some(format!("select_data {id}")),
+            connection_id: Some("shop-pg".to_string()),
+            database_name: None,
+            driver_id: Some("postgres".to_string()),
+            object_type: None,
+            object_id: None,
+            details_json: Some(r#"{"rows": 3}"#.to_string()),
+            error_code: None,
+            error_message: Some("statement timeout".to_string()),
+            session_id: None,
+            correlation_id: Some(format!("correlation-{id}")),
+        }
+    }
+
+    /// Two expanded rows render the same detail actions; the per-event row
+    /// id keeps their accessibility nodes distinct, so the debug assertion
+    /// on duplicate node ids does not fire and both rows' actions are
+    /// reported.
+    #[gpui::test]
+    fn two_expanded_rows_render_distinct_accessibility_nodes(cx: &mut gpui::TestAppContext) {
+        let (document, _app_state, window) = new_audit_document(cx, None);
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        window.update(|window, cx| {
+            window.observe_frames(&capture);
+
+            document.update(cx, |document, cx| {
+                document.events = vec![detailed_event(1), detailed_event(2)];
+                document.expanded_event_ids = [1, 2].into_iter().collect();
+                cx.notify();
+            });
+
+            window.refresh();
+        });
+        window.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let copy_buttons = frame
+            .nodes()
+            .filter(|(_, node)| node.path().ends_with("audit-detail-copy-json"))
+            .count();
+        assert_eq!(copy_buttons, 2, "each expanded row reports its own action");
+    }
 }

@@ -41,9 +41,6 @@ access:
   ssh_disabled_hint: Habilita el túnel SSH para configurar la conexión a través de un host bastión
 audit:
   toast:
-    focus_existing_viewer: Se enfocó el visor de auditoría existente
-    opened_viewer: Se abrió el visor de auditoría
-    opened_mcp_approvals: Se abrieron las aprobaciones de MCP
     mcp_governance_persisted: Se guardó el estado de gobernanza de MCP
   error:
     open_viewer_failed: "No se pudo abrir el visor de auditoría: %{error}"

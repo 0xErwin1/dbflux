@@ -41,9 +41,6 @@ access:
   ssh_disabled_hint: 启用 SSH 隧道以配置经由堡垒机的连接
 audit:
   toast:
-    focus_existing_viewer: 正在聚焦已打开的审计查看器
-    opened_viewer: 已打开审计查看器
-    opened_mcp_approvals: 已打开 MCP 审批
     mcp_governance_persisted: MCP 治理状态已持久化
   error:
     open_viewer_failed: "无法打开审计查看器：%{error}"

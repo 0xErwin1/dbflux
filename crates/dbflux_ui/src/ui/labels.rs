@@ -384,21 +384,6 @@ pub(crate) fn select_dump_analyzer(
     Some((first.0, multiple_matched))
 }
 
-/// Formats the "Focusing existing audit viewer" toast.
-pub(crate) fn audit_focus_existing_viewer_message() -> String {
-    dbflux_i18n::t!("audit.toast.focus_existing_viewer")
-}
-
-/// Formats the "Opened audit viewer" toast.
-pub(crate) fn audit_opened_viewer_message() -> String {
-    dbflux_i18n::t!("audit.toast.opened_viewer")
-}
-
-/// Formats the "Opened MCP approvals" toast.
-pub(crate) fn audit_opened_mcp_approvals_message() -> String {
-    dbflux_i18n::t!("audit.toast.opened_mcp_approvals")
-}
-
 /// Formats the "MCP governance state persisted" toast.
 pub(crate) fn audit_mcp_governance_persisted_message() -> String {
     dbflux_i18n::t!("audit.toast.mcp_governance_persisted")
@@ -502,10 +487,8 @@ pub(crate) fn unsaved_changes_cannot_save_message(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        NoActiveConnectionKind, audit_focus_existing_viewer_message,
-        audit_mcp_governance_persisted_message, audit_open_viewer_failed_message,
-        audit_opened_mcp_approvals_message, audit_opened_viewer_message,
-        audit_persist_mcp_governance_failed_message,
+        NoActiveConnectionKind, audit_mcp_governance_persisted_message,
+        audit_open_viewer_failed_message, audit_persist_mcp_governance_failed_message,
         charts_instance_overview_create_editable_failed_message,
         charts_instance_overview_created_editable_message, charts_instance_overview_editable_name,
         charts_instance_overview_no_dashboard_message, connections_disconnecting_message,
@@ -699,9 +682,6 @@ mod tests {
         "scripts.dialog.filter.redis",
         "scripts.dialog.filter.all_files",
         "scripts.error.read_file_failed",
-        "audit.toast.focus_existing_viewer",
-        "audit.toast.opened_viewer",
-        "audit.toast.opened_mcp_approvals",
         "audit.toast.mcp_governance_persisted",
         "audit.error.open_viewer_failed",
         "audit.error.persist_mcp_governance_failed",
@@ -825,9 +805,6 @@ mod tests {
 
     #[test]
     fn audit_toast_messages_resolve() {
-        assert!(!audit_focus_existing_viewer_message().is_empty());
-        assert!(!audit_opened_viewer_message().is_empty());
-        assert!(!audit_opened_mcp_approvals_message().is_empty());
         assert!(!audit_mcp_governance_persisted_message().is_empty());
     }
 

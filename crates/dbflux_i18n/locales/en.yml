@@ -41,9 +41,6 @@ access:
   ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
 audit:
   toast:
-    focus_existing_viewer: Focusing existing audit viewer
-    opened_viewer: Opened audit viewer
-    opened_mcp_approvals: Opened MCP approvals
     mcp_governance_persisted: MCP governance state persisted
   error:
     open_viewer_failed: "Cannot open audit viewer: %{error}"

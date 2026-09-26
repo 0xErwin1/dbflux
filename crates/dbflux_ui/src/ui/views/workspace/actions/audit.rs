@@ -1,8 +1,7 @@
 use super::*;
 use crate::ui::labels::{
-    audit_focus_existing_viewer_message, audit_mcp_governance_persisted_message,
-    audit_open_viewer_failed_message, audit_opened_mcp_approvals_message,
-    audit_opened_viewer_message, audit_persist_mcp_governance_failed_message,
+    audit_mcp_governance_persisted_message, audit_open_viewer_failed_message,
+    audit_persist_mcp_governance_failed_message,
 };
 
 impl Workspace {
@@ -37,9 +36,6 @@ impl Workspace {
             });
 
             self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-            Toast::info(audit_focus_existing_viewer_message())
-                .meta_right(now_hms())
-                .push(cx);
             return;
         }
 
@@ -63,9 +59,6 @@ impl Workspace {
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-        Toast::info(audit_opened_viewer_message())
-            .meta_right(now_hms())
-            .push(cx);
     }
 
     /// Opens (or focuses) the audit viewer pre-filtered by correlation id.
@@ -160,10 +153,6 @@ impl Workspace {
         let approvals_focus = self.mcp_approvals_view.read(cx).focus_handle();
         approvals_focus.focus(window, cx);
         cx.notify();
-
-        Toast::info(audit_opened_mcp_approvals_message())
-            .meta_right(now_hms())
-            .push(cx);
     }
 
     /// Hides the governance overlay and hands focus back to the panel that

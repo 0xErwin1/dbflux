@@ -978,11 +978,7 @@ impl AuditDocument {
 
             row = row
                 .child(
-                    div()
-                        .w(AuditColumns::PARTITION)
-                        .flex_shrink_0()
-                        .pr(DocumentMetrics::GAP)
-                        .overflow_hidden()
+                    Self::badge_cell(AuditColumns::PARTITION)
                         .when_some(partition, |cell, value| {
                             cell.child(Badge::new(value, BadgeTone::Neutral))
                         }),
@@ -1002,7 +998,7 @@ impl AuditDocument {
                 .as_deref()
                 .and_then(dbflux_core::EventOutcome::from_str_repr);
 
-            let level_cell = div().w(AuditColumns::LEVEL).flex_shrink_0().when_some(
+            let level_cell = Self::badge_cell(AuditColumns::LEVEL).when_some(
                 event.level.as_deref(),
                 |cell, level| {
                     cell.child(Badge::new(
@@ -1057,7 +1053,10 @@ impl AuditDocument {
                 .child(outcome_cell);
         }
 
+        // The per-event id scopes the ids of the detail's controls, which
+        // repeat in every expanded row.
         div()
+            .id(("audit-event-entry", event_id as u64))
             .w_full()
             .flex()
             .flex_col()
@@ -1065,6 +1064,19 @@ impl AuditDocument {
             .when(is_expanded, |root| {
                 root.child(self.render_inline_detail(event, window, cx))
             })
+    }
+
+    /// A table cell holding a badge. The cell lays its child out as a flex
+    /// item so the badge keeps its content width instead of stretching to
+    /// the column, and the trailing padding keeps it off the next column.
+    fn badge_cell(width: Pixels) -> Div {
+        div()
+            .w(width)
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .pr(DocumentMetrics::GAP)
+            .overflow_hidden()
     }
 
     /// Lays detail fields out in rows of six equal columns.

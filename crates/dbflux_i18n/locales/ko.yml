@@ -41,9 +41,6 @@ access:
   ssh_disabled_hint: 배스천 호스트를 통한 연결을 구성하려면 SSH 터널을 사용하세요.
 audit:
   toast:
-    focus_existing_viewer: 기존 감사 뷰어로 포커스를 이동합니다.
-    opened_viewer: 감사 뷰어를 열었습니다.
-    opened_mcp_approvals: MCP 승인을 열었습니다.
     mcp_governance_persisted: MCP 거버넌스 상태를 저장했습니다.
   error:
     open_viewer_failed: "감사 뷰어를 열 수 없습니다: %{error}"
