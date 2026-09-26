@@ -2461,7 +2461,7 @@ mod tests {
         let header_only =
             super::DataTableState::initial_column_width(&model_with_values("title", &["E1"]), 0);
         let with_content = super::DataTableState::initial_column_width(
-            &model_with_values("title", &["E1", "E11 — Task 1117: split the release notes"]),
+            &model_with_values("title", &["E1", "E11 — Task 1117: notes"]),
             0,
         );
 
@@ -2470,7 +2470,7 @@ mod tests {
             "a value longer than the header widens the column ({with_content} vs {header_only})"
         );
 
-        let value_chars = "E11 — Task 1117: split the release notes".chars().count() as f32;
+        let value_chars = "E11 — Task 1117: notes".chars().count() as f32;
         let value_width = value_chars * f32::from(GridMetrics::FONT) * MONO_ADVANCE_EM
             + f32::from(CELL_PADDING_X) * 2.0;
         assert!(

@@ -35,8 +35,13 @@ impl Status {
 }
 
 /// Formats a latency the way the sidebar and status bar show it ("12 ms").
+/// A round trip under one millisecond, typical of a local server, reads
+/// "<1 ms" instead of a misleading "0 ms".
 pub fn format_latency(latency: Duration) -> SharedString {
-    format!("{} ms", latency.as_millis()).into()
+    match latency.as_millis() {
+        0 => "<1 ms".into(),
+        millis => format!("{millis} ms").into(),
+    }
 }
 
 /// Stateless status indicator: a 7 px diamond in the state color, followed by
@@ -151,6 +156,7 @@ mod tests {
     #[test]
     fn latency_is_shown_in_whole_milliseconds() {
         assert_eq!(format_latency(Duration::from_micros(12_400)), "12 ms");
+        assert_eq!(format_latency(Duration::from_micros(300)), "<1 ms");
     }
 
     #[test]

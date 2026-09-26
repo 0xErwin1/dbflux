@@ -24,7 +24,7 @@ pub const MIN_COLUMN_WIDTH: f32 = 50.0;
 
 /// Widest a column opens to fit its values. A longer value is cut, and the
 /// column can still be dragged wider.
-pub const MAX_AUTO_COLUMN_WIDTH: f32 = 360.0;
+pub const MAX_AUTO_COLUMN_WIDTH: f32 = 240.0;
 
 /// Rows read to find a column's longest value when it opens.
 pub const AUTO_WIDTH_SAMPLE_ROWS: usize = 200;
