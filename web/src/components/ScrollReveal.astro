@@ -1,0 +1,30 @@
+---
+/**
+ * Scroll reveal for the site pages, rendered once in the head.
+ *
+ * The inline script decides before first paint whether reveals run, so no
+ * element is painted visible and then hidden. The module script observes the
+ * marked elements; see src/lib/reveal.ts.
+ */
+---
+
+<script is:inline>
+  (() => {
+    const root = document.documentElement;
+    if (!('IntersectionObserver' in window)) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    root.classList.add('js-reveal');
+
+    // Hidden content must never depend on a module that failed to load.
+    setTimeout(() => {
+      if (!('revealReady' in root.dataset)) root.classList.remove('js-reveal');
+    }, 3000);
+  })();
+</script>
+
+<script>
+  import { initScrollReveal } from '../lib/reveal.ts';
+
+  initScrollReveal();
+</script>

@@ -33,7 +33,7 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
 ---
 
 <section id="compare" class="cmp shell" data-cmp>
-  <div class="cmp__head">
+  <div class="cmp__head reveal">
     <div class="cmp__title">
       <p class="eyebrow">{strings.eyebrow}</p>
       <h2 class="display display--section">{strings.title}</h2>
@@ -41,7 +41,7 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
     <p class="cmp__body">{strings.body}</p>
   </div>
 
-  <div class="cmp__tabs" role="radiogroup" aria-label={strings.eyebrow}>
+  <div class="cmp__tabs reveal-group" role="radiogroup" aria-label={strings.eyebrow}>
     {
       COMPARE_CLIENTS.map((client, index) => (
         <button
@@ -60,8 +60,12 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
 
   {
     COMPARE_CLIENTS.map((client, index) => (
-      <div class="cmp__grid" data-cmp-item={index} hidden={index !== 0}>
-        <div class="cmp__table card c18" role="table" aria-label={`DBFlux vs ${client.name}`}>
+      <div class="cmp__grid reveal-group" data-cmp-item={index} hidden={index !== 0}>
+        <div
+          class="cmp__table card c18 reveal-group"
+          role="table"
+          aria-label={`DBFlux vs ${client.name}`}
+        >
           <div class="cmp__row cmp__row--head" role="row">
             <span class="cmp__feature x" role="columnheader">
               {strings.feature}
@@ -129,7 +133,11 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
     ))
   }
 
-  <div class="cmp__phone card c14" role="table" aria-label="DBFlux vs DBeaver Community">
+  <div
+    class="cmp__phone card c14 reveal-group"
+    role="table"
+    aria-label="DBFlux vs DBeaver Community"
+  >
     <div class="cmp__phone-row cmp__phone-row--head" role="row">
       <span role="columnheader">vs DBeaver CE</span>
       <span role="columnheader">DBFlux</span>
@@ -155,7 +163,7 @@ const LEGEND: readonly CompareTone[] = ['included', 'limited', 'paid', 'none', '
     }
   </div>
 
-  <a class="go go--plain cmp__phone-full" href={fullComparison}>
+  <a class="go go--plain cmp__phone-full reveal" href={fullComparison}>
     {strings.full}
     <Glyph name="chevron-right" size={14} class="go__chev" />
   </a>

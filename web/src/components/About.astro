@@ -62,9 +62,9 @@ const LAYERS = [
     </aside>
   </section>
 
-  <section class="about__block shell reveal">
-    <p class="eyebrow">{strings.options_eyebrow}</p>
-    <div class="about__grid about__grid--3">
+  <section class="about__block shell">
+    <p class="eyebrow reveal">{strings.options_eyebrow}</p>
+    <div class="about__grid about__grid--3 reveal-group">
       {
         OPTIONS.map((option) => (
           <div class:list={['about__tile card c14 lift', { 'about__tile--chosen': option.chosen }]}>
@@ -80,9 +80,9 @@ const LAYERS = [
     </div>
   </section>
 
-  <section class="about__block shell reveal">
-    <p class="eyebrow">{strings.principles_eyebrow}</p>
-    <ol class="about__grid about__grid--4">
+  <section class="about__block shell">
+    <p class="eyebrow reveal">{strings.principles_eyebrow}</p>
+    <ol class="about__grid about__grid--4 reveal-group">
       {
         PRINCIPLES.map((principle) => (
           <li class="about__tile card c14 lift">
@@ -98,8 +98,8 @@ const LAYERS = [
     </ol>
   </section>
 
-  <section class="about__arch shell reveal">
-    <div class="about__arch-copy">
+  <section class="about__arch shell">
+    <div class="about__arch-copy reveal">
       <p class="eyebrow">{strings.arch_eyebrow}</p>
       <h2 class="display display--compact">{strings.arch_title}</h2>
       <p>{strings.arch_body}</p>
@@ -116,7 +116,7 @@ const LAYERS = [
         </a>
       </div>
     </div>
-    <div class="about__layers">
+    <div class="about__layers reveal-group">
       {
         LAYERS.map((layer, index) => (
           <div
@@ -132,7 +132,7 @@ const LAYERS = [
     </div>
   </section>
 
-  <section class="about__people shell reveal">
+  <section class="about__people shell reveal-group">
     <div class="about__tile card c14 lift">
       <p class="eyebrow">{strings.maintainer_title}</p>
       <p class="about__people-body">{strings.maintainer_body}</p>

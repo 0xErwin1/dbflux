@@ -109,7 +109,7 @@ const SOURCED_ROWS = COMPARE_GROUPS.flatMap((group) => group.rows).filter(
           </thead>
           {
             COMPARE_GROUPS.map((group) => (
-              <tbody>
+              <tbody class="reveal-group">
                 <tr class="cp__group">
                   <th scope="colgroup" colspan={COLUMNS.length + 1}>
                     <span class="cp__group-label">
@@ -150,12 +150,12 @@ const SOURCED_ROWS = COMPARE_GROUPS.flatMap((group) => group.rows).filter(
       </div>
     </div>
 
-    <div class="cp__notes">
+    <div class="cp__notes reveal">
       <p>{strings.note_dynamodb}</p>
       <p>{strings.note_datagrip}</p>
     </div>
 
-    <div class="cp__sources">
+    <div class="cp__sources reveal">
       <p class="cp__sources-title x">{strings.sources_title}</p>
       <ul>
         {
@@ -177,9 +177,9 @@ const SOURCED_ROWS = COMPARE_GROUPS.flatMap((group) => group.rows).filter(
     </div>
   </section>
 
-  <section class="cp__pages shell reveal">
-    <p class="eyebrow">{strings.per_client}</p>
-    <div class="cp__cards">
+  <section class="cp__pages shell">
+    <p class="eyebrow reveal">{strings.per_client}</p>
+    <div class="cp__cards reveal-group">
       {
         COMPARE_CLIENTS.map((client) => {
           const page = COMPARE_PAGES[client.id];

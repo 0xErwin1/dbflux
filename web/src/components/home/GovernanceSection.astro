@@ -93,7 +93,7 @@ const stageState = (stop: number, index: number) => {
 
 <section id="governance" class="gov" data-gov>
   <div class="gov__inner shell">
-    <div class="gov__head">
+    <div class="gov__head reveal">
       <div class="gov__title">
         <p class="eyebrow eyebrow--link">{strings.eyebrow}</p>
         <h2 class="display display--section">{strings.title}</h2>
@@ -101,7 +101,7 @@ const stageState = (stop: number, index: number) => {
       <p class="gov__body">{strings.body}</p>
     </div>
 
-    <div class="gov__ops" role="radiogroup" aria-label={strings.eyebrow}>
+    <div class="gov__ops reveal-group" role="radiogroup" aria-label={strings.eyebrow}>
       {
         OPERATIONS.map((operation, index) => (
           <button
@@ -124,7 +124,7 @@ const stageState = (stop: number, index: number) => {
     {
       OPERATIONS.map((operation, index) => (
         <div
-          class="gov__run"
+          class="gov__run reveal"
           data-gov-item={index}
           data-tone={operation.tone}
           hidden={index !== DEFAULT_OPERATION}

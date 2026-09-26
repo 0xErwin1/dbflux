@@ -114,7 +114,7 @@ const DRIVERS: readonly {
 ---
 
 <section class="core shell" data-core>
-  <div class="core__head">
+  <div class="core__head reveal">
     <div class="core__title">
       <p class="eyebrow">{strings.eyebrow}</p>
       <h2 class="display display--section">{strings.title}</h2>
@@ -122,7 +122,7 @@ const DRIVERS: readonly {
     <p class="core__body">{strings.body}</p>
   </div>
 
-  <div class="core__grid">
+  <div class="core__grid reveal-group">
     <div class="core__list" role="radiogroup" aria-label={strings.eyebrow}>
       {
         DRIVERS.map((driver, index) => (

@@ -575,18 +575,26 @@ html[data-theme='light'] .astro-code span {
 }
 
 /*
- * Section entrance. Scroll-driven where the browser supports view() timelines,
- * and a plain load animation everywhere else. `both` keeps the end state visible
- * either way, so no content depends on the animation running.
+ * Scroll reveal. `.reveal` marks one element and `.reveal-group` a container
+ * whose direct children enter in turn; src/lib/reveal.ts drives both. Nothing
+ * is hidden unless the head script set `js-reveal`, so content stays visible
+ * without JavaScript or with reduced motion. The fill is `backwards` so no
+ * animated value outlives the entrance and hover transforms keep working.
  */
-.reveal {
-  animation: rise var(--t-entrance) var(--ease-out) both;
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--reveal-distance));
+  }
 }
 
-@supports (animation-timeline: view()) {
-  .reveal {
-    animation-timeline: view();
-    animation-range: entry 0% cover 22%;
+@media (prefers-reduced-motion: no-preference) {
+  .js-reveal :is(.reveal, .reveal-group > *):not([data-revealed]) {
+    opacity: 0;
+  }
+
+  .js-reveal :is(.reveal, .reveal-group > *)[data-revealed='run'] {
+    animation: reveal-in var(--reveal-duration) var(--ease-out) var(--reveal-delay, 0ms) backwards;
   }
 }
 

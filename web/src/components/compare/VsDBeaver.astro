@@ -132,7 +132,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody class="reveal-group">
             {
               DBEAVER_EDITION_ROWS.map(({ row, community, paid }) => (
                 <tr>
@@ -178,9 +178,9 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     </p>
   </section>
 
-  <section id="gain" class="vs__block shell reveal">
-    <p class="eyebrow">{strings.gain_title}</p>
-    <div class="vs__gains">
+  <section id="gain" class="vs__block shell">
+    <p class="eyebrow reveal">{strings.gain_title}</p>
+    <div class="vs__gains reveal-group">
       {
         GAINS.map((gain) => (
           <article class="vs__gain card c14 lift">
@@ -200,10 +200,10 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     </div>
   </section>
 
-  <section id="gaps" class="vs__block shell reveal">
-    <p class="eyebrow">{strings.gaps_title}</p>
-    <p class="vs__body">{strings.gaps_body}</p>
-    <ul class="vs__gaps">
+  <section id="gaps" class="vs__block shell">
+    <p class="eyebrow reveal">{strings.gaps_title}</p>
+    <p class="vs__body reveal">{strings.gaps_body}</p>
+    <ul class="vs__gaps reveal-group">
       {
         DBEAVER_GAPS.map((gap) => (
           <li class="vs__gap card c10">
@@ -222,10 +222,10 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
     </ul>
   </section>
 
-  <section id="moving" class="vs__moving shell reveal">
+  <section id="moving" class="vs__moving shell">
     <div class="vs__steps">
-      <p class="eyebrow">{strings.moving_title}</p>
-      <ol class="vs__step-list">
+      <p class="eyebrow reveal">{strings.moving_title}</p>
+      <ol class="vs__step-list reveal-group">
         {
           STEPS.map((step, index) => (
             <li class="vs__step">
@@ -245,7 +245,7 @@ const SOURCES = DBEAVER_EDITION_ROWS.map(({ row }) => ({
       </ol>
     </div>
 
-    <div class="vs__where card c14">
+    <div class="vs__where card c14 reveal">
       <p class="vs__where-title">
         <Glyph name="arrow-left-right" size={16} />
         {strings.where_title}
