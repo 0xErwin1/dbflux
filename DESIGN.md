@@ -587,6 +587,15 @@ All boards live on the design canvas: https://claude.ai/artifact/RrT5VLW14vaPQzV
 | P2KvFilter, P2KvStream, P2KvZset | key-value search while scanning, streams, sorted sets |
 | P2Series | time-series measurement |
 | P2Findings | phase 2 review findings |
+| IslNotifications, IslNotificationStates | notifications center popover and bell states |
+| PromoSplit | README screenshot (`resources/dbflux.png`), dark and light table view |
+| PromoOg | link preview card (`web/public/brand/og-card.jpg`, 1200 × 630) |
+| PromoGithub | GitHub repository social preview (`resources/branding/social/github-social-preview.png`, 1280 × 640) |
+
+The promo images are exported from their boards at the board size (a full-board
+screenshot is the final image). The link card is saved as JPEG at quality 86
+with 4:4:4 sampling and metadata stripped; the social preview is uploaded by
+hand in the repository settings on GitHub.
 
 ## Do's and Don'ts
 
