@@ -16,6 +16,7 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Editor, EditorState};
+use gpui_component::tooltip::Tooltip;
 
 use super::{CollectionTab, SchemaLoad};
 use crate::data_grid_panel::DataGridPanel;
@@ -59,16 +60,19 @@ fn value_text(value: &Value) -> String {
 }
 
 impl DataGridPanel {
-    /// Keyword-prefixed slot of the query bar on a cut-6 ground field.
+    /// Keyword-prefixed slot of the query bar on a cut-6 ground field. The
+    /// keyword carries a tooltip explaining what the slot holds.
     fn query_slot(
         &self,
         id: &'static str,
         keyword: &'static str,
+        tooltip: String,
         content: AnyElement,
         width: Option<Pixels>,
         cx: &App,
     ) -> Stateful<Div> {
         let theme = cx.theme();
+        let tooltip = SharedString::from(tooltip);
 
         div()
             .id(id)
@@ -91,9 +95,11 @@ impl DataGridPanel {
             )
             .child(
                 div()
+                    .id(SharedString::from(format!("{id}-label")))
                     .flex_shrink_0()
                     .font_weight(FontWeight::BOLD)
                     .text_color(ChromeColors::tint(theme))
+                    .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                     .child(keyword),
             )
             .child(div().flex_1().min_w_0().overflow_hidden().child(content))
@@ -117,6 +123,7 @@ impl DataGridPanel {
         let filter = self.query_slot(
             "collection-slot-filter",
             "filter",
+            dbflux_i18n::t!("document.collection.slot.tooltip.filter"),
             editor(&self.filter_bar.filter_input),
             None,
             cx,
@@ -125,6 +132,7 @@ impl DataGridPanel {
         let limit = self.query_slot(
             "collection-slot-limit",
             "limit",
+            dbflux_i18n::t!("document.collection.slot.tooltip.limit"),
             Input::new(&self.filter_bar.limit_input)
                 .small()
                 .appearance(false)
@@ -155,6 +163,7 @@ impl DataGridPanel {
                 row.child(self.query_slot(
                     "collection-slot-project",
                     "project",
+                    dbflux_i18n::t!("document.collection.slot.tooltip.project"),
                     editor(&self.collection.projection_input),
                     Some(CollectionMetrics::PROJECT_SLOT_WIDTH),
                     cx,
@@ -162,6 +171,7 @@ impl DataGridPanel {
                 .child(self.query_slot(
                     "collection-slot-sort",
                     "sort",
+                    dbflux_i18n::t!("document.collection.slot.tooltip.sort"),
                     editor(&self.collection.sort_input),
                     Some(CollectionMetrics::SORT_SLOT_WIDTH),
                     cx,

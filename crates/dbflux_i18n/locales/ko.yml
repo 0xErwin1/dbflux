@@ -626,6 +626,13 @@ document:
     slot:
       not_object: "%{slot} 칸은 JSON 객체여야 합니다"
       invalid: "%{slot}의 JSON이 올바르지 않습니다: %{error}"
+      project_placeholder: "예: {\"name\": 1, \"_id\": 0}"
+      sort_placeholder: "예: {\"created_at\": -1}"
+      tooltip:
+        filter: "반환할 문서"
+        project: "반환할 필드 (1 포함, 0 제외)"
+        sort: "결과 정렬 순서 (1 오름차순, -1 내림차순)"
+        limit: "페이지당 최대 문서 수"
     schema:
       sample_size: "표본 %{count}"
       sampled_of: "문서 %{total}개 중 %{sampled}개 표본"

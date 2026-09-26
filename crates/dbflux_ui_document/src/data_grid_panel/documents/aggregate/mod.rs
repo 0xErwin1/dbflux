@@ -260,7 +260,7 @@ impl AggregateViewState {
         Self {
             pipeline_editor,
             pipeline_error: None,
-            view_mode: DataViewMode::Table,
+            view_mode: DataViewMode::Document,
             results: None,
             running: false,
             run_generation: 0,
@@ -1468,6 +1468,12 @@ mod panel_tests {
 
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
+                assert_eq!(
+                    panel.collection.aggregate.view_mode,
+                    DataViewMode::Document,
+                    "aggregate results open in the tree"
+                );
+
                 let documents_mode = panel.view_config.mode;
                 panel.set_aggregate_view_mode(DataViewMode::Json, cx);
                 assert_eq!(panel.collection.aggregate.view_mode, DataViewMode::Json);

@@ -247,8 +247,16 @@ impl CollectionViewState {
                 })
             };
 
-        let projection_input = make_slot("{ }", window, cx);
-        let sort_input = make_slot("{ }", window, cx);
+        let projection_input = make_slot(
+            &dbflux_i18n::t!("document.collection.slot.project_placeholder"),
+            window,
+            cx,
+        );
+        let sort_input = make_slot(
+            &dbflux_i18n::t!("document.collection.slot.sort_placeholder"),
+            window,
+            cx,
+        );
 
         let json_editor = cx.new(|cx| {
             EditorState::new(window, cx)

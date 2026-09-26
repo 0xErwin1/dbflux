@@ -1,8 +1,10 @@
 # Document Collections
 
-A collection on a document database opens as a table of its documents: `_id`
-first, then the fields in the order the page returns them. **Tree** and **JSON**
-show the same page; switch with the Tree / Table / JSON control or press `t`.
+A collection on a document database opens as a tree of its documents, one
+collapsible node per document. **Table** and **JSON** show the same page; switch
+with the Tree / Table / JSON control or press `t`. The view you pick stays for
+the tab across pages and refreshes. The table puts `_id` first, then the fields
+in the order the page returns them.
 
 - A nested object shows its field count and an array its length. `e` on an
   object column expands it in place into a column group; `Enter` on an object or
@@ -26,7 +28,7 @@ show the same page; switch with the Tree / Table / JSON control or press `t`.
   and run it with **Run** or `Ctrl+Enter`. A pipeline that does not parse, or
   a stage that is not a document naming one `$` operator, is reported under the
   editor and nothing runs. The result documents show in their own Tree, Table
-  and JSON views, apart from the Documents page, and are read-only: nothing in
+  and JSON views, opening in the Tree, apart from the Documents page, and are read-only: nothing in
   them can be edited, deleted or committed. A run shows at most 1,000
   documents, and the footer says when the result was cut. A pipeline with an
   `$out` or `$merge` stage writes to a collection, so it asks for the same

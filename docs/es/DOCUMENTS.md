@@ -1,9 +1,11 @@
 # Colecciones de documentos
 
-Una colección de una base de datos de documentos se abre como una tabla de sus
-documentos: primero `_id` y después los campos en el orden en que los devuelve
-la página. **Árbol** y **JSON** muestran la misma página; cambia con el control
-Árbol / Tabla / JSON o pulsa `t`.
+Una colección de una base de datos de documentos se abre como un árbol de sus
+documentos, con un nodo plegable por documento. **Tabla** y **JSON** muestran la
+misma página; cambia con el control Árbol / Tabla / JSON o pulsa `t`. La vista
+que elijas se mantiene en la pestaña entre páginas y actualizaciones. La tabla
+muestra primero `_id` y después los campos en el orden en que los devuelve la
+página.
 
 - Un objeto anidado muestra su número de campos y un arreglo su longitud. `e`
   sobre una columna de objeto la expande en su lugar en un grupo de columnas;
@@ -30,8 +32,8 @@ la página. **Árbol** y **JSON** muestran la misma página; cambia con el contr
   ejecútalo con **Ejecutar** o `Ctrl+Enter`. Un pipeline que no se puede
   analizar, o una etapa que no es un documento con un único operador `$`, se
   informa debajo del editor y no se ejecuta nada. Los documentos de resultado
-  se muestran en sus propias vistas Árbol, Tabla y JSON, separadas de la página
-  de Documentos, y son de solo lectura: no se pueden editar, borrar ni
+  se muestran en sus propias vistas Árbol, Tabla y JSON, abriéndose en el
+  Árbol, separadas de la página de Documentos, y son de solo lectura: no se pueden editar, borrar ni
   confirmar. Una ejecución muestra como máximo 1.000 documentos, y el pie indica
   cuándo se recortó el resultado. Un pipeline con una etapa `$out` o `$merge`
   escribe en una colección, así que pide la misma confirmación que cualquier

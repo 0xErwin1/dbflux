@@ -626,6 +626,13 @@ document:
     slot:
       not_object: "%{slot} 栏必须是 JSON 对象"
       invalid: "%{slot} 中的 JSON 无效：%{error}"
+      project_placeholder: "例如 {\"name\": 1, \"_id\": 0}"
+      sort_placeholder: "例如 {\"created_at\": -1}"
+      tooltip:
+        filter: "要返回的文档"
+        project: "要返回的字段（1 包含，0 排除）"
+        sort: "结果顺序（1 升序，-1 降序）"
+        limit: "每页最多文档数"
     schema:
       sample_size: "样本 %{count}"
       sampled_of: "已从 %{total} 个文档中抽样 %{sampled} 个"

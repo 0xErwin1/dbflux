@@ -626,6 +626,13 @@ document:
     slot:
       not_object: "The %{slot} slot must be a JSON object"
       invalid: "Invalid JSON in %{slot}: %{error}"
+      project_placeholder: "e.g. {\"name\": 1, \"_id\": 0}"
+      sort_placeholder: "e.g. {\"created_at\": -1}"
+      tooltip:
+        filter: "Documents to return"
+        project: "Fields to return (1 include, 0 exclude)"
+        sort: "Order of results (1 ascending, -1 descending)"
+        limit: "Maximum documents per page"
     schema:
       sample_size: "Sample %{count}"
       sampled_of: "Sampled %{sampled} of %{total} documents"

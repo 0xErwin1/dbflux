@@ -626,6 +626,13 @@ document:
     slot:
       not_object: "El campo %{slot} debe ser un objeto JSON"
       invalid: "JSON no válido en %{slot}: %{error}"
+      project_placeholder: "p. ej. {\"name\": 1, \"_id\": 0}"
+      sort_placeholder: "p. ej. {\"created_at\": -1}"
+      tooltip:
+        filter: "Documentos a devolver"
+        project: "Campos a devolver (1 incluir, 0 excluir)"
+        sort: "Orden de los resultados (1 ascendente, -1 descendente)"
+        limit: "Máximo de documentos por página"
     schema:
       sample_size: "Muestra %{count}"
       sampled_of: "Muestra de %{sampled} de %{total} documentos"

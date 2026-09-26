@@ -1377,10 +1377,10 @@ impl DataGridPanel {
         )
         .detach();
 
+        let category = Self::connection_category(&source, &app_state, cx);
         let time_series_collection = matches!(source, DataSource::Collection { .. })
-            && Self::connection_category(&source, &app_state, cx)
-                == Some(DatabaseCategory::TimeSeries);
-        let view_config = Self::view_config_for(&source, time_series_collection);
+            && category == Some(DatabaseCategory::TimeSeries);
+        let view_config = Self::view_config_for(&source, category);
         let result_view_mode = ResultViewMode::Table;
 
         let connection_id = match &source {
@@ -2573,20 +2573,26 @@ impl DataGridPanel {
         }));
     }
 
-    /// View configuration a source opens with.
+    /// View configuration a source opens with, given the category of the
+    /// connection behind it.
     ///
-    /// A time-series collection holds flat rows (time, tags, fields), so its
-    /// Data view is the grid rather than the document tree other collections use.
+    /// A collection of a document database opens in the document tree. A
+    /// time-series collection holds flat rows (time, tags, fields), so it opens
+    /// in the grid. Every other source keeps its own recommended view.
     fn view_config_for(
         source: &DataSource,
-        time_series_collection: bool,
+        category: Option<DatabaseCategory>,
     ) -> super::data_view::DataViewConfig {
-        if time_series_collection {
-            super::data_view::DataViewConfig {
-                mode: super::data_view::DataViewMode::Table,
-            }
-        } else {
-            super::data_view::DataViewConfig::for_source(source)
+        use super::data_view::{DataViewConfig, DataViewMode};
+
+        match (source, category) {
+            (DataSource::Collection { .. }, Some(DatabaseCategory::Document)) => DataViewConfig {
+                mode: DataViewMode::Document,
+            },
+            (DataSource::Collection { .. }, Some(DatabaseCategory::TimeSeries)) => DataViewConfig {
+                mode: DataViewMode::Table,
+            },
+            _ => DataViewConfig::for_source(source),
         }
     }
 
@@ -2652,7 +2658,8 @@ impl DataGridPanel {
 
     /// Update the result data (for QueryResult source or after table fetch).
     pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
-        self.view_config = Self::view_config_for(&self.source, self.chart.time_series_collection);
+        let category = Self::connection_category(&self.source, &self.app_state, cx);
+        self.view_config = Self::view_config_for(&self.source, category);
         self.chrome.derived_json = None;
         self.chrome.derived_text = None;
 
@@ -10555,6 +10562,59 @@ mod tests {
     }
 
     #[gpui::test]
+    fn document_shaped_query_result_opens_in_the_tree(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(nested_document_rows()),
+                    "db.products.find({})".to_string(),
+                    None,
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert_eq!(panel.result_view_mode(), super::ResultViewMode::Table);
+                assert!(!panel.uses_result_view());
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Document,
+                    "a document-shaped result opens in the tree"
+                );
+
+                panel.set_query_result(
+                    Arc::new(reload_result(&["id", "name"], 2)),
+                    "SELECT id, name FROM users".to_string(),
+                    None,
+                    cx,
+                );
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Table,
+                    "a table-shaped result stays in the grid"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
     fn new_query_result_remaps_widths_by_name_and_drops_sort(cx: &mut TestAppContext) {
         init_test_runtime(cx);
 
@@ -11493,7 +11553,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn document_collection_opens_as_a_table_without_result_views(cx: &mut TestAppContext) {
+    fn document_collection_opens_as_a_tree_without_result_views(cx: &mut TestAppContext) {
         let (app_state, profile_id) = register_builder_stub_connection(
             cx,
             dbflux_core::DatabaseCategory::Document,
@@ -11518,7 +11578,8 @@ mod tests {
                 assert!(panel.available_result_view_modes(cx).is_empty());
                 assert_eq!(
                     panel.view_config.mode,
-                    crate::data_view::DataViewMode::Table
+                    crate::data_view::DataViewMode::Document,
+                    "a document collection opens in the tree"
                 );
                 assert!(
                     panel.collection.raw.is_some(),
@@ -11538,6 +11599,93 @@ mod tests {
                     "a driver without a browse query keeps the generic label"
                 );
             });
+        });
+    }
+
+    #[gpui::test]
+    fn document_collection_keeps_the_view_the_user_picked_across_pages(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+                panel.set_document_view_mode(crate::data_view::DataViewMode::Table, cx);
+
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    nested_document_rows(),
+                    cx,
+                );
+
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Table,
+                    "a refresh or a new page keeps the picked view"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn empty_project_and_sort_slots_show_their_placeholders(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            let collection = &panel.read(app).collection;
+
+            let projection = collection.projection_input.read(app);
+            assert!(projection.value().is_empty());
+            assert_eq!(
+                projection.presentation().placeholder().as_ref(),
+                dbflux_i18n::t!("document.collection.slot.project_placeholder")
+            );
+
+            let sort = collection.sort_input.read(app);
+            assert!(sort.value().is_empty());
+            assert_eq!(
+                sort.presentation().placeholder().as_ref(),
+                dbflux_i18n::t!("document.collection.slot.sort_placeholder")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn non_document_collection_still_opens_as_a_table(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::KeyValue,
+            dbflux_core::QueryLanguage::RedisCommands,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            assert_eq!(
+                panel.read(app).view_config.mode,
+                crate::data_view::DataViewMode::Table
+            );
         });
     }
 
