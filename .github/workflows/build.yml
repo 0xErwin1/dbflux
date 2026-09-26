@@ -133,12 +133,62 @@ jobs:
           grep -qF "version = \"${VERSION}\"" Cargo.toml \
             || { echo "::error::Version stamp did not apply."; exit 1; }
 
+      - name: Make room for the release build
+        # The release build ran out of memory on these runners once the UI crates
+        # grew: both Linux jobs were killed mid-build with "The runner has received
+        # a shutdown signal" while rustc compiled the UI crates in parallel. Extra
+        # swap lets the peak spill instead of taking the runner down, and removing
+        # toolchains this job never uses gives the swap file and the release
+        # artifacts room on the root disk.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo swapoff -a
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo fallocate -l 12G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+          df -h /
+
       - name: Build DBFlux
         # No --locked here: the version stamp above mutates Cargo.toml, so cargo must
         # refresh the workspace entries in Cargo.lock. Dependency-lock integrity is
         # already enforced by the deterministic-tests and clippy gates (--locked) on
         # this same commit; here only the local workspace version changes.
-        run: cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+        #
+        # A sampler records memory, swap and the largest rustc processes every 30
+        # seconds, like the macOS build, so a regression can be traced to memory
+        # pressure instead of guessed at. The samples are written outside the build
+        # step so they survive a killed job.
+        run: |
+          SAMPLES="$RUNNER_TEMP/memory-samples.log"
+          (
+            while true; do
+              {
+                echo "== $(date -u '+%H:%M:%S') $(free -m | awk '/Mem:/ { printf "mem used %d MB of %d MB", $3, $2 } /Swap:/ { printf ", swap used %d MB", $3 }')"
+                ps -eo rss=,args= --sort=-rss | head -3 | awk '{ printf "  %6d MB %s\n", $1 / 1024, substr($0, index($0, $2), 160) }'
+              } >> "$SAMPLES"
+              sleep 30
+            done
+          ) &
+          SAMPLER_PID=$!
+
+          cargo build --release --features "$FEATURES" --target ${{ matrix.target }}
+
+          kill "$SAMPLER_PID"
+
+      - name: Report build memory samples
+        if: always()
+        run: |
+          SAMPLES="$RUNNER_TEMP/memory-samples.log"
+          if [ ! -f "$SAMPLES" ]; then
+            echo "No memory samples were recorded."
+            exit 0
+          fi
+
+          free -h
+          cat "$SAMPLES"
 
       - name: Create package
         run: |
