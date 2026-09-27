@@ -30,6 +30,9 @@ use serde::de::{Deserialize, Deserializer, Error as _, MapAccess, SeqAccess, Vis
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MongoDocumentCodec;
 
+/// Hexadecimal digits of an ObjectId.
+const OBJECT_ID_HEX_DIGITS: usize = 24;
+
 impl DocumentQueryCodec for MongoDocumentCodec {
     fn render_find(&self, spec: &DocumentQuerySpec) -> Result<DocumentFindSlots, DbError> {
         ensure_mode(spec, DocumentQueryMode::Find)?;
@@ -147,6 +150,19 @@ impl DocumentQueryCodec for MongoDocumentCodec {
             "object" | "document" => Some(DocumentFieldType::Object),
             _ => None,
         }
+    }
+
+    fn operator_label(&self, operator: DocumentOperator) -> &'static str {
+        operator_key(operator)
+    }
+
+    fn object_id_wrapper(&self) -> Option<(&'static str, &'static str)> {
+        Some(("ObjectId(", ")"))
+    }
+
+    /// The driver runs every 24-digit hexadecimal string as an ObjectId.
+    fn object_id_hex_digits(&self) -> Option<usize> {
+        Some(OBJECT_ID_HEX_DIGITS)
     }
 }
 
@@ -452,7 +468,7 @@ fn value_json(value: &DocumentValue) -> Result<Json, DbError> {
 }
 
 fn is_object_id(hex: &str) -> bool {
-    hex.len() == 24 && hex.chars().all(|character| character.is_ascii_hexdigit())
+    hex.len() == OBJECT_ID_HEX_DIGITS && hex.chars().all(|character| character.is_ascii_hexdigit())
 }
 
 /// The driver runs every 24-digit hexadecimal JSON string as an ObjectId, so
@@ -1761,5 +1777,15 @@ mod tests {
         for (type_name, expected) in cases {
             assert_eq!(codec.field_type(type_name), expected, "{type_name}");
         }
+    }
+
+    #[test]
+    fn the_builder_spells_operators_and_object_ids_the_mongodb_way() {
+        let codec = MongoDocumentCodec;
+
+        assert_eq!(codec.operator_label(Gte), "$gte");
+        assert_eq!(codec.operator_label(ElemMatch), "$elemMatch");
+        assert_eq!(codec.object_id_wrapper(), Some(("ObjectId(", ")")));
+        assert_eq!(codec.object_id_hex_digits(), Some(OBJECT_ID.len()));
     }
 }

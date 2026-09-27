@@ -632,7 +632,9 @@ impl DataGridPanel {
                             .flex_shrink_0()
                             .font_weight(FontWeight::BOLD)
                             .text_color(ChromeColors::tint(&theme))
-                            .child("pipeline"),
+                            .child(dbflux_i18n::t!(
+                                "document.collection.builder.pipeline_label"
+                            )),
                     )
                     .child(
                         div()

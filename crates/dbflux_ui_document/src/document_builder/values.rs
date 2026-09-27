@@ -2,7 +2,69 @@
 //! type, and how the text typed into it reads as a [`DocumentValue`].
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Timelike, Utc};
-use dbflux_core::{DocumentFieldType, DocumentOperator, DocumentValue};
+use dbflux_core::{DocumentFieldType, DocumentOperator, DocumentQueryCodec, DocumentValue};
+
+/// How the connection's driver writes the values the builder types, taken
+/// from its codec. The default has no object identifier literal and no
+/// text that would run as another type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ValueSyntax {
+    object_id_wrapper: Option<(&'static str, &'static str)>,
+    object_id_hex_digits: Option<usize>,
+}
+
+impl ValueSyntax {
+    pub fn of(codec: &dyn DocumentQueryCodec) -> Self {
+        Self {
+            object_id_wrapper: codec.object_id_wrapper(),
+            object_id_hex_digits: codec.object_id_hex_digits(),
+        }
+    }
+
+    /// Text shown before and after an object identifier input.
+    pub fn object_id_affixes(&self) -> Option<(String, String)> {
+        self.object_id_wrapper
+            .map(|(open, close)| (format!("{open}\""), format!("\"{close}")))
+    }
+
+    /// `hex` as written where a value of any type is accepted.
+    fn format_object_id(&self, hex: &str) -> String {
+        match self.object_id_wrapper {
+            Some((open, close)) => format!("{open}\"{hex}\"{close}"),
+            None => hex.to_string(),
+        }
+    }
+
+    /// Whether `text` starts like a wrapped object identifier.
+    fn opens_object_id(&self, text: &str) -> bool {
+        self.object_id_wrapper
+            .is_some_and(|(open, _)| text.starts_with(open))
+    }
+
+    /// The text inside the wrapper, or `text` when it is not wrapped.
+    fn unwrap_object_id<'a>(&self, text: &'a str) -> &'a str {
+        self.object_id_wrapper
+            .and_then(|(open, close)| text.strip_prefix(open)?.strip_suffix(close))
+            .map(str::trim)
+            .unwrap_or(text)
+    }
+
+    fn is_object_id(&self, hex: &str) -> bool {
+        let digits = hex.chars().all(|character| character.is_ascii_hexdigit());
+        let length = match self.object_id_hex_digits {
+            Some(expected) => hex.len() == expected,
+            None => !hex.is_empty(),
+        };
+
+        digits && length
+    }
+
+    /// Whether `text` would not survive as a string: the driver would run
+    /// it as an object identifier.
+    fn text_changes_type(&self, text: &str) -> bool {
+        self.object_id_hex_digits.is_some() && self.is_object_id(text)
+    }
+}
 
 /// The type a single value is read as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,25 +160,29 @@ pub enum ValueProblem {
     NotADate,
     NotAnObjectId,
     NotABool,
-    /// 24 hexadecimal digits typed as text: the driver would run it as an
-    /// object identifier, so it has to be entered as one.
+    /// Text the driver would run as an object identifier, so it has to be
+    /// entered as one.
     LooksLikeObjectId,
 }
 
 /// Reads `text` as a single value of `kind`.
-pub fn parse_scalar(kind: ScalarKind, text: &str) -> Result<DocumentValue, ValueProblem> {
+pub fn parse_scalar(
+    kind: ScalarKind,
+    text: &str,
+    syntax: ValueSyntax,
+) -> Result<DocumentValue, ValueProblem> {
     match kind {
-        ScalarKind::Text => parse_text(text),
+        ScalarKind::Text => parse_text(text, syntax),
         ScalarKind::Number => parse_number(text),
         ScalarKind::Date => parse_date(text).map(DocumentValue::Date),
-        ScalarKind::ObjectId => parse_object_id(text),
+        ScalarKind::ObjectId => parse_object_id(text, syntax),
         ScalarKind::Bool => match text.trim() {
             "true" => Ok(DocumentValue::Bool(true)),
             "false" => Ok(DocumentValue::Bool(false)),
             "" => Err(ValueProblem::Empty),
             _ => Err(ValueProblem::NotABool),
         },
-        ScalarKind::Auto => parse_auto(text),
+        ScalarKind::Auto => parse_auto(text, syntax),
     }
 }
 
@@ -157,12 +223,12 @@ pub fn parse_pattern(text: &str) -> Result<DocumentValue, ValueProblem> {
 
 /// Text that reads back as `value` through [`parse_scalar`] with `kind`, or
 /// through [`parse_pattern`] for a regular expression.
-pub fn format_value(value: &DocumentValue, kind: ScalarKind) -> String {
+pub fn format_value(value: &DocumentValue, kind: ScalarKind, syntax: ValueSyntax) -> String {
     match value {
         DocumentValue::String(text) => {
             let plain_reads_back = match kind {
                 ScalarKind::Text => !is_quoted(text) && !text.is_empty(),
-                _ => parse_auto(text).as_ref() == Ok(value),
+                _ => parse_auto(text, syntax).as_ref() == Ok(value),
             };
             if plain_reads_back {
                 text.clone()
@@ -177,7 +243,7 @@ pub fn format_value(value: &DocumentValue, kind: ScalarKind) -> String {
         DocumentValue::Date(date) => format_date(date),
         DocumentValue::ObjectId(hex) => match kind {
             ScalarKind::ObjectId => hex.clone(),
-            _ => format!("ObjectId(\"{hex}\")"),
+            _ => syntax.format_object_id(hex),
         },
         DocumentValue::Regex { pattern, options } => {
             if options.is_empty() && !pattern.starts_with('/') {
@@ -187,7 +253,10 @@ pub fn format_value(value: &DocumentValue, kind: ScalarKind) -> String {
             }
         }
         DocumentValue::List(items) => {
-            let parts: Vec<String> = items.iter().map(|item| format_value(item, kind)).collect();
+            let parts: Vec<String> = items
+                .iter()
+                .map(|item| format_value(item, kind, syntax))
+                .collect();
             format!("[{}]", parts.join(", "))
         }
         DocumentValue::Nested(_) => String::new(),
@@ -219,17 +288,13 @@ fn unwrap_between(text: &str, quote: char) -> Option<&str> {
         .and_then(|inner| inner.strip_suffix(quote))
 }
 
-fn is_object_id_hex(text: &str) -> bool {
-    text.len() == 24 && text.chars().all(|character| character.is_ascii_hexdigit())
-}
-
-fn parse_text(text: &str) -> Result<DocumentValue, ValueProblem> {
+fn parse_text(text: &str, syntax: ValueSyntax) -> Result<DocumentValue, ValueProblem> {
     if text.is_empty() {
         return Err(ValueProblem::Empty);
     }
 
     let content = unquote(text).unwrap_or(text);
-    if is_object_id_hex(content) {
+    if syntax.text_changes_type(content) {
         return Err(ValueProblem::LooksLikeObjectId);
     }
 
@@ -284,37 +349,34 @@ fn parse_date(text: &str) -> Result<DateTime<Utc>, ValueProblem> {
         .ok_or(ValueProblem::NotADate)
 }
 
-/// Reads 24 hexadecimal digits, bare or as `ObjectId("…")`.
-fn parse_object_id(text: &str) -> Result<DocumentValue, ValueProblem> {
+/// Reads an object identifier's hexadecimal digits, bare, quoted or inside
+/// the driver's wrapper.
+fn parse_object_id(text: &str, syntax: ValueSyntax) -> Result<DocumentValue, ValueProblem> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(ValueProblem::Empty);
     }
 
-    let inner = trimmed
-        .strip_prefix("ObjectId(")
-        .and_then(|rest| rest.strip_suffix(')'))
-        .map(str::trim)
-        .unwrap_or(trimmed);
+    let inner = syntax.unwrap_object_id(trimmed);
     let hex = unquote(inner)
         .or_else(|| unwrap_between(inner, '\''))
         .unwrap_or(inner);
 
-    if is_object_id_hex(hex) {
+    if syntax.is_object_id(hex) {
         Ok(DocumentValue::ObjectId(hex.to_ascii_lowercase()))
     } else {
         Err(ValueProblem::NotAnObjectId)
     }
 }
 
-fn parse_auto(text: &str) -> Result<DocumentValue, ValueProblem> {
+fn parse_auto(text: &str, syntax: ValueSyntax) -> Result<DocumentValue, ValueProblem> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(ValueProblem::Empty);
     }
 
     if let Some(content) = unquote(trimmed) {
-        return parse_text(content).or_else(|problem| match problem {
+        return parse_text(content, syntax).or_else(|problem| match problem {
             ValueProblem::Empty => Ok(DocumentValue::String(String::new())),
             other => Err(other),
         });
@@ -327,15 +389,15 @@ fn parse_auto(text: &str) -> Result<DocumentValue, ValueProblem> {
         _ => {}
     }
 
-    if trimmed.starts_with("ObjectId(") {
-        return parse_object_id(trimmed);
+    if syntax.opens_object_id(trimmed) {
+        return parse_object_id(trimmed, syntax);
     }
 
     if let Ok(number) = parse_number(trimmed) {
         return Ok(number);
     }
 
-    parse_text(trimmed)
+    parse_text(trimmed, syntax)
 }
 
 /// Byte ranges of the `$operator` tokens in preview text, for highlighting.

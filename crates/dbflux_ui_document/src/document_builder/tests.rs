@@ -9,16 +9,21 @@ use dbflux_core::{
     DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue, FieldSchemaStats,
     FieldTypeShare, FieldValueSummary, UnrepresentableClause,
 };
+use dbflux_driver_mongodb::MongoDocumentCodec;
 
 use super::catalog::FieldCatalog;
 use super::model::{AccumulatorOp, BuilderDraft, DraftProblem, NodeDraft, Operand, ProblemKind};
 use super::sync::{SlotSync, SlotWrite};
 use super::values::{
-    ScalarKind, ValueEditor, ValueProblem, format_value, operator_choices, operator_ranges,
-    parse_pattern, parse_scalar, value_editor,
+    ScalarKind, ValueEditor, ValueProblem, ValueSyntax, format_value, operator_choices,
+    operator_ranges, parse_pattern, parse_scalar, value_editor,
 };
 
 use DocumentOperator::*;
+
+fn mongo() -> ValueSyntax {
+    ValueSyntax::of(&MongoDocumentCodec)
+}
 
 const OBJECT_ID: &str = "66f0c2a1b2c3d4e5f6a7b8c9";
 
@@ -109,7 +114,7 @@ fn clause(slot: DocumentSlot, text: &str) -> UnrepresentableClause {
 
 /// A draft with one root condition on `path`, typed for `types`.
 fn draft_with_condition(path: &str, types: &[DocumentFieldType]) -> (BuilderDraft, u64) {
-    let mut draft = BuilderDraft::default();
+    let mut draft = BuilderDraft::with_value_syntax(mongo());
     let root = draft.filter.id;
     let id = draft.add_condition(root).expect("root group exists");
     assert!(draft.set_path(id, path, types));
@@ -158,72 +163,114 @@ fn the_value_editor_follows_the_operator_and_the_kind() {
 #[test]
 fn typed_text_reads_as_the_value_of_its_kind() {
     assert_eq!(
-        parse_scalar(ScalarKind::Number, "100"),
+        parse_scalar(ScalarKind::Number, "100", mongo()),
         Ok(DocumentValue::Integer(100))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Number, " 2500.5 "),
+        parse_scalar(ScalarKind::Number, " 2500.5 ", mongo()),
         Ok(DocumentValue::Decimal(2500.5))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Number, "ten"),
+        parse_scalar(ScalarKind::Number, "ten", mongo()),
         Err(ValueProblem::NotANumber)
     );
 
     let midnight = Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap();
     assert_eq!(
-        parse_scalar(ScalarKind::Date, "2026-09-01 00:00 UTC"),
+        parse_scalar(ScalarKind::Date, "2026-09-01 00:00 UTC", mongo()),
         Ok(DocumentValue::Date(midnight))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Date, "2026-09-01"),
+        parse_scalar(ScalarKind::Date, "2026-09-01", mongo()),
         Ok(DocumentValue::Date(midnight))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Date, "2026-09-01T10:20:30Z"),
+        parse_scalar(ScalarKind::Date, "2026-09-01T10:20:30Z", mongo()),
         Ok(DocumentValue::Date(
             Utc.with_ymd_and_hms(2026, 9, 1, 10, 20, 30).unwrap()
         ))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Date, "yesterday"),
+        parse_scalar(ScalarKind::Date, "yesterday", mongo()),
         Err(ValueProblem::NotADate)
     );
 
     assert_eq!(
-        parse_scalar(ScalarKind::ObjectId, &format!("ObjectId(\"{OBJECT_ID}\")")),
+        parse_scalar(
+            ScalarKind::ObjectId,
+            &format!("ObjectId(\"{OBJECT_ID}\")"),
+            mongo()
+        ),
         Ok(DocumentValue::ObjectId(OBJECT_ID.to_string()))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::ObjectId, &OBJECT_ID.to_ascii_uppercase()),
+        parse_scalar(
+            ScalarKind::ObjectId,
+            &OBJECT_ID.to_ascii_uppercase(),
+            mongo()
+        ),
         Ok(DocumentValue::ObjectId(OBJECT_ID.to_string()))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::ObjectId, "66f0"),
+        parse_scalar(ScalarKind::ObjectId, "66f0", mongo()),
         Err(ValueProblem::NotAnObjectId)
     );
 
     assert_eq!(
-        parse_scalar(ScalarKind::Text, OBJECT_ID),
+        parse_scalar(ScalarKind::Text, OBJECT_ID, mongo()),
         Err(ValueProblem::LooksLikeObjectId)
     );
-    assert_eq!(parse_scalar(ScalarKind::Text, "\"\""), Ok(text("")));
-    assert_eq!(parse_scalar(ScalarKind::Text, ""), Err(ValueProblem::Empty));
-    assert_eq!(parse_scalar(ScalarKind::Text, "failed"), Ok(text("failed")));
+    assert_eq!(
+        parse_scalar(ScalarKind::Text, "\"\"", mongo()),
+        Ok(text(""))
+    );
+    assert_eq!(
+        parse_scalar(ScalarKind::Text, "", mongo()),
+        Err(ValueProblem::Empty)
+    );
+    assert_eq!(
+        parse_scalar(ScalarKind::Text, "failed", mongo()),
+        Ok(text("failed"))
+    );
 
     assert_eq!(
-        parse_scalar(ScalarKind::Auto, "true"),
+        parse_scalar(ScalarKind::Auto, "true", mongo()),
         Ok(DocumentValue::Bool(true))
     );
     assert_eq!(
-        parse_scalar(ScalarKind::Auto, "42"),
+        parse_scalar(ScalarKind::Auto, "42", mongo()),
         Ok(DocumentValue::Integer(42))
     );
-    assert_eq!(parse_scalar(ScalarKind::Auto, "\"42\""), Ok(text("42")));
-    assert_eq!(parse_scalar(ScalarKind::Auto, "Ada"), Ok(text("Ada")));
     assert_eq!(
-        parse_scalar(ScalarKind::Auto, "null"),
+        parse_scalar(ScalarKind::Auto, "\"42\"", mongo()),
+        Ok(text("42"))
+    );
+    assert_eq!(
+        parse_scalar(ScalarKind::Auto, "Ada", mongo()),
+        Ok(text("Ada"))
+    );
+    assert_eq!(
+        parse_scalar(ScalarKind::Auto, "null", mongo()),
         Ok(DocumentValue::Null)
+    );
+}
+
+#[test]
+fn without_a_driver_syntax_values_have_no_object_id_spelling() {
+    let neutral = ValueSyntax::default();
+    let object_id = DocumentValue::ObjectId(OBJECT_ID.to_string());
+
+    assert_eq!(
+        parse_scalar(ScalarKind::Text, OBJECT_ID, neutral),
+        Ok(text(OBJECT_ID))
+    );
+    assert_eq!(
+        format_value(&object_id, ScalarKind::Auto, neutral),
+        OBJECT_ID
+    );
+    assert_eq!(
+        format_value(&object_id, ScalarKind::Auto, mongo()),
+        format!("ObjectId(\"{OBJECT_ID}\")")
     );
 }
 
@@ -260,7 +307,7 @@ fn formatted_values_read_back_unchanged() {
 
     for (value, kind) in cases {
         assert_eq!(
-            parse_scalar(kind, &format_value(&value, kind)),
+            parse_scalar(kind, &format_value(&value, kind, mongo()), mongo()),
             Ok(value.clone()),
             "{value:?} as {kind:?}"
         );
@@ -271,7 +318,7 @@ fn formatted_values_read_back_unchanged() {
         options: "i".to_string(),
     };
     assert_eq!(parse_pattern("/^KB-/i"), Ok(pattern.clone()));
-    assert_eq!(format_value(&pattern, ScalarKind::Text), "/^KB-/i");
+    assert_eq!(format_value(&pattern, ScalarKind::Text, mongo()), "/^KB-/i");
     assert_eq!(
         parse_pattern("abc"),
         Ok(DocumentValue::Regex {

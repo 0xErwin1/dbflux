@@ -2530,29 +2530,6 @@ pub(crate) fn collection_matching_estimated(shown: usize, total: u64) -> String 
     )
 }
 
-/// Operator as the document builder lists it.
-pub(crate) fn document_operator_label(operator: dbflux_core::DocumentOperator) -> String {
-    use dbflux_core::DocumentOperator;
-
-    let label = match operator {
-        DocumentOperator::Eq => "$eq",
-        DocumentOperator::Ne => "$ne",
-        DocumentOperator::Gt => "$gt",
-        DocumentOperator::Gte => "$gte",
-        DocumentOperator::Lt => "$lt",
-        DocumentOperator::Lte => "$lte",
-        DocumentOperator::In => "$in",
-        DocumentOperator::Nin => "$nin",
-        DocumentOperator::Regex => "$regex",
-        DocumentOperator::Exists => "$exists",
-        DocumentOperator::ElemMatch => "$elemMatch",
-        DocumentOperator::Size => "$size",
-        DocumentOperator::All => "$all",
-    };
-
-    label.to_string()
-}
-
 /// Short type tag next to a field path in the document builder.
 pub(crate) fn document_field_type_tag(field_type: dbflux_core::DocumentFieldType) -> String {
     use dbflux_core::DocumentFieldType;

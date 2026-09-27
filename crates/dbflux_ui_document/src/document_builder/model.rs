@@ -20,8 +20,8 @@ use dbflux_core::{
 };
 
 use super::values::{
-    ScalarKind, ValueEditor, ValueProblem, format_value, operator_choices, parse_count,
-    parse_pattern, parse_scalar, value_editor,
+    ScalarKind, ValueEditor, ValueProblem, ValueSyntax, format_value, operator_choices,
+    parse_count, parse_pattern, parse_scalar, value_editor,
 };
 
 pub type NodeId = u64;
@@ -140,6 +140,8 @@ pub struct BuilderDraft {
     pub skip: Option<u64>,
     /// The group stage; kept while in Find mode so Aggregate restores it.
     pub group: Option<GroupStageDraft>,
+    /// How typed values are written for the connection's driver.
+    syntax: ValueSyntax,
 }
 
 impl Default for BuilderDraft {
@@ -157,11 +159,24 @@ impl Default for BuilderDraft {
             limit: None,
             skip: None,
             group: None,
+            syntax: ValueSyntax::default(),
         }
     }
 }
 
 impl BuilderDraft {
+    /// An empty draft whose values are written as `syntax` says.
+    pub fn with_value_syntax(syntax: ValueSyntax) -> Self {
+        Self {
+            syntax,
+            ..Self::default()
+        }
+    }
+
+    pub fn value_syntax(&self) -> ValueSyntax {
+        self.syntax
+    }
+
     #[cfg(test)]
     pub fn from_spec(spec: &DocumentQuerySpec) -> Self {
         let mut draft = Self::default();
@@ -254,7 +269,7 @@ impl BuilderDraft {
             (DocumentValue::Bool(flag), ValueEditor::Toggle) => Operand::Toggle(*flag),
             (DocumentValue::List(items), ValueEditor::Chips(_)) => Operand::Chips(items.clone()),
             (value, _) => Operand::Text {
-                text: format_value(value, kind),
+                text: format_value(value, kind, self.syntax),
                 value: Ok(value.clone()),
             },
         };
@@ -485,6 +500,7 @@ impl BuilderDraft {
 
     /// Reads typed text as the condition's value.
     pub fn set_text(&mut self, id: NodeId, text: &str) -> bool {
+        let syntax = self.syntax;
         let Some(condition) = self.condition_mut(id) else {
             return false;
         };
@@ -496,7 +512,7 @@ impl BuilderDraft {
                 value,
             } => {
                 *current = text.to_string();
-                *value = read_text(editor, text);
+                *value = read_text(editor, text, syntax);
                 true
             }
             _ => false,
@@ -532,6 +548,7 @@ impl BuilderDraft {
 
     /// Adds a typed chip to a list operand.
     pub fn add_chip(&mut self, id: NodeId, text: &str) -> Result<(), ValueProblem> {
+        let syntax = self.syntax;
         let Some(condition) = self.condition_mut(id) else {
             return Err(ValueProblem::Empty);
         };
@@ -541,7 +558,7 @@ impl BuilderDraft {
             return Err(ValueProblem::Empty);
         };
 
-        let value = parse_scalar(kind, text)?;
+        let value = parse_scalar(kind, text, syntax)?;
         items.push(value);
         Ok(())
     }
@@ -573,6 +590,7 @@ impl BuilderDraft {
         let editor = condition.editor();
         let kind = condition.kind;
         let current = condition.operand.clone();
+        let syntax = self.syntax;
 
         let reshaped = match (editor, current) {
             (ValueEditor::Nested, Operand::Nested(body)) => Operand::Nested(body),
@@ -593,41 +611,41 @@ impl BuilderDraft {
             (ValueEditor::Chips(_), Operand::Chips(items)) => {
                 let text = items
                     .iter()
-                    .map(|item| format_value(item, kind))
+                    .map(|item| format_value(item, kind, syntax))
                     .collect::<Vec<_>>();
                 Operand::Chips(
                     text.iter()
-                        .filter_map(|text| parse_scalar(kind, text).ok())
+                        .filter_map(|text| parse_scalar(kind, text, syntax).ok())
                         .collect(),
                 )
             }
             (ValueEditor::Chips(_), Operand::Text { text, .. }) => {
-                Operand::Chips(parse_scalar(kind, &text).into_iter().collect())
+                Operand::Chips(parse_scalar(kind, &text, syntax).into_iter().collect())
             }
             (ValueEditor::Chips(_), _) => Operand::Chips(Vec::new()),
             (editor, Operand::Text { text, .. }) => Operand::Text {
-                value: read_text(editor, &text),
+                value: read_text(editor, &text, syntax),
                 text,
             },
             (editor, Operand::Chips(items)) => {
                 let text = items
                     .first()
-                    .map(|item| format_value(item, kind))
+                    .map(|item| format_value(item, kind, syntax))
                     .unwrap_or_default();
                 Operand::Text {
-                    value: read_text(editor, &text),
+                    value: read_text(editor, &text, syntax),
                     text,
                 }
             }
             (editor, Operand::Toggle(flag)) => {
                 let text = flag.to_string();
                 Operand::Text {
-                    value: read_text(editor, &text),
+                    value: read_text(editor, &text, syntax),
                     text,
                 }
             }
             (editor, Operand::Nested(_)) => Operand::Text {
-                value: read_text(editor, ""),
+                value: read_text(editor, "", syntax),
                 text: String::new(),
             },
         };
@@ -899,13 +917,17 @@ fn empty_condition(id: NodeId) -> ConditionDraft {
     }
 }
 
-fn read_text(editor: ValueEditor, text: &str) -> Result<DocumentValue, ValueProblem> {
+fn read_text(
+    editor: ValueEditor,
+    text: &str,
+    syntax: ValueSyntax,
+) -> Result<DocumentValue, ValueProblem> {
     match editor {
-        ValueEditor::Scalar(kind) => parse_scalar(kind, text),
+        ValueEditor::Scalar(kind) => parse_scalar(kind, text, syntax),
         ValueEditor::Pattern => parse_pattern(text),
         ValueEditor::Count => parse_count(text),
-        ValueEditor::Toggle => parse_scalar(ScalarKind::Bool, text),
-        ValueEditor::Chips(kind) => parse_scalar(kind, text),
+        ValueEditor::Toggle => parse_scalar(ScalarKind::Bool, text, syntax),
+        ValueEditor::Chips(kind) => parse_scalar(kind, text, syntax),
         ValueEditor::Nested => Err(ValueProblem::Empty),
     }
 }

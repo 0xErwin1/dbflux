@@ -693,6 +693,7 @@ document:
       open_in_editor: "在编辑器中打开"
       run_pipeline: "运行管道"
       run_pipeline_busy: "已有聚合正在运行或等待确认，构建器的管道未运行"
+      pipeline_label: "管道"
       editable_note: "可编辑：每一行都保留其 _id"
       section:
         filter: "筛选"

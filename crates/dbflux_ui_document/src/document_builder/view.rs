@@ -980,9 +980,7 @@ fn render_operator_select(
                 .font_family(AppFonts::MONO)
                 .text_size(FontSizes::XS)
                 .text_color(ChromeColors::strong(theme))
-                .child(SharedString::from(crate::labels::document_operator_label(
-                    condition.operator,
-                ))),
+                .child(SharedString::from(panel.operator_label(condition.operator))),
         )
         .child(
             Icon::new(AppIcon::ChevronDown)
@@ -999,10 +997,10 @@ fn render_operator_select(
             .into_iter()
             .enumerate()
             .map(|(index, operator)| {
-                let label = crate::labels::document_operator_label(operator);
+                let label = panel.operator_label(operator);
                 let row_selector = format!(
                     "doc-builder-operator-{id}-option-{}",
-                    label.trim_start_matches('$').to_lowercase()
+                    operator.name().replace('_', "")
                 );
                 let highlighted = index == menu.highlighted;
                 let current = operator == condition.operator;
@@ -1111,7 +1109,11 @@ fn render_value(
                     .bg(theme.secondary)
                     .font_family(AppFonts::MONO)
                     .text_size(FontSizes::XS)
-                    .child(SharedString::from(format_value(item, kind)))
+                    .child(SharedString::from(format_value(
+                        item,
+                        kind,
+                        panel.draft.value_syntax(),
+                    )))
                     .child(
                         Button::new(
                             SharedString::from(format!("doc-builder-chip-remove-{id}-{index}")),
@@ -1159,14 +1161,15 @@ fn render_value(
                 .small()
                 .w_full();
 
-            let field = match editor {
-                ValueEditor::Scalar(ScalarKind::ObjectId) => field
-                    .prefix(mono_affix("ObjectId(\"", muted))
-                    .suffix(mono_affix("\")", muted)),
-                ValueEditor::Scalar(ScalarKind::Date) => field
+            let object_id_affixes = panel.draft.value_syntax().object_id_affixes();
+            let field = match (editor, object_id_affixes) {
+                (ValueEditor::Scalar(ScalarKind::ObjectId), Some((prefix, suffix))) => field
+                    .prefix(mono_affix(prefix, muted))
+                    .suffix(mono_affix(suffix, muted)),
+                (ValueEditor::Scalar(ScalarKind::Date), _) => field
                     .prefix(Icon::new(AppIcon::Clock).small().color(muted))
                     .suffix(mono_affix("UTC", muted)),
-                ValueEditor::Pattern => field.placeholder("/pattern/i"),
+                (ValueEditor::Pattern, _) => field.placeholder("/pattern/i"),
                 _ => field.placeholder(dbflux_i18n::t!(
                     "document.collection.builder.filter.value_placeholder"
                 )),
@@ -1177,12 +1180,12 @@ fn render_value(
     }
 }
 
-fn mono_affix(text: &'static str, color: Hsla) -> AnyElement {
+fn mono_affix(text: impl Into<SharedString>, color: Hsla) -> AnyElement {
     div()
         .font_family(AppFonts::MONO)
         .text_size(FontSizes::XS)
         .text_color(color)
-        .child(text)
+        .child(text.into())
         .into_any_element()
 }
 
@@ -1604,7 +1607,7 @@ fn render_match_card(
             .children(conflict_note)
             .into_any_element()
     } else {
-        let summary = match_summary(&panel.draft.filter);
+        let summary = match_summary(panel);
         let has_problem = panel
             .problems
             .iter()
@@ -1659,13 +1662,13 @@ fn render_match_card(
 }
 
 /// The root conditions in one line, nested groups counted.
-fn match_summary(root: &GroupDraft) -> String {
+fn match_summary(panel: &DocumentBuilderPanel) -> String {
     let mut parts = Vec::new();
     let mut groups = 0;
 
-    for child in &root.children {
+    for child in &panel.draft.filter.children {
         match child {
-            NodeDraft::Condition(condition) => parts.push(condition_summary(condition)),
+            NodeDraft::Condition(condition) => parts.push(condition_summary(panel, condition)),
             NodeDraft::Group(_) => groups += 1,
         }
     }
@@ -1681,8 +1684,8 @@ fn match_summary(root: &GroupDraft) -> String {
     }
 }
 
-fn condition_summary(condition: &ConditionDraft) -> String {
-    let operator = crate::labels::document_operator_label(condition.operator);
+fn condition_summary(panel: &DocumentBuilderPanel, condition: &ConditionDraft) -> String {
+    let operator = panel.operator_label(condition.operator);
     let value = match &condition.operand {
         Operand::Text { text, .. } => text.clone(),
         Operand::Toggle(flag) => flag.to_string(),
@@ -1690,7 +1693,7 @@ fn condition_summary(condition: &ConditionDraft) -> String {
             "[{}]",
             items
                 .iter()
-                .map(|item| format_value(item, condition.kind))
+                .map(|item| format_value(item, condition.kind, panel.draft.value_syntax()))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),

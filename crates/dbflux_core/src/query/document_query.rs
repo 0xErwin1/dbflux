@@ -112,6 +112,26 @@ impl DocumentOperator {
         DocumentOperator::All,
     ];
 
+    /// Neutral name of the operator, for a driver without spellings of its
+    /// own and for stable element ids.
+    pub fn name(self) -> &'static str {
+        match self {
+            DocumentOperator::Eq => "eq",
+            DocumentOperator::Ne => "ne",
+            DocumentOperator::Gt => "gt",
+            DocumentOperator::Gte => "gte",
+            DocumentOperator::Lt => "lt",
+            DocumentOperator::Lte => "lte",
+            DocumentOperator::In => "in",
+            DocumentOperator::Nin => "nin",
+            DocumentOperator::Regex => "regex",
+            DocumentOperator::Exists => "exists",
+            DocumentOperator::ElemMatch => "elem_match",
+            DocumentOperator::Size => "size",
+            DocumentOperator::All => "all",
+        }
+    }
+
     /// Whether `value` has the shape this operator takes.
     pub fn accepts(&self, value: &DocumentValue) -> bool {
         match self {
@@ -569,6 +589,26 @@ pub trait DocumentQueryCodec: Send + Sync {
     /// Builder type of a native schema-sample type name, `None` when the
     /// builder has no operators for it.
     fn field_type(&self, type_name: &str) -> Option<DocumentFieldType>;
+
+    /// How the builder labels `operator`. Defaults to its neutral name.
+    fn operator_label(&self, operator: DocumentOperator) -> &'static str {
+        operator.name()
+    }
+
+    /// Text before and after a quoted object identifier written where a
+    /// value of any type is accepted: `("Id(", ")")` writes `Id("…")`.
+    /// Defaults to `None`, the bare identifier.
+    fn object_id_wrapper(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// Hexadecimal digits in an object identifier, when the driver runs
+    /// every string of exactly that many hexadecimal digits as one: such
+    /// text cannot be sent as a string. Defaults to `None`, where text
+    /// always stays text.
+    fn object_id_hex_digits(&self) -> Option<usize> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1065,5 +1105,44 @@ mod tests {
                 accumulators: vec![],
             })
         );
+    }
+
+    /// A codec that only answers what every codec must.
+    struct PlainCodec;
+
+    impl DocumentQueryCodec for PlainCodec {
+        fn render_find(&self, _spec: &DocumentQuerySpec) -> Result<DocumentFindSlots, DbError> {
+            Ok(DocumentFindSlots::default())
+        }
+
+        fn render_pipeline(&self, _spec: &DocumentQuerySpec) -> Result<String, DbError> {
+            Ok(String::new())
+        }
+
+        fn render_preview(
+            &self,
+            _spec: &DocumentQuerySpec,
+            _collection: &str,
+        ) -> Result<String, DbError> {
+            Ok(String::new())
+        }
+
+        fn parse_find(&self, _slots: &DocumentFindSlots) -> DocumentSlotParse {
+            DocumentSlotParse::default()
+        }
+
+        fn field_type(&self, _type_name: &str) -> Option<DocumentFieldType> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_codec_without_spellings_of_its_own_uses_neutral_ones() {
+        let codec = PlainCodec;
+
+        assert_eq!(codec.operator_label(Gte), "gte");
+        assert_eq!(codec.operator_label(ElemMatch), "elem_match");
+        assert_eq!(codec.object_id_wrapper(), None);
+        assert_eq!(codec.object_id_hex_digits(), None);
     }
 }

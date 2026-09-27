@@ -24,7 +24,7 @@ use gpui_component::input::InputState;
 use super::catalog::FieldCatalog;
 use super::model::{AccumulatorOp, BuilderDraft, DraftProblem, NodeId, Operand};
 use super::sync::{SlotSync, SlotWrite};
-use super::values::{ScalarKind, ValueEditor, ValueProblem, operator_choices};
+use super::values::{ScalarKind, ValueEditor, ValueProblem, ValueSyntax, operator_choices};
 
 /// What the rail asks of the grid that owns the slots.
 #[derive(Debug, Clone)]
@@ -187,10 +187,15 @@ impl DocumentBuilderPanel {
             }),
         ];
 
+        let value_syntax = connection
+            .document_query_codec()
+            .map(ValueSyntax::of)
+            .unwrap_or_default();
+
         Self {
             connection,
             collection,
-            draft: BuilderDraft::default(),
+            draft: BuilderDraft::with_value_syntax(value_syntax),
             sync: SlotSync::default(),
             unread_slots: None,
             catalog: FieldCatalog::default(),
@@ -225,6 +230,14 @@ impl DocumentBuilderPanel {
 
     fn codec(&self) -> Option<&dyn DocumentQueryCodec> {
         self.connection.document_query_codec()
+    }
+
+    /// How the connection's driver labels `operator`.
+    pub(super) fn operator_label(&self, operator: DocumentOperator) -> &'static str {
+        match self.codec() {
+            Some(codec) => codec.operator_label(operator),
+            None => operator.name(),
+        }
     }
 
     // ---- state the grid reads --------------------------------------------
