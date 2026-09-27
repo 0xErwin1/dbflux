@@ -1,5 +1,5 @@
 import { docsUrl } from './site';
-import { CURRENT, buildInfo } from './versions';
+import { CURRENT, buildInfo, prefixFor } from './versions';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
 import {
@@ -172,8 +172,7 @@ export function routeForRepoPath(
   locale: Locale = DEFAULT_LOCALE,
   versionId?: string,
 ): string {
-  const versionPrefix =
-    versionId === undefined ? undefined : versionId === CURRENT.id ? '' : versionId;
+  const versionPrefix = versionId === undefined ? undefined : prefixFor(versionId);
 
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
   if (driver) return docsUrl(`drivers/${driver[1]}`, versionPrefix, locale);

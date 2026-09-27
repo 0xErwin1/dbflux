@@ -1,6 +1,7 @@
 // Vite inlines this at build time. Reading it with `fs` instead breaks once the
 // module is bundled, because the relative path no longer points at the file.
 import { docsPath, docsUrl } from './site';
+import { currentVersionId, versionPrefix } from './version-routing.ts';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
 import registry from '../../versions.json';
@@ -48,7 +49,9 @@ export interface DocsVersion {
  */
 export const VERSIONS: readonly DocsVersion[] = registry;
 
-export const CURRENT = VERSIONS.find((version) => version.current) ?? VERSIONS[0];
+const CURRENT_ID = currentVersionId(VERSIONS);
+
+export const CURRENT = VERSIONS.find((version) => version.id === CURRENT_ID) ?? VERSIONS[0];
 
 /** One record written by `scripts/fetch-docs.ts` while it pulls that ref. */
 interface ManifestEntry {
@@ -96,8 +99,8 @@ export const versionById = (id: string): DocsVersion | undefined =>
   VERSIONS.find((version) => version.id === id);
 
 /** Prefix a version occupies in a URL — empty for the current release. */
-function prefixFor(versionId: string): string {
-  return versionId === CURRENT.id ? '' : versionId;
+export function prefixFor(versionId: string): string {
+  return versionPrefix(versionId, CURRENT.id);
 }
 
 /**
