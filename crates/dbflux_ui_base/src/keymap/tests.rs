@@ -669,6 +669,164 @@ fn global_bindings_stop_at_capturing_contexts_and_modals() {
     );
 }
 
+/// While text is typed in a field or the context bar, the global chords
+/// still reach the workspace, inside the field's own `Input` element too.
+#[test]
+fn global_chords_reach_text_entry_roots() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::TextInput, ContextId::ContextBar] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let inside_input = element_stack(root.clone(), &["Input"]);
+
+        for (keys, command) in [
+            ("ctrl-shift-p", Command::ToggleCommandPalette),
+            ("ctrl-tab", Command::NextTab),
+            ("ctrl-shift-tab", Command::PrevTab),
+            ("ctrl-w", Command::CloseCurrentTab),
+            ("ctrl-3", Command::SwitchToTab(3)),
+            ("ctrl-shift-2", Command::FocusEditor),
+        ] {
+            for stack in [std::slice::from_ref(&root), inside_input.as_slice()] {
+                let action = top_action(&keymap, keys, stack)
+                    .unwrap_or_else(|| panic!("`{keys}` must be bound in {context:?}"));
+
+                assert!(
+                    runs_command(action.as_ref(), command),
+                    "`{keys}` in {context:?} must run {command:?}, got {}",
+                    action.name()
+                );
+            }
+        }
+    }
+}
+
+/// Unmodified keys in a text root stay with the field: the global layer's
+/// Tab cycle and Escape never take them from the text being typed.
+#[test]
+fn text_entry_roots_keep_unmodified_keys_from_the_global_layer() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let inside_input = element_stack(root.clone(), &["Input"]);
+
+    for keys in ["j", "tab", "shift-tab", "enter", "down"] {
+        let action = top_action(&keymap, keys, &inside_input);
+
+        assert!(
+            !action.as_ref().is_some_and(|action| {
+                [
+                    Command::CycleFocusForward,
+                    Command::CycleFocusBackward,
+                    Command::SelectNext,
+                    Command::Execute,
+                ]
+                .into_iter()
+                .any(|command| runs_command(action.as_ref(), command))
+            }),
+            "`{keys}` in a text field must not run a workspace command"
+        );
+    }
+
+    let escape = top_action(&keymap, "escape", std::slice::from_ref(&root)).expect("bound");
+    assert!(runs_command(escape.as_ref(), Command::Cancel));
+}
+
+/// Dialogs, menus, dropdowns and pickers own the keyboard until they close:
+/// the global chords do not fire through them.
+#[test]
+fn global_chords_stop_at_dialogs_menus_and_pickers() {
+    let keymap = native_keymap();
+
+    for context in [
+        ContextId::HistoryModal,
+        ContextId::ConfirmModal,
+        ContextId::Dropdown,
+        ContextId::EventStreamsPicker,
+        ContextId::SqlPreviewModal,
+        ContextId::FormNavigation,
+        ContextId::ContextMenu,
+        ContextId::CommandPalette,
+    ] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+
+        for keys in ["ctrl-tab", "ctrl-shift-p", "ctrl-1"] {
+            assert!(
+                top_action(&keymap, keys, std::slice::from_ref(&root)).is_none(),
+                "`{keys}` must not fire while {context:?} owns the keyboard"
+            );
+        }
+    }
+
+    let text_root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let text_in_modal = element_stack(text_root, &["Modal", "Input"]);
+    assert!(
+        top_action(&keymap, "ctrl-tab", &text_in_modal).is_none(),
+        "a text field inside a modal keeps the chords out"
+    );
+}
+
+/// While an overlay owns the keyboard, the root drops the global chords even
+/// for a text root, whether or not focus reached the overlay's `Modal`.
+#[test]
+fn overlay_roots_do_not_keep_the_global_chords() {
+    let keymap = native_keymap();
+    let overlay = overlay_root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+
+    assert!(overlay.contains("TextInput"));
+    assert!(!overlay.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
+    assert!(top_action(&keymap, "ctrl-tab", &[overlay]).is_none());
+}
+
+/// The copies of the global chords follow the user's overrides: a rebound
+/// chord moves, a shortcut moved to a bare key or to a predicate of the
+/// user's own stays out of the text roots.
+#[test]
+fn global_chords_in_text_roots_follow_the_overrides() {
+    let next_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::NextTab,
+        KeyChord::new("tab", Modifiers::ctrl()),
+    );
+    let close_tab = BindingSlot::new(
+        ContextId::Global,
+        Command::CloseCurrentTab,
+        KeyChord::new("w", Modifiers::primary()),
+    );
+    let palette = BindingSlot::new(
+        ContextId::Global,
+        Command::ToggleCommandPalette,
+        KeyChord::new("p", Modifiers::primary_shift()),
+    );
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(
+        next_tab,
+        Some(KeySequence::from(KeyChord::new(
+            "j",
+            Modifiers::ctrl_shift(),
+        ))),
+    );
+    overrides.set(
+        close_tab,
+        Some(KeySequence::from(KeyChord::new("f4", Modifiers::none()))),
+    );
+    overrides.set_predicate(palette, Some("Editor && !Modal".to_string()));
+
+    let mut keymap = gpui::Keymap::default();
+    keymap.add_bindings(native_bindings(
+        &overrides.effective_bindings(default_keymap()),
+    ));
+
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let stack = std::slice::from_ref(&root);
+
+    let rebound = top_action(&keymap, "ctrl-shift-j", stack).expect("the rebound chord");
+    assert!(runs_command(rebound.as_ref(), Command::NextTab));
+    assert!(top_action(&keymap, "ctrl-tab", stack).is_none());
+    assert!(top_action(&keymap, "f4", stack).is_none());
+    assert!(top_action(&keymap, "ctrl-shift-p", stack).is_none());
+}
+
 /// GPUI normalizes Ctrl+Shift+digit at the platform layer (GitHub #65); as
 /// native bindings the focus chords go through the same normalization.
 #[test]
@@ -1037,6 +1195,11 @@ fn root_key_context_adds_global_only_to_inheriting_contexts() {
 
     let palette = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::CommandPalette, &[]);
     assert!(!palette.contains("Global"));
+    assert!(!palette.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
+
+    let text = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    assert!(!text.contains("Global"));
+    assert!(text.contains(ContextId::GLOBAL_CHORDS_IDENTIFIER));
 }
 
 #[test]

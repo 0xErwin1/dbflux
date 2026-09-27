@@ -786,6 +786,7 @@ mod tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::{bell_urgency, first_line};
+    use crate::keymap::{Command, ContextId, FocusTarget};
     use crate::ui::document::DocumentIcon;
     use crate::ui::views::workspace::Workspace;
     use dbflux_components::composites::BellUrgency;
@@ -878,6 +879,13 @@ mod tests {
                 .nodes()
                 .find(|(_, node)| node.id() == id)
                 .map(|(_, node)| node.bounds())
+        }
+
+        /// Draws a frame, which delivers the focus changes of the last
+        /// key presses to the elements that listen for them.
+        fn redraw(&mut self) {
+            self.window.update(|window, _| window.refresh());
+            self.window.run_until_parked();
         }
 
         fn is_rendered(&mut self, id: &str) -> bool {
@@ -1016,6 +1024,66 @@ mod tests {
         assert_eq!(active_icon, Some(DocumentIcon::Audit));
         assert!(!harness.is_open());
         assert_eq!(harness.urgency(), NotificationUrgency::None);
+    }
+
+    /// The keys the default keymap gives `command` in the global layer, in
+    /// GPUI keystroke syntax.
+    fn global_keys(command: Command) -> String {
+        let keymap = dbflux_ui_base::keymap::effective_keymap();
+        let keys = keymap
+            .keys_for_command(ContextId::Global, command)
+            .unwrap_or_else(|| panic!("{command:?} has a default shortcut"));
+
+        dbflux_ui_base::keymap::gpui_keystrokes(keys)
+    }
+
+    /// Typing in the sidebar search leaves letters to the field, and the
+    /// global chords still run while it has focus.
+    #[gpui::test]
+    fn global_chords_run_while_the_sidebar_search_has_focus(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+
+        // Focus events reach the search field only in the active window.
+        harness.window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        harness.window.run_until_parked();
+
+        harness.window.simulate_keystrokes("/");
+        harness.redraw();
+
+        let search_focused = |harness: &mut Harness<'_>| {
+            let workspace = harness.workspace.clone();
+            harness.window.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .sidebar
+                    .read(cx)
+                    .search_input_has_focus_state()
+            })
+        };
+        assert!(search_focused(&mut harness), "`/` focuses the search");
+
+        harness.window.simulate_keystrokes("j k");
+        harness.redraw();
+        assert!(search_focused(&mut harness), "letters stay with the field");
+
+        harness
+            .window
+            .simulate_keystrokes(&global_keys(Command::ToggleCommandPalette));
+        harness.window.run_until_parked();
+
+        let palette_visible = harness
+            .window
+            .update(|_, cx| workspace.read(cx).command_palette.read(cx).is_visible());
+        assert!(
+            palette_visible,
+            "the palette chord runs from the search field"
+        );
     }
 
     #[cfg(feature = "mcp")]

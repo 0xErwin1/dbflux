@@ -317,6 +317,8 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | 在新标签页中执行查询 |
 | `Ctrl+Shift+z` | 重做（Linux 和 Windows；macOS 使用 `Cmd+Shift+z`） |
 
+在对话框之外的文本输入框中输入时（例如侧边栏搜索或执行上下文栏），带 `Ctrl` 或 `Cmd` 的全局快捷键仍然有效：`Ctrl+Tab`、`Ctrl+1` .. `Ctrl+9`、`Ctrl+w`、`Ctrl+Shift+P` 以及[全局](#全局无论焦点在哪都可用)中的其他快捷键。不带这些修饰键的按键（包括 `Tab`、`Escape`、`Enter` 和方向键）仍由输入框处理。输入框自身绑定的快捷键（如 `Ctrl+a` 或 `Ctrl+c`）优先于全局快捷键。在对话框、菜单、下拉列表或选择器中，全局快捷键要等它关闭后才生效。
+
 ## 对话框
 
 | 按键 | 操作 |

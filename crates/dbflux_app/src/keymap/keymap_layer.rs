@@ -89,6 +89,9 @@ impl KeymapLayer {
 ///
 /// When resolving keys, the stack first checks the current context, then
 /// falls back to parent contexts (ending at Global) if no match is found.
+/// A context that keeps the global chords (see
+/// [`ContextId::inherits_global_chords`]) falls back last to the global
+/// bindings on a Ctrl or Cmd chord.
 /// Key dispatch itself goes through GPUI's keymap (see
 /// `dbflux_ui_base::keymap`); the stack answers lookups such as the keys a
 /// command has, for shortcut labels.
@@ -123,18 +126,33 @@ impl KeymapStack {
     /// Resolves a key sequence to a command, checking the given context
     /// first, then falling back to parent contexts.
     pub fn resolve_sequence(&self, context: ContextId, keys: &KeySequence) -> Option<Command> {
+        self.lookup_chain(context)
+            .into_iter()
+            .filter(|(_, chords_only)| !chords_only || keys.is_global_chord())
+            .find_map(|(layer, _)| layer.get_sequence(keys))
+    }
+
+    /// The layers a key pressed in `context` reaches, in lookup order: the
+    /// context's own, its ancestors', and last the global layer when the
+    /// context keeps only its chords (the flag is `true` for that entry).
+    fn lookup_chain(&self, context: ContextId) -> Vec<(&KeymapLayer, bool)> {
+        let mut chain = Vec::new();
         let mut current = Some(context);
 
         while let Some(ctx) = current {
-            if let Some(layer) = self.layers.get(&ctx)
-                && let Some(cmd) = layer.get_sequence(keys)
-            {
-                return Some(cmd);
+            if let Some(layer) = self.layers.get(&ctx) {
+                chain.push((layer, false));
             }
             current = ctx.parent();
         }
 
-        None
+        if context.inherits_global_chords()
+            && let Some(global) = self.layers.get(&ContextId::Global)
+        {
+            chain.push((global, true));
+        }
+
+        chain
     }
 
     /// Returns all keybindings for a given context, including inherited ones.
@@ -144,17 +162,17 @@ impl KeymapStack {
     ) -> Vec<(KeySequence, Command, ContextId)> {
         let mut result = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let mut current = Some(context);
 
-        while let Some(ctx) = current {
-            if let Some(layer) = self.layers.get(&ctx) {
-                for (keys, cmd) in layer.ordered_bindings() {
-                    if seen.insert(keys.clone()) {
-                        result.push((keys.clone(), cmd, ctx));
-                    }
+        for (layer, chords_only) in self.lookup_chain(context) {
+            for (keys, cmd) in layer.ordered_bindings() {
+                if chords_only && !keys.is_global_chord() {
+                    continue;
+                }
+
+                if seen.insert(keys.clone()) {
+                    result.push((keys.clone(), cmd, layer.context()));
                 }
             }
-            current = ctx.parent();
         }
 
         result
@@ -172,20 +190,16 @@ impl KeymapStack {
     /// When one layer binds the command to several key sequences, the one
     /// bound first is returned.
     pub fn keys_for_command(&self, context: ContextId, command: Command) -> Option<&KeySequence> {
-        let mut current = Some(context);
-
-        while let Some(ctx) = current {
-            if let Some(layer) = self.layers.get(&ctx)
-                && let Some((keys, _)) = layer
+        self.lookup_chain(context)
+            .into_iter()
+            .find_map(|(layer, chords_only)| {
+                layer
                     .ordered_bindings()
-                    .find(|(_, bound_command)| *bound_command == command)
-            {
-                return Some(keys);
-            }
-            current = ctx.parent();
-        }
-
-        None
+                    .find(|(keys, bound_command)| {
+                        *bound_command == command && (!chords_only || keys.is_global_chord())
+                    })
+                    .map(|(keys, _)| keys)
+            })
     }
 
     /// The first chord of the keys bound to `command`, see
@@ -272,6 +286,58 @@ mod tests {
 
         let chord = KeyChord::new("p", Modifiers::ctrl_shift());
         assert_eq!(stack.resolve(ContextId::CommandPalette, &chord), None);
+    }
+
+    #[test]
+    fn text_entry_contexts_fall_back_to_global_chords_only() {
+        let mut global = KeymapLayer::new(ContextId::Global);
+        global.bind(
+            KeyChord::new("p", Modifiers::ctrl_shift()),
+            Command::ToggleCommandPalette,
+        );
+        global.bind(
+            KeyChord::new("tab", Modifiers::none()),
+            Command::CycleFocusForward,
+        );
+        global.bind(
+            KeyChord::new("h", Modifiers::alt()),
+            Command::ToggleHistoryDropdown,
+        );
+
+        let mut text_input = KeymapLayer::new(ContextId::TextInput);
+        text_input.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+        let mut stack = KeymapStack::new();
+        stack.add_layer(global);
+        stack.add_layer(text_input);
+
+        let palette = KeyChord::new("p", Modifiers::ctrl_shift());
+        let tab = KeyChord::new("tab", Modifiers::none());
+        let alt_h = KeyChord::new("h", Modifiers::alt());
+
+        assert_eq!(
+            stack.resolve(ContextId::TextInput, &palette),
+            Some(Command::ToggleCommandPalette)
+        );
+        assert_eq!(stack.resolve(ContextId::TextInput, &tab), None);
+        assert_eq!(stack.resolve(ContextId::TextInput, &alt_h), None);
+        assert_eq!(stack.resolve(ContextId::ConfirmModal, &palette), None);
+
+        assert_eq!(
+            stack.keys_for_command(ContextId::TextInput, Command::ToggleCommandPalette),
+            Some(&KeySequence::from(palette.clone()))
+        );
+        assert_eq!(
+            stack.keys_for_command(ContextId::TextInput, Command::CycleFocusForward),
+            None
+        );
+
+        let listed: Vec<Command> = stack
+            .bindings_for_context(ContextId::TextInput)
+            .into_iter()
+            .map(|(_, command, _)| command)
+            .collect();
+        assert_eq!(listed, vec![Command::Cancel, Command::ToggleCommandPalette]);
     }
 
     #[test]

@@ -13,6 +13,7 @@ All notable changes to DBFlux will be documented in this file.
 ### Changed
 
 * **MongoDB extended JSON dates** — `{"$date": "<RFC 3339>"}` in the query bar, in aggregation pipelines and in document edits is now stored as a date. An invalid date string there now fails with an error instead of being saved as a nested object.
+* **Global shortcuts while typing** — Shortcuts that hold Ctrl or Cmd, such as Ctrl+Tab, Ctrl+1 to Ctrl+9, Ctrl+W and Ctrl+Shift+P, now work while a text field outside a dialog has focus, such as the sidebar search or the execution context bar. Letters, Tab, Escape, Enter and the arrows stay with the field, and dialogs, menus, dropdowns and pickers keep the shortcuts out until they close.
 
 ## [0.8.3] - 2026-09-29
 

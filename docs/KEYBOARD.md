@@ -380,6 +380,15 @@ edited.
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |
 | `Ctrl+Shift+z` | Redo (Linux and Windows; macOS uses `Cmd+Shift+z`) |
 
+While you type in a text field outside a dialog, such as the sidebar search or
+the execution context bar, the global shortcuts that hold `Ctrl` or `Cmd` keep
+working: `Ctrl+Tab`, `Ctrl+1` .. `Ctrl+9`, `Ctrl+w`, `Ctrl+Shift+P` and the
+others in [Global](#global-available-regardless-of-focus). Keys without those
+modifiers, including `Tab`, `Escape`, `Enter` and the arrows, stay with the
+field. A shortcut the field binds itself, such as `Ctrl+a` or `Ctrl+c`, wins
+over the global one. Inside a dialog, a menu, a dropdown or a picker the global
+shortcuts wait until it closes.
+
 ## Dialogs
 
 | Keys | Action |

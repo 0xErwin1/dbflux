@@ -375,11 +375,39 @@ fn refresh_derived_keybindings(cx: &mut App) {
 /// error in the log: predicates are validated before they are saved, so this
 /// only happens to rows edited outside the app.
 pub fn keymap_keybindings() -> Vec<KeyBinding> {
-    keymap_overrides()
-        .effective_bindings(default_keymap())
+    native_bindings(&keymap_overrides().effective_bindings(default_keymap()))
+}
+
+/// `bindings` as native GPUI bindings, preceded by the copies of the global
+/// chords the text entry roots keep (see [`global_chord_binding`]). The
+/// copies come first so that a root context's own binding on the same keys
+/// wins over them.
+fn native_bindings(bindings: &[EffectiveBinding]) -> Vec<KeyBinding> {
+    let chords: Vec<EffectiveBinding> = bindings.iter().filter_map(global_chord_binding).collect();
+
+    chords
         .iter()
+        .chain(bindings)
         .filter_map(native_binding)
         .collect()
+}
+
+/// The copy of a global binding that applies in the roots keeping the
+/// global chords ([`ContextId::inherits_global_chords`]), or `None` when the
+/// binding is not a global chord.
+///
+/// It follows the binding's effective keys, so a rebound or removed global
+/// shortcut changes there too. A binding the user moved to a predicate of
+/// their own applies only where they put it.
+fn global_chord_binding(binding: &EffectiveBinding) -> Option<EffectiveBinding> {
+    let is_global_chord = binding.slot.context == ContextId::Global
+        && binding.predicate == binding.slot.default_predicate
+        && binding.keys.is_global_chord();
+
+    is_global_chord.then(|| EffectiveBinding {
+        predicate: ContextId::global_chords_predicate().to_string(),
+        ..binding.clone()
+    })
 }
 
 fn native_binding(binding: &EffectiveBinding) -> Option<KeyBinding> {
@@ -590,11 +618,33 @@ pub const LANGUAGE_KEY: &str = "language";
 
 /// The key context of a window root whose keyboard belongs to `context`:
 /// `root`, the context's identifier, `Global` when the context inherits the
-/// global bindings, and the extra key=value `entries` (`vim_mode=normal`).
+/// global bindings, `GlobalChords` when it keeps only the global chords, and
+/// the extra key=value `entries` (`vim_mode=normal`).
 pub fn root_key_context(
     root: &'static str,
     context: ContextId,
     entries: &[(SharedString, SharedString)],
+) -> KeyContext {
+    build_root_key_context(root, context, entries, context.inherits_global_chords())
+}
+
+/// The key context of a window root while an overlay it draws (a dialog, a
+/// picker, a menu) owns the keyboard: [`root_key_context`] without the
+/// global chords, so a text field inside the overlay does not let Ctrl+W or
+/// Ctrl+Tab act on the workspace behind it.
+pub fn overlay_root_key_context(
+    root: &'static str,
+    context: ContextId,
+    entries: &[(SharedString, SharedString)],
+) -> KeyContext {
+    build_root_key_context(root, context, entries, false)
+}
+
+fn build_root_key_context(
+    root: &'static str,
+    context: ContextId,
+    entries: &[(SharedString, SharedString)],
+    global_chords: bool,
 ) -> KeyContext {
     let mut key_context = KeyContext::default();
     key_context.add(root);
@@ -602,6 +652,10 @@ pub fn root_key_context(
 
     if inherits_global(context) {
         key_context.add(ContextId::Global.as_gpui_context());
+    }
+
+    if global_chords {
+        key_context.add(ContextId::GLOBAL_CHORDS_IDENTIFIER);
     }
 
     for (key, value) in entries {
@@ -637,6 +691,7 @@ pub fn known_context_names() -> Vec<&'static str> {
         .collect();
 
     names.extend([
+        ContextId::GLOBAL_CHORDS_IDENTIFIER,
         WORKSPACE_KEY_CONTEXT,
         SETTINGS_WINDOW_KEY_CONTEXT,
         CONNECTION_MANAGER_WINDOW_KEY_CONTEXT,

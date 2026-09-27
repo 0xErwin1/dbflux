@@ -1923,8 +1923,18 @@ impl Workspace {
 
     /// The key context of the workspace root: `Workspace`, the context that
     /// owns the keyboard (see [`Workspace::active_context`]) and, while a
-    /// document owns it, the entries the document contributes.
+    /// document owns it, the entries the document contributes. While a
+    /// workspace overlay owns the keyboard the global chords stay out, even
+    /// when the overlay reports a text field.
     fn root_key_context(&self, cx: &Context<Self>) -> gpui::KeyContext {
+        if let Some(context) = self.overlay_context(cx) {
+            return dbflux_ui_base::keymap::overlay_root_key_context(
+                dbflux_ui_base::keymap::WORKSPACE_KEY_CONTEXT,
+                context,
+                &[],
+            );
+        }
+
         let context = self.active_context(cx);
 
         let entries = if self.focus_target == FocusTarget::Document {
@@ -1945,58 +1955,8 @@ impl Workspace {
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
-        // A quit request can open the active-query prompt over any other
-        // overlay, and the prompt is drawn above them, so it owns the keyboard
-        // first.
-        if self.modal_active_query.read(cx).is_visible() {
-            return ContextId::ConfirmModal;
-        }
-
-        if self.command_palette.read(cx).is_visible() {
-            return ContextId::CommandPalette;
-        }
-
-        if self.sidebar.read(cx).has_child_picker_open() {
-            // When the filter input inside the picker is focused, defer to the
-            // text-input keymap so typing does not trigger list navigation.
-            if self.sidebar.read(cx).child_picker_filter_is_focused() {
-                return ContextId::TextInput;
-            }
-            return ContextId::EventStreamsPicker;
-        }
-
-        if self.sql_preview_modal.read(cx).is_visible() {
-            return ContextId::SqlPreviewModal;
-        }
-
-        // Text-input-bearing modals must own the keymap so the underlying
-        // sidebar/document context does not consume typed characters as
-        // command shortcuts. Returning `TextInput` (which has no parent in
-        // the keymap fallback chain) ensures only input-level bindings fire.
-        if self.modal_import_dashboard.read(cx).is_visible()
-            || self.modal_create_dashboard.read(cx).is_visible()
-            || self.modal_rename_item.read(cx).is_visible()
-            || self.modal_add_panel.read(cx).is_visible()
-            || self.modal_drop_table.read(cx).is_visible()
-            || self.modal_tunnel_auth.read(cx).is_visible()
-        {
-            return ContextId::TextInput;
-        }
-
-        // Confirm-only modals (no text input) still need to swallow keys so
-        // global shortcuts do not run while the user is reading a confirmation
-        // dialog.
-        if self.modal_delete_connection.read(cx).is_visible()
-            || self.modal_unsaved_changes.read(cx).is_visible()
-            || self.modal_delete_dashboard.read(cx).is_visible()
-            || self.modal_delete_saved_chart.read(cx).is_visible()
-            || self.sidebar.read(cx).delete_modal_state().is_some()
-        {
-            return ContextId::ConfirmModal;
-        }
-
-        if self.tab_bar.read(cx).has_context_menu_open() {
-            return ContextId::ContextMenu;
+        if let Some(context) = self.overlay_context(cx) {
+            return context;
         }
 
         if self.focus_target == FocusTarget::Sidebar && self.sidebar.read(cx).is_renaming() {
@@ -2017,6 +1977,68 @@ impl Workspace {
         }
 
         self.focus_target.to_context()
+    }
+
+    /// The context of the workspace overlay that owns the keyboard (a
+    /// prompt, the palette, a picker, a dialog or the tab menu), or `None`
+    /// when no overlay is open and the focused panel owns it.
+    fn overlay_context(&self, cx: &Context<Self>) -> Option<ContextId> {
+        // A quit request can open the active-query prompt over any other
+        // overlay, and the prompt is drawn above them, so it owns the keyboard
+        // first.
+        if self.modal_active_query.read(cx).is_visible() {
+            return Some(ContextId::ConfirmModal);
+        }
+
+        if self.command_palette.read(cx).is_visible() {
+            return Some(ContextId::CommandPalette);
+        }
+
+        if self.sidebar.read(cx).has_child_picker_open() {
+            // When the filter input inside the picker is focused, defer to the
+            // text-input keymap so typing does not trigger list navigation.
+            if self.sidebar.read(cx).child_picker_filter_is_focused() {
+                return Some(ContextId::TextInput);
+            }
+            return Some(ContextId::EventStreamsPicker);
+        }
+
+        if self.sql_preview_modal.read(cx).is_visible() {
+            return Some(ContextId::SqlPreviewModal);
+        }
+
+        // Text-input-bearing modals must own the keymap so the underlying
+        // sidebar/document context does not consume typed characters as
+        // command shortcuts. `TextInput` has no parent in the keymap fallback
+        // chain, and as an overlay it keeps no global chords either, so only
+        // input-level bindings fire.
+        if self.modal_import_dashboard.read(cx).is_visible()
+            || self.modal_create_dashboard.read(cx).is_visible()
+            || self.modal_rename_item.read(cx).is_visible()
+            || self.modal_add_panel.read(cx).is_visible()
+            || self.modal_drop_table.read(cx).is_visible()
+            || self.modal_tunnel_auth.read(cx).is_visible()
+        {
+            return Some(ContextId::TextInput);
+        }
+
+        // Confirm-only modals (no text input) still need to swallow keys so
+        // global shortcuts do not run while the user is reading a confirmation
+        // dialog.
+        if self.modal_delete_connection.read(cx).is_visible()
+            || self.modal_unsaved_changes.read(cx).is_visible()
+            || self.modal_delete_dashboard.read(cx).is_visible()
+            || self.modal_delete_saved_chart.read(cx).is_visible()
+            || self.sidebar.read(cx).delete_modal_state().is_some()
+        {
+            return Some(ContextId::ConfirmModal);
+        }
+
+        if self.tab_bar.read(cx).has_context_menu_open() {
+            return Some(ContextId::ContextMenu);
+        }
+
+        None
     }
 
     /// Moves keyboard focus to `target`. Focusing the background tasks

@@ -989,6 +989,29 @@ impl ContextId {
         }
     }
 
+    /// Identifier a window root adds to its key context when its context keeps
+    /// the global chords (see [`ContextId::inherits_global_chords`]).
+    pub const GLOBAL_CHORDS_IDENTIFIER: &'static str = "GlobalChords";
+
+    /// Whether this context keeps the global layer's chords, the global
+    /// bindings whose first key holds Ctrl or Cmd, although it does not
+    /// inherit the global layer.
+    ///
+    /// These contexts own the keyboard while text is typed outside a dialog:
+    /// a text field and the execution context bar. Unmodified keys (letters,
+    /// Tab, Escape, Enter, the arrows) stay with the field, while chords such
+    /// as Ctrl+Tab or Ctrl+W still reach the workspace. Dialogs, menus,
+    /// dropdowns and pickers do not keep them: the user closes those first.
+    pub fn inherits_global_chords(&self) -> bool {
+        matches!(self, ContextId::TextInput | ContextId::ContextBar)
+    }
+
+    /// The context predicate the global chords carry in the contexts that
+    /// keep them. Like the global layer, it does not hold inside a modal.
+    pub fn global_chords_predicate() -> &'static str {
+        "GlobalChords && !Modal"
+    }
+
     /// Returns true if this context captures all keyboard input (modals/inputs).
     #[allow(dead_code)]
     pub fn is_modal(&self) -> bool {
@@ -1292,6 +1315,29 @@ mod tests {
                 "{context:?} default predicate must name its own identifier"
             );
         }
+    }
+
+    #[test]
+    fn only_text_entry_contexts_outside_dialogs_keep_the_global_chords() {
+        let keeping: Vec<ContextId> = ContextId::all_variants()
+            .iter()
+            .copied()
+            .filter(ContextId::inherits_global_chords)
+            .collect();
+
+        assert_eq!(keeping, vec![ContextId::TextInput, ContextId::ContextBar]);
+
+        for context in keeping {
+            assert_eq!(
+                context.parent(),
+                None,
+                "{context:?} keeps the chords without inheriting the global layer"
+            );
+        }
+
+        assert!(
+            ContextId::global_chords_predicate().starts_with(ContextId::GLOBAL_CHORDS_IDENTIFIER)
+        );
     }
 
     #[test]

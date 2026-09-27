@@ -234,7 +234,6 @@ impl KeyChord {
     }
 
     /// Returns true if this chord has the Ctrl or Platform (Cmd) modifier.
-    #[allow(dead_code)]
     pub fn has_ctrl_or_cmd(&self) -> bool {
         self.modifiers.ctrl || self.modifiers.platform
     }
@@ -313,6 +312,14 @@ impl KeySequence {
     /// Whether the sequence is a single chord.
     pub fn is_single(&self) -> bool {
         self.0.len() == 1
+    }
+
+    /// Whether a global binding on these keys is one of the global chords
+    /// (see `ContextId::inherits_global_chords`): its first key holds Ctrl or
+    /// Cmd. Alt alone does not count, since Alt with a letter types a
+    /// character on macOS and on many keyboard layouts.
+    pub fn is_global_chord(&self) -> bool {
+        self.first().has_ctrl_or_cmd()
     }
 
     /// Whether `self` is a strict prefix of `other`: pressing `self` leaves
