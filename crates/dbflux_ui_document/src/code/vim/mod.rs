@@ -159,9 +159,6 @@ impl CodeDocument {
             enabled,
             ..VimState::default()
         };
-        self.editor
-            .input_state
-            .update(cx, |state, _| state.set_replace_action_enabled(!enabled));
         self.sync_editor_lock(cx);
         self.sync_editor_cursor_shape(cx);
         self.sync_search_moves_cursor(cx);
@@ -704,7 +701,7 @@ impl CodeDocument {
             ) == Some(VimCommand::Swallow)
     }
 
-    fn editor_menu_open(&self, cx: &App) -> bool {
+    pub(super) fn editor_menu_open(&self, cx: &App) -> bool {
         let state = self.editor.input_state.read(cx);
         state.completion_menu_state().open || state.code_action_menu_state().open
     }

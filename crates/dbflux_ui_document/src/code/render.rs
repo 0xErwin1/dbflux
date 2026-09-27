@@ -372,6 +372,13 @@ impl CodeDocument {
             // operator, and Cancel keeps the editor focused, as the Escape
             // key listener does when no binding takes the key.
             .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                if let Some(command) = Command::from_action_id(&action.command)
+                    && this.handle_editor_overlay_pane_move(command, window, cx)
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+
                 if !action.from_user_binding
                     && let Some(keystroke) = last_keystroke(cx)
                     && this.handle_vim_key_down(

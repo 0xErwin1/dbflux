@@ -135,16 +135,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.replaceable && self.is_editable()
     }
 
-    /// Whether the `Replace` action opens the search panel in replace mode.
-    ///
-    /// Enabled by default. While disabled, the action propagates instead of
-    /// being handled, so another binding of the same keystroke, such as an
-    /// application shortcut bound further up the key context tree, runs in its
-    /// place. The replace field stays reachable from the open search panel.
-    pub fn set_replace_action_enabled(&mut self, enabled: bool) {
-        self.replace_action_enabled = enabled;
-    }
-
     /// Whether search navigation moves the cursor onto the match it reaches.
     ///
     /// Disabled by default: navigation only scrolls to the match and marks it
@@ -272,25 +262,27 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.search_session.matcher.update(&self.text);
     }
 
+    /// Opens search. An input that is not searchable lets the action
+    /// propagate, so an enclosing handler or the next binding of the same
+    /// keystroke runs instead of the key being swallowed.
     pub(super) fn on_action_search(&mut self, _: &Search, _: &mut Window, cx: &mut Context<Self>) {
         if !self.searchable {
+            cx.propagate();
             return;
         }
         self.open_search(false, cx);
     }
 
+    /// Opens search in replace mode, propagating like
+    /// [`InputBaseState::on_action_search`] when the input is not searchable.
     pub(super) fn on_action_replace(
         &mut self,
         _: &Replace,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.replace_action_enabled {
-            cx.propagate();
-            return;
-        }
-
         if !self.searchable {
+            cx.propagate();
             return;
         }
         self.open_search(true, cx);

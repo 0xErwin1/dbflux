@@ -431,8 +431,6 @@ pub struct InputBaseState<M: InputModeKind> {
     /// [`InputBaseState::search_activation_revision`].
     pub(super) search_activation_revision: u64,
     pub(super) searchable: bool,
-    /// See [`InputBaseState::set_replace_action_enabled`].
-    pub(super) replace_action_enabled: bool,
     /// See [`InputBaseState::set_search_moves_cursor`].
     pub(super) search_moves_cursor: bool,
     pub(super) replaceable: bool,
@@ -777,7 +775,6 @@ impl<M: InputModeKind> InputBaseState<M> {
             search_session: super::SearchSession::default(),
             search_activation_revision: 0,
             searchable: false,
-            replace_action_enabled: true,
             search_moves_cursor: false,
             replaceable: true,
             soft_wrap: true,
@@ -5345,6 +5342,59 @@ mod tests {
                     safe_y_min,
                 );
             });
+        });
+    }
+
+    /// Counts the `Search` and `Replace` actions that reach the view around
+    /// an input.
+    struct SearchActionProbe {
+        input: Entity<InputBaseState<InputMode>>,
+        searches: usize,
+        replaces: usize,
+    }
+
+    impl Render for SearchActionProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, _: &Search, _, _| this.searches += 1))
+                .on_action(cx.listener(|this, _: &Replace, _, _| this.replaces += 1))
+                .child(self.input.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn search_actions_propagate_from_an_input_that_is_not_searchable(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                super::super::init(cx);
+
+                let input = cx.new(|cx| crate::input::InputState::new(window, cx));
+                cx.new(|_| SearchActionProbe {
+                    input,
+                    searches: 0,
+                    replaces: 0,
+                })
+            })
+            .unwrap()
+        });
+        let probe = window.root(cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        cx.update(|window, cx| {
+            let input = probe.read(cx).input.clone();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.run_until_parked();
+
+        cx.dispatch_action(Search);
+        cx.dispatch_action(Replace);
+
+        probe.read_with(&cx, |probe, cx| {
+            assert_eq!(probe.searches, 1);
+            assert_eq!(probe.replaces, 1);
+            assert!(!probe.input.read(cx).search_session().open);
         });
     }
 

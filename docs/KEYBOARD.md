@@ -68,6 +68,8 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | Keys | Action |
 |------|--------|
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Focus left / down / up panel |
+| `Ctrl+f` / `Cmd+f` | Find in the editor |
+| `Ctrl+Shift+h` / `Cmd+Shift+f` | Find and replace in the editor |
 | `Alt+h` | Toggle history dropdown |
 | `Ctrl+p` / `Cmd+p` | Open saved queries |
 | `Ctrl+s` / `Cmd+s` | Save query |
@@ -76,6 +78,14 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Enter` | Focus / execute |
 
 (Unmodified letters are intentionally left to the text input so typing works.)
+
+`Ctrl+h` / `Ctrl+j` / `Ctrl+k` move focus between panels whether or not Vim mode
+is on; they never move the cursor. While a completion menu is open, `Ctrl+j` /
+`Ctrl+k` step through it instead. In the find panel, `Ctrl+j` closes the panel
+and returns to the editor, as `Escape` does, and `Ctrl+h` / `Ctrl+k` close it
+before moving focus. The same find-and-replace keys toggle the replace field
+while the panel is open. In Vim Normal mode the editor is read-only, so the find
+panel opens without its replace field.
 
 ## Vim mode (opt-in)
 
@@ -364,7 +374,7 @@ edited.
 
 | Keys | Action |
 |------|--------|
-| `Ctrl+j` / `Ctrl+k` | Next / previous line, or the next / previous completion |
+| `Ctrl+j` / `Ctrl+k` | Next / previous line, or the next / previous completion (outside the code editor, where they move focus; see [Editor](#editor)) |
 | `Ctrl+Space` | Show completions |
 | `Ctrl+Enter` / `Cmd+Enter` | Run the query |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Run the query in a new tab |

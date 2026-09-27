@@ -103,6 +103,19 @@ impl Fixture<'_> {
         })
     }
 
+    fn native_replace_mode(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .replace_mode
+        })
+    }
+
     fn current_match_index(&mut self) -> usize {
         let document = self.document.clone();
         self.window.update(|_, cx| {
@@ -3352,10 +3365,7 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
     visual_line_cx: &mut TestAppContext,
     visual_block_cx: &mut TestAppContext,
 ) {
-    // Ctrl+H is left out: with Vim mode off it opens the editor's replace
-    // panel, which takes focus and changes where the later shortcuts land. Its
-    // Vim-mode behaviour has its own test.
-    const SHORTCUTS: &str = "ctrl-j ctrl-k ctrl-l ctrl-s alt-h ctrl-enter ctrl-shift-s";
+    const SHORTCUTS: &str = "ctrl-h ctrl-j ctrl-k ctrl-l ctrl-s alt-h ctrl-enter ctrl-shift-s";
 
     let mut outcomes = Vec::new();
 
@@ -3388,6 +3398,11 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
     assert!(
         reference_commands.contains(&Command::SaveQuery) && reference_runs == 1,
         "the reference run must exercise the shortcuts: {reference_commands:?}"
+    );
+    assert_eq!(
+        reference_commands[..3],
+        [Command::FocusLeft, Command::FocusDown, Command::FocusUp],
+        "Ctrl+h / Ctrl+j / Ctrl+k move focus between panes"
     );
 
     for (setup, commands, runs, text) in &outcomes {
@@ -3470,6 +3485,146 @@ fn escape_in_the_native_search_panel_closes_it_from_visual_mode(cx: &mut TestApp
 
     assert!(!editor.native_search_open());
     assert!(editor.editor_focused());
+}
+
+#[gpui::test]
+fn ctrl_h_j_k_move_focus_without_vim_and_never_move_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\ndef\nghi", false);
+    editor.set_cursor(5);
+
+    editor.keys("ctrl-h ctrl-j ctrl-k");
+
+    assert_eq!(
+        editor.commands(),
+        vec![Command::FocusLeft, Command::FocusDown, Command::FocusUp]
+    );
+    assert!(!editor.native_search_open());
+    assert_eq!(editor.cursor(), 5);
+    assert!(editor.editor_focused());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[gpui::test]
+fn ctrl_shift_h_opens_replace_and_toggles_it_inside_the_panel(
+    disabled_cx: &mut TestAppContext,
+    vim_cx: &mut TestAppContext,
+) {
+    // Vim's Normal mode locks the buffer read-only, which leaves the panel
+    // without its replace row, so the Vim run replaces from Insert mode.
+    for (setup, vim_enabled, app_cx) in [("disabled", false, disabled_cx), ("vim", true, vim_cx)] {
+        let mut editor = open_editor(app_cx, "abc abc", vim_enabled);
+        if vim_enabled {
+            editor.keys("i");
+        }
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_search_open(), "{setup}");
+        assert!(editor.native_replace_mode(), "{setup}");
+        assert!(!editor.editor_focused(), "{setup}");
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_search_open(), "{setup}");
+        assert!(!editor.native_replace_mode(), "{setup}");
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_replace_mode(), "{setup}");
+        assert_eq!(editor.text(), "abc abc", "{setup}");
+        assert!(editor.commands().is_empty(), "{setup}");
+    }
+}
+
+#[gpui::test]
+fn ctrl_j_in_the_native_find_panel_returns_to_the_editor(
+    disabled_cx: &mut TestAppContext,
+    vim_cx: &mut TestAppContext,
+) {
+    for (setup, vim_enabled, app_cx) in [("disabled", false, disabled_cx), ("vim", true, vim_cx)] {
+        let mut editor = open_editor(app_cx, "one two one", vim_enabled);
+        editor.set_cursor(0);
+        editor.keys(if vim_enabled { "/" } else { "ctrl-f" });
+        editor.type_text("two");
+        if vim_enabled {
+            editor.keys("enter");
+            assert_eq!(editor.cursor(), 4, "{setup}");
+        }
+
+        editor.keys("ctrl-j");
+
+        assert!(!editor.native_search_open(), "{setup}");
+        assert!(editor.editor_focused(), "{setup}");
+        assert!(editor.commands().is_empty(), "{setup}");
+        assert_eq!(editor.native_search_query(), "two", "{setup}");
+        assert_eq!(editor.cursor(), if vim_enabled { 4 } else { 0 }, "{setup}");
+    }
+}
+
+#[gpui::test]
+#[allow(clippy::too_many_arguments)]
+fn pane_moves_from_the_native_find_panel_close_it_first(
+    left_cx: &mut TestAppContext,
+    up_cx: &mut TestAppContext,
+    vim_left_cx: &mut TestAppContext,
+    vim_up_cx: &mut TestAppContext,
+) {
+    for (setup, vim_enabled, key, command, app_cx) in [
+        ("left", false, "ctrl-h", Command::FocusLeft, left_cx),
+        ("up", false, "ctrl-k", Command::FocusUp, up_cx),
+        ("vim left", true, "ctrl-h", Command::FocusLeft, vim_left_cx),
+        ("vim up", true, "ctrl-k", Command::FocusUp, vim_up_cx),
+    ] {
+        let mut editor = open_editor(app_cx, "one two", vim_enabled);
+        editor.keys(if vim_enabled { "/" } else { "ctrl-f" });
+        assert!(editor.native_search_open(), "{setup}");
+
+        editor.keys(key);
+
+        assert!(!editor.native_search_open(), "{setup}");
+        assert_eq!(editor.commands(), vec![command], "{setup}");
+    }
+}
+
+#[gpui::test]
+fn ctrl_j_and_ctrl_k_move_through_an_open_completion_menu(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "sel", false);
+    editor.set_cursor(3);
+
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| {
+            state.present_completion_items(
+                0,
+                "sel",
+                vec![
+                    lsp_types::CompletionItem {
+                        label: "select".to_string(),
+                        ..Default::default()
+                    },
+                    lsp_types::CompletionItem {
+                        label: "selection".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                cx,
+            );
+        });
+    });
+    editor.window.run_until_parked();
+
+    editor.keys("ctrl-j ctrl-j ctrl-k enter");
+
+    assert_eq!(editor.text().lines().next(), Some("selection"));
+    assert!(editor.commands().is_empty());
+}
+
+#[gpui::test]
+fn a_plain_input_lets_ctrl_h_reach_the_app(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", false);
+    editor.focus_other_input();
+
+    editor.keys("ctrl-h");
+
+    assert_eq!(editor.commands(), vec![Command::FocusLeft]);
 }
 
 #[gpui::test]

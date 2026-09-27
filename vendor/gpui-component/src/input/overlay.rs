@@ -357,7 +357,12 @@ impl<M: OverlayMode> InputOverlayHost<M> {
                             cx,
                         );
                     } else {
-                        panel.hide_with_focus(!cfg!(test), window, cx);
+                        // The session can close while focus is already
+                        // elsewhere, for example after a pane move out of the
+                        // panel. Only a panel that still holds focus hands it
+                        // back to the editor.
+                        let focus_editor = !cfg!(test) && panel.has_focus(window, cx);
+                        panel.hide_with_focus(focus_editor, window, cx);
                     }
                 });
             }

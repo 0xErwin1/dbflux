@@ -69,6 +69,8 @@ foco toma `Enter` y `Space` para sí.
 | Teclas                         | Acción                                   |
 | ------------------------------ | ---------------------------------------- |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Enfocar panel izquierda / abajo / arriba |
+| `Ctrl+f` / `Cmd+f`             | Buscar en el editor                      |
+| `Ctrl+Shift+h` / `Cmd+Shift+f` | Buscar y reemplazar en el editor         |
 | `Alt+h`                        | Alternar desplegable de historial        |
 | `Ctrl+p` / `Cmd+p`             | Abrir queries guardadas                  |
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
@@ -78,6 +80,14 @@ foco toma `Enter` y `Space` para sí.
 
 (Las letras sin modificador se dejan intencionadamente para el input de texto,
 así la escritura funciona con normalidad.)
+
+`Ctrl+h` / `Ctrl+j` / `Ctrl+k` mueven el foco entre paneles con o sin el modo Vim
+activo; nunca mueven el cursor. Con un menú de sugerencias abierto, `Ctrl+j` /
+`Ctrl+k` recorren el menú. En el panel de búsqueda, `Ctrl+j` cierra el panel y
+vuelve al editor, igual que `Escape`, y `Ctrl+h` / `Ctrl+k` lo cierran antes de
+mover el foco. Las mismas teclas de buscar y reemplazar muestran u ocultan el
+campo de reemplazo con el panel abierto. En el modo Normal de Vim el editor es de
+solo lectura, así que el panel de búsqueda se abre sin el campo de reemplazo.
 
 ## Modo Vim (opcional)
 
@@ -379,7 +389,7 @@ un campo de texto.
 
 | Teclas | Acción |
 |--------|--------|
-| `Ctrl+j` / `Ctrl+k` | Línea siguiente / anterior, o sugerencia siguiente / anterior |
+| `Ctrl+j` / `Ctrl+k` | Línea siguiente / anterior, o sugerencia siguiente / anterior (fuera del editor de código, donde mueven el foco; ver [Editor](#editor)) |
 | `Ctrl+Space` | Mostrar sugerencias |
 | `Ctrl+Enter` / `Cmd+Enter` | Ejecutar la consulta |
 | `Ctrl+Shift+Enter` / `Cmd+Shift+Enter` | Ejecutar la consulta en una pestaña nueva |

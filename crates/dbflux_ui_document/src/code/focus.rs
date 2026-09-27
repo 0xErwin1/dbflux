@@ -21,6 +21,57 @@ impl CodeDocument {
         }
     }
 
+    /// Handles a pane move (`FocusLeft` / `FocusRight` / `FocusUp` /
+    /// `FocusDown`) while one of the editor's own overlays has the keyboard,
+    /// before the workspace moves focus.
+    ///
+    /// With focus in the find panel, the panel closes and focus returns to
+    /// the editor first. Moving down ends there, because the panel sits above
+    /// the editor text; the other directions go on to the workspace. With a
+    /// completion or code-action menu open in the editor, moving down or up
+    /// steps through the menu instead of leaving the editor.
+    ///
+    /// Returns true when the command was consumed.
+    pub(super) fn handle_editor_overlay_pane_move(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !matches!(
+            command,
+            Command::FocusLeft | Command::FocusRight | Command::FocusUp | Command::FocusDown
+        ) {
+            return false;
+        }
+
+        let input = self.editor.input_state.clone();
+        let editor_focused = input.read(cx).focus_handle(cx).is_focused(window);
+
+        if !editor_focused && input.read(cx).search_session().open {
+            input.update(cx, |state, cx| {
+                state.close_search(cx);
+                state.focus(window, cx);
+            });
+            return command == Command::FocusDown;
+        }
+
+        if editor_focused
+            && matches!(command, Command::FocusDown | Command::FocusUp)
+            && self.editor_menu_open(cx)
+        {
+            let step: Box<dyn gpui::Action> = if command == Command::FocusDown {
+                Box::new(gpui_component::input::MoveDown)
+            } else {
+                Box::new(gpui_component::input::MoveUp)
+            };
+            input.update(cx, |state, cx| state.route_overlay_action(step, window, cx));
+            return true;
+        }
+
+        false
+    }
+
     /// Key context entries the keymap sees while this editor owns the
     /// keyboard: the query language and, with Vim editing on, the Vim mode.
     /// The mode is left out while the find panel is open, because its fields

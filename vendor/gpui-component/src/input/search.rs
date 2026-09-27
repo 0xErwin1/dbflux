@@ -177,6 +177,19 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
             .unwrap_or(false)
     }
 
+    /// Whether the search or the replace field has focus.
+    pub(super) fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.search_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+            || self
+                .replace_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+    }
+
     pub(super) fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.hide_with_focus(true, window, cx);
     }

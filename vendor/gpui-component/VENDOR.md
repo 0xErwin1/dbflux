@@ -8,7 +8,9 @@ This directory starts from the complete published `gpui-component` 0.6.1 crate. 
 
 ## Local patch list
 
-None yet. Every local change must be listed here with the file it touches and the behaviour it changes.
+Every local change is listed here with the file it touches and the behaviour it changes.
+
+- `src/input/overlay.rs` and `src/input/search.rs`: when the overlay sync sees the search session close, it returns focus to the editor only if the panel's search or replace field still has focus (`SearchPanel::has_focus`). Upstream refocused the editor unconditionally, which took focus back from wherever it had moved when the session closed after focus left the panel, for example a pane move out of the find panel while a language-feature popover kept the overlay host alive. Closing from inside the panel (Escape, the close button) still returns focus to the editor. The crate's own tests never apply overlay focus (`!cfg!(test)`), so this path has no test here.
 
 ## Refresh
 

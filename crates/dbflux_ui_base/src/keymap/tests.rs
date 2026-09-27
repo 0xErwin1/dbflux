@@ -850,7 +850,10 @@ fn every_element_binding_has_an_element_action() {
 
         for (keys, command) in layer.ordered_bindings() {
             let passes_through_root = (*context == ContextId::Input
-                && matches!(command, Command::RunQuery | Command::RunQueryInNewTab))
+                && matches!(
+                    command,
+                    Command::RunQuery | Command::RunQueryInNewTab | Command::FocusLeft
+                ))
                 || RUN_COMMAND_ELEMENT_CONTEXTS.contains(context);
 
             assert!(
@@ -877,6 +880,45 @@ fn input_bindings_run_the_input_actions() {
     expected.push(("ctrl-shift-z", Box::new(gpui_component::input::Redo)));
 
     assert_element_bindings(&stack, expected, "input");
+}
+
+/// Inside the code editor, including the text fields of its find panel,
+/// Ctrl+h / Ctrl+j / Ctrl+k move focus between panes. Every other text field
+/// keeps Ctrl+j / Ctrl+k as its own Down / Up.
+#[test]
+fn code_editor_inputs_move_focus_with_ctrl_h_j_k() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]);
+
+    for elements in [
+        &["CodeEditor", "Input"][..],
+        &["CodeEditor", "Input", "SearchPanel", "Input"][..],
+    ] {
+        let stack = element_stack(root.clone(), elements);
+
+        for (keys, command) in [
+            ("ctrl-h", Command::FocusLeft),
+            ("ctrl-j", Command::FocusDown),
+            ("ctrl-k", Command::FocusUp),
+        ] {
+            let action = top_action(&keymap, keys, &stack).expect("bound");
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` in {elements:?} must run {command:?}, got {}",
+                action.name()
+            );
+        }
+    }
+
+    let plain_input = element_stack(root, &["Input"]);
+    assert_element_bindings(
+        &plain_input,
+        vec![
+            ("ctrl-j", Box::new(InputMoveDown)),
+            ("ctrl-k", Box::new(InputMoveUp)),
+        ],
+        "input outside the code editor",
+    );
 }
 
 /// The input component binds the primary modifier + Enter to a newline; the
