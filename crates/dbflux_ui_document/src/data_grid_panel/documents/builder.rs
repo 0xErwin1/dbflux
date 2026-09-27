@@ -275,6 +275,18 @@ impl DataGridPanel {
         panel.update(cx, |builder, cx| builder.read_slots(slots, cx));
     }
 
+    /// The slots were replaced from outside the builder, as by a history
+    /// entry. Their query has no skip, so the builder's skip resets instead
+    /// of applying to a query it was not set for, and an open builder reads
+    /// the new slots. A closed one reads them when it reopens.
+    pub(in crate::data_grid_panel) fn document_slots_replaced(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.collection.builder.panel.clone() {
+            panel.update(cx, |builder, cx| builder.reset_skip(cx));
+        }
+
+        self.sync_slots_into_document_builder(cx);
+    }
+
     pub(in crate::data_grid_panel) fn handle_document_builder_event(
         &mut self,
         event: &DocumentBuilderEvent,
@@ -1417,6 +1429,142 @@ mod tests {
         assert_eq!(
             window.update(|_, cx| panel.read(cx).document_builder_pipeline_stages(cx)),
             None
+        );
+    }
+
+    #[gpui::test]
+    fn a_slot_typed_while_the_rail_was_away_stays_locked_when_find_returns(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+        let (id, _, _) = first_condition(&panel, window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                rail.set_operator(id, DocumentOperator::Gte, cx);
+            });
+        });
+        window.update(|_, cx| {
+            panel.update(cx, |grid, _| grid.mark_document_builder_closed());
+        });
+
+        let unreadable = r#"{"$expr": {"$gt": ["$total", "$limit"]}}"#;
+        set_slot_texts(&panel, window, unreadable, "");
+        sync_slots(&panel, window);
+
+        open_builder(&panel, window);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.remove_group_stage(cx)));
+        window.run_until_parked();
+
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            unreadable,
+            "the builder never overwrites a slot it cannot read"
+        );
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert_eq!(rail.mode(), DocumentQueryMode::Find);
+            assert!(rail.is_conflicted());
+            assert!(!rail.can_find(), "the edit is held until the user decides");
+        });
+    }
+
+    #[gpui::test]
+    fn a_slot_edited_during_an_aggregation_reaches_the_builder_when_find_returns(
+        cx: &mut TestAppContext,
+    ) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        sync_slots(&panel, window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| rail.set_mode(DocumentQueryMode::Find, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(first_condition(&panel, window).1, "status");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            r#"{ "status": "failed" }"#,
+            "a part the builder did not edit takes the slot's text"
+        );
+        assert!(!window.update(|_, cx| rail.read(cx).is_conflicted()));
+    }
+
+    #[gpui::test]
+    fn a_history_entry_reloads_the_builder_and_drops_its_skip(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.set_skip(Some(40), cx)));
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| {
+                grid.collection.history = vec![super::super::QueryHistoryEntry {
+                    filter: r#"{ "status": "failed" }"#.to_string(),
+                    projection: String::new(),
+                    sort: String::new(),
+                    limit: String::new(),
+                }];
+                grid.run_history_entry(0, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(first_condition(&panel, window).1, "status");
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert!(!rail.is_conflicted());
+            assert_eq!(rail.skip(), None, "a history entry has no skip");
+        });
+    }
+
+    #[gpui::test]
+    fn opening_a_saved_find_writes_every_slot_it_replaces(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        let saved_filter = r#"{"age": {"$gt": 30}}"#;
+        set_slot_texts(&panel, window, saved_filter, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        set_query_name(&rail, window, "adults");
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_save(cx)));
+        window.run_until_parked();
+        let saved_id = stored_queries(&panel, window)[0].id.clone();
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        sync_slots(&panel, window);
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_open_saved(&saved_id, cx)));
+        window.run_until_parked();
+
+        assert_eq!(slot_texts(&panel, window).0, saved_filter);
+        assert_eq!(
+            window.update(|_, cx| rail.read(cx).mode()),
+            DocumentQueryMode::Find
         );
     }
 

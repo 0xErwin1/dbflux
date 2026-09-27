@@ -102,6 +102,9 @@ pub struct DocumentBuilderPanel {
     pub(super) collection: CollectionRef,
     pub(super) draft: BuilderDraft,
     pub(super) sync: SlotSync,
+    /// Slot texts read while the draft composes an aggregation. They are not
+    /// the builder's query then; the way back to Find reconciles them.
+    unread_slots: Option<DocumentFindSlots>,
     pub(super) catalog: FieldCatalog,
     pub(super) sampled_documents: Option<u64>,
     pub(super) sampling: bool,
@@ -189,6 +192,7 @@ impl DocumentBuilderPanel {
             collection,
             draft: BuilderDraft::default(),
             sync: SlotSync::default(),
+            unread_slots: None,
             catalog: FieldCatalog::default(),
             sampled_documents: None,
             sampling: false,
@@ -304,14 +308,67 @@ impl DocumentBuilderPanel {
 
     /// Reads the slots into the draft unless they only echo what the
     /// builder last wrote or read. Never writes back.
-    /// In Aggregate mode the slots are not the builder's query, so they are
-    /// not read either.
+    /// In Aggregate mode the slots are not the builder's query: they are
+    /// kept aside and reconciled when the draft returns to Find.
     pub fn read_slots(&mut self, slots: DocumentFindSlots, cx: &mut Context<Self>) {
-        if self.draft.mode == DocumentQueryMode::Aggregate || self.sync.is_echo(&slots) {
+        if self.draft.mode == DocumentQueryMode::Aggregate {
+            self.unread_slots = (!self.sync.is_echo(&slots)).then_some(slots);
+            return;
+        }
+
+        self.unread_slots = None;
+        if self.sync.is_echo(&slots) {
             return;
         }
 
         self.reload(slots, cx);
+    }
+
+    /// Reads slots that changed while the draft composed an aggregation.
+    /// A part the builder did not edit meanwhile takes the slot's query; a
+    /// part it edited stays and is planned against the slot, so a slot the
+    /// builder cannot read keeps its text and holds the edit. A draft that
+    /// cannot become a spec takes the slots whole, as a slot edit in Find
+    /// mode does.
+    fn reconcile_unread_slots(&mut self, mut slots: DocumentFindSlots) {
+        let Some(codec) = self.connection.document_query_codec() else {
+            return;
+        };
+
+        slots.skip = self.draft.skip;
+        let parse = codec.parse_find(&slots);
+
+        let reconciled = match self.draft.to_spec() {
+            Ok(draft) => {
+                let agreed = self.sync.spec();
+                let mut reconciled = draft.clone();
+
+                if draft.filter == agreed.filter {
+                    reconciled.filter = parse.spec.filter.clone();
+                }
+                if draft.projection == agreed.projection {
+                    reconciled.projection = parse.spec.projection.clone();
+                }
+                if draft.sort == agreed.sort {
+                    reconciled.sort = parse.spec.sort.clone();
+                }
+                if draft.limit == agreed.limit {
+                    reconciled.limit = parse.spec.limit;
+                }
+
+                (reconciled != draft).then_some(reconciled)
+            }
+            Err(_) => Some(parse.spec.clone()),
+        };
+
+        if let Some(spec) = reconciled {
+            self.draft.load(&spec);
+            self.chip_problems.clear();
+            self.pending_paging_texts = true;
+            self.limit_problem = false;
+        }
+
+        self.sync.read(&slots, &parse);
     }
 
     fn reload(&mut self, mut slots: DocumentFindSlots, cx: &mut Context<Self>) {
@@ -590,6 +647,7 @@ impl DocumentBuilderPanel {
         }
 
         self.draft.load_all(spec);
+        self.unread_slots = None;
         self.loaded_id = Some(id);
         self.pending_name = Some(name.to_string());
         self.saved_menu_open = false;
@@ -640,6 +698,15 @@ impl DocumentBuilderPanel {
     }
 
     fn mode_changed(&mut self, cx: &mut Context<Self>) {
+        match self.draft.mode {
+            DocumentQueryMode::Find => {
+                if let Some(slots) = self.unread_slots.take() {
+                    self.reconcile_unread_slots(slots);
+                }
+            }
+            DocumentQueryMode::Aggregate => self.unread_slots = None,
+        }
+
         self.picker = None;
         self.operator_menu = None;
         self.filter_expanded = false;
@@ -949,6 +1016,18 @@ impl DocumentBuilderPanel {
         } else {
             cx.notify();
         }
+    }
+
+    /// Drops the skip without writing the slots, when a query without one
+    /// replaced them.
+    pub fn reset_skip(&mut self, cx: &mut Context<Self>) {
+        if self.draft.skip.take().is_none() && !self.skip_problem {
+            return;
+        }
+
+        self.skip_problem = false;
+        self.pending_paging_texts = true;
+        self.recompute(false, cx);
     }
 
     // ---- operator list ---------------------------------------------------

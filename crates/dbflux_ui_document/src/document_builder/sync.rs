@@ -75,6 +75,11 @@ impl SlotSync {
         &self.texts
     }
 
+    /// The query the slots held when last read or written.
+    pub fn spec(&self) -> &DocumentQuerySpec {
+        &self.spec
+    }
+
     pub fn unrepresentable(&self) -> &[UnrepresentableClause] {
         &self.unrepresentable
     }
@@ -129,28 +134,16 @@ impl SlotSync {
     }
 
     /// Texts that replace every slot with what the builder holds, dropping
-    /// the clauses it could not read.
+    /// the clauses it could not read. Every part is written: the slots may
+    /// no longer hold what was last read, so a part that looks unchanged
+    /// here is not known to be unchanged there.
     pub fn rewrite(&mut self, spec: &DocumentQuerySpec, rendered: &DocumentFindSlots) -> SlotWrite {
-        let mut write = SlotWrite::default();
-
-        let filter = part_text(spec.filter.is_empty(), &rendered.filter);
-        if filter != self.texts.filter || self.locks(DocumentSlot::Filter) {
-            write.filter = Some(self.write_filter(spec, rendered));
-        }
-
-        let projection = part_text(spec.projection.is_empty(), &rendered.projection);
-        if projection != self.texts.projection || self.locks(DocumentSlot::Projection) {
-            write.projection = Some(self.write_projection(spec, rendered));
-        }
-
-        let sort = part_text(spec.sort.is_empty(), &rendered.sort);
-        if sort != self.texts.sort || self.locks(DocumentSlot::Sort) {
-            write.sort = Some(self.write_sort(spec, rendered));
-        }
-
-        if spec.limit != self.texts.limit {
-            write.limit = Some(self.write_limit(spec));
-        }
+        let write = SlotWrite {
+            filter: Some(self.write_filter(spec, rendered)),
+            projection: Some(self.write_projection(spec, rendered)),
+            sort: Some(self.write_sort(spec, rendered)),
+            limit: Some(self.write_limit(spec)),
+        };
 
         self.unrepresentable.clear();
         self.held.clear();

@@ -810,6 +810,30 @@ fn rewriting_from_the_builder_replaces_the_slot_and_ends_the_conflict() {
     assert!(sync.is_echo(&slots(r#"{"a": 1}"#, "", "", None)));
 }
 
+#[test]
+fn rewriting_writes_every_part_even_when_its_text_looks_unchanged() {
+    let mut sync = SlotSync::default();
+    let read = slots(r#"{"a": 1}"#, r#"{"name": 1}"#, r#"{"a": -1}"#, Some(20));
+    let mut spec = filtered(vec![condition("a", Eq, DocumentValue::Integer(1))]);
+    spec.projection.fields = vec!["name".to_string()];
+    spec.sort = vec![DocumentSortKey::new("a", DocumentSortDirection::Descending)];
+    spec.limit = Some(20);
+    sync.read(&read, &parse(spec.clone(), Vec::new()));
+
+    let write = sync.rewrite(&spec, &read);
+
+    assert_eq!(
+        write,
+        SlotWrite {
+            filter: Some(r#"{"a": 1}"#.to_string()),
+            projection: Some(r#"{"name": 1}"#.to_string()),
+            sort: Some(r#"{"a": -1}"#.to_string()),
+            limit: Some("20".to_string()),
+        },
+        "the slot may no longer hold what was last read"
+    );
+}
+
 // ---- aggregate mode -----------------------------------------------------
 
 fn accumulator(name: &str, kind: DocumentAccumulatorKind) -> DocumentAccumulator {

@@ -857,7 +857,8 @@ impl DataGridPanel {
         }
     }
 
-    /// Restores a history entry into the slots and runs it.
+    /// Restores a history entry into the slots and runs it, without the
+    /// builder's skip.
     pub(super) fn run_history_entry(
         &mut self,
         index: usize,
@@ -881,6 +882,8 @@ impl DataGridPanel {
             .limit_input
             .update(cx, |input, cx| input.set_value(&entry.limit, window, cx));
 
+        // `set_value` emits no change, so the builder is told directly.
+        self.document_slots_replaced(cx);
         self.find_documents(window, cx);
     }
 
