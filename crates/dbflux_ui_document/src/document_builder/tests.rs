@@ -1044,3 +1044,205 @@ fn group_keys_are_unique_and_removable() {
     );
     assert!(!draft.remove_group_key(3));
 }
+
+// ---- rendered rail ------------------------------------------------------
+
+mod rendered {
+    use std::sync::Arc;
+
+    use dbflux_core::{
+        CollectionRef, CollectionSchemaSample, DocumentFeatures, DocumentQueryCodec,
+        FieldSchemaStats, FieldTypeShare, FieldValueSummary,
+    };
+    use dbflux_driver_mongodb::MongoDocumentCodec;
+    use gpui::{AppContext, Bounds, Pixels, TestAppContext, VisualTestContext, point, px, size};
+
+    use super::super::RAIL_WIDTH;
+    use super::super::panel::{DocumentBuilderPanel, PickTarget};
+
+    /// A document connection with the builder and aggregations. It answers
+    /// no query.
+    struct StubConnection {
+        metadata: dbflux_core::DriverMetadata,
+    }
+
+    impl StubConnection {
+        fn new() -> Self {
+            Self {
+                metadata: dbflux_core::DriverMetadata {
+                    id: "stub-documents".to_string(),
+                    display_name: "Stub".to_string(),
+                    description: "test stub".to_string(),
+                    category: dbflux_core::DatabaseCategory::Document,
+                    transfer_family: dbflux_core::TransferFamily::Incompatible,
+                    deployment_class: None,
+                    query_language: dbflux_core::QueryLanguage::MongoQuery,
+                    capabilities: dbflux_core::DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "stub".to_string(),
+                    icon: dbflux_core::Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
+                },
+            }
+        }
+    }
+
+    impl dbflux_core::Connection for StubConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::MongoDB
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _request: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn document_features(&self) -> DocumentFeatures {
+            DocumentFeatures::QUERY_SLOTS
+                | DocumentFeatures::VISUAL_BUILDER
+                | DocumentFeatures::AGGREGATE
+        }
+
+        fn document_query_codec(&self) -> Option<&dyn DocumentQueryCodec> {
+            Some(&MongoDocumentCodec)
+        }
+    }
+
+    fn sample() -> CollectionSchemaSample {
+        let field = |path: String| FieldSchemaStats {
+            path,
+            presence: 10,
+            types: vec![FieldTypeShare {
+                type_name: "String".to_string(),
+                count: 10,
+            }],
+            summary: FieldValueSummary::Empty,
+        };
+
+        CollectionSchemaSample {
+            sampled_documents: 10,
+            total_documents: Some(10),
+            fields: (0..8)
+                .map(|index| field(format!("attribute{index}")))
+                .collect(),
+        }
+    }
+
+    /// The builder alone in a window as wide as the workspace rail.
+    fn rendered_rail(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DocumentBuilderPanel>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let (rail, window) = cx.add_window_view(|window, cx| {
+            DocumentBuilderPanel::new(
+                Arc::new(StubConnection::new()),
+                CollectionRef::new("shop", "orders"),
+                window,
+                cx,
+            )
+        });
+        window.simulate_resize(size(RAIL_WIDTH, px(760.0)));
+
+        let sample = sample();
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.set_schema(&sample, cx)));
+        window.run_until_parked();
+
+        (rail, window)
+    }
+
+    fn bounds_of(window: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+        window
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} is rendered"))
+    }
+
+    fn click(window: &mut VisualTestContext, selector: &'static str) {
+        let bounds = bounds_of(window, selector);
+        let center = point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        );
+        window.simulate_click(center, gpui::Modifiers::none());
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_field_picker_opens_inside_the_rail(cx: &mut TestAppContext) {
+        let (rail, window) = rendered_rail(cx);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        window.run_until_parked();
+
+        // Group keys push "+ field" to the right, until a picker opened at
+        // its left edge would no longer fit in the rail.
+        let picker_fits_from = |bounds: Bounds<Pixels>| {
+            bounds.origin.x + super::super::view::PICKER_WIDTH <= RAIL_WIDTH
+        };
+        for index in 0..8 {
+            if !picker_fits_from(bounds_of(window, "doc-builder-group-key-add")) {
+                break;
+            }
+            window.update(|window, cx| {
+                rail.update(cx, |rail, cx| {
+                    rail.open_picker(PickTarget::GroupKey, window, cx);
+                    rail.pick(&format!("attribute{index}"), cx);
+                })
+            });
+            window.run_until_parked();
+        }
+        assert!(
+            !picker_fits_from(bounds_of(window, "doc-builder-group-key-add")),
+            "the group keys moved the add button far enough right"
+        );
+
+        click(window, "doc-builder-group-key-add");
+
+        let picker = bounds_of(window, "doc-builder-picker");
+        assert!(
+            picker.origin.x >= px(0.0) && picker.origin.x + picker.size.width <= RAIL_WIDTH,
+            "the picker ({picker:?}) stays inside the {RAIL_WIDTH:?} rail"
+        );
+    }
+}

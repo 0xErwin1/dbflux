@@ -22,8 +22,9 @@ use dbflux_core::{
 use gpui::Focusable;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, FontWeight, HighlightStyle, Hsla, IntoElement, KeyDownEvent, Pixels,
-    SharedString, StyledText, Window, deferred, div, linear_color_stop, linear_gradient, px,
+    AnyElement, App, Bounds, Context, FontWeight, HighlightStyle, Hsla, IntoElement, KeyDownEvent,
+    Pixels, SharedString, StyledText, Window, canvas, deferred, div, linear_color_stop,
+    linear_gradient, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
@@ -56,7 +57,7 @@ const CHIP_ENTRY_WIDTH: Pixels = px(110.0);
 /// Output name input of an accumulator.
 const ACCUMULATOR_NAME_WIDTH: Pixels = px(96.0);
 /// Field picker popover.
-const PICKER_WIDTH: Pixels = px(320.0);
+pub(super) const PICKER_WIDTH: Pixels = px(320.0);
 const PICKER_LIST_HEIGHT: Pixels = px(280.0);
 /// Indent per nesting level in the field picker.
 const PICKER_INDENT: Pixels = px(14.0);
@@ -79,6 +80,7 @@ pub(super) fn render_panel(
 
     let theme = cx.theme().clone();
     let focus_handle = panel.focus_handle(cx);
+    let entity = cx.entity();
 
     div()
         .id("doc-builder")
@@ -99,6 +101,20 @@ pub(super) fn render_panel(
         .child(render_body(panel, &theme, cx))
         .child(render_preview_pane(panel, &theme, cx))
         .child(render_footer(panel, &theme, cx))
+        .child(
+            canvas(
+                move |bounds, _window, cx| {
+                    cx.defer(move |cx| {
+                        entity.update(cx, |panel, cx| panel.record_rail_bounds(bounds, cx));
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,16 +2235,66 @@ fn render_saved_menu_if_open(
 // Field picker
 // ---------------------------------------------------------------------------
 
+/// Left edge of a picker opened from `anchor`, relative to it: under the
+/// anchor, moved left as far as it takes to end inside the rail.
+fn picker_offset(anchor: Bounds<Pixels>, rail: Bounds<Pixels>) -> Pixels {
+    let leftmost = rail.left() + BuilderMetrics::RAIL_PADDING_X;
+    let rightmost = rail.right() - BuilderMetrics::RAIL_PADDING_X - PICKER_WIDTH;
+
+    let left = if anchor.left() > rightmost {
+        rightmost
+    } else {
+        anchor.left()
+    };
+    let left = if left < leftmost { leftmost } else { left };
+
+    left - anchor.left()
+}
+
+/// The field picker of `target` while it is open, with the element that
+/// measures where it opens from. It shows once that element and the rail
+/// have been painted, so it never opens past the rail's right edge.
 fn render_picker_if_open(
     panel: &DocumentBuilderPanel,
     target: PickTarget,
     theme: &Theme,
     cx: &mut Context<DocumentBuilderPanel>,
-) -> Option<AnyElement> {
-    let picker = panel
+) -> Vec<AnyElement> {
+    let Some(picker) = panel
         .picker
         .as_ref()
-        .filter(|picker| picker.target == target)?;
+        .filter(|picker| picker.target == target)
+    else {
+        return Vec::new();
+    };
+
+    let entity = cx.entity();
+    let anchor_probe = canvas(
+        move |bounds, _window, cx| {
+            // A notify while the window draws is dropped, so the bounds are
+            // recorded once this frame is done and the change redraws.
+            cx.defer(move |cx| {
+                entity.update(cx, |panel, cx| {
+                    panel.record_picker_anchor(target, bounds, cx)
+                });
+            });
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .into_any_element();
+
+    let Some(offset) = picker
+        .anchor
+        .zip(panel.rail_bounds)
+        .map(|(anchor, rail)| picker_offset(anchor, rail))
+    else {
+        return vec![anchor_probe];
+    };
+
     let search = picker.search.clone();
     let query = panel.picker_query(cx);
     let catalog = panel.picker_catalog(target);
@@ -2310,9 +2376,10 @@ fn render_picker_if_open(
 
     let popover = menu_frame(cx)
         .id("doc-builder-picker")
+        .debug_selector(|| "doc-builder-picker".to_string())
         .absolute()
         .top_full()
-        .left_0()
+        .left(offset)
         .mt(Spacing::XS)
         .w(PICKER_WIDTH)
         .occlude()
@@ -2343,7 +2410,10 @@ fn render_picker_if_open(
                 .child(caption(note, muted)),
         );
 
-    Some(deferred(popover).with_priority(2).into_any_element())
+    vec![
+        anchor_probe,
+        deferred(popover).with_priority(2).into_any_element(),
+    ]
 }
 
 fn picker_row(

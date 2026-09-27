@@ -16,7 +16,8 @@ use dbflux_core::{
     parse_aggregate_pipeline,
 };
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
+    App, AppContext, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels,
+    Subscription, Window,
 };
 use gpui_component::input::InputState;
 
@@ -77,6 +78,8 @@ pub enum PickTarget {
 pub(super) struct FieldPicker {
     pub target: PickTarget,
     pub search: Entity<InputState>,
+    /// Window bounds of the element the picker opens from, once painted.
+    pub anchor: Option<Bounds<Pixels>>,
     _subscription: Subscription,
 }
 
@@ -132,6 +135,8 @@ pub struct DocumentBuilderPanel {
     /// Saved queries of the collection, while their list is open.
     pub(super) saved_queries: Vec<SavedQueryEntry>,
     pub(super) saved_menu_open: bool,
+    /// Window bounds of the rail as last painted, so a picker opens inside it.
+    pub(super) rail_bounds: Option<Bounds<Pixels>>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -208,6 +213,7 @@ impl DocumentBuilderPanel {
             loaded_id: None,
             saved_queries: Vec::new(),
             saved_menu_open: false,
+            rail_bounds: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -1080,9 +1086,44 @@ impl DocumentBuilderPanel {
         self.picker = Some(FieldPicker {
             target,
             search,
+            anchor: None,
             _subscription: subscription,
         });
         cx.notify();
+    }
+
+    /// Records where the rail was painted. An open picker is placed from it,
+    /// so a move redraws the picker.
+    pub(super) fn record_rail_bounds(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if self.rail_bounds == Some(bounds) {
+            return;
+        }
+
+        self.rail_bounds = Some(bounds);
+        if self.picker.is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Records where the element the open picker belongs to was painted.
+    pub(super) fn record_picker_anchor(
+        &mut self,
+        target: PickTarget,
+        bounds: Bounds<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(picker) = self
+            .picker
+            .as_mut()
+            .filter(|picker| picker.target == target)
+        else {
+            return;
+        };
+
+        if picker.anchor != Some(bounds) {
+            picker.anchor = Some(bounds);
+            cx.notify();
+        }
     }
 
     pub fn close_picker(&mut self, cx: &mut Context<Self>) {
