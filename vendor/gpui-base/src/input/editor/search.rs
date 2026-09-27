@@ -135,6 +135,16 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.replaceable && self.is_editable()
     }
 
+    /// Whether the `Replace` action opens the search panel in replace mode.
+    ///
+    /// Enabled by default. While disabled, the action propagates instead of
+    /// being handled, so another binding of the same keystroke, such as an
+    /// application shortcut bound further up the key context tree, runs in its
+    /// place. The replace field stays reachable from the open search panel.
+    pub fn set_replace_action_enabled(&mut self, enabled: bool) {
+        self.replace_action_enabled = enabled;
+    }
+
     pub fn set_search_query(
         &mut self,
         query: impl Into<String>,
@@ -239,6 +249,11 @@ impl<M: InputModeKind> InputBaseState<M> {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.replace_action_enabled {
+            cx.propagate();
+            return;
+        }
+
         if !self.searchable {
             return;
         }

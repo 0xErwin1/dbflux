@@ -347,15 +347,15 @@ impl CodeDocument {
                 }),
             )
             .capture_action(cx.listener(
-                |this, _: &gpui_component::input::IndentInline, _window, cx| {
-                    if this.vim_swallows_indent_action(cx) {
+                |this, _: &gpui_component::input::IndentInline, window, cx| {
+                    if this.vim_swallows_indent_action(window, cx) {
                         cx.stop_propagation();
                     }
                 },
             ))
             .capture_action(cx.listener(
-                |this, _: &gpui_component::input::OutdentInline, _window, cx| {
-                    if this.vim_swallows_indent_action(cx) {
+                |this, _: &gpui_component::input::OutdentInline, window, cx| {
+                    if this.vim_swallows_indent_action(window, cx) {
                         cx.stop_propagation();
                     }
                 },

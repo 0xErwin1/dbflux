@@ -121,6 +121,44 @@ impl Fixture<'_> {
         })
     }
 
+    fn native_search_open(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .open
+        })
+    }
+
+    fn native_search_query(&mut self) -> String {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .query
+                .clone()
+        })
+    }
+
+    /// Opens the editor's own find panel the way its Find shortcut does, and
+    /// lets the overlay move focus into the panel's query field.
+    fn open_native_search(&mut self) {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| state.open_search(false, cx));
+        });
+        self.window.run_until_parked();
+    }
+
     fn text(&mut self) -> String {
         let document = self.document.clone();
         self.window.update(|_, cx| {
@@ -3282,7 +3320,10 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
     visual_line_cx: &mut TestAppContext,
     visual_block_cx: &mut TestAppContext,
 ) {
-    const SHORTCUTS: &str = "ctrl-h ctrl-j ctrl-k ctrl-l ctrl-s alt-h ctrl-enter ctrl-shift-s";
+    // Ctrl+H is left out: with Vim mode off it opens the editor's replace
+    // panel, which takes focus and changes where the later shortcuts land. Its
+    // Vim-mode behaviour has its own test.
+    const SHORTCUTS: &str = "ctrl-j ctrl-k ctrl-l ctrl-s alt-h ctrl-enter ctrl-shift-s";
 
     let mut outcomes = Vec::new();
 
@@ -3322,6 +3363,81 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
         assert_eq!(*runs, reference_runs, "{setup}");
         assert_eq!(text, "abc", "{setup}");
     }
+}
+
+#[gpui::test]
+#[allow(clippy::too_many_arguments)]
+fn ctrl_h_focuses_left_in_every_vim_mode_without_opening_replace(
+    normal_cx: &mut TestAppContext,
+    insert_cx: &mut TestAppContext,
+    replace_cx: &mut TestAppContext,
+    pending_replace_cx: &mut TestAppContext,
+    visual_cx: &mut TestAppContext,
+    visual_line_cx: &mut TestAppContext,
+    visual_block_cx: &mut TestAppContext,
+) {
+    for (setup, prefix, app_cx) in [
+        ("normal", "", normal_cx),
+        ("insert", "i", insert_cx),
+        ("replace", "shift-r", replace_cx),
+        ("pending replace", "r", pending_replace_cx),
+        ("visual", "v", visual_cx),
+        ("visual line", "shift-v", visual_line_cx),
+        ("visual block", "ctrl-v", visual_block_cx),
+    ] {
+        let mut editor = open_editor(app_cx, "abc", true);
+        if !prefix.is_empty() {
+            editor.keys(prefix);
+        }
+
+        editor.keys("ctrl-h");
+
+        assert_eq!(editor.commands(), vec![Command::FocusLeft], "{setup}");
+        assert!(!editor.native_search_open(), "{setup}");
+        assert_eq!(editor.text(), "abc", "{setup}");
+    }
+}
+
+#[gpui::test]
+fn vim_keys_reach_the_focused_native_search_panel(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "select 1\nselect 2", true);
+    editor.set_cursor(3);
+    editor.open_native_search();
+    assert!(editor.native_search_open());
+    assert!(!editor.editor_focused());
+
+    editor.type_text("hjkl");
+
+    assert_eq!(editor.native_search_query(), "hjkl");
+    assert_eq!(editor.cursor(), 3);
+    assert_eq!(editor.text(), "select 1\nselect 2");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn escape_in_the_native_search_panel_closes_it_and_keeps_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.open_native_search();
+    editor.type_text("b");
+
+    editor.keys("escape");
+
+    assert!(!editor.native_search_open());
+    assert!(editor.editor_focused());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn escape_in_the_native_search_panel_closes_it_from_visual_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc abc", true);
+    editor.keys("v l");
+    editor.open_native_search();
+    assert!(editor.native_search_open());
+
+    editor.keys("escape");
+
+    assert!(!editor.native_search_open());
+    assert!(editor.editor_focused());
 }
 
 #[gpui::test]

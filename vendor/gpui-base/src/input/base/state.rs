@@ -431,6 +431,8 @@ pub struct InputBaseState<M: InputModeKind> {
     /// [`InputBaseState::search_activation_revision`].
     pub(super) search_activation_revision: u64,
     pub(super) searchable: bool,
+    /// See [`InputBaseState::set_replace_action_enabled`].
+    pub(super) replace_action_enabled: bool,
     pub(super) replaceable: bool,
     pub(super) soft_wrap: bool,
     pub(super) wrapping_indent: WrappingIndent,
@@ -773,6 +775,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             search_session: super::SearchSession::default(),
             search_activation_revision: 0,
             searchable: false,
+            replace_action_enabled: true,
             replaceable: true,
             soft_wrap: true,
             wrapping_indent: WrappingIndent::default(),

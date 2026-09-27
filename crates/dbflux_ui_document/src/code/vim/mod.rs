@@ -161,6 +161,9 @@ impl CodeDocument {
             enabled,
             ..VimState::default()
         };
+        self.editor
+            .input_state
+            .update(cx, |state, _| state.set_replace_action_enabled(!enabled));
         self.sync_editor_lock(cx);
         self.sync_editor_cursor_shape(cx);
 
@@ -181,6 +184,21 @@ impl CodeDocument {
     /// The current Vim mode, or `None` when Vim mode is disabled.
     pub fn vim_mode(&self) -> Option<VimMode> {
         self.vim.enabled.then_some(self.vim.mode)
+    }
+
+    /// Whether Vim may treat keys and editor actions as its commands: Vim mode is
+    /// on and focus is on the editor text itself. Focus inside one of the
+    /// editor's own overlays, such as the find panel's query field, leaves the
+    /// keys to that overlay.
+    fn vim_owns_keys(&self, window: &Window, cx: &App) -> bool {
+        self.vim.enabled
+            && self.focus_mode == SqlQueryFocus::Editor
+            && self
+                .editor
+                .input_state
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
     }
 
     /// Whether the editor must reject user text changes right now.
@@ -221,7 +239,7 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
+        if !self.vim_owns_keys(window, cx) {
             self.clear_vim_count_and_notify(cx);
             return false;
         }
@@ -698,7 +716,7 @@ impl CodeDocument {
             self.cancel_replace_once(cx);
             return true;
         }
-        if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
+        if !self.vim_owns_keys(window, cx) {
             return false;
         }
         if matches!(
@@ -723,13 +741,16 @@ impl CodeDocument {
     /// the keys would fall through to the root's focus navigation and move focus
     /// out of the editor. Checked in the actions' capture phase, because key
     /// bindings are dispatched before any key listener runs.
-    pub(super) fn vim_swallows_indent_action(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn vim_swallows_indent_action(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.vim.search_open {
             return true;
         }
         self.clear_vim_count_and_notify(cx);
-        self.vim.enabled
-            && self.focus_mode == SqlQueryFocus::Editor
+        self.vim_owns_keys(window, cx)
             && machine::command_for(
                 self.vim.mode,
                 VimKey {
@@ -1684,11 +1705,10 @@ impl CodeDocument {
             return false;
         }
         self.clear_vim_count_and_notify(cx);
-        if !self.vim.enabled
+        if !self.vim_owns_keys(window, cx)
             || self.vim.mode != VimMode::Normal
             || self.vim.history_unlocked
             || self.read_only
-            || self.focus_mode != SqlQueryFocus::Editor
         {
             return false;
         }
