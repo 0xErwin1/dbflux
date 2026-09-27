@@ -997,11 +997,6 @@ document:
       visual: "VISUAL"
       visual_line: "VISUAL LINE"
       visual_block: "VISUAL BLOCK"
-      search:
-        label: "Vim search"
-        placeholder: "Search forward"
-        run: "search"
-        cancel: "cancel"
     output:
       running: "Running…"
       stopped: Stopped

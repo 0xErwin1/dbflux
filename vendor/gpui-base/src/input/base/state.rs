@@ -433,6 +433,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) searchable: bool,
     /// See [`InputBaseState::set_replace_action_enabled`].
     pub(super) replace_action_enabled: bool,
+    /// See [`InputBaseState::set_search_moves_cursor`].
+    pub(super) search_moves_cursor: bool,
     pub(super) replaceable: bool,
     pub(super) soft_wrap: bool,
     pub(super) wrapping_indent: WrappingIndent,
@@ -776,6 +778,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             search_activation_revision: 0,
             searchable: false,
             replace_action_enabled: true,
+            search_moves_cursor: false,
             replaceable: true,
             soft_wrap: true,
             wrapping_indent: WrappingIndent::default(),
@@ -5340,6 +5343,42 @@ mod tests {
                      — paint would jitter (Bug C regression)",
                     deferred.y,
                     safe_y_min,
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn search_navigation_moves_the_cursor_only_when_enabled(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("foo bar foo bar foo", window, cx);
+                state.set_selected_range(0..0, cx);
+                state.set_search_query("foo", true, cx);
+
+                assert_eq!(state.next_search_match(cx), Some(8..11));
+                assert_eq!(state.selected_range(), 0..0, "disabled by default");
+
+                state.set_search_moves_cursor(true);
+                state.set_selected_range(9..9, cx);
+
+                assert_eq!(state.next_search_match(cx), Some(16..19));
+                assert_eq!(state.selected_range(), 16..16);
+                assert_eq!(state.search_session.matcher.current_match_index(), 2);
+
+                assert_eq!(state.previous_search_match(cx), Some(8..11));
+                assert_eq!(state.selected_range(), 8..8);
+                assert_eq!(state.search_session.matcher.current_match_index(), 1);
+
+                state.set_search_query("bar", true, cx);
+                assert_eq!(
+                    state.search_session.matcher.current_match_index(),
+                    1,
+                    "a changed query starts at the first match from the cursor"
                 );
             });
         });

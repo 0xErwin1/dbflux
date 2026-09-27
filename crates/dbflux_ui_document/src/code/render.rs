@@ -306,7 +306,7 @@ impl CodeDocument {
         // ring of its own.
         let mut key_context = KeyContext::default();
         key_context.add(CODE_EDITOR_KEY_CONTEXT);
-        for (key, value) in self.key_context_entries() {
+        for (key, value) in self.key_context_entries(cx) {
             key_context.set(key, value);
         }
 
@@ -320,15 +320,6 @@ impl CodeDocument {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
-                    if this.vim.search_open
-                        && this
-                            .vim_search_input
-                            .read(cx)
-                            .focus_handle(cx)
-                            .is_focused(window)
-                    {
-                        return;
-                    }
                     this.enter_editor_mode(cx);
                     this.editor
                         .input_state
@@ -339,9 +330,7 @@ impl CodeDocument {
             .capture_action(
                 cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
                     this.clear_vim_count_and_notify(cx);
-                    if this.cancel_vim_search(window, cx)
-                        || this.handle_vim_escape_action(window, cx)
-                    {
+                    if this.handle_vim_escape_action(window, cx) {
                         cx.stop_propagation();
                     }
                 }),
@@ -432,58 +421,9 @@ impl CodeDocument {
                         .h_full(),
                 ),
             )
-            .when(self.vim.search_open, |el| {
-                el.child(self.render_vim_search_prompt(cx))
-            })
             .when_some(self.vim_mode(), |el, mode| {
                 el.child(self.render_vim_mode_indicator(mode, cx))
             })
-    }
-
-    /// The `/` prompt: a bar the height of the mode indicator above it, the
-    /// tinted slash, the frameless search field in the code face, and the
-    /// Enter and Escape hints the field answers.
-    fn render_vim_search_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let tint = ChromeColors::tint(theme);
-
-        div()
-            .id("vim-search-prompt")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(Spacing::SM)
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .font_family(AppFonts::MONO)
-            .child(Text::code("/").color(tint))
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.vim_search_input)
-                        .id("vim-search-input")
-                        .aria_label(dbflux_i18n::t!("document.code.vim.search.label"))
-                        .appearance(false)
-                        .small(),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(Spacing::XS)
-                    .child(Kbd::new("Enter"))
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.code.vim.search.run"
-                    )))
-                    .child(Kbd::new("Esc"))
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "document.code.vim.search.cancel"
-                    ))),
-            )
     }
 
     fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {

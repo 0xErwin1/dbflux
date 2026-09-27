@@ -98,8 +98,8 @@ status bar.
 | Normal | `h` / `l` | Move one character left / right within the line |
 | Normal | `j` / `k` | Move one line down / up, keeping the column across shorter lines |
 | Normal | `Enter` | Move one line down |
-| Normal | `/` | Open the native text-search prompt |
-| Normal | `n` / `N` | Repeat the last search forward / backward (accepts a prefix count) |
+| Normal | `/` | Open the editor's find panel with its query field focused |
+| Normal | `n` / `N` | Move to the next / previous match of the find panel's query (accepts a prefix count) |
 | Normal | `m{a-z}` | Set or overwrite a lowercase local mark at the cursor |
 | Normal | `'{a-z}` / `` `{a-z} `` | Jump to the marked line's first non-blank character / the exact marked position (clamped to a Normal-mode cursor) |
 | Normal / Visual / Visual Line / Visual Block | `gg` / `G` / `Ngg` / `NG` | Go to the first / last / 1-based absolute logical line (clamped to the buffer); Visual extends the selection |
@@ -148,15 +148,17 @@ whitespace-only block selection uses the full buffer. Block columns count
 Unicode scalars, not visual cells: tabs, wide characters, and combining
 sequences may not align with on-screen columns.
 
-In Normal mode, `/` opens a search bar under the editor, a tinted `/` next to
-the search field. Type a literal, case-sensitive query and press `Enter` to
-search forward from the cursor, wrapping at the end of the buffer. `Escape` cancels without moving the cursor or replacing the last
-query. Use `n` to repeat forward or `N` to repeat backward; a prefix count
-repeats the search that many times. Search works in read-only editors, and each
-tab keeps its own last query. While the prompt is open, `Tab` / `Shift+Tab` do
-nothing and leave focus in the prompt. This is literal text search, not regex;
-Vim-style search highlighting is not provided. Desktop IME behavior and the
-rendered UI have not been validated.
+In Normal mode, `/` opens the editor's find panel, the same panel as `Ctrl+f`,
+with its query field focused and the last query selected. Type a literal query;
+matches are case-insensitive unless the panel's case button is on. `Enter` moves
+the cursor to the next match after it and `Shift+Enter` to the previous one,
+wrapping around the buffer, and the panel stays open. `Escape` closes the panel
+and returns to the editor in Normal mode, with the cursor on the last match it
+reached and the query kept. `n` / `N` then move to the next / previous match of
+that query from the cursor, and a prefix count repeats the move that many times;
+the panel's match counter follows them. Search works in read-only editors, and
+each tab keeps its own query. While the panel has focus, keys are typed into it
+rather than read as Vim commands. This is literal text search, not regex.
 
 **Local marks.** Marks belong to the current code document, not other tabs or
 sessions. Setting a mark also works in a read-only editor. Native text edits,

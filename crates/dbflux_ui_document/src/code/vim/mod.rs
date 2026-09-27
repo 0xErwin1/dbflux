@@ -45,8 +45,6 @@ pub(super) enum HistoryStep {
 pub(super) struct VimState {
     enabled: bool,
     mode: VimMode,
-    pub(super) search_open: bool,
-    last_search: Option<String>,
     /// Set while a Normal-mode undo or redo temporarily lifts the read-only lock
     /// so the component's own handler is registered for one dispatch.
     history_unlocked: bool,
@@ -166,6 +164,7 @@ impl CodeDocument {
             .update(cx, |state, _| state.set_replace_action_enabled(!enabled));
         self.sync_editor_lock(cx);
         self.sync_editor_cursor_shape(cx);
+        self.sync_search_moves_cursor(cx);
 
         if enabled {
             self.clamp_cursor_for_normal(cx);
@@ -217,6 +216,20 @@ impl CodeDocument {
             .update(cx, |state, cx| state.set_readonly(locked, cx));
     }
 
+    /// Lets the find panel's navigation move the cursor onto the match while
+    /// Vim mode is on, as `/` does in Vim. Visual modes keep the selection
+    /// they own, so navigation only marks the match there.
+    fn sync_search_moves_cursor(&mut self, cx: &mut Context<Self>) {
+        let moves_cursor = self.vim.enabled
+            && !matches!(
+                self.vim.mode,
+                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+            );
+        self.editor
+            .input_state
+            .update(cx, |state, _| state.set_search_moves_cursor(moves_cursor));
+    }
+
     fn sync_editor_cursor_shape(&mut self, cx: &mut Context<Self>) {
         use gpui_base::input::InputCursorShape;
 
@@ -241,9 +254,6 @@ impl CodeDocument {
     ) -> bool {
         if !self.vim_owns_keys(window, cx) {
             self.clear_vim_count_and_notify(cx);
-            return false;
-        }
-        if self.vim.search_open {
             return false;
         }
 
@@ -552,24 +562,11 @@ impl CodeDocument {
                 self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
             VimCommand::OpenSearch => {
-                self.vim.search_open = true;
-                self.vim_search_input.update(cx, |state, cx| {
-                    state.set_value("", window, cx);
-                    state.focus(window, cx);
-                });
-                cx.notify();
+                self.editor
+                    .input_state
+                    .update(cx, |state, cx| state.open_search(false, cx));
             }
-            VimCommand::RepeatSearch(reverse) => {
-                self.repeat_vim_search(
-                    if reverse {
-                        machine::SearchDirection::Backward
-                    } else {
-                        machine::SearchDirection::Forward
-                    },
-                    count,
-                    cx,
-                );
-            }
+            VimCommand::RepeatSearch(reverse) => self.repeat_native_search(reverse, count, cx),
             VimCommand::DeleteChar
             | VimCommand::ReplaceOnce
             | VimCommand::EnterReplace
@@ -578,78 +575,26 @@ impl CodeDocument {
         }
     }
 
-    pub(super) fn focus_vim_search_prompt(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.vim.search_open {
-            return false;
-        }
-        self.vim_search_input
-            .update(cx, |state, cx| state.focus(window, cx));
-        true
-    }
-
-    pub(super) fn accept_vim_search(
-        &mut self,
-        query: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.vim.search_open {
-            return;
-        }
-        self.vim.search_open = false;
-        if !query.is_empty() {
-            self.vim.last_search = Some(query.clone());
-            self.editor
-                .input_state
-                .update(cx, |state, cx| state.set_search_query(query, false, cx));
-            self.repeat_vim_search(machine::SearchDirection::Forward, 1, cx);
-        }
-        self.schedule_editor_refocus(window, cx);
-        cx.notify();
-    }
-
-    pub(super) fn cancel_vim_search(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if !self.vim.search_open {
-            return false;
-        }
-        self.vim.search_open = false;
-        self.schedule_editor_refocus(window, cx);
-        cx.notify();
-        true
-    }
-
-    fn repeat_vim_search(
-        &mut self,
-        direction: machine::SearchDirection,
-        count: usize,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(query) = self.vim.last_search.clone() else {
-            return;
-        };
-        let (matches, mut cursor) = self.editor.input_state.update(cx, |state, cx| {
-            state.set_search_query(query, false, cx);
-            (
-                state.search_session().matcher.matched_ranges(),
-                state.cursor(),
-            )
-        });
-        for _ in 0..count.min(10_000) {
-            let Some(range) = machine::cursor_relative_match(&matches, cursor, direction) else {
-                return;
-            };
-            cursor = range.start;
-        }
+    /// Repeats the find panel's query from the cursor, `count` times, moving
+    /// the cursor onto the match and making it the panel's current match.
+    fn repeat_native_search(&mut self, backward: bool, count: usize, cx: &mut Context<Self>) {
         self.vim.vertical_goal = None;
-        self.set_editor_cursor(cursor, cx);
+
+        self.editor.input_state.update(cx, |state, cx| {
+            for _ in 0..count.min(10_000) {
+                let reached = if backward {
+                    state.previous_search_match(cx)
+                } else {
+                    state.next_search_match(cx)
+                };
+
+                if reached.is_none() {
+                    break;
+                }
+            }
+        });
+
+        self.clamp_cursor_for_normal(cx);
     }
 
     fn apply_absolute_operator(
@@ -696,6 +641,7 @@ impl CodeDocument {
         self.vim.vertical_goal = None;
         self.sync_editor_lock(cx);
         self.sync_editor_cursor_shape(cx);
+        self.sync_search_moves_cursor(cx);
         cx.notify();
     }
 
@@ -746,9 +692,6 @@ impl CodeDocument {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.vim.search_open {
-            return true;
-        }
         self.clear_vim_count_and_notify(cx);
         self.vim_owns_keys(window, cx)
             && machine::command_for(
@@ -1701,9 +1644,6 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.vim.search_open {
-            return false;
-        }
         self.clear_vim_count_and_notify(cx);
         if !self.vim_owns_keys(window, cx)
             || self.vim.mode != VimMode::Normal

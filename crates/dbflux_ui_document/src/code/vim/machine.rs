@@ -177,35 +177,6 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SearchDirection {
-    Forward,
-    Backward,
-}
-
-/// Selects a literal match by its UTF-8 byte start, excluding the cursor's start.
-/// Ranges must be sorted and nonoverlapping.
-pub(crate) fn cursor_relative_match(
-    matches: &[Range<usize>],
-    cursor: usize,
-    direction: SearchDirection,
-) -> Option<Range<usize>> {
-    if matches.is_empty() {
-        return None;
-    }
-
-    let index = match direction {
-        SearchDirection::Forward => {
-            matches.partition_point(|range| range.start <= cursor) % matches.len()
-        }
-        SearchDirection::Backward => matches
-            .partition_point(|range| range.start < cursor)
-            .checked_sub(1)
-            .unwrap_or(matches.len() - 1),
-    };
-    Some(matches[index].clone())
-}
-
 /// The mode a command leaves the editor in.
 pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
@@ -853,44 +824,6 @@ mod tests {
         VimKey {
             command_modifier: true,
             ..key(name)
-        }
-    }
-
-    #[test]
-    fn search_selects_strictly_by_start_and_wraps() {
-        let matches = [0..2, 5..7, 10..12];
-        for (cursor, forward, backward) in [
-            (0, 5..7, 10..12),
-            (6, 10..12, 5..7),
-            (10, 0..2, 5..7),
-            (12, 0..2, 10..12),
-        ] {
-            assert_eq!(
-                cursor_relative_match(&matches, cursor, SearchDirection::Forward),
-                Some(forward)
-            );
-            assert_eq!(
-                cursor_relative_match(&matches, cursor, SearchDirection::Backward),
-                Some(backward)
-            );
-        }
-    }
-
-    #[test]
-    fn search_uses_utf8_byte_offsets_without_splitting_matches() {
-        let content = "é中é中";
-        let matches = [0..2, 5..7];
-        assert!(content.is_char_boundary(matches[1].start));
-        assert_eq!(
-            cursor_relative_match(&matches, 2, SearchDirection::Forward),
-            Some(5..7)
-        );
-        assert_eq!(
-            cursor_relative_match(&matches, 6, SearchDirection::Backward),
-            Some(5..7)
-        );
-        for direction in [SearchDirection::Forward, SearchDirection::Backward] {
-            assert_eq!(cursor_relative_match(&[], 0, direction), None);
         }
     }
 

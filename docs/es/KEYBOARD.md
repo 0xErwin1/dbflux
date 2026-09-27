@@ -101,8 +101,8 @@ de estado del espacio de trabajo.
 | Normal | `h` / `l` | Mover un carácter a la izquierda / derecha dentro de la línea |
 | Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
 | Normal | `Enter` | Mover una línea abajo |
-| Normal | `/` | Abrir el campo nativo de búsqueda de texto |
-| Normal | `n` / `N` | Repetir la última búsqueda hacia adelante / atrás (admite contador previo) |
+| Normal | `/` | Abrir el panel de búsqueda del editor con el campo de consulta enfocado |
+| Normal | `n` / `N` | Ir a la coincidencia siguiente / anterior de la consulta del panel de búsqueda (admite contador previo) |
 | Normal | `m{a-z}` | Fijar o sobrescribir una marca local minúscula en el cursor |
 | Normal | `'{a-z}` / `` `{a-z} `` | Ir al primer carácter no blanco de la línea marcada / a la posición exacta marcada (limitada a un cursor Normal) |
 | Normal / Visual / Visual Línea / Visual Bloque | `gg` / `G` / `Ngg` / `NG` | Ir a la primera / última / línea lógica absoluta N (desde 1, limitada al archivo); en Visual se extiende la selección |
@@ -152,17 +152,19 @@ editor. Las columnas del bloque cuentan escalares Unicode, no celdas visuales:
 las tabulaciones, los caracteres anchos y las secuencias combinadas pueden no
 alinearse con las columnas en pantalla.
 
-En modo Normal, `/` abre una barra de búsqueda bajo el editor: una `/` de acento
-junto al campo de búsqueda. Escribe una
-cadena literal, que distingue mayúsculas y minúsculas, y pulsa `Enter` para
-buscar hacia adelante desde el cursor, volviendo al inicio al llegar al final.
-`Escape` cancela sin mover el cursor ni sustituir la última búsqueda. `n`
-repite hacia adelante y `N` hacia atrás; un contador previo repite la búsqueda
-ese número de veces. Funciona también en editores de solo lectura; cada pestaña
-conserva su última búsqueda. Mientras el campo está abierto, `Tab` / `Shift+Tab`
-no hacen nada y mantienen el foco en él. No admite expresiones regulares ni
-resaltado de búsqueda al estilo Vim. No se ha validado el IME de escritorio ni
-la interfaz renderizada.
+En modo Normal, `/` abre el panel de búsqueda del editor, el mismo que
+`Ctrl+f`, con el campo de consulta enfocado y la última consulta seleccionada.
+Escribe una cadena literal; no distingue mayúsculas y minúsculas salvo que actives
+el botón correspondiente del panel. `Enter` mueve el cursor a la siguiente
+coincidencia tras él y `Shift+Enter` a la anterior, volviendo al principio o al
+final del texto, y el panel sigue abierto. `Escape` cierra el panel y vuelve al
+editor en modo Normal, con el cursor en la última coincidencia alcanzada y la
+consulta conservada. Después, `n` / `N` van a la coincidencia siguiente / anterior
+de esa consulta desde el cursor, y un contador previo repite el salto ese número
+de veces; el contador de coincidencias del panel los acompaña. Funciona también
+en editores de solo lectura, y cada pestaña conserva su consulta. Mientras el
+panel tiene el foco, las teclas se escriben en él en lugar de leerse como
+comandos de Vim. Es una búsqueda de texto literal, no de expresiones regulares.
 
 **Marcas locales.** Las marcas pertenecen al documento de código actual, no a
 otras pestañas ni a otras sesiones. También se pueden fijar en editores de solo

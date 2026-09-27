@@ -14,10 +14,6 @@ impl CodeDocument {
         self.clear_vim_count_and_notify(cx);
         self.focus_handle.focus(window, cx);
 
-        if self.focus_vim_search_prompt(window, cx) {
-            return;
-        }
-
         if self.focus_mode == SqlQueryFocus::Editor {
             self.editor
                 .input_state
@@ -27,16 +23,16 @@ impl CodeDocument {
 
     /// Key context entries the keymap sees while this editor owns the
     /// keyboard: the query language and, with Vim editing on, the Vim mode.
-    /// The mode is left out while the `/` search prompt is open, because the
-    /// prompt takes every key as typed text.
-    pub fn key_context_entries(&self) -> Vec<(SharedString, SharedString)> {
+    /// The mode is left out while the find panel is open, because its fields
+    /// take every key as typed text.
+    pub fn key_context_entries(&self, cx: &App) -> Vec<(SharedString, SharedString)> {
         let mut entries: Vec<(SharedString, SharedString)> = vec![(
             LANGUAGE_KEY.into(),
             self.effective_language().context_id().into(),
         )];
 
         if let Some(mode) = self.vim_mode()
-            && !self.vim.search_open
+            && !self.editor.input_state.read(cx).search_session().open
         {
             entries.push((VIM_MODE_KEY.into(), mode.context_id().into()));
         }

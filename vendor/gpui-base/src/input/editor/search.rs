@@ -145,14 +145,36 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.replace_action_enabled = enabled;
     }
 
+    /// Whether search navigation moves the cursor onto the match it reaches.
+    ///
+    /// Disabled by default: navigation only scrolls to the match and marks it
+    /// current. While enabled, [`InputBaseState::next_search_match`] and
+    /// [`InputBaseState::previous_search_match`] pick the match relative to the
+    /// cursor (the first one starting after it, or the last one starting before
+    /// it, wrapping around the buffer) and collapse the selection onto its
+    /// start. A changed query then starts at the first match at or after the
+    /// cursor instead of the first match in the buffer.
+    pub fn set_search_moves_cursor(&mut self, enabled: bool) {
+        self.search_moves_cursor = enabled;
+    }
+
     pub fn set_search_query(
         &mut self,
         query: impl Into<String>,
         case_insensitive: bool,
         cx: &mut Context<Self>,
     ) {
+        let query = query.into();
+        let query_changed = query != self.search_session.query
+            || case_insensitive != self.search_session.case_insensitive;
+
         self.search_session.update_query(query, case_insensitive);
         self.search_session.matcher.update(&self.text);
+
+        if query_changed && self.search_moves_cursor {
+            let cursor = self.cursor();
+            self.search_session.matcher.select_from(cursor);
+        }
         cx.notify();
     }
 
@@ -162,7 +184,14 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub fn next_search_match(&mut self, cx: &mut Context<Self>) -> Option<Range<usize>> {
-        let range = self.search_session.matcher.next()?;
+        let range = if self.search_moves_cursor {
+            let cursor = self.cursor();
+            let range = self.search_session.matcher.select_next_after(cursor)?;
+            self.set_selected_range(range.start..range.start, cx);
+            range
+        } else {
+            self.search_session.matcher.next()?
+        };
         // Match order does not describe viewport direction after a manual
         // scroll. Always allow search navigation to reveal the active match.
         self.scroll_to_with_padding(range.end, None, ScrollPadding::SurroundingLines, cx);
@@ -170,7 +199,14 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub fn previous_search_match(&mut self, cx: &mut Context<Self>) -> Option<Range<usize>> {
-        let range = self.search_session.matcher.next_back()?;
+        let range = if self.search_moves_cursor {
+            let cursor = self.cursor();
+            let range = self.search_session.matcher.select_previous_before(cursor)?;
+            self.set_selected_range(range.start..range.start, cx);
+            range
+        } else {
+            self.search_session.matcher.next_back()?
+        };
         // Match order does not describe viewport direction after a manual
         // scroll. Always allow search navigation to reveal the active match.
         self.scroll_to_with_padding(range.start, None, ScrollPadding::SurroundingLines, cx);
@@ -340,6 +376,40 @@ impl SearchMatcher {
         }
     }
 
+    /// Makes the first match starting at or after `offset` current, wrapping
+    /// around to the first match. Returns that match.
+    pub fn select_from(&mut self, offset: usize) -> Option<Range<usize>> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let index = self
+            .matched_ranges
+            .partition_point(|range| range.start < offset)
+            % self.matched_ranges.len();
+        self.current_match_ix = index;
+        self.matched_ranges.get(index).cloned()
+    }
+
+    /// Makes the first match starting after `offset` current, wrapping around
+    /// to the first match. Returns that match.
+    pub fn select_next_after(&mut self, offset: usize) -> Option<Range<usize>> {
+        self.select_from(offset.saturating_add(1))
+    }
+
+    /// Makes the last match starting before `offset` current, wrapping around
+    /// to the last match. Returns that match.
+    pub fn select_previous_before(&mut self, offset: usize) -> Option<Range<usize>> {
+        let last = self.matched_ranges.len().checked_sub(1)?;
+        let index = self
+            .matched_ranges
+            .partition_point(|range| range.start < offset)
+            .checked_sub(1)
+            .unwrap_or(last);
+        self.current_match_ix = index;
+        self.matched_ranges.get(index).cloned()
+    }
+
     /// Preserve the current logical match while a replacement mutates text.
     fn begin_replacement(&mut self) {
         self.replacing = true;
@@ -419,6 +489,51 @@ mod tests {
         matcher.begin_replacement();
         matcher.update(&Rope::from("foo FOO bar"));
         assert_eq!(matcher.current_match_index(), 1);
+    }
+
+    #[test]
+    fn cursor_relative_selection_uses_match_starts_and_wraps() {
+        let mut matcher = SearchMatcher::new();
+        matcher.update(&Rope::from("ab...ab...ab"));
+        matcher.update_query("ab", false);
+        assert_eq!(&*matcher.matched_ranges(), &[0..2, 5..7, 10..12]);
+
+        for (offset, after, before) in [
+            (0, 5..7, 10..12),
+            (6, 10..12, 5..7),
+            (10, 0..2, 5..7),
+            (12, 0..2, 10..12),
+        ] {
+            assert_eq!(matcher.select_next_after(offset), Some(after.clone()));
+            assert_eq!(
+                matcher.matched_ranges()[matcher.current_match_index()],
+                after
+            );
+            assert_eq!(matcher.select_previous_before(offset), Some(before.clone()));
+            assert_eq!(
+                matcher.matched_ranges()[matcher.current_match_index()],
+                before
+            );
+        }
+
+        assert_eq!(matcher.select_from(5), Some(5..7));
+        assert_eq!(matcher.select_from(11), Some(0..2));
+    }
+
+    #[test]
+    fn cursor_relative_selection_uses_utf8_byte_offsets() {
+        let mut matcher = SearchMatcher::new();
+        matcher.update(&Rope::from("é中é中"));
+        matcher.update_query("é", false);
+        assert_eq!(&*matcher.matched_ranges(), &[0..2, 5..7]);
+
+        assert_eq!(matcher.select_next_after(2), Some(5..7));
+        assert_eq!(matcher.select_previous_before(6), Some(5..7));
+
+        let mut empty = SearchMatcher::new();
+        assert_eq!(empty.select_next_after(0), None);
+        assert_eq!(empty.select_previous_before(0), None);
+        assert_eq!(empty.select_from(0), None);
     }
 
     #[test]
