@@ -23,7 +23,7 @@ export const en = {
     releases: 'Releases',
     changelog: 'Changelog',
     docs: 'Docs',
-    usage: 'Usage guide',
+    usage: 'Getting started',
     connecting: 'Connecting',
     mcp: 'AI + MCP',
     driver_authoring: 'Driver authoring',

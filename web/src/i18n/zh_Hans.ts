@@ -23,7 +23,7 @@ export const zh_Hans: Dictionary = {
     releases: '版本',
     changelog: '更新日志',
     docs: '文档',
-    usage: '使用指南',
+    usage: '快速入门',
     connecting: '连接',
     mcp: 'AI + MCP',
     driver_authoring: '编写驱动',

@@ -23,7 +23,7 @@ export const es: Dictionary = {
     releases: 'Versiones',
     changelog: 'Registro de cambios',
     docs: 'Documentación',
-    usage: 'Guía de uso',
+    usage: 'Primeros pasos',
     connecting: 'Conexión',
     mcp: 'IA + MCP',
     driver_authoring: 'Escribir un driver',

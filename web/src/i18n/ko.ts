@@ -23,7 +23,7 @@ export const ko: Dictionary = {
     releases: '릴리스',
     changelog: '변경 기록',
     docs: '문서',
-    usage: '사용 가이드',
+    usage: '시작하기',
     connecting: '연결',
     mcp: 'AI + MCP',
     driver_authoring: '드라이버 작성',

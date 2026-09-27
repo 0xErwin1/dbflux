@@ -84,7 +84,7 @@ for (const url of locations) {
     fail(`indexed noindex page ${url.pathname}`);
 }
 if (!/^# DBFlux\n\n> /.test(llms)) fail('llms lacks the llmstxt.org H1 + blockquote preamble');
-for (const path of ['/', '/install/', '/usage/']) {
+for (const path of ['/', '/install/', '/getting_started/']) {
   if (!llms.includes(`](${mode === 'docs' ? path : `https://docs.dbflux.dev${path}`})`))
     fail(`llms lacks ${path}`);
 }

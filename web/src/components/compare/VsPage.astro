@@ -47,11 +47,9 @@ const TOC = [
   { href: '#moving', icon: 'arrow-left-right', label: strings.toc.moving },
 ];
 
-const usage = docsUrl('usage', '', locale);
-
 const GAIN_LINKS: Readonly<Record<VsGain, { icon: string; href: string }>> = {
-  builder: { icon: 'square-function', href: `${usage}#visual-query-builder` },
-  redis: { icon: 'brand/redis', href: `${usage}#key-value-view` },
+  builder: { icon: 'square-function', href: docsUrl('query_builder', '', locale) },
+  redis: { icon: 'brand/redis', href: docsUrl('key_value', '', locale) },
   aws: { icon: 'logs', href: docsUrl('drivers', '', locale) },
   governance: { icon: 'bot', href: docsUrl('mcp_ai_integration', '', locale) },
 };
