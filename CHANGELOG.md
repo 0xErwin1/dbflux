@@ -4,6 +4,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Vim search uses the find panel** — In Vim mode, `/` opens the editor's find panel instead of a separate search prompt. Enter and Shift+Enter move the cursor to the next or previous match and keep the panel open, Esc closes it and keeps the query for `n` and `N`, and Ctrl+J returns to the editor.
+* **Pane navigation in the code editor** — Ctrl+H, Ctrl+J and Ctrl+K move focus between panes in the code editor with or without Vim, as everywhere else in the app. Find and replace moves to Ctrl+Shift+H on Linux and Windows.
+
+### Fixed
+
+* **Vim keys in the find panel** — Typing in the editor's find panel no longer runs Vim commands, so letters such as `h`, `j`, `k` and `l` reach the search field.
+* **Ctrl+H and Ctrl+F in text fields** — Text fields without search no longer swallow Ctrl+H and Ctrl+F, so the app shortcuts bound to those keys run.
+
 ## [0.8.1] - 2026-09-27
 
 ### Fixed
