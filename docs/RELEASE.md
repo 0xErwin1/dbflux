@@ -394,10 +394,12 @@ Not yet upstream. When it is, only stable tags will get a PR to `NixOS/nixpkgs`.
 
 ```bash
 cargo check --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py` covers only the first-party crates under `crates/` and never lints or reformats the vendored crates under `vendor/`.
 
 These fast suites do not cover the driver live integration tests: driver-specific suites backed by containers, local files, or a credential-gated Redshift cluster, documented in [tests/driver-live/README.md](../tests/driver-live/README.md). Run them before tagging an rc or stable. CI gates publication on the same suites — `release.yml` invokes `tests.yml`, and the `Create Release` job waits for it — but the suites exercise source code, not the built artifacts, and nightly builds are not test-gated (`nightly.yml` calls `build.yml` directly).
 

@@ -1000,7 +1000,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - 构建：`cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` 或加 `--release`（AGENTS.md）。
 - 运行：`cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws`（AGENTS.md）。
 - 测试：`cargo test --workspace`（AGENTS.md）。
-- 检查/格式化：`cargo clippy --workspace -- -D warnings`、`cargo fmt --all`（AGENTS.md）。
+- 检查/格式化：`python3 scripts/lint.py clippy`、`python3 scripts/lint.py fmt`（AGENTS.md）。
 - Nix：使用 flake.nix 执行 `nix build` 或 `nix run`；`nix develop` 进入开发 shell。
 - Arch Linux：以 `dbflux` 之名发布到 AUR；PKGBUILD 维护在外部 AUR 仓库中，不在本仓库内。
 - Linux 安装脚本：`curl -fsSL .../install.sh | bash` 下载并安装发布版本。

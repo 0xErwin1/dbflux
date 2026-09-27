@@ -368,10 +368,12 @@ nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 
 ```bash
 cargo check --workspace
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py`는 `crates/` 아래의 자체 크레이트만 대상으로 하며, `vendor/` 아래의 서드파티 크레이트는 린트하거나 재포맷하지 않습니다.
 
 이 빠른 스위트들은 드라이버 라이브 통합 테스트를 포괄하지 않습니다. 드라이버별 스위트는 컨테이너, 로컬 파일 또는 자격 증명이 필요한 Redshift 클러스터를 기반으로 하며, [tests/driver-live/README.md](../../tests/driver-live/README.md)에 문서화되어 있습니다. rc나 stable에 태깅하기 전에 실행하세요. CI는 동일한 스위트를 게시 게이트로 사용합니다 — `release.yml`이 `tests.yml`을 호출하고 `Create Release` 잡이 그 완료를 기다립니다 — 하지만 이 스위트들은 빌드된 아티팩트가 아니라 소스 코드를 검증하며, 나이틀리 빌드는 테스트 게이트가 없습니다(`nightly.yml`은 `build.yml`을 직접 호출합니다).
 

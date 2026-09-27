@@ -1789,7 +1789,7 @@ IA con una capa completa de gobernanza:
 - Run: `cargo run -p dbflux --features
   sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
-- Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all`
+- Lint/format: `python3 scripts/lint.py clippy`, `python3 scripts/lint.py fmt`
   (AGENTS.md).
 - Nix: `nix build` o `nix run` usando flake.nix; `nix develop` para el dev
   shell.

@@ -238,8 +238,8 @@ cargo run -p dbflux
 
 ```bash
 cargo check --workspace                    # Type checking
-cargo clippy --workspace -- -D warnings    # Lint
-cargo fmt --all                            # Format
+python3 scripts/lint.py clippy             # Lint
+python3 scripts/lint.py fmt                # Format
 cargo test --workspace                     # Tests
 ```
 

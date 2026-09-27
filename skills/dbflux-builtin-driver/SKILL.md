@@ -49,7 +49,7 @@ license: MIT
 ## Commands
 
 ```bash
-cargo fmt --all -- --check
+python3 scripts/lint.py fmt --check
 cargo check -p dbflux --features <driver-feature>
 cargo test -p dbflux_driver_<name>
 cargo check --workspace

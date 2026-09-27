@@ -35,10 +35,12 @@ macOS no se ven afectados.
 Antes de abrir un PR ejecuta:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py` solo cubre los crates propios bajo `crates/` y nunca analiza ni reformatea los crates de terceros bajo `vendor/`.
 
 Los tests también pueden ejecutarse con [`cargo-nextest`](https://nexte.st) (más
 rápido en este workspace, provisto por el dev shell de Nix). Ten en cuenta que

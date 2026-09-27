@@ -50,7 +50,7 @@ license: MIT
 ## Commands
 
 ```bash
-cargo fmt --all -- --check
+python3 scripts/lint.py fmt --check
 cargo test -p <provider-crate-or-dbflux_aws>
 cargo check --workspace
 ```
