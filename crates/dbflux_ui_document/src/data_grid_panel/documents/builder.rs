@@ -2092,6 +2092,43 @@ mod tests {
         assert_eq!(path.as_deref(), Some("price"));
     }
 
+    #[gpui::test]
+    fn the_field_picker_opens_inside_the_rail(cx: &mut TestAppContext) {
+        let (grid, _host, window) = rendered_rail_with(cx, "", aggregate_features());
+        let rail_width = crate::document_builder::RAIL_WIDTH;
+        window.simulate_resize(gpui::size(rail_width, gpui::px(760.0)));
+        let rail = builder(&grid, window);
+        give_rail_a_sample(&rail, window);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        window.run_until_parked();
+
+        // Group keys push "+ field" to the right, until a picker opened at
+        // its left edge would no longer fit in the rail.
+        let mut picker = None;
+        for index in 0..10 {
+            click(window, "doc-builder-group-key-add".to_string());
+            let add = bounds_of(window, "doc-builder-group-key-add".to_string()).expect("add");
+            let open = bounds_of(window, "doc-builder-picker".to_string()).expect("picker");
+            if add.origin.x + open.size.width > rail_width {
+                picker = Some(open);
+                break;
+            }
+
+            window.update(|_, cx| {
+                rail.update(cx, |rail, cx| {
+                    rail.pick(&format!("attribute{index:02}"), cx)
+                })
+            });
+            window.run_until_parked();
+        }
+
+        let picker = picker.expect("the group keys moved the add button far enough right");
+        assert!(
+            picker.origin.x >= gpui::px(0.0) && picker.origin.x + picker.size.width <= rail_width,
+            "the picker ({picker:?}) stays inside the {rail_width:?} rail"
+        );
+    }
+
     #[test]
     fn saved_query_audit_events_pass_config_validation() {
         let scope = dbflux_storage::DocumentQueryScope::new("profile-1", "shop", "orders");
