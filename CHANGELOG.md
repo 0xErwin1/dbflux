@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.1] - 2026-09-27
+
+
+### Fixed
+
+* Enable the font-kit text system so text renders (#769)
 
 ## [0.8.0] - 2026-09-26
 
