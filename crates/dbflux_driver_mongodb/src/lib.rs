@@ -9,6 +9,7 @@
     )
 )]
 
+pub mod document_codec;
 mod document_ops;
 pub mod driver;
 pub mod instance_catalog;
@@ -17,6 +18,7 @@ pub mod query_generator;
 pub mod query_parser;
 mod script_host;
 
+pub use document_codec::MongoDocumentCodec;
 pub use driver::{MONGODB_FORM, MONGODB_METADATA, MongoDriver};
 pub use language_service::MongoLanguageService;
 pub use query_generator::MongoShellGenerator;

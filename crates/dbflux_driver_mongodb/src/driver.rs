@@ -2769,7 +2769,16 @@ impl Connection for MongoConnection {
     }
 
     fn document_features(&self) -> DocumentFeatures {
-        DocumentFeatures::QUERY_SLOTS | DocumentFeatures::FIELD_PATCH | DocumentFeatures::AGGREGATE
+        DocumentFeatures::QUERY_SLOTS
+            | DocumentFeatures::FIELD_PATCH
+            | DocumentFeatures::AGGREGATE
+            | DocumentFeatures::VISUAL_BUILDER
+    }
+
+    fn document_query_codec(&self) -> Option<&dyn dbflux_core::DocumentQueryCodec> {
+        static CODEC: crate::document_codec::MongoDocumentCodec =
+            crate::document_codec::MongoDocumentCodec;
+        Some(&CODEC)
     }
 
     fn estimate_collection_count(
@@ -3305,6 +3314,17 @@ fn json_to_bson(val: &serde_json::Value) -> Result<Bson, DbError> {
                 let oid = bson::oid::ObjectId::parse_str(oid_str)
                     .map_err(|e| DbError::query_failed(format!("Invalid ObjectId: {}", e)))?;
                 return Ok(Bson::ObjectId(oid));
+            }
+
+            if obj.len() == 1
+                && let Some(date_value) = obj.get("$date")
+                && let Some(date_text) = date_value.as_str()
+            {
+                let date = chrono::DateTime::parse_from_rfc3339(date_text)
+                    .map_err(|e| DbError::query_failed(format!("Invalid date: {}", e)))?;
+                return Ok(Bson::DateTime(bson::DateTime::from_millis(
+                    date.timestamp_millis(),
+                )));
             }
 
             let mut doc = Document::new();
@@ -4320,6 +4340,21 @@ mod tests {
         DatabaseCategory, DbDriver, DbError, QueryLanguage, SemanticFilter, SemanticPlanKind,
         SemanticRequest, Value, WhereOperator,
     };
+
+    #[test]
+    fn json_to_bson_reads_extended_json_dates() {
+        let document =
+            json_to_bson_doc(&serde_json::json!({"at": {"$date": "2024-03-09T14:30:05.250Z"}}))
+                .unwrap();
+        assert_eq!(
+            document.get("at"),
+            Some(&Bson::DateTime(bson::DateTime::from_millis(
+                1_709_994_605_250
+            )))
+        );
+
+        assert!(json_to_bson_doc(&serde_json::json!({"at": {"$date": "yesterday"}})).is_err());
+    }
 
     #[test]
     fn mongodb_metadata_declares_script_execution_capability() {
