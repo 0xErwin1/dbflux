@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **Text on macOS** — Text renders again on macOS. Version 0.8.0 was built without the macOS text system, so every label, input and menu was blank (#768).
+
 ## [0.8.0] - 2026-09-26
 
 ### Added
