@@ -692,6 +692,7 @@ document:
       find_invalid: "Finish the highlighted conditions before running"
       open_in_editor: "Open in editor"
       run_pipeline: "Run pipeline"
+      run_pipeline_busy: "An aggregation is already running or waiting for confirmation; the builder's pipeline did not run"
       editable_note: "Editable: every row keeps its _id"
       section:
         filter: "Filter"

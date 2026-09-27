@@ -656,8 +656,14 @@ impl DataGridPanel {
 
         let filter_for_count = filter.clone();
 
+        // The page is counted from the builder's skip; only the request
+        // carries the absolute offset.
+        let request_pagination = Pagination::Offset {
+            limit: pagination.limit(),
+            offset: pagination.offset() + self.document_builder_skip(cx),
+        };
         let mut browse_request =
-            CollectionBrowseRequest::new(collection.clone()).with_pagination(pagination.clone());
+            CollectionBrowseRequest::new(collection.clone()).with_pagination(request_pagination);
         if let Some(f) = filter {
             browse_request = browse_request.with_filter(f);
         }

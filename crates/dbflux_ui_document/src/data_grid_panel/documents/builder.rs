@@ -527,13 +527,27 @@ impl DataGridPanel {
     }
 
     /// Writes the builder's pipeline into the Aggregate view and runs it
-    /// there, so it goes through the same checks as a typed pipeline.
+    /// there, so it goes through the same checks as a typed pipeline. While
+    /// that view runs a pipeline or waits for its confirmation, the editor
+    /// keeps the pipeline it holds and nothing runs.
     fn run_builder_pipeline(
         &mut self,
         pipeline: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let aggregate = &self.collection.aggregate;
+        if aggregate.running || aggregate.pending_run.is_some() {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("document.collection.builder.run_pipeline_busy"),
+                ),
+                cx,
+            );
+            return;
+        }
+
         self.set_collection_tab(CollectionTab::Aggregate, cx);
         if self.collection.tab != CollectionTab::Aggregate {
             return;
@@ -663,7 +677,20 @@ impl DataGridPanel {
         cx.notify();
     }
 
-    /// Where a Find starts reading: the builder's skip while it is open.
+    /// Documents the open builder skips before the first page. Paging
+    /// counts from there: the collection's pagination is relative to it, so
+    /// Previous stops at the skip and a new page size starts over at it.
+    pub(in crate::data_grid_panel) fn document_builder_skip(&self, cx: &App) -> u64 {
+        self.collection
+            .builder
+            .panel
+            .as_ref()
+            .filter(|_| self.collection.builder.open)
+            .and_then(|panel| panel.read(cx).skip())
+            .unwrap_or(0)
+    }
+
+    /// The first page of a Find, counted from the builder's skip.
     pub(in crate::data_grid_panel) fn document_find_pagination(&self, cx: &App) -> Pagination {
         let current = match &self.source {
             DataSource::Collection { pagination, .. } => pagination.clone(),
@@ -681,19 +708,7 @@ impl DataGridPanel {
             .filter(|limit| *limit > 0)
             .unwrap_or_else(|| current.limit());
 
-        let skip = self
-            .collection
-            .builder
-            .panel
-            .as_ref()
-            .filter(|_| self.collection.builder.open)
-            .and_then(|panel| panel.read(cx).skip())
-            .unwrap_or(0);
-
-        Pagination::Offset {
-            limit,
-            offset: skip,
-        }
+        Pagination::Offset { limit, offset: 0 }
     }
 
     /// Footer note while the builder drives a find: its rows stay editable.
@@ -817,7 +832,7 @@ mod tests {
 
     use std::cell::RefCell;
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use dbflux_core::{
         CollectionRef, DatabaseCategory, DocumentFeatures, DocumentOperator, DocumentQueryCodec,
@@ -839,6 +854,8 @@ mod tests {
         metadata: dbflux_core::DriverMetadata,
         features: DocumentFeatures,
         codec: Option<MongoDocumentCodec>,
+        /// Offsets of the collection browses asked for.
+        browse_offsets: Arc<Mutex<Vec<u64>>>,
     }
 
     impl StubDocumentConnection {
@@ -871,7 +888,13 @@ mod tests {
                 },
                 features,
                 codec: codec.then_some(MongoDocumentCodec),
+                browse_offsets: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn logging_browse_offsets(mut self, offsets: Arc<Mutex<Vec<u64>>>) -> Self {
+            self.browse_offsets = offsets;
+            self
         }
     }
 
@@ -917,6 +940,22 @@ mod tests {
 
         fn document_features(&self) -> DocumentFeatures {
             self.features
+        }
+
+        fn browse_collection(
+            &self,
+            request: &dbflux_core::CollectionBrowseRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            self.browse_offsets
+                .lock()
+                .unwrap()
+                .push(request.pagination.offset());
+
+            Ok(dbflux_core::QueryResult::json(
+                Vec::new(),
+                Vec::new(),
+                std::time::Duration::from_millis(1),
+            ))
         }
 
         fn document_query_codec(&self) -> Option<&dyn DocumentQueryCodec> {
@@ -1273,20 +1312,28 @@ mod tests {
             });
         });
 
-        let start = window.update(|_, cx| panel.read(cx).document_find_pagination(cx));
+        let (start, skip) = window.update(|_, cx| {
+            let grid = panel.read(cx);
+            (
+                grid.document_find_pagination(cx),
+                grid.document_builder_skip(cx),
+            )
+        });
         assert_eq!(
             start,
             Pagination::Offset {
                 limit: 20,
-                offset: 40,
-            }
+                offset: 0,
+            },
+            "pages count from the skip"
         );
+        assert_eq!(skip, 40);
 
         window.update(|_, cx| {
             panel.update(cx, |grid, _| grid.mark_document_builder_closed());
         });
-        let start = window.update(|_, cx| panel.read(cx).document_find_pagination(cx));
-        assert_eq!(start.offset(), 0, "a closed builder does not skip");
+        let skip = window.update(|_, cx| panel.read(cx).document_builder_skip(cx));
+        assert_eq!(skip, 0, "a closed builder does not skip");
     }
 
     #[gpui::test]
@@ -1617,6 +1664,112 @@ mod tests {
         assert!(
             !window.update(|_, cx| panel.read(cx).collection.aggregate.results_from_builder),
             "a pipeline run from the editor is not the builder's"
+        );
+    }
+
+    #[gpui::test]
+    fn run_pipeline_leaves_a_busy_aggregate_view_alone(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+        let typed = r#"[{"$match": {"status": "failed"}}]"#;
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| {
+                grid.collection
+                    .aggregate
+                    .pipeline_editor
+                    .update(cx, |editor, cx| editor.set_value(typed, window, cx));
+                grid.collection.aggregate.running = true;
+            });
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                rail.request_run(cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let aggregate = &panel.read(cx).collection.aggregate;
+            assert_eq!(
+                aggregate.pipeline_editor.read(cx).value().to_string(),
+                typed,
+                "the pipeline being run keeps its text"
+            );
+            assert!(!aggregate.next_run_from_builder);
+            assert!(aggregate.results.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn paging_a_builder_find_never_goes_below_its_skip(cx: &mut TestAppContext) {
+        let offsets = Arc::new(Mutex::new(Vec::new()));
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true)
+                .logging_browse_offsets(offsets.clone()),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+        offsets.lock().unwrap().clear();
+
+        window.update(|window, cx| {
+            rail.update(cx, |rail, cx| rail.set_skip(Some(40), cx));
+            panel.update(cx, |grid, cx| {
+                grid.filter_bar
+                    .limit_input
+                    .update(cx, |input, cx| input.set_value("20", window, cx));
+                grid.find_documents(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let grid = panel.read(cx);
+            assert!(!grid.can_go_prev(), "the first page starts at the skip");
+            assert_eq!(
+                grid.source.pagination().map(|page| page.current_page()),
+                Some(1)
+            );
+        });
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.go_to_next_page(window, cx));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.go_to_prev_page(window, cx));
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.go_to_prev_page(window, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| {
+                grid.go_to_next_page(window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| {
+                grid.filter_bar
+                    .limit_input
+                    .update(cx, |input, cx| input.set_value("10", window, cx));
+                grid.refresh(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            *offsets.lock().unwrap(),
+            vec![40, 60, 40, 60, 40],
+            "find, next, previous (twice, the second stays), next, then a new \
+             page size starts over at the skip"
         );
     }
 

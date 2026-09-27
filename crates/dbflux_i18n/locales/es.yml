@@ -692,6 +692,7 @@ document:
       find_invalid: "Completa las condiciones marcadas antes de ejecutar"
       open_in_editor: "Abrir en el editor"
       run_pipeline: "Ejecutar pipeline"
+      run_pipeline_busy: "Ya hay una agregación en ejecución o esperando confirmación; el pipeline del constructor no se ejecutó"
       editable_note: "Editable: cada fila conserva su _id"
       section:
         filter: "Filtro"

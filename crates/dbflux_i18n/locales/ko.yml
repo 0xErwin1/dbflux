@@ -692,6 +692,7 @@ document:
       find_invalid: "실행하기 전에 표시된 조건을 완성하세요"
       open_in_editor: "편집기에서 열기"
       run_pipeline: "파이프라인 실행"
+      run_pipeline_busy: "집계가 이미 실행 중이거나 확인을 기다리고 있어 빌더의 파이프라인을 실행하지 않았습니다"
       editable_note: "편집 가능: 모든 행이 _id를 유지합니다"
       section:
         filter: "필터"
