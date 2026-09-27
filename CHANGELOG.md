@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.8.2] - 2026-09-27
+
+
+### Fixed
+
+* Vim find panel and ctrl-hjkl pane navigation in the code editor (#775)
+
 ## [0.8.1] - 2026-09-27
 
 
