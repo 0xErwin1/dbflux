@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-27
+
 ### Changed
 
 * **Vim search uses the find panel** — In Vim mode, `/` opens the editor's find panel instead of a separate search prompt. Enter and Shift+Enter move the cursor to the next or previous match and keep the panel open, Esc closes it and keeps the query for `n` and `N`, and Ctrl+J returns to the editor.
