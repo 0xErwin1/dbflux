@@ -27,10 +27,12 @@ On Linux, the [`mold`](https://github.com/rui314/mold) linker is **required** fo
 Before opening a PR run:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py` covers only the first-party crates under `crates/` and never lints or reformats the vendored crates under `vendor/`.
 
 Tests can also be run with [`cargo-nextest`](https://nexte.st) (faster on this workspace, provided by the Nix dev shell). Note nextest does not run doctests:
 

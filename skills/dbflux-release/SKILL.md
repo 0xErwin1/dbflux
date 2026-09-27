@@ -177,10 +177,12 @@ After the GitHub Release publishes, run post-release steps (see "Post-Release Ch
 
    ```bash
    cargo check --workspace
-   cargo fmt --all -- --check
-   cargo clippy --workspace -- -D warnings
+   python3 scripts/lint.py fmt --check
+   python3 scripts/lint.py clippy
    cargo test --workspace
    ```
+
+   `scripts/lint.py` covers only the first-party crates under `crates/` and never lints or reformats the vendored crates under `vendor/`.
 
 2. Confirm the versioned files match the tag exactly.
 3. Create an annotated tag:

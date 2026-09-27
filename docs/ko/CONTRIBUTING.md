@@ -32,10 +32,12 @@ Linux에서 로컬 빌드에는 [`mold`](https://github.com/rui314/mold) 링커�
 PR을 열기 전에 다음을 실행합니다:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py`는 `crates/` 아래의 자체 크레이트만 대상으로 하며, `vendor/` 아래의 서드파티 크레이트는 린트하거나 재포맷하지 않습니다.
 
 테스트는 [`cargo-nextest`](https://nexte.st)로도 실행할 수 있습니다(이
 워크스페이스에서 더 빠르며, Nix 개발 셸이 제공합니다). nextest는 doctest를

@@ -236,8 +236,8 @@ cargo run -p dbflux
 
 ```bash
 cargo check --workspace                    # 타입 검사
-cargo clippy --workspace -- -D warnings    # 린트
-cargo fmt --all                            # 포맷
+python3 scripts/lint.py clippy             # 린트
+python3 scripts/lint.py fmt                # 포맷
 cargo test --workspace                     # 테스트
 ```
 
