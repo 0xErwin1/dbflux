@@ -431,6 +431,8 @@ pub struct InputBaseState<M: InputModeKind> {
     /// [`InputBaseState::search_activation_revision`].
     pub(super) search_activation_revision: u64,
     pub(super) searchable: bool,
+    /// See [`InputBaseState::set_search_moves_cursor`].
+    pub(super) search_moves_cursor: bool,
     pub(super) replaceable: bool,
     pub(super) soft_wrap: bool,
     pub(super) wrapping_indent: WrappingIndent,
@@ -773,6 +775,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             search_session: super::SearchSession::default(),
             search_activation_revision: 0,
             searchable: false,
+            search_moves_cursor: false,
             replaceable: true,
             soft_wrap: true,
             wrapping_indent: WrappingIndent::default(),
@@ -5337,6 +5340,95 @@ mod tests {
                      — paint would jitter (Bug C regression)",
                     deferred.y,
                     safe_y_min,
+                );
+            });
+        });
+    }
+
+    /// Counts the `Search` and `Replace` actions that reach the view around
+    /// an input.
+    struct SearchActionProbe {
+        input: Entity<InputBaseState<InputMode>>,
+        searches: usize,
+        replaces: usize,
+    }
+
+    impl Render for SearchActionProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .on_action(cx.listener(|this, _: &Search, _, _| this.searches += 1))
+                .on_action(cx.listener(|this, _: &Replace, _, _| this.replaces += 1))
+                .child(self.input.clone())
+        }
+    }
+
+    #[gpui::test]
+    fn search_actions_propagate_from_an_input_that_is_not_searchable(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                super::super::init(cx);
+
+                let input = cx.new(|cx| crate::input::InputState::new(window, cx));
+                cx.new(|_| SearchActionProbe {
+                    input,
+                    searches: 0,
+                    replaces: 0,
+                })
+            })
+            .unwrap()
+        });
+        let probe = window.root(cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+
+        cx.update(|window, cx| {
+            let input = probe.read(cx).input.clone();
+            input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.run_until_parked();
+
+        cx.dispatch_action(Search);
+        cx.dispatch_action(Replace);
+
+        probe.read_with(&cx, |probe, cx| {
+            assert_eq!(probe.searches, 1);
+            assert_eq!(probe.replaces, 1);
+            assert!(!probe.input.read(cx).search_session().open);
+        });
+    }
+
+    #[gpui::test]
+    fn search_navigation_moves_the_cursor_only_when_enabled(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("foo bar foo bar foo", window, cx);
+                state.set_selected_range(0..0, cx);
+                state.set_search_query("foo", true, cx);
+
+                assert_eq!(state.next_search_match(cx), Some(8..11));
+                assert_eq!(state.selected_range(), 0..0, "disabled by default");
+
+                state.set_search_moves_cursor(true);
+                state.set_selected_range(9..9, cx);
+
+                assert_eq!(state.next_search_match(cx), Some(16..19));
+                assert_eq!(state.selected_range(), 16..16);
+                assert_eq!(state.search_session.matcher.current_match_index(), 2);
+
+                assert_eq!(state.previous_search_match(cx), Some(8..11));
+                assert_eq!(state.selected_range(), 8..8);
+                assert_eq!(state.search_session.matcher.current_match_index(), 1);
+
+                state.set_search_query("bar", true, cx);
+                assert_eq!(
+                    state.search_session.matcher.current_match_index(),
+                    1,
+                    "a changed query starts at the first match from the cursor"
                 );
             });
         });

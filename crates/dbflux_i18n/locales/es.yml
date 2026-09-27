@@ -997,11 +997,6 @@ document:
       visual: "VISUAL"
       visual_line: "VISUAL LÍNEA"
       visual_block: "VISUAL BLOQUE"
-      search:
-        label: "Búsqueda de Vim"
-        placeholder: "Buscar hacia adelante"
-        run: "buscar"
-        cancel: "cancelar"
     output:
       running: "Ejecutando…"
       stopped: Detenido

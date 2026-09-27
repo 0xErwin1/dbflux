@@ -278,6 +278,13 @@ impl Global for DerivedKeybindingSources {}
 /// same context depth, which lets the keymap take keys the input component
 /// also binds (the primary modifier + Enter).
 pub fn init_keymap(cx: &mut App) {
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([KeyBinding::new(
+        CODE_EDITOR_REPLACE_KEYS,
+        gpui_component::input::Replace,
+        Some(CODE_EDITOR_INPUT_PREDICATE),
+    )]);
+
     register_derived_keybindings(keymap_keybindings, cx);
 
     cx.set_global(dbflux_components::actions::ShortcutLabels(Box::new(
@@ -296,6 +303,16 @@ pub fn init_keymap(cx: &mut App) {
     });
     cx.default_global::<LastKeystroke>().1 = Some(recorder);
 }
+
+/// Keys that open the code editor's replace panel on Linux and Windows,
+/// where the input component's own Ctrl+H is taken by pane navigation.
+/// macOS keeps the component's Cmd+Shift+F.
+#[cfg(not(target_os = "macos"))]
+const CODE_EDITOR_REPLACE_KEYS: &str = "ctrl-shift-h";
+
+/// Every text field inside the code editor, including its find panel.
+#[cfg(not(target_os = "macos"))]
+const CODE_EDITOR_INPUT_PREDICATE: &str = "CodeEditor > Input";
 
 /// The last key pressed in any window, and the interceptor that records it.
 #[derive(Default)]

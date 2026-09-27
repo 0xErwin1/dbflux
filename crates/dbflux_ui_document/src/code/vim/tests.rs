@@ -47,7 +47,7 @@ impl Render for Harness {
         let key_context = root_key_context(
             WORKSPACE_KEY_CONTEXT,
             document.active_context(cx),
-            &document.key_context_entries(),
+            &document.key_context_entries(cx),
         );
 
         div()
@@ -91,34 +91,81 @@ struct Fixture<'a> {
 }
 
 impl Fixture<'_> {
-    fn search_open(&mut self) -> bool {
-        let document = self.document.clone();
-        self.window
-            .update(|_, cx| document.read(cx).vim.search_open)
-    }
-
-    fn prompt_focused(&mut self) -> bool {
-        let document = self.document.clone();
-        self.window.update(|window, cx| {
-            document
-                .read(cx)
-                .vim_search_input
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        })
-    }
-
-    fn prompt_text(&mut self) -> String {
+    /// Whether the key context the workspace reports carries the Vim mode.
+    fn reports_vim_mode(&mut self) -> bool {
         let document = self.document.clone();
         self.window.update(|_, cx| {
             document
                 .read(cx)
-                .vim_search_input
-                .read(cx)
-                .value()
-                .to_string()
+                .key_context_entries(cx)
+                .iter()
+                .any(|(key, _)| key.as_ref() == dbflux_ui_base::keymap::VIM_MODE_KEY)
         })
+    }
+
+    fn native_replace_mode(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .replace_mode
+        })
+    }
+
+    fn current_match_index(&mut self) -> usize {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .matcher
+                .current_match_index()
+        })
+    }
+
+    fn native_search_open(&mut self) -> bool {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .open
+        })
+    }
+
+    fn native_search_query(&mut self) -> String {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .search_session()
+                .query
+                .clone()
+        })
+    }
+
+    /// Opens the editor's own find panel the way its Find shortcut does, and
+    /// lets the overlay move focus into the panel's query field.
+    fn open_native_search(&mut self) {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            let input = document.read(cx).editor.input_state.clone();
+            input.update(cx, |state, cx| state.open_search(false, cx));
+        });
+        self.window.run_until_parked();
     }
 
     fn text(&mut self) -> String {
@@ -972,94 +1019,134 @@ fn mark_prefix_interruptions_and_readonly_do_not_edit(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn search_prompt_survives_document_focus_and_bypasses_normal_history(cx: &mut TestAppContext) {
+fn slash_opens_the_native_find_panel_with_its_query_focused(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "alpha beta alpha", true);
-    let second = editor.open_second_document("other");
-    editor.keys("/");
-    assert!(editor.prompt_focused());
-    editor.type_text("alpha");
-    editor.focus_document(&second);
-    editor.focus_document(&editor.document.clone());
-    assert!(editor.search_open());
-    assert!(editor.prompt_focused());
-    assert!(!editor.editor_focused());
-    assert_eq!(editor.mode(), Some(VimMode::Normal));
-    editor.keys("tab");
-    assert!(editor.prompt_focused());
-    assert_eq!(editor.prompt_text(), "alpha");
-    editor.keys("shift-tab");
-    assert!(editor.prompt_focused());
-    assert_eq!(editor.prompt_text(), "alpha");
-    editor.type_text(" beta");
-    assert_eq!(editor.prompt_text(), "alpha beta");
-    editor.keys("ctrl-z ctrl-shift-z");
-    assert_eq!(editor.text(), "alpha beta alpha");
-    assert!(editor.search_open());
-    assert_eq!(editor.mode(), Some(VimMode::Normal));
-    editor.keys("enter");
-    assert!(!editor.search_open());
-    assert_eq!(editor.text(), "alpha beta alpha");
-}
-
-#[gpui::test]
-fn search_prompt_does_not_capture_editor_history_or_tab(cx: &mut TestAppContext) {
-    let mut editor = open_editor(cx, "alpha", true);
     editor.keys("x");
-    assert_eq!(editor.text(), "lpha");
+    assert_eq!(editor.text(), "lpha beta alpha");
+
     editor.keys("/");
-    editor.type_text("query");
-    editor.keys("ctrl-z");
-    assert_eq!(editor.text(), "lpha");
-    assert!(editor.prompt_focused());
-    editor.keys("ctrl-y");
-    assert_eq!(editor.text(), "lpha");
-    assert!(editor.prompt_focused());
-    assert!(editor.search_open());
-    for key in ["tab", "shift-tab"] {
+
+    assert!(editor.native_search_open());
+    assert!(!editor.editor_focused());
+    assert!(!editor.reports_vim_mode());
+
+    editor.type_text("beta");
+    assert_eq!(editor.native_search_query(), "beta");
+    assert_eq!(editor.text(), "lpha beta alpha");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    for key in ["tab", "shift-tab", "ctrl-z", "ctrl-y"] {
         editor.keys(key);
-        assert_eq!(editor.text(), "lpha");
-        assert_eq!(editor.prompt_text(), "query");
-        assert!(editor.prompt_focused());
-        assert!(editor.search_open());
+        assert_eq!(editor.text(), "lpha beta alpha", "{key}");
+        assert!(editor.native_search_open(), "{key}");
+        assert!(!editor.editor_focused(), "{key}");
     }
-    let document = editor.document.clone();
-    editor.window.update(|window, cx| {
-        document.update(cx, |document, cx| {
-            assert!(document.cancel_vim_search(window, cx));
-        });
-    });
-    assert!(!editor.search_open());
-    editor.focus_document(&editor.document.clone());
+
+    editor.keys("escape");
+    assert!(editor.reports_vim_mode());
     editor.keys("u");
-    assert_eq!(editor.text(), "alpha");
+    assert_eq!(editor.text(), "alpha beta alpha");
 }
 
 #[gpui::test]
-fn literal_search_prompt_accept_repeat_cancel_and_wrap(cx: &mut TestAppContext) {
-    let mut editor = open_editor(cx, "é x é x é", true);
+fn enter_in_the_native_find_panel_moves_the_cursor_and_keeps_it_open(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "beta alpha beta alpha", true);
+    editor.set_cursor(0);
     editor.keys("/");
-    assert!(editor.search_open());
-    editor.type_text("é");
-    assert_eq!(editor.prompt_text(), "é");
-    assert_eq!(editor.text(), "é x é x é");
+    editor.type_text("alpha");
+
     editor.keys("enter");
-    assert!(!editor.search_open());
     assert_eq!(editor.cursor(), 5);
-    editor.keys("2 n");
-    assert_eq!(editor.cursor(), 0);
-    editor.keys("shift-n");
-    assert_eq!(editor.cursor(), 10);
+    assert_eq!(editor.current_match_index(), 0);
+    assert!(editor.native_search_open());
+    assert!(!editor.editor_focused());
+
+    editor.keys("enter");
+    assert_eq!(editor.cursor(), 16);
+    assert_eq!(editor.current_match_index(), 1);
+
+    editor.keys("enter");
+    assert_eq!(editor.cursor(), 5);
+
+    editor.keys("shift-enter");
+    assert_eq!(editor.cursor(), 16);
+    assert_eq!(editor.current_match_index(), 1);
+    assert!(editor.native_search_open());
+    assert_eq!(editor.text(), "beta alpha beta alpha");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn escape_closes_the_native_find_panel_and_n_repeats_its_query(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one x one x one", true);
+    editor.set_cursor(0);
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 0, "n without a query does nothing");
+
     editor.keys("/");
-    editor.type_text("missing");
+    editor.type_text("one");
+    editor.keys("enter");
+    assert_eq!(editor.cursor(), 6);
+
     editor.keys("escape");
-    assert!(!editor.search_open());
+    assert!(!editor.native_search_open());
+    assert!(editor.editor_focused());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 6);
+    assert_eq!(editor.native_search_query(), "one");
+
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 12);
+    assert_eq!(editor.current_match_index(), 2);
+
     editor.keys("n");
     assert_eq!(editor.cursor(), 0);
-    assert_eq!(editor.text(), "é x é x é");
+    assert_eq!(editor.current_match_index(), 0);
+
+    editor.keys("shift-n");
+    assert_eq!(editor.cursor(), 12);
+    assert_eq!(editor.current_match_index(), 2);
+
+    editor.keys("2 n");
+    assert_eq!(editor.cursor(), 6);
+    assert_eq!(editor.current_match_index(), 1);
+    assert!(!editor.native_search_open());
+    assert_eq!(editor.text(), "one x one x one");
 }
 
 #[gpui::test]
-fn search_prompt_ime_and_no_match_are_read_only_safe(cx: &mut TestAppContext) {
+fn slash_reopens_the_native_find_panel_with_the_last_query_selected(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two one", true);
+    editor.set_cursor(0);
+    editor.keys("/");
+    editor.type_text("one");
+    editor.keys("escape");
+
+    editor.keys("/");
+    assert!(editor.native_search_open());
+    assert_eq!(editor.native_search_query(), "one");
+
+    editor.type_text("two");
+    assert_eq!(editor.native_search_query(), "two");
+    editor.keys("enter escape");
+    assert_eq!(editor.cursor(), 4);
+}
+
+#[gpui::test]
+fn n_uses_the_native_case_insensitive_default(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "Beta beta", true);
+    editor.set_cursor(0);
+    editor.keys("/");
+    editor.type_text("beta");
+    editor.keys("enter escape");
+    assert_eq!(editor.cursor(), 5);
+
+    editor.keys("n");
+    assert_eq!(editor.cursor(), 0);
+}
+
+#[gpui::test]
+fn native_search_moves_but_never_edits_a_read_only_editor(cx: &mut TestAppContext) {
     let mut editor = open_editor_with(
         cx,
         EditorSetup {
@@ -1069,20 +1156,16 @@ fn search_prompt_ime_and_no_match_are_read_only_safe(cx: &mut TestAppContext) {
             read_only: true,
         },
     );
+    editor.set_cursor(0);
     editor.keys("/");
-    let document = editor.document.clone();
-    editor.window.update(|window, cx| {
-        let input = document.read(cx).vim_search_input.clone();
-        input.update(cx, |state, cx| {
-            state.replace_and_mark_text_in_range(None, "中", None, window, cx);
-            state.replace_text_in_range(None, "中", window, cx);
-        });
-    });
-    assert_eq!(editor.prompt_text(), "中");
+    editor.type_text("é");
     editor.keys("enter");
+    assert_eq!(editor.cursor(), 7);
+
+    editor.keys("escape n");
     assert_eq!(editor.cursor(), 0);
-    editor.keys("n shift-n");
-    assert_eq!(editor.cursor(), 0);
+    editor.keys("shift-n");
+    assert_eq!(editor.cursor(), 7);
     assert_eq!(editor.text(), "é one é");
 }
 
@@ -3316,12 +3399,232 @@ fn app_shortcuts_dispatch_the_same_in_every_mode(
         reference_commands.contains(&Command::SaveQuery) && reference_runs == 1,
         "the reference run must exercise the shortcuts: {reference_commands:?}"
     );
+    assert_eq!(
+        reference_commands[..3],
+        [Command::FocusLeft, Command::FocusDown, Command::FocusUp],
+        "Ctrl+h / Ctrl+j / Ctrl+k move focus between panes"
+    );
 
     for (setup, commands, runs, text) in &outcomes {
         assert_eq!(commands, &reference_commands, "{setup}");
         assert_eq!(*runs, reference_runs, "{setup}");
         assert_eq!(text, "abc", "{setup}");
     }
+}
+
+#[gpui::test]
+#[allow(clippy::too_many_arguments)]
+fn ctrl_h_focuses_left_in_every_vim_mode_without_opening_replace(
+    normal_cx: &mut TestAppContext,
+    insert_cx: &mut TestAppContext,
+    replace_cx: &mut TestAppContext,
+    pending_replace_cx: &mut TestAppContext,
+    visual_cx: &mut TestAppContext,
+    visual_line_cx: &mut TestAppContext,
+    visual_block_cx: &mut TestAppContext,
+) {
+    for (setup, prefix, app_cx) in [
+        ("normal", "", normal_cx),
+        ("insert", "i", insert_cx),
+        ("replace", "shift-r", replace_cx),
+        ("pending replace", "r", pending_replace_cx),
+        ("visual", "v", visual_cx),
+        ("visual line", "shift-v", visual_line_cx),
+        ("visual block", "ctrl-v", visual_block_cx),
+    ] {
+        let mut editor = open_editor(app_cx, "abc", true);
+        if !prefix.is_empty() {
+            editor.keys(prefix);
+        }
+
+        editor.keys("ctrl-h");
+
+        assert_eq!(editor.commands(), vec![Command::FocusLeft], "{setup}");
+        assert!(!editor.native_search_open(), "{setup}");
+        assert_eq!(editor.text(), "abc", "{setup}");
+    }
+}
+
+#[gpui::test]
+fn vim_keys_reach_the_focused_native_search_panel(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "select 1\nselect 2", true);
+    editor.set_cursor(3);
+    editor.open_native_search();
+    assert!(editor.native_search_open());
+    assert!(!editor.editor_focused());
+
+    editor.type_text("hjkl");
+
+    assert_eq!(editor.native_search_query(), "hjkl");
+    assert_eq!(editor.cursor(), 3);
+    assert_eq!(editor.text(), "select 1\nselect 2");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn escape_in_the_native_search_panel_closes_it_and_keeps_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    editor.open_native_search();
+    editor.type_text("b");
+
+    editor.keys("escape");
+
+    assert!(!editor.native_search_open());
+    assert!(editor.editor_focused());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn escape_in_the_native_search_panel_closes_it_from_visual_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc abc", true);
+    editor.keys("v l");
+    editor.open_native_search();
+    assert!(editor.native_search_open());
+
+    editor.keys("escape");
+
+    assert!(!editor.native_search_open());
+    assert!(editor.editor_focused());
+}
+
+#[gpui::test]
+fn ctrl_h_j_k_move_focus_without_vim_and_never_move_the_cursor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\ndef\nghi", false);
+    editor.set_cursor(5);
+
+    editor.keys("ctrl-h ctrl-j ctrl-k");
+
+    assert_eq!(
+        editor.commands(),
+        vec![Command::FocusLeft, Command::FocusDown, Command::FocusUp]
+    );
+    assert!(!editor.native_search_open());
+    assert_eq!(editor.cursor(), 5);
+    assert!(editor.editor_focused());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[gpui::test]
+fn ctrl_shift_h_opens_replace_and_toggles_it_inside_the_panel(
+    disabled_cx: &mut TestAppContext,
+    vim_cx: &mut TestAppContext,
+) {
+    // Vim's Normal mode locks the buffer read-only, which leaves the panel
+    // without its replace row, so the Vim run replaces from Insert mode.
+    for (setup, vim_enabled, app_cx) in [("disabled", false, disabled_cx), ("vim", true, vim_cx)] {
+        let mut editor = open_editor(app_cx, "abc abc", vim_enabled);
+        if vim_enabled {
+            editor.keys("i");
+        }
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_search_open(), "{setup}");
+        assert!(editor.native_replace_mode(), "{setup}");
+        assert!(!editor.editor_focused(), "{setup}");
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_search_open(), "{setup}");
+        assert!(!editor.native_replace_mode(), "{setup}");
+
+        editor.keys("ctrl-shift-h");
+        assert!(editor.native_replace_mode(), "{setup}");
+        assert_eq!(editor.text(), "abc abc", "{setup}");
+        assert!(editor.commands().is_empty(), "{setup}");
+    }
+}
+
+#[gpui::test]
+fn ctrl_j_in_the_native_find_panel_returns_to_the_editor(
+    disabled_cx: &mut TestAppContext,
+    vim_cx: &mut TestAppContext,
+) {
+    for (setup, vim_enabled, app_cx) in [("disabled", false, disabled_cx), ("vim", true, vim_cx)] {
+        let mut editor = open_editor(app_cx, "one two one", vim_enabled);
+        editor.set_cursor(0);
+        editor.keys(if vim_enabled { "/" } else { "ctrl-f" });
+        editor.type_text("two");
+        if vim_enabled {
+            editor.keys("enter");
+            assert_eq!(editor.cursor(), 4, "{setup}");
+        }
+
+        editor.keys("ctrl-j");
+
+        assert!(!editor.native_search_open(), "{setup}");
+        assert!(editor.editor_focused(), "{setup}");
+        assert!(editor.commands().is_empty(), "{setup}");
+        assert_eq!(editor.native_search_query(), "two", "{setup}");
+        assert_eq!(editor.cursor(), if vim_enabled { 4 } else { 0 }, "{setup}");
+    }
+}
+
+#[gpui::test]
+#[allow(clippy::too_many_arguments)]
+fn pane_moves_from_the_native_find_panel_close_it_first(
+    left_cx: &mut TestAppContext,
+    up_cx: &mut TestAppContext,
+    vim_left_cx: &mut TestAppContext,
+    vim_up_cx: &mut TestAppContext,
+) {
+    for (setup, vim_enabled, key, command, app_cx) in [
+        ("left", false, "ctrl-h", Command::FocusLeft, left_cx),
+        ("up", false, "ctrl-k", Command::FocusUp, up_cx),
+        ("vim left", true, "ctrl-h", Command::FocusLeft, vim_left_cx),
+        ("vim up", true, "ctrl-k", Command::FocusUp, vim_up_cx),
+    ] {
+        let mut editor = open_editor(app_cx, "one two", vim_enabled);
+        editor.keys(if vim_enabled { "/" } else { "ctrl-f" });
+        assert!(editor.native_search_open(), "{setup}");
+
+        editor.keys(key);
+
+        assert!(!editor.native_search_open(), "{setup}");
+        assert_eq!(editor.commands(), vec![command], "{setup}");
+    }
+}
+
+#[gpui::test]
+fn ctrl_j_and_ctrl_k_move_through_an_open_completion_menu(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "sel", false);
+    editor.set_cursor(3);
+
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| {
+            state.present_completion_items(
+                0,
+                "sel",
+                vec![
+                    lsp_types::CompletionItem {
+                        label: "select".to_string(),
+                        ..Default::default()
+                    },
+                    lsp_types::CompletionItem {
+                        label: "selection".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                cx,
+            );
+        });
+    });
+    editor.window.run_until_parked();
+
+    editor.keys("ctrl-j ctrl-j ctrl-k enter");
+
+    assert_eq!(editor.text().lines().next(), Some("selection"));
+    assert!(editor.commands().is_empty());
+}
+
+#[gpui::test]
+fn a_plain_input_lets_ctrl_h_reach_the_app(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", false);
+    editor.focus_other_input();
+
+    editor.keys("ctrl-h");
+
+    assert_eq!(editor.commands(), vec![Command::FocusLeft]);
 }
 
 #[gpui::test]
