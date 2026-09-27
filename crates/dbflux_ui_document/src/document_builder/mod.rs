@@ -17,7 +17,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-pub use model::ProblemKind;
+pub use model::{AccumulatorOp, ProblemKind};
 pub use panel::{DocumentBuilderEvent, DocumentBuilderPanel};
 pub use sync::SlotWrite;
 pub use values::ValueProblem;

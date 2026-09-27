@@ -115,11 +115,17 @@ impl DataGridPanel {
     }
 
     /// Query bar of a document collection: filter, project, sort and limit
-    /// slots, Find and the query history (P1DocTable).
+    /// slots, Find and the query history (P1DocTable). While the builder
+    /// composes an aggregation the slots are not its query, so the bar shows
+    /// the pipeline summary instead.
     pub(in crate::data_grid_panel) fn render_document_query_bar(
         &self,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
+        if let Some(stages) = self.document_builder_pipeline_stages(cx) {
+            return self.render_builder_pipeline_row(stages, cx);
+        }
+
         let theme = cx.theme().clone();
         let slots = self.has_document_query_slots(cx);
 
@@ -230,6 +236,7 @@ impl DataGridPanel {
                     )
                     .when_some(history_menu, |anchor, menu| anchor.child(menu)),
             )
+            .into_any_element()
     }
 
     fn render_query_history_menu(&self, cx: &mut Context<Self>) -> AnyElement {

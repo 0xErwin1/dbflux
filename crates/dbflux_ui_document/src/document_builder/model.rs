@@ -5,10 +5,17 @@
 //! each operand as the text the user typed next to the value it reads as.
 //! A draft with an unfinished condition cannot become a spec; it reports
 //! [`DraftProblem`]s instead, and the slots keep the last query that could.
+//!
+//! In Aggregate mode the draft also holds a group stage. Switching back to
+//! Find keeps that stage aside, so switching again restores it; removing it
+//! is what drops it.
+
+use std::collections::HashMap;
 
 use dbflux_core::{
-    DocumentCombinator, DocumentCondition, DocumentFieldType, DocumentFilterGroup,
-    DocumentFilterNode, DocumentOperator, DocumentProjection, DocumentProjectionMode,
+    DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator, DocumentCondition,
+    DocumentFieldType, DocumentFilterGroup, DocumentFilterNode, DocumentGroupStage,
+    DocumentOperator, DocumentProjection, DocumentProjectionMode, DocumentQueryMode,
     DocumentQuerySpec, DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
 };
 
@@ -66,6 +73,45 @@ pub enum Operand {
     Nested(GroupDraft),
 }
 
+/// What an accumulator computes for each group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccumulatorOp {
+    Count,
+    Sum,
+    Avg,
+}
+
+impl AccumulatorOp {
+    pub const ALL: [AccumulatorOp; 3] =
+        [AccumulatorOp::Count, AccumulatorOp::Sum, AccumulatorOp::Avg];
+
+    /// Whether the accumulator reads a field.
+    pub fn takes_field(self) -> bool {
+        self != AccumulatorOp::Count
+    }
+}
+
+/// One named output of the group stage. The field stays when the operator
+/// switches to `Count`, so switching back finds it again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccumulatorDraft {
+    pub id: NodeId,
+    pub name: String,
+    pub op: AccumulatorOp,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupStageDraft {
+    pub id: NodeId,
+    pub keys: Vec<String>,
+    pub accumulators: Vec<AccumulatorDraft>,
+}
+
+/// Name of the first accumulator of a new group stage, and the stem of the
+/// names of the next ones.
+const DEFAULT_ACCUMULATOR_NAME: &str = "count";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProblemKind {
     MissingField,
@@ -86,17 +132,21 @@ pub struct DraftProblem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuilderDraft {
     next_id: NodeId,
+    pub mode: DocumentQueryMode,
     pub filter: GroupDraft,
     pub projection: DocumentProjection,
     pub sort: Vec<DocumentSortKey>,
     pub limit: Option<u64>,
     pub skip: Option<u64>,
+    /// The group stage; kept while in Find mode so Aggregate restores it.
+    pub group: Option<GroupStageDraft>,
 }
 
 impl Default for BuilderDraft {
     fn default() -> Self {
         Self {
             next_id: 1,
+            mode: DocumentQueryMode::Find,
             filter: GroupDraft {
                 id: 0,
                 combinator: DocumentCombinator::And,
@@ -106,6 +156,7 @@ impl Default for BuilderDraft {
             sort: Vec::new(),
             limit: None,
             skip: None,
+            group: None,
         }
     }
 }
@@ -115,11 +166,18 @@ impl BuilderDraft {
     pub fn from_spec(spec: &DocumentQuerySpec) -> Self {
         let mut draft = Self::default();
         draft.load(spec);
+        draft.mode = spec.mode;
+        draft.group = spec
+            .group
+            .as_ref()
+            .map(|stage| draft.group_stage_from_spec(stage));
         draft
     }
 
-    /// Replaces the draft with `spec`. Every node gets an id never used
-    /// before, so inputs keyed by the old ids are dropped rather than reused.
+    /// Replaces the find parts of the draft with `spec`: filter, projection,
+    /// sort, limit and skip. The mode and the group stage stay, since the
+    /// slots never hold them. Every node gets an id never used before, so
+    /// inputs keyed by the old ids are dropped rather than reused.
     pub fn load(&mut self, spec: &DocumentQuerySpec) {
         self.filter = self.group_from_spec(&spec.filter);
         self.projection = spec.projection.clone();
@@ -132,6 +190,34 @@ impl BuilderDraft {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    #[cfg(test)]
+    fn group_stage_from_spec(&mut self, stage: &DocumentGroupStage) -> GroupStageDraft {
+        let id = self.allocate();
+        let accumulators = stage
+            .accumulators
+            .iter()
+            .map(|accumulator| {
+                let (op, path) = match &accumulator.kind {
+                    DocumentAccumulatorKind::Count => (AccumulatorOp::Count, String::new()),
+                    DocumentAccumulatorKind::Sum { path } => (AccumulatorOp::Sum, path.clone()),
+                    DocumentAccumulatorKind::Avg { path } => (AccumulatorOp::Avg, path.clone()),
+                };
+                AccumulatorDraft {
+                    id: self.allocate(),
+                    name: accumulator.name.clone(),
+                    op,
+                    path,
+                }
+            })
+            .collect();
+
+        GroupStageDraft {
+            id,
+            keys: stage.keys.clone(),
+            accumulators,
+        }
     }
 
     fn group_from_spec(&mut self, group: &DocumentFilterGroup) -> GroupDraft {
@@ -184,24 +270,38 @@ impl BuilderDraft {
         let mut problems = Vec::new();
         let filter = group_to_spec(&self.filter, false, &mut problems);
 
+        let group = match (self.mode, &self.group) {
+            (DocumentQueryMode::Aggregate, Some(stage)) => {
+                Some(group_stage_to_spec(stage, &mut problems))
+            }
+            _ => None,
+        };
+
         if !problems.is_empty() {
             return Err(problems);
         }
 
+        let projection = match self.mode {
+            DocumentQueryMode::Find => self.projection.clone(),
+            DocumentQueryMode::Aggregate => DocumentProjection::default(),
+        };
+
         let spec = DocumentQuerySpec {
+            mode: self.mode,
             filter,
-            projection: self.projection.clone(),
+            projection,
             sort: self.sort.clone(),
             limit: self.limit,
             skip: self.skip,
-            ..DocumentQuerySpec::default()
+            group,
         };
 
+        let mut duplicates_seen: HashMap<String, usize> = HashMap::new();
         let spec_problems: Vec<DraftProblem> = spec
             .validate()
             .into_iter()
             .map(|problem| DraftProblem {
-                node: self.filter.id,
+                node: self.problem_node(&problem, &mut duplicates_seen),
                 kind: ProblemKind::Spec(problem),
             })
             .collect();
@@ -210,6 +310,58 @@ impl BuilderDraft {
             Ok(spec)
         } else {
             Err(spec_problems)
+        }
+    }
+
+    /// The node a core problem is shown on: the accumulator it names, the
+    /// group stage for the rest of its problems, the filter otherwise.
+    /// `duplicates_seen` counts the duplicate-name problems already placed,
+    /// so each lands on the next accumulator reusing the name.
+    fn problem_node(
+        &self,
+        problem: &DocumentSpecProblem,
+        duplicates_seen: &mut HashMap<String, usize>,
+    ) -> NodeId {
+        let Some(stage) = self
+            .group
+            .as_ref()
+            .filter(|_| self.mode == DocumentQueryMode::Aggregate)
+        else {
+            return self.filter.id;
+        };
+
+        match problem {
+            DocumentSpecProblem::AccumulatorNameEmpty { index } => stage
+                .accumulators
+                .get(*index)
+                .map_or(stage.id, |accumulator| accumulator.id),
+            DocumentSpecProblem::AccumulatorNameDuplicate { name } => {
+                let seen = duplicates_seen.entry(name.clone()).or_insert(0);
+                *seen += 1;
+                accumulators_named(stage, name)
+                    .nth(*seen)
+                    .map_or(stage.id, |accumulator| accumulator.id)
+            }
+            DocumentSpecProblem::AccumulatorPathMissing { name } => {
+                accumulators_named(stage, name.trim())
+                    .next()
+                    .map_or(stage.id, |accumulator| accumulator.id)
+            }
+            DocumentSpecProblem::PathNamesOperator { path } => {
+                if let Some(accumulator) = stage.accumulators.iter().find(|accumulator| {
+                    accumulator.op.takes_field() && accumulator.path.trim() == path
+                }) {
+                    accumulator.id
+                } else if stage.keys.iter().any(|key| key == path) {
+                    stage.id
+                } else {
+                    self.filter.id
+                }
+            }
+            DocumentSpecProblem::ProjectionInAggregate
+            | DocumentSpecProblem::AggregateWithoutGroup
+            | DocumentSpecProblem::AggregateSortPathUnknown { .. } => stage.id,
+            _ => self.filter.id,
         }
     }
 
@@ -480,6 +632,179 @@ impl BuilderDraft {
         }
     }
 
+    // ---- mode and group stage --------------------------------------------
+
+    /// Switches between Find and Aggregate. Aggregate needs a group stage:
+    /// the one kept from before, or a new one counting the documents.
+    pub fn set_mode(&mut self, mode: DocumentQueryMode) -> bool {
+        if self.mode == mode {
+            return false;
+        }
+
+        if mode == DocumentQueryMode::Aggregate && self.group.is_none() {
+            let stage_id = self.allocate();
+            let accumulator_id = self.allocate();
+            self.group = Some(GroupStageDraft {
+                id: stage_id,
+                keys: Vec::new(),
+                accumulators: vec![AccumulatorDraft {
+                    id: accumulator_id,
+                    name: DEFAULT_ACCUMULATOR_NAME.to_string(),
+                    op: AccumulatorOp::Count,
+                    path: String::new(),
+                }],
+            });
+        }
+
+        self.mode = mode;
+        true
+    }
+
+    /// Drops the group stage and returns to Find.
+    pub fn remove_group_stage(&mut self) -> bool {
+        let had_stage = self.group.take().is_some();
+        let changed_mode = self.mode != DocumentQueryMode::Find;
+        self.mode = DocumentQueryMode::Find;
+        had_stage || changed_mode
+    }
+
+    pub fn add_group_key(&mut self, path: &str) -> bool {
+        let path = path.trim();
+        let Some(stage) = self.group.as_mut() else {
+            return false;
+        };
+
+        if path.is_empty() || stage.keys.iter().any(|key| key == path) {
+            return false;
+        }
+
+        stage.keys.push(path.to_string());
+        true
+    }
+
+    pub fn remove_group_key(&mut self, index: usize) -> bool {
+        match self.group.as_mut() {
+            Some(stage) if index < stage.keys.len() => {
+                stage.keys.remove(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Appends a `Count` accumulator with a name no other one uses.
+    pub fn add_accumulator(&mut self) -> Option<NodeId> {
+        let id = self.allocate();
+        let stage = self.group.as_mut()?;
+
+        let taken = |name: &str| {
+            stage
+                .accumulators
+                .iter()
+                .any(|accumulator| accumulator.name.trim() == name)
+        };
+        let name = if taken(DEFAULT_ACCUMULATOR_NAME) {
+            (2..)
+                .map(|suffix| format!("{DEFAULT_ACCUMULATOR_NAME}_{suffix}"))
+                .find(|candidate| !taken(candidate))
+                .unwrap_or_default()
+        } else {
+            DEFAULT_ACCUMULATOR_NAME.to_string()
+        };
+
+        stage.accumulators.push(AccumulatorDraft {
+            id,
+            name,
+            op: AccumulatorOp::Count,
+            path: String::new(),
+        });
+        Some(id)
+    }
+
+    pub fn remove_accumulator(&mut self, id: NodeId) -> bool {
+        let Some(stage) = self.group.as_mut() else {
+            return false;
+        };
+
+        let before = stage.accumulators.len();
+        stage
+            .accumulators
+            .retain(|accumulator| accumulator.id != id);
+        stage.accumulators.len() != before
+    }
+
+    #[cfg(test)]
+    pub fn accumulator(&self, id: NodeId) -> Option<&AccumulatorDraft> {
+        self.group
+            .as_ref()?
+            .accumulators
+            .iter()
+            .find(|accumulator| accumulator.id == id)
+    }
+
+    fn accumulator_mut(&mut self, id: NodeId) -> Option<&mut AccumulatorDraft> {
+        self.group
+            .as_mut()?
+            .accumulators
+            .iter_mut()
+            .find(|accumulator| accumulator.id == id)
+    }
+
+    pub fn set_accumulator_name(&mut self, id: NodeId, name: &str) -> bool {
+        match self.accumulator_mut(id) {
+            Some(accumulator) if accumulator.name != name => {
+                accumulator.name = name.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn set_accumulator_op(&mut self, id: NodeId, op: AccumulatorOp) -> bool {
+        match self.accumulator_mut(id) {
+            Some(accumulator) if accumulator.op != op => {
+                accumulator.op = op;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn set_accumulator_path(&mut self, id: NodeId, path: &str) -> bool {
+        let path = path.trim();
+        match self.accumulator_mut(id) {
+            Some(accumulator) if accumulator.path != path => {
+                accumulator.path = path.to_string();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// What a sort key may name after the group stage: the group keys, then
+    /// the accumulator names, each once.
+    pub fn sort_choices(&self) -> Vec<String> {
+        let Some(stage) = self.group.as_ref() else {
+            return Vec::new();
+        };
+
+        let mut choices: Vec<String> = Vec::new();
+        let names = stage.keys.iter().map(|key| key.as_str()).chain(
+            stage
+                .accumulators
+                .iter()
+                .map(|accumulator| accumulator.name.trim()),
+        );
+
+        for name in names {
+            if !name.is_empty() && !choices.iter().any(|choice| choice == name) {
+                choices.push(name.to_string());
+            }
+        }
+
+        choices
+    }
+
     // ---- projection ------------------------------------------------------
 
     /// Switches between returning and hiding the listed fields. Hiding
@@ -577,6 +902,53 @@ fn read_text(editor: ValueEditor, text: &str) -> Result<DocumentValue, ValueProb
         ValueEditor::Toggle => parse_scalar(ScalarKind::Bool, text),
         ValueEditor::Chips(kind) => parse_scalar(kind, text),
         ValueEditor::Nested => Err(ValueProblem::Empty),
+    }
+}
+
+fn accumulators_named<'a>(
+    stage: &'a GroupStageDraft,
+    name: &'a str,
+) -> impl Iterator<Item = &'a AccumulatorDraft> {
+    stage
+        .accumulators
+        .iter()
+        .filter(move |accumulator| accumulator.name.trim() == name)
+}
+
+/// The group stage the draft describes. A `Sum` or `Avg` without a field is
+/// reported on its accumulator instead of reaching the core checks.
+fn group_stage_to_spec(
+    stage: &GroupStageDraft,
+    problems: &mut Vec<DraftProblem>,
+) -> DocumentGroupStage {
+    let accumulators = stage
+        .accumulators
+        .iter()
+        .map(|accumulator| {
+            let path = accumulator.path.trim().to_string();
+            if accumulator.op.takes_field() && path.is_empty() {
+                problems.push(DraftProblem {
+                    node: accumulator.id,
+                    kind: ProblemKind::MissingField,
+                });
+            }
+
+            let kind = match accumulator.op {
+                AccumulatorOp::Count => DocumentAccumulatorKind::Count,
+                AccumulatorOp::Sum => DocumentAccumulatorKind::Sum { path },
+                AccumulatorOp::Avg => DocumentAccumulatorKind::Avg { path },
+            };
+
+            DocumentAccumulator {
+                name: accumulator.name.trim().to_string(),
+                kind,
+            }
+        })
+        .collect();
+
+    DocumentGroupStage {
+        keys: stage.keys.clone(),
+        accumulators,
     }
 }
 

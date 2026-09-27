@@ -1,6 +1,9 @@
 //! Chrome of the Aggregate view: the pipeline editor with Run and the
 //! history, the results view row, the read-only results and their footer,
-//! and the confirmation shown before a pipeline that writes.
+//! and the confirmation shown before a pipeline that writes. While the query
+//! builder composes an aggregation, its pipeline summary takes the place of
+//! the editor, and its results carry a banner explaining why they are
+//! read-only (IslDocBuilderAggregate).
 
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::composites::{EmptyState, MenuItem, menu_frame, menu_row};
@@ -8,7 +11,9 @@ use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::modal::{Modal, ModalVariant};
 use dbflux_components::modals::{modal_code, modal_lead};
-use dbflux_components::primitives::{Chamfer, Icon, SegmentedControl, SegmentedItem};
+use dbflux_components::primitives::{
+    BannerBlock, BannerVariant, Chamfer, Icon, SegmentedControl, SegmentedItem,
+};
 use dbflux_components::tokens::{ChamferCut, CollectionMetrics, ModalMetrics, Spacing};
 use dbflux_components::typography::AppFonts;
 use gpui::prelude::*;
@@ -32,7 +37,11 @@ impl DataGridPanel {
             .flex()
             .flex_col()
             .size_full()
-            .child(self.render_pipeline_section(cx))
+            .child(match self.document_builder_pipeline_stages(cx) {
+                Some(stages) => self.render_builder_pipeline_row(stages, cx),
+                None => self.render_pipeline_section(cx).into_any_element(),
+            })
+            .children(self.render_builder_read_only_banner(cx))
             .child(self.render_aggregate_view_row(cx))
             .child(
                 div()
@@ -43,6 +52,38 @@ impl DataGridPanel {
             )
             .child(self.render_aggregate_footer(cx))
             .into_any_element()
+    }
+
+    /// Why the query builder's grouped results cannot be edited.
+    fn render_builder_read_only_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let aggregate = &self.collection.aggregate;
+        if !aggregate.results_from_builder || aggregate.results.is_none() {
+            return None;
+        }
+
+        let lock = Icon::new(AppIcon::Lock)
+            .size(CollectionMetrics::NESTED_ICON)
+            .color(cx.theme().warning);
+
+        Some(
+            div()
+                .id("aggregate-builder-read-only")
+                .debug_selector(|| "aggregate-builder-read-only".to_string())
+                .flex_shrink_0()
+                .px(CollectionMetrics::QUERY_ROW_PADDING_X)
+                .py(Spacing::SM)
+                .child(
+                    BannerBlock::new(
+                        BannerVariant::Warning,
+                        dbflux_i18n::t!("document.collection.aggregate.builder_read_only.title"),
+                    )
+                    .with_icon(lock)
+                    .with_body(dbflux_i18n::t!(
+                        "document.collection.aggregate.builder_read_only.body"
+                    )),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_pipeline_section(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -589,6 +589,9 @@ document:
       failed: "聚合失败：%{error}"
       read_only_edit: "聚合结果为只读"
       task: "聚合 %{collection}"
+      builder_read_only:
+        title: "只读结果。"
+        body: "分组行是计算得出的，因此没有可编辑的文档 _id。移除分组阶段即可获得可编辑的文档。"
       error:
         syntax: "JSON 无效：%{error}"
         not_array: "管道必须是阶段数组"
@@ -678,18 +681,25 @@ document:
       close: "关闭构建器"
       mode:
         find: "Find"
+        aggregate: "Aggregate"
+        find_hint: "添加分组阶段会切换到 Aggregate"
+        aggregate_hint: "分组阶段已开启 · 结果为只读"
+        aggregate_unavailable: "此连接无法运行聚合"
       synced: "已与构建器同步"
       out_of_sync: "构建器无法读取某个输入框"
       find: "查找"
       find_blocked: "运行前请保留文本或从构建器重写"
       find_invalid: "运行前请补全标出的条件"
       open_in_editor: "在编辑器中打开"
+      run_pipeline: "运行管道"
       editable_note: "可编辑：每一行都保留其 _id"
       section:
         filter: "筛选"
         project: "投影"
         sort: "排序、限制与跳过"
         preview: "预览"
+        group: "分组"
+        group_stage: "分组阶段"
       filter:
         conditions:
           one: "%{count} 个条件"
@@ -713,6 +723,7 @@ document:
         exclude: "排除"
         add_field: "字段"
         id_note: "始终返回 _id，因此行仍可编辑。"
+        disabled: "分组阶段之后不使用：输出字段是分组键和累加器。"
       sort:
         add_key: "排序键"
         ascending: "升序"
@@ -721,6 +732,27 @@ document:
         skip: "跳过"
         invalid_limit: "限制必须是正整数"
         invalid_skip: "跳过必须是整数"
+        aggregate_note: "分组阶段之后，请按分组键或累加器排序。"
+      match:
+        edit: "编辑"
+        done: "完成"
+        everything: "无条件：所有文档"
+        conflict: "filter 输入框中有构建器无法显示的子句，管道会将其排除。"
+        groups:
+          one: "%{count} 个分组"
+          many: "%{count} 个分组"
+      group:
+        add: "添加分组阶段"
+        add_hint: "按字段计数、求和或求平均值。会切换到 Aggregate。"
+        group_by: "分组依据"
+        all_documents: "所有文档作为一个分组"
+        add_key: "字段"
+        accumulators: "累加器"
+        add_accumulator: "累加器"
+        remove: "移除分组阶段"
+        no_field: "无字段"
+        pick_number: "请选择数值字段"
+        name_placeholder: "名称"
       picker:
         search: "搜索字段"
         sample_note: "路径和类型来自 %{count} 个文档的样本。百分比表示字段出现的频率。"

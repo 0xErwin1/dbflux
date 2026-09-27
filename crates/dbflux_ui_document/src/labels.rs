@@ -2593,6 +2593,21 @@ pub(crate) fn document_builder_condition_count(count: usize) -> String {
     }
 }
 
+/// "1 group" in the `$match` summary of the builder's Filter card.
+pub(crate) fn document_builder_group_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.collection.builder.match.groups.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.collection.builder.match.groups.many",
+            count = count
+        )
+    }
+}
+
 /// Mixed-type warning under a condition, naming the sampled types.
 pub(crate) fn document_builder_mixed_types(types: &[dbflux_core::DocumentFieldType]) -> String {
     let tags: Vec<String> = types.iter().map(|t| document_field_type_tag(*t)).collect();
@@ -6865,6 +6880,59 @@ mod tests {
             assert_ne!(english, key, "key {key} did not resolve in en");
             assert_ne!(spanish, key, "key {key} did not resolve in es");
             assert_ne!(spanish, english, "key {key} has identical en/es text");
+        }
+    }
+
+    /// Every key of the document builder's aggregate mode resolves in each
+    /// shipped catalog.
+    #[test]
+    fn document_builder_aggregate_keys_resolve_in_every_locale() {
+        let keys = [
+            "document.collection.builder.mode.aggregate",
+            "document.collection.builder.mode.find_hint",
+            "document.collection.builder.mode.aggregate_hint",
+            "document.collection.builder.mode.aggregate_unavailable",
+            "document.collection.builder.run_pipeline",
+            "document.collection.builder.section.group",
+            "document.collection.builder.section.group_stage",
+            "document.collection.builder.project.disabled",
+            "document.collection.builder.sort.aggregate_note",
+            "document.collection.builder.match.edit",
+            "document.collection.builder.match.done",
+            "document.collection.builder.match.everything",
+            "document.collection.builder.match.conflict",
+            "document.collection.builder.match.groups.one",
+            "document.collection.builder.match.groups.many",
+            "document.collection.builder.group.add",
+            "document.collection.builder.group.add_hint",
+            "document.collection.builder.group.group_by",
+            "document.collection.builder.group.all_documents",
+            "document.collection.builder.group.add_key",
+            "document.collection.builder.group.accumulators",
+            "document.collection.builder.group.add_accumulator",
+            "document.collection.builder.group.remove",
+            "document.collection.builder.group.no_field",
+            "document.collection.builder.group.pick_number",
+            "document.collection.builder.group.name_placeholder",
+            "document.collection.aggregate.builder_read_only.title",
+            "document.collection.aggregate.builder_read_only.body",
+        ];
+
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            for key in keys {
+                let text = dbflux_i18n::translate_in(locale, key);
+                assert_ne!(text, key, "key {key} did not resolve in {locale}");
+
+                // The mode name stays the operation's name in every locale;
+                // every other key is translated, not the English fallback.
+                if locale != "en" && key != "document.collection.builder.mode.aggregate" {
+                    assert_ne!(
+                        text,
+                        dbflux_i18n::translate_in("en", key),
+                        "key {key} falls back to English in {locale}"
+                    );
+                }
+            }
         }
     }
 

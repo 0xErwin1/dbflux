@@ -2,15 +2,16 @@
 
 use chrono::{TimeZone, Utc};
 use dbflux_core::{
-    CollectionSchemaSample, DocumentCombinator, DocumentCondition, DocumentFieldType,
-    DocumentFilterGroup, DocumentFilterNode, DocumentFindSlots, DocumentOperator,
-    DocumentProjection, DocumentProjectionMode, DocumentQuerySpec, DocumentSlot, DocumentSlotParse,
-    DocumentSortDirection, DocumentSortKey, DocumentValue, FieldSchemaStats, FieldTypeShare,
-    FieldValueSummary, UnrepresentableClause,
+    CollectionSchemaSample, DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator,
+    DocumentCondition, DocumentFieldType, DocumentFilterGroup, DocumentFilterNode,
+    DocumentFindSlots, DocumentGroupStage, DocumentOperator, DocumentProjection,
+    DocumentProjectionMode, DocumentQueryMode, DocumentQuerySpec, DocumentSlot, DocumentSlotParse,
+    DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue, FieldSchemaStats,
+    FieldTypeShare, FieldValueSummary, UnrepresentableClause,
 };
 
 use super::catalog::FieldCatalog;
-use super::model::{BuilderDraft, DraftProblem, NodeDraft, Operand, ProblemKind};
+use super::model::{AccumulatorOp, BuilderDraft, DraftProblem, NodeDraft, Operand, ProblemKind};
 use super::sync::{SlotSync, SlotWrite};
 use super::values::{
     ScalarKind, ValueEditor, ValueProblem, format_value, operator_choices, operator_ranges,
@@ -807,4 +808,239 @@ fn rewriting_from_the_builder_replaces_the_slot_and_ends_the_conflict() {
     assert!(!sync.is_conflicted());
     assert!(sync.held().is_empty());
     assert!(sync.is_echo(&slots(r#"{"a": 1}"#, "", "", None)));
+}
+
+// ---- aggregate mode -----------------------------------------------------
+
+fn accumulator(name: &str, kind: DocumentAccumulatorKind) -> DocumentAccumulator {
+    DocumentAccumulator {
+        name: name.to_string(),
+        kind,
+    }
+}
+
+fn grouped_spec() -> DocumentQuerySpec {
+    DocumentQuerySpec {
+        mode: DocumentQueryMode::Aggregate,
+        filter: group(
+            DocumentCombinator::And,
+            vec![condition("status", Eq, text("failed"))],
+        ),
+        sort: vec![DocumentSortKey::new(
+            "revenue",
+            DocumentSortDirection::Descending,
+        )],
+        limit: Some(20),
+        group: Some(DocumentGroupStage {
+            keys: vec!["customer.tier".to_string()],
+            accumulators: vec![
+                accumulator("orders", DocumentAccumulatorKind::Count),
+                accumulator(
+                    "revenue",
+                    DocumentAccumulatorKind::Sum {
+                        path: "total".to_string(),
+                    },
+                ),
+                accumulator(
+                    "avg_total",
+                    DocumentAccumulatorKind::Avg {
+                        path: "total".to_string(),
+                    },
+                ),
+            ],
+        }),
+        ..DocumentQuerySpec::default()
+    }
+}
+
+#[test]
+fn a_grouped_spec_loads_into_the_draft_and_comes_back_unchanged() {
+    let spec = grouped_spec();
+    let draft = BuilderDraft::from_spec(&spec);
+
+    assert_eq!(draft.mode, DocumentQueryMode::Aggregate);
+    assert_eq!(draft.to_spec().unwrap(), spec);
+}
+
+#[test]
+fn adding_a_group_stage_switches_to_aggregate_and_removing_it_returns_to_find() {
+    let (mut draft, id) = draft_with_condition("status", &[DocumentFieldType::String]);
+    draft.set_text(id, "failed");
+    draft.add_projection_field("total");
+
+    assert!(draft.set_mode(DocumentQueryMode::Aggregate));
+    assert_eq!(draft.mode, DocumentQueryMode::Aggregate);
+
+    let stage = draft.group.as_ref().expect("a group stage");
+    assert!(stage.keys.is_empty());
+    assert_eq!(stage.accumulators.len(), 1);
+    assert_eq!(stage.accumulators[0].op, AccumulatorOp::Count);
+
+    let spec = draft.to_spec().unwrap();
+    assert_eq!(spec.mode, DocumentQueryMode::Aggregate);
+    assert!(
+        spec.projection.is_empty(),
+        "an aggregation takes no projection"
+    );
+    assert_eq!(
+        spec.group.unwrap().accumulators,
+        vec![accumulator("count", DocumentAccumulatorKind::Count)]
+    );
+
+    assert!(draft.remove_group_stage());
+    assert_eq!(draft.mode, DocumentQueryMode::Find);
+    assert!(draft.group.is_none());
+
+    let spec = draft.to_spec().unwrap();
+    assert_eq!(spec.mode, DocumentQueryMode::Find);
+    assert!(spec.group.is_none());
+    assert_eq!(
+        spec.projection.fields,
+        vec!["total".to_string()],
+        "the find projection survives the round trip"
+    );
+}
+
+#[test]
+fn switching_to_find_keeps_the_group_stage_for_the_way_back() {
+    let mut draft = BuilderDraft::default();
+    draft.set_mode(DocumentQueryMode::Aggregate);
+    assert!(draft.add_group_key("customer.tier"));
+
+    assert!(draft.set_mode(DocumentQueryMode::Find));
+    assert!(draft.to_spec().unwrap().group.is_none());
+
+    assert!(draft.set_mode(DocumentQueryMode::Aggregate));
+    assert_eq!(
+        draft.to_spec().unwrap().group.unwrap().keys,
+        vec!["customer.tier".to_string()]
+    );
+    assert!(!draft.set_mode(DocumentQueryMode::Aggregate));
+}
+
+#[test]
+fn accumulators_take_unique_names_and_sum_or_avg_need_a_field() {
+    let mut draft = BuilderDraft::default();
+    draft.set_mode(DocumentQueryMode::Aggregate);
+
+    let second = draft.add_accumulator().unwrap();
+    let names: Vec<String> = draft
+        .group
+        .as_ref()
+        .unwrap()
+        .accumulators
+        .iter()
+        .map(|accumulator| accumulator.name.clone())
+        .collect();
+    assert_eq!(names, vec!["count".to_string(), "count_2".to_string()]);
+
+    assert!(draft.set_accumulator_op(second, AccumulatorOp::Sum));
+    assert!(draft.set_accumulator_name(second, "revenue"));
+    assert_eq!(
+        draft.to_spec().unwrap_err(),
+        vec![DraftProblem {
+            node: second,
+            kind: ProblemKind::MissingField,
+        }]
+    );
+
+    assert!(draft.set_accumulator_path(second, "total"));
+    assert_eq!(
+        draft.to_spec().unwrap().group.unwrap().accumulators[1],
+        accumulator(
+            "revenue",
+            DocumentAccumulatorKind::Sum {
+                path: "total".to_string(),
+            }
+        )
+    );
+
+    assert!(draft.set_accumulator_op(second, AccumulatorOp::Count));
+    assert!(draft.set_accumulator_op(second, AccumulatorOp::Avg));
+    assert_eq!(
+        draft.accumulator(second).unwrap().path,
+        "total",
+        "the field is kept while the operator changes"
+    );
+
+    assert!(draft.remove_accumulator(second));
+    assert!(draft.accumulator(second).is_none());
+}
+
+#[test]
+fn core_problems_of_the_group_stage_point_at_their_accumulator() {
+    let mut draft = BuilderDraft::default();
+    draft.set_mode(DocumentQueryMode::Aggregate);
+    let first = draft.group.as_ref().unwrap().accumulators[0].id;
+    let second = draft.add_accumulator().unwrap();
+    let third = draft.add_accumulator().unwrap();
+
+    draft.set_accumulator_name(second, "count");
+    draft.set_accumulator_name(third, " ");
+
+    let problems = draft.to_spec().unwrap_err();
+    assert!(problems.contains(&DraftProblem {
+        node: second,
+        kind: ProblemKind::Spec(DocumentSpecProblem::AccumulatorNameDuplicate {
+            name: "count".to_string(),
+        }),
+    }));
+    assert!(problems.contains(&DraftProblem {
+        node: third,
+        kind: ProblemKind::Spec(DocumentSpecProblem::AccumulatorNameEmpty { index: 2 }),
+    }));
+    assert!(problems.iter().all(|problem| problem.node != first));
+}
+
+#[test]
+fn after_a_group_stage_sort_offers_only_the_group_keys_and_accumulators() {
+    let mut draft = BuilderDraft::from_spec(&grouped_spec());
+
+    assert_eq!(
+        draft.sort_choices(),
+        vec![
+            "customer.tier".to_string(),
+            "orders".to_string(),
+            "revenue".to_string(),
+            "avg_total".to_string(),
+        ]
+    );
+
+    assert!(draft.add_sort_key("created_at"));
+    let problems = draft.to_spec().unwrap_err();
+    assert_eq!(
+        problems
+            .iter()
+            .map(|problem| problem.kind.clone())
+            .collect::<Vec<_>>(),
+        vec![ProblemKind::Spec(
+            DocumentSpecProblem::AggregateSortPathUnknown {
+                path: "created_at".to_string(),
+            }
+        )]
+    );
+
+    draft.set_mode(DocumentQueryMode::Find);
+    assert!(
+        draft.to_spec().is_ok(),
+        "a find sorts on any field of the documents"
+    );
+}
+
+#[test]
+fn group_keys_are_unique_and_removable() {
+    let mut draft = BuilderDraft::default();
+    draft.set_mode(DocumentQueryMode::Aggregate);
+
+    assert!(draft.add_group_key("customer.tier"));
+    assert!(!draft.add_group_key("customer.tier"));
+    assert!(!draft.add_group_key(" "));
+    assert!(draft.add_group_key("status"));
+
+    assert!(draft.remove_group_key(0));
+    assert_eq!(
+        draft.group.as_ref().unwrap().keys,
+        vec!["status".to_string()]
+    );
+    assert!(!draft.remove_group_key(3));
 }

@@ -1,14 +1,18 @@
 //! The builder rail's entity: the draft, its sync with the slots and the
 //! inputs keyed by draft node.
+//!
+//! In Find mode edits are written to the slots and Find runs them. In
+//! Aggregate mode the slots are left alone: the rail renders the pipeline
+//! and Run pipeline hands its text to the collection's Aggregate view.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use dbflux_components::controls::InputEvent;
 use dbflux_core::{
-    CollectionRef, CollectionSchemaSample, Connection, DocumentCombinator, DocumentFieldType,
-    DocumentFindSlots, DocumentOperator, DocumentProjectionMode, DocumentQueryCodec,
-    DocumentSortDirection,
+    CollectionRef, CollectionSchemaSample, Connection, DocumentCombinator, DocumentFeatures,
+    DocumentFieldType, DocumentFindSlots, DocumentOperator, DocumentProjectionMode,
+    DocumentQueryCodec, DocumentQueryMode, DocumentSortDirection, parse_aggregate_pipeline,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
@@ -16,7 +20,7 @@ use gpui::{
 use gpui_component::input::InputState;
 
 use super::catalog::FieldCatalog;
-use super::model::{BuilderDraft, DraftProblem, NodeId, Operand};
+use super::model::{AccumulatorOp, BuilderDraft, DraftProblem, NodeId, Operand};
 use super::sync::{SlotSync, SlotWrite};
 use super::values::{ScalarKind, ValueEditor, ValueProblem, operator_choices};
 
@@ -27,6 +31,11 @@ pub enum DocumentBuilderEvent {
     WriteSlots(SlotWrite),
     /// Run the slots, which hold the builder's query.
     FindRequested,
+    /// Run this pipeline text in the collection's Aggregate view.
+    RunPipelineRequested(String),
+    /// Switched between Find and Aggregate; the query bar shows the slots
+    /// or the pipeline summary.
+    ModeChanged,
     /// Open the query text in a new editor tab.
     OpenInEditorRequested(String),
     /// Hide the rail, keeping the draft.
@@ -39,6 +48,9 @@ pub enum PickTarget {
     Condition(NodeId),
     Projection,
     Sort,
+    GroupKey,
+    /// The field a `$sum` or `$avg` accumulator reads.
+    Accumulator(NodeId),
 }
 
 pub(super) struct FieldPicker {
@@ -72,6 +84,12 @@ pub struct DocumentBuilderPanel {
     pub(super) problems: Vec<DraftProblem>,
     pub(super) render_error: Option<String>,
     pub(super) preview: String,
+    /// Pipeline text of the last aggregate the draft rendered to.
+    pub(super) pipeline: Option<String>,
+    /// Whether the Filter card is open in Aggregate mode, instead of its
+    /// `$match` summary.
+    pub(super) filter_expanded: bool,
+    pub(super) accumulator_inputs: HashMap<NodeId, NodeInput>,
     pub(super) picker: Option<FieldPicker>,
     pub(super) chip_problems: HashMap<NodeId, ValueProblem>,
     pub(super) value_inputs: HashMap<NodeId, NodeInput>,
@@ -132,6 +150,9 @@ impl DocumentBuilderPanel {
             problems: Vec::new(),
             render_error: None,
             preview: String::new(),
+            pipeline: None,
+            filter_expanded: false,
+            accumulator_inputs: HashMap::new(),
             picker: None,
             chip_problems: HashMap::new(),
             value_inputs: HashMap::new(),
@@ -167,6 +188,52 @@ impl DocumentBuilderPanel {
         self.sync.is_conflicted()
     }
 
+    pub fn mode(&self) -> DocumentQueryMode {
+        self.draft.mode
+    }
+
+    /// Whether the connection runs aggregations, which Aggregate mode needs.
+    pub fn aggregate_available(&self) -> bool {
+        self.connection
+            .document_features()
+            .contains(DocumentFeatures::AGGREGATE)
+    }
+
+    /// Stage names of the pipeline, in order, while in Aggregate mode; empty
+    /// until the draft renders to a pipeline.
+    pub fn pipeline_stages(&self) -> Option<Vec<String>> {
+        if self.draft.mode != DocumentQueryMode::Aggregate {
+            return None;
+        }
+
+        let stages = self
+            .pipeline
+            .as_deref()
+            .and_then(|text| parse_aggregate_pipeline(text).ok())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|stage| stage.as_object()?.keys().next().cloned())
+            .collect();
+
+        Some(stages)
+    }
+
+    /// Whether the primary action can run: Find, or Run pipeline.
+    pub fn can_run(&self) -> bool {
+        match self.draft.mode {
+            DocumentQueryMode::Find => self.can_find(),
+            DocumentQueryMode::Aggregate => {
+                self.codec().is_some()
+                    && self.aggregate_available()
+                    && self.problems.is_empty()
+                    && self.render_error.is_none()
+                    && !self.limit_problem
+                    && !self.skip_problem
+                    && self.pipeline.is_some()
+            }
+        }
+    }
+
     /// Whether the slots hold the builder's query, so Find runs it.
     pub fn can_find(&self) -> bool {
         self.codec().is_some()
@@ -181,8 +248,10 @@ impl DocumentBuilderPanel {
 
     /// Reads the slots into the draft unless they only echo what the
     /// builder last wrote or read. Never writes back.
+    /// In Aggregate mode the slots are not the builder's query, so they are
+    /// not read either.
     pub fn read_slots(&mut self, slots: DocumentFindSlots, cx: &mut Context<Self>) {
-        if self.sync.is_echo(&slots) {
+        if self.draft.mode == DocumentQueryMode::Aggregate || self.sync.is_echo(&slots) {
             return;
         }
 
@@ -250,19 +319,34 @@ impl DocumentBuilderPanel {
             return;
         };
 
-        match codec.render_find(&spec) {
-            Ok(rendered) => {
-                self.render_error = None;
-                if write {
-                    let slot_write = self.sync.plan(&spec, &rendered);
-                    if !slot_write.is_empty() {
-                        cx.emit(DocumentBuilderEvent::WriteSlots(slot_write));
+        match self.draft.mode {
+            DocumentQueryMode::Find => {
+                self.pipeline = None;
+                match codec.render_find(&spec) {
+                    Ok(rendered) => {
+                        self.render_error = None;
+                        if write {
+                            let slot_write = self.sync.plan(&spec, &rendered);
+                            if !slot_write.is_empty() {
+                                cx.emit(DocumentBuilderEvent::WriteSlots(slot_write));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.render_error = Some(error.to_string());
                     }
                 }
             }
-            Err(error) => {
-                self.render_error = Some(error.to_string());
-            }
+            DocumentQueryMode::Aggregate => match codec.render_pipeline(&spec) {
+                Ok(pipeline) => {
+                    self.render_error = None;
+                    self.pipeline = Some(pipeline);
+                }
+                Err(error) => {
+                    self.render_error = Some(error.to_string());
+                    self.pipeline = None;
+                }
+            },
         }
 
         match codec.render_preview(&spec, &self.collection.name) {
@@ -287,6 +371,9 @@ impl DocumentBuilderPanel {
     /// Replaces every slot with the builder's query, dropping the clauses it
     /// could not read.
     pub fn rewrite_from_builder(&mut self, cx: &mut Context<Self>) {
+        if self.draft.mode != DocumentQueryMode::Find {
+            return;
+        }
         let Ok(spec) = self.draft.to_spec() else {
             return;
         };
@@ -314,6 +401,20 @@ impl DocumentBuilderPanel {
         }
     }
 
+    /// The primary action of the rail: Find, or Run pipeline.
+    pub fn request_run(&mut self, cx: &mut Context<Self>) {
+        match self.draft.mode {
+            DocumentQueryMode::Find => self.request_find(cx),
+            DocumentQueryMode::Aggregate => {
+                if self.can_run()
+                    && let Some(pipeline) = self.pipeline.clone()
+                {
+                    cx.emit(DocumentBuilderEvent::RunPipelineRequested(pipeline));
+                }
+            }
+        }
+    }
+
     pub fn request_open_in_editor(&mut self, cx: &mut Context<Self>) {
         if self.problems.is_empty() && self.render_error.is_none() && !self.preview.is_empty() {
             cx.emit(DocumentBuilderEvent::OpenInEditorRequested(
@@ -325,6 +426,131 @@ impl DocumentBuilderPanel {
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
         self.picker = None;
         cx.emit(DocumentBuilderEvent::CloseRequested);
+    }
+
+    // ---- mode and group stage --------------------------------------------
+
+    /// Switches between Find and Aggregate. Aggregate is refused without the
+    /// connection's aggregation support. Back in Find, the parts edited in
+    /// the meantime are written to the slots.
+    pub fn set_mode(&mut self, mode: DocumentQueryMode, cx: &mut Context<Self>) {
+        if mode == DocumentQueryMode::Aggregate && !self.aggregate_available() {
+            return;
+        }
+
+        if self.draft.set_mode(mode) {
+            self.mode_changed(cx);
+        }
+    }
+
+    /// "Add group stage": switches to Aggregate.
+    pub fn add_group_stage(&mut self, cx: &mut Context<Self>) {
+        self.set_mode(DocumentQueryMode::Aggregate, cx);
+    }
+
+    /// "Remove group stage": drops it and returns to Find.
+    pub fn remove_group_stage(&mut self, cx: &mut Context<Self>) {
+        if self.draft.remove_group_stage() {
+            self.mode_changed(cx);
+        }
+    }
+
+    fn mode_changed(&mut self, cx: &mut Context<Self>) {
+        self.picker = None;
+        self.operator_menu = None;
+        self.filter_expanded = false;
+        self.sweep_inputs();
+        self.recompute(self.draft.mode == DocumentQueryMode::Find, cx);
+        cx.emit(DocumentBuilderEvent::ModeChanged);
+    }
+
+    /// Opens or closes the Filter card behind the `$match` summary.
+    pub fn toggle_filter_expanded(&mut self, cx: &mut Context<Self>) {
+        self.filter_expanded = !self.filter_expanded;
+        cx.notify();
+    }
+
+    pub fn remove_group_key(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.draft.remove_group_key(index) {
+            self.edited(cx);
+        }
+    }
+
+    pub fn add_accumulator(&mut self, cx: &mut Context<Self>) {
+        if self.draft.add_accumulator().is_some() {
+            self.edited(cx);
+        }
+    }
+
+    pub fn remove_accumulator(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self.draft.remove_accumulator(id) {
+            self.sweep_inputs();
+            self.edited(cx);
+        }
+    }
+
+    pub fn set_accumulator_op(&mut self, id: NodeId, op: AccumulatorOp, cx: &mut Context<Self>) {
+        if self.draft.set_accumulator_op(id, op) {
+            self.edited(cx);
+        }
+    }
+
+    fn set_accumulator_name(&mut self, id: NodeId, name: &str, cx: &mut Context<Self>) {
+        if self.draft.set_accumulator_name(id, name) {
+            self.edited(cx);
+        }
+    }
+
+    /// Sort names offered after the group stage, typed like the fields they
+    /// come from: a key as sampled, a count as a whole number, a sum as its
+    /// field and an average as a decimal.
+    fn group_output_catalog(&self) -> FieldCatalog {
+        let Some(stage) = self.draft.group.as_ref() else {
+            return FieldCatalog::default();
+        };
+
+        let numeric = |types: Vec<DocumentFieldType>| {
+            let numeric: Vec<DocumentFieldType> = types
+                .into_iter()
+                .filter(|field_type| is_numeric(*field_type))
+                .collect();
+            if numeric.is_empty() {
+                vec![DocumentFieldType::Decimal]
+            } else {
+                numeric
+            }
+        };
+
+        let keys = stage
+            .keys
+            .iter()
+            .map(|key| (key.clone(), self.catalog.types(key)));
+        let accumulators = stage.accumulators.iter().map(|accumulator| {
+            let types = match accumulator.op {
+                AccumulatorOp::Count => vec![DocumentFieldType::Integer],
+                AccumulatorOp::Sum => numeric(self.catalog.types(&accumulator.path)),
+                AccumulatorOp::Avg => vec![DocumentFieldType::Decimal],
+            };
+            (accumulator.name.trim().to_string(), types)
+        });
+
+        let mut outputs: Vec<(String, Vec<DocumentFieldType>)> = Vec::new();
+        for (name, types) in keys.chain(accumulators) {
+            if !name.is_empty() && !outputs.iter().any(|(existing, _)| *existing == name) {
+                outputs.push((name, types));
+            }
+        }
+
+        FieldCatalog::from_outputs(outputs)
+    }
+
+    /// Types of a sort key: the sampled field in Find mode, the group output
+    /// in Aggregate mode.
+    pub(super) fn sort_types(&self, path: &str) -> Vec<DocumentFieldType> {
+        match self.draft.mode {
+            DocumentQueryMode::Find => self.catalog.types(path),
+            DocumentQueryMode::Aggregate => self.group_output_catalog().types(path),
+        }
     }
 
     // ---- filter edits ----------------------------------------------------
@@ -347,8 +573,20 @@ impl DocumentBuilderPanel {
                 let scope = self.draft.condition_scope(id).unwrap_or_default();
                 self.catalog.scoped(&scope)
             }
-            PickTarget::Projection | PickTarget::Sort => self.catalog.clone(),
+            PickTarget::Sort if self.draft.mode == DocumentQueryMode::Aggregate => {
+                self.group_output_catalog()
+            }
+            PickTarget::Accumulator(_) => self.catalog.numeric(),
+            PickTarget::Projection | PickTarget::Sort | PickTarget::GroupKey => {
+                self.catalog.clone()
+            }
         }
+    }
+
+    /// Whether a pick for `target` may name a path the list does not offer.
+    /// After a group stage a sort names only a group output.
+    pub(super) fn accepts_typed_path(&self, target: PickTarget) -> bool {
+        !(target == PickTarget::Sort && self.draft.mode == DocumentQueryMode::Aggregate)
     }
 
     pub fn add_condition(&mut self, group: NodeId, cx: &mut Context<Self>) {
@@ -697,7 +935,23 @@ impl DocumentBuilderPanel {
                 }
             }
             PickTarget::Sort => {
-                if self.draft.add_sort_key(path) {
+                let offered = self.accepts_typed_path(PickTarget::Sort)
+                    || self
+                        .draft
+                        .sort_choices()
+                        .iter()
+                        .any(|choice| choice == path);
+                if offered && self.draft.add_sort_key(path) {
+                    self.edited(cx);
+                }
+            }
+            PickTarget::GroupKey => {
+                if self.draft.add_group_key(path) {
+                    self.edited(cx);
+                }
+            }
+            PickTarget::Accumulator(id) => {
+                if self.draft.set_accumulator_path(id, path) {
                     self.edited(cx);
                 }
             }
@@ -714,7 +968,9 @@ impl DocumentBuilderPanel {
 
         let path = query.trim();
         let element_itself = path.is_empty() && self.allows_element_itself(target);
-        if element_itself || is_valid_typed_path(path) {
+        let typed_allowed = self.accepts_typed_path(target) && is_valid_typed_path(path);
+        let offered = self.picker_catalog(target).field(path).is_some();
+        if element_itself || typed_allowed || offered {
             self.pick(path, cx);
         }
     }
@@ -726,7 +982,10 @@ impl DocumentBuilderPanel {
                 .draft
                 .condition_scope(id)
                 .is_some_and(|scope| !scope.is_empty()),
-            PickTarget::Projection | PickTarget::Sort => false,
+            PickTarget::Projection
+            | PickTarget::Sort
+            | PickTarget::GroupKey
+            | PickTarget::Accumulator(_) => false,
         }
     }
 
@@ -793,6 +1052,50 @@ impl DocumentBuilderPanel {
             }
         }
 
+        let accumulators: Vec<(NodeId, String)> = self
+            .draft
+            .group
+            .as_ref()
+            .map(|stage| {
+                stage
+                    .accumulators
+                    .iter()
+                    .map(|accumulator| (accumulator.id, accumulator.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for (id, name) in accumulators {
+            if self.accumulator_inputs.contains_key(&id) {
+                continue;
+            }
+
+            let state = cx.new(|cx| {
+                let mut state = InputState::new(window, cx);
+                state.set_value(name, window, cx);
+                state
+            });
+            let subscription = cx.subscribe_in(
+                &state,
+                window,
+                move |this, input, event: &InputEvent, _window, cx| match event {
+                    InputEvent::Change => {
+                        let text = input.read(cx).value().to_string();
+                        this.set_accumulator_name(id, &text, cx);
+                    }
+                    InputEvent::PressEnter { .. } => this.request_run(cx),
+                    InputEvent::Focus | InputEvent::Blur => {}
+                },
+            );
+            self.accumulator_inputs.insert(
+                id,
+                NodeInput {
+                    state,
+                    _subscription: subscription,
+                },
+            );
+        }
+
         if self.pending_paging_texts {
             self.pending_paging_texts = false;
             let limit = self
@@ -836,7 +1139,7 @@ impl DocumentBuilderPanel {
         if is_chips {
             self.add_chip(id, text, cx);
         } else {
-            self.request_find(cx);
+            self.request_run(cx);
         }
     }
 
@@ -862,7 +1165,29 @@ impl DocumentBuilderPanel {
         }
         self.chip_problems.retain(|id, _| ids.contains(id));
         self.pending_texts.retain(|id, _| ids.contains(id));
+
+        let accumulator_ids: Vec<NodeId> = self
+            .draft
+            .group
+            .as_ref()
+            .map(|stage| {
+                stage
+                    .accumulators
+                    .iter()
+                    .map(|accumulator| accumulator.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.accumulator_inputs
+            .retain(|id, _| accumulator_ids.contains(id));
     }
+}
+
+pub(super) fn is_numeric(field_type: DocumentFieldType) -> bool {
+    matches!(
+        field_type,
+        DocumentFieldType::Integer | DocumentFieldType::Decimal
+    )
 }
 
 /// `scope.path`, or either part alone when the other is empty.

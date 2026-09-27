@@ -7,13 +7,21 @@
 //! their `_id` editability, count and history. The toggle is offered only
 //! when the driver reports `DocumentFeatures::VISUAL_BUILDER` and returns a
 //! codec; other document drivers show it disabled.
+//!
+//! In Aggregate mode the slots are not written: the query bar shows a
+//! read-only summary of the pipeline instead, and Run pipeline writes the
+//! pipeline text into the Aggregate view and runs it there, through the
+//! ordinary aggregate path.
 
 use std::sync::Arc;
 
 use dbflux_components::controls::{Button, InputEvent};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone};
-use dbflux_core::{Connection, DatabaseCategory, DocumentFeatures, DocumentFindSlots, Pagination};
+use dbflux_core::{
+    Connection, DatabaseCategory, DocumentFeatures, DocumentFindSlots, DocumentQueryMode,
+    Pagination,
+};
 use gpui::*;
 
 use super::CollectionTab;
@@ -266,6 +274,10 @@ impl DataGridPanel {
                 self.collection.tab = CollectionTab::Documents;
                 self.find_documents(window, cx);
             }
+            DocumentBuilderEvent::RunPipelineRequested(pipeline) => {
+                self.run_builder_pipeline(pipeline, window, cx);
+            }
+            DocumentBuilderEvent::ModeChanged => cx.notify(),
             DocumentBuilderEvent::OpenInEditorRequested(text) => {
                 if let DataSource::Collection { profile_id, .. } = &self.source {
                     cx.emit(DataGridEvent::OpenEditorWithContent {
@@ -276,6 +288,113 @@ impl DataGridPanel {
             }
             DocumentBuilderEvent::CloseRequested => self.close_document_builder(cx),
         }
+    }
+
+    /// Writes the builder's pipeline into the Aggregate view and runs it
+    /// there, so it goes through the same checks as a typed pipeline.
+    fn run_builder_pipeline(
+        &mut self,
+        pipeline: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_collection_tab(CollectionTab::Aggregate, cx);
+        if self.collection.tab != CollectionTab::Aggregate {
+            return;
+        }
+
+        let pipeline = pipeline.to_string();
+        self.collection
+            .aggregate
+            .pipeline_editor
+            .update(cx, |editor, cx| editor.set_value(pipeline, window, cx));
+
+        self.collection.aggregate.next_run_from_builder = true;
+        self.run_aggregate(window, cx);
+    }
+
+    /// The open builder, when it composes an aggregation.
+    pub(in crate::data_grid_panel) fn document_builder_in_aggregate(
+        &self,
+        cx: &App,
+    ) -> Option<Entity<DocumentBuilderPanel>> {
+        self.collection.builder.panel.clone().filter(|panel| {
+            self.collection.builder.open && panel.read(cx).mode() == DocumentQueryMode::Aggregate
+        })
+    }
+
+    /// Stage names of the builder's pipeline while it composes an
+    /// aggregation; `None` while the slots are the query.
+    pub(in crate::data_grid_panel) fn document_builder_pipeline_stages(
+        &self,
+        cx: &App,
+    ) -> Option<Vec<String>> {
+        self.document_builder_in_aggregate(cx)
+            .and_then(|panel| panel.read(cx).pipeline_stages())
+    }
+
+    /// The row above the grid while the builder composes an aggregation:
+    /// `pipeline [ $match, $group, ... ]`, read-only, with the synced chip.
+    pub(in crate::data_grid_panel) fn render_builder_pipeline_row(
+        &self,
+        stages: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use dbflux_components::primitives::Chamfer;
+        use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics};
+        use dbflux_components::typography::AppFonts;
+        use gpui_component::ActiveTheme;
+
+        let theme = cx.theme().clone();
+        let summary = format!("[ {} ]", stages.join(", "));
+
+        div()
+            .id("collection-builder-pipeline-row")
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap(CollectionMetrics::QUERY_ROW_GAP)
+            .min_h(CollectionMetrics::QUERY_ROW_HEIGHT)
+            .px(CollectionMetrics::QUERY_ROW_PADDING_X)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .id("collection-slot-pipeline")
+                    .debug_selector(|| "collection-slot-pipeline".to_string())
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap(CollectionMetrics::SLOT_GAP)
+                    .h(CollectionMetrics::SLOT_HEIGHT)
+                    .px(CollectionMetrics::SLOT_PADDING_X)
+                    .font_family(AppFonts::MONO)
+                    .text_size(CollectionMetrics::SLOT_FONT)
+                    .child(
+                        Chamfer::new(ChamferCut::CONTROL)
+                            .fill(theme.background)
+                            .border(theme.input),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(ChromeColors::tint(&theme))
+                            .child("pipeline"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.muted_foreground)
+                            .child(SharedString::from(summary)),
+                    ),
+            )
+            .children(self.render_document_builder_sync_chip(cx))
+            .into_any_element()
     }
 
     fn write_document_slots(
@@ -343,7 +462,8 @@ impl DataGridPanel {
 
     /// Footer note while the builder drives a find: its rows stay editable.
     pub(in crate::data_grid_panel) fn document_builder_footer(&self, cx: &App) -> Option<String> {
-        (self.collection.builder.open && self.commits_document_patches(cx))
+        let finds = self.document_builder_in_aggregate(cx).is_none();
+        (self.collection.builder.open && finds && self.commits_document_patches(cx))
             .then(|| dbflux_i18n::t!("document.collection.builder.editable_note"))
     }
 
@@ -391,12 +511,12 @@ impl DataGridPanel {
             return None;
         }
 
-        let conflicted = self
-            .collection
-            .builder
-            .panel
-            .as_ref()
-            .is_some_and(|panel| panel.read(cx).is_conflicted());
+        // The pipeline summary is rendered from the builder, so it is always
+        // in sync; only the find slots can hold what the builder cannot read.
+        let conflicted = self.collection.builder.panel.as_ref().is_some_and(|panel| {
+            let panel = panel.read(cx);
+            panel.mode() == DocumentQueryMode::Find && panel.is_conflicted()
+        });
 
         let (id, badge) = if conflicted {
             (
@@ -432,14 +552,16 @@ mod tests {
 
     use dbflux_core::{
         CollectionRef, DatabaseCategory, DocumentFeatures, DocumentOperator, DocumentQueryCodec,
-        Pagination,
+        DocumentQueryMode, Pagination,
     };
     use dbflux_driver_mongodb::MongoDocumentCodec;
     use gpui::{AppContext, TestAppContext, VisualTestContext};
 
+    use super::super::CollectionTab;
     use super::BuilderSupport;
     use crate::data_grid_panel::tests::register_stub_connection;
     use crate::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
+    use crate::document_builder::AccumulatorOp;
     use crate::document_builder::DocumentBuilderEvent;
 
     /// A document connection whose builder support is set per test. It
@@ -533,10 +655,66 @@ mod tests {
                 .as_ref()
                 .map(|codec| codec as &dyn DocumentQueryCodec)
         }
+
+        fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+            Some(&StubGenerator)
+        }
+
+        fn aggregate_collection(
+            &self,
+            _request: &dbflux_core::CollectionAggregateRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Ok(dbflux_core::QueryResult::json(
+                vec![dbflux_core::ColumnMeta {
+                    name: "_id".to_string(),
+                    type_name: String::new(),
+                    kind: dbflux_core::ColumnKind::Text,
+                    nullable: true,
+                    is_primary_key: false,
+                }],
+                vec![vec![dbflux_core::Value::Text("team".to_string())]],
+                std::time::Duration::from_millis(1),
+            ))
+        }
+    }
+
+    /// Native text of a pipeline, so it classifies as a read and runs
+    /// without asking.
+    struct StubGenerator;
+
+    impl dbflux_core::QueryGenerator for StubGenerator {
+        fn supported_categories(&self) -> &'static [dbflux_core::MutationCategory] {
+            &[dbflux_core::MutationCategory::Document]
+        }
+
+        fn generate_mutation(
+            &self,
+            _mutation: &dbflux_core::MutationRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            None
+        }
+
+        fn aggregate_query(
+            &self,
+            request: &dbflux_core::CollectionAggregateRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            Some(dbflux_core::GeneratedQuery {
+                language: dbflux_core::QueryLanguage::MongoQuery,
+                text: format!(
+                    "db.{}.aggregate({})",
+                    request.collection.name,
+                    serde_json::Value::Array(request.pipeline.clone())
+                ),
+            })
+        }
     }
 
     fn builder_features() -> DocumentFeatures {
         DocumentFeatures::QUERY_SLOTS | DocumentFeatures::VISUAL_BUILDER
+    }
+
+    fn aggregate_features() -> DocumentFeatures {
+        builder_features() | DocumentFeatures::AGGREGATE
     }
 
     fn collection_panel(
@@ -876,6 +1054,194 @@ mod tests {
         assert!(!window.update(|_, cx| panel.read(cx).document_builder_is_open()));
     }
 
+    #[gpui::test]
+    fn aggregate_mode_needs_the_aggregate_feature(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                assert!(!rail.aggregate_available());
+                rail.add_group_stage(cx);
+                rail.set_mode(DocumentQueryMode::Aggregate, cx);
+                assert_eq!(rail.mode(), DocumentQueryMode::Find);
+                assert!(rail.draft().group.is_none());
+            });
+        });
+
+        let mut cx = TestAppContext::single();
+        let (panel, window) = collection_panel(
+            &mut cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                assert!(rail.aggregate_available());
+                rail.add_group_stage(cx);
+                assert_eq!(rail.mode(), DocumentQueryMode::Aggregate);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn aggregate_mode_leaves_the_slots_alone_until_find_returns(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "{ name: 1 }");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+        let (id, _, _) = first_condition(&panel, window);
+
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).document_builder_pipeline_stages(cx)),
+            None,
+            "find mode shows the slots"
+        );
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                rail.set_operator(id, DocumentOperator::Gte, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            slot_texts(&panel, window),
+            (
+                r#"{ age: { $gt: 30 } }"#.to_string(),
+                "{ name: 1 }".to_string()
+            ),
+            "no slot is written in aggregate mode"
+        );
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).document_builder_pipeline_stages(cx)),
+            Some(vec![
+                "$match".to_string(),
+                "$group".to_string(),
+                "$limit".to_string()
+            ]),
+            "the limit slot's page size carries over as the pipeline's limit"
+        );
+
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "{ name: 1 }");
+        window.update(|_, cx| {
+            panel.update(cx, |grid, cx| grid.sync_slots_into_document_builder(cx));
+        });
+        assert_eq!(
+            first_condition(&panel, window).1,
+            "age",
+            "a slot edit does not replace the pipeline's filter"
+        );
+
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "{ name: 1 }");
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| rail.set_mode(DocumentQueryMode::Find, cx));
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            slot_texts(&panel, window),
+            (
+                r#"{"age": {"$gte": 30}}"#.to_string(),
+                "{ name: 1 }".to_string()
+            ),
+            "back in find mode the builder writes the part it changed"
+        );
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).document_builder_pipeline_stages(cx)),
+            None
+        );
+    }
+
+    #[gpui::test]
+    fn run_pipeline_hands_the_pipeline_to_the_aggregate_view(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        let expected = window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                assert!(rail.can_run());
+                let spec = rail.draft().to_spec().expect("a valid pipeline");
+                MongoDocumentCodec
+                    .render_pipeline(&spec)
+                    .expect("renderable")
+            })
+        });
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_run(cx)));
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let grid = panel.read(cx);
+            assert_eq!(grid.collection.tab, CollectionTab::Aggregate);
+
+            let aggregate = &grid.collection.aggregate;
+            assert_eq!(
+                aggregate.pipeline_editor.read(cx).value().to_string(),
+                expected
+            );
+            assert_eq!(aggregate.result_count(), Some(1));
+            assert!(aggregate.results_from_builder);
+        });
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            r#"{ "status": "failed" }"#,
+            "running the pipeline writes no slot"
+        );
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.run_aggregate(window, cx));
+        });
+        window.run_until_parked();
+        assert!(
+            !window.update(|_, cx| panel.read(cx).collection.aggregate.results_from_builder),
+            "a pipeline run from the editor is not the builder's"
+        );
+    }
+
+    #[gpui::test]
+    fn an_invalid_group_stage_cannot_run(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                let id = rail.draft().group.as_ref().unwrap().accumulators[0].id;
+                rail.set_accumulator_op(id, AccumulatorOp::Sum, cx);
+                assert!(!rail.can_run(), "a sum needs a field");
+                rail.request_run(cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let grid = panel.read(cx);
+            assert_eq!(grid.collection.tab, CollectionTab::Documents);
+            assert!(grid.collection.aggregate.results.is_none());
+        });
+    }
+
     /// Window content for the rendered tests: the builder rail, as the
     /// workspace hosts it, or the grid itself.
     struct RailHost {
@@ -926,11 +1292,23 @@ mod tests {
         gpui::Entity<RailHost>,
         &'a mut VisualTestContext,
     ) {
+        rendered_rail_with(cx, filter, builder_features())
+    }
+
+    fn rendered_rail_with<'a>(
+        cx: &'a mut TestAppContext,
+        filter: &str,
+        features: DocumentFeatures,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        gpui::Entity<RailHost>,
+        &'a mut VisualTestContext,
+    ) {
         let (app_state, profile_id) = register_stub_connection(
             cx,
             Arc::new(StubDocumentConnection::new(
                 DatabaseCategory::Document,
-                builder_features(),
+                features,
                 true,
             )),
         );
@@ -1030,6 +1408,52 @@ mod tests {
         window.run_until_parked();
         assert!(bounds_of(window, format!("doc-builder-operator-{id}-option-eq")).is_none());
         assert_eq!(first_condition(&grid, window).2, DocumentOperator::Gte);
+    }
+
+    #[gpui::test]
+    fn aggregate_mode_shows_the_pipeline_summary_and_the_read_only_banner(cx: &mut TestAppContext) {
+        let (grid, host, window) =
+            rendered_rail_with(cx, r#"{"status": "failed"}"#, aggregate_features());
+        let rail = builder(&grid, window);
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        window.run_until_parked();
+
+        assert!(bounds_of(window, "doc-builder-group-stage".to_string()).is_some());
+        assert!(
+            bounds_of(window, "doc-builder-match-summary".to_string()).is_some(),
+            "the filter collapses to its $match summary"
+        );
+
+        host.update(window, |host, cx| {
+            host.show_builder = false;
+            cx.notify();
+        });
+        window.run_until_parked();
+
+        assert!(bounds_of(window, "collection-slot-pipeline".to_string()).is_some());
+        assert!(
+            bounds_of(window, "collection-slot-filter".to_string()).is_none(),
+            "the find slots give way to the pipeline summary"
+        );
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_run(cx)));
+        window.run_until_parked();
+
+        assert!(bounds_of(window, "aggregate-builder-read-only".to_string()).is_some());
+        assert!(
+            bounds_of(window, "collection-slot-pipeline".to_string()).is_some(),
+            "the Aggregate view shows the builder's pipeline in place of its editor"
+        );
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.remove_group_stage(cx)));
+        window.run_until_parked();
+
+        assert!(bounds_of(window, "collection-slot-pipeline".to_string()).is_none());
+        assert!(
+            bounds_of(window, "aggregate-builder-read-only".to_string()).is_some(),
+            "the banner stays with the results it explains"
+        );
     }
 
     #[gpui::test]

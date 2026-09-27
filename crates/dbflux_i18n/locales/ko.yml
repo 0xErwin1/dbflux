@@ -589,6 +589,9 @@ document:
       failed: "집계 실패: %{error}"
       read_only_edit: "집계 결과는 읽기 전용입니다"
       task: "%{collection} 집계"
+      builder_read_only:
+        title: "읽기 전용 결과입니다."
+        body: "그룹화된 행은 계산된 값이므로 편집할 문서 _id가 없습니다. 편집 가능한 문서를 얻으려면 그룹 단계를 제거하세요."
       error:
         syntax: "잘못된 JSON: %{error}"
         not_array: "파이프라인은 스테이지 배열이어야 합니다"
@@ -678,18 +681,25 @@ document:
       close: "빌더 닫기"
       mode:
         find: "Find"
+        aggregate: "Aggregate"
+        find_hint: "그룹 단계를 추가하면 Aggregate로 전환됩니다"
+        aggregate_hint: "그룹 단계 사용 중 · 결과는 읽기 전용입니다"
+        aggregate_unavailable: "이 연결은 집계를 실행할 수 없습니다"
       synced: "빌더와 동기화됨"
       out_of_sync: "빌더가 읽을 수 없는 입력란이 있음"
       find: "찾기"
       find_blocked: "실행하기 전에 텍스트를 유지하거나 빌더로 다시 쓰세요"
       find_invalid: "실행하기 전에 표시된 조건을 완성하세요"
       open_in_editor: "편집기에서 열기"
+      run_pipeline: "파이프라인 실행"
       editable_note: "편집 가능: 모든 행이 _id를 유지합니다"
       section:
         filter: "필터"
         project: "프로젝션"
         sort: "정렬, 제한, 건너뛰기"
         preview: "미리 보기"
+        group: "그룹"
+        group_stage: "그룹 단계"
       filter:
         conditions:
           one: "조건 %{count}개"
@@ -713,6 +723,7 @@ document:
         exclude: "제외"
         add_field: "필드"
         id_note: "_id는 항상 반환되므로 행을 계속 편집할 수 있습니다."
+        disabled: "그룹 단계 뒤에는 사용되지 않습니다. 출력 필드는 그룹 키와 누산기입니다."
       sort:
         add_key: "정렬 키"
         ascending: "오름차순"
@@ -721,6 +732,27 @@ document:
         skip: "건너뛰기"
         invalid_limit: "제한은 양의 정수여야 합니다"
         invalid_skip: "건너뛰기는 정수여야 합니다"
+        aggregate_note: "그룹 단계 뒤에는 그룹 키나 누산기로 정렬하세요."
+      match:
+        edit: "편집"
+        done: "완료"
+        everything: "조건 없음: 모든 문서"
+        conflict: "filter 입력란에 빌더가 표시할 수 없는 절이 있으며, 파이프라인에서는 제외됩니다."
+        groups:
+          one: "그룹 %{count}개"
+          many: "그룹 %{count}개"
+      group:
+        add: "그룹 단계 추가"
+        add_hint: "필드별로 개수, 합계 또는 평균을 구합니다. Aggregate로 전환됩니다."
+        group_by: "그룹 기준"
+        all_documents: "모든 문서를 하나의 그룹으로"
+        add_key: "필드"
+        accumulators: "누산기"
+        add_accumulator: "누산기"
+        remove: "그룹 단계 제거"
+        no_field: "필드 없음"
+        pick_number: "숫자 필드를 선택하세요"
+        name_placeholder: "이름"
       picker:
         search: "필드 검색"
         sample_note: "문서 %{count}개 샘플의 경로와 타입입니다. 백분율은 필드가 나타나는 빈도입니다."

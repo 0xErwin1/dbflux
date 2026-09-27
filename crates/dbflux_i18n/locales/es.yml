@@ -589,6 +589,9 @@ document:
       failed: "La agregación falló: %{error}"
       read_only_edit: "Los resultados de la agregación son de solo lectura"
       task: "Agregación en %{collection}"
+      builder_read_only:
+        title: "Resultado de solo lectura."
+        body: "Las filas agrupadas se calculan, así que no tienen un _id de documento para editar. Quita la etapa de grupo para obtener documentos editables."
       error:
         syntax: "JSON no válido: %{error}"
         not_array: "El pipeline debe ser un arreglo de etapas"
@@ -678,18 +681,25 @@ document:
       close: "Cerrar constructor"
       mode:
         find: "Find"
+        aggregate: "Aggregate"
+        find_hint: "Agregar una etapa de grupo cambia a Aggregate"
+        aggregate_hint: "Etapa de grupo activa · los resultados son de solo lectura"
+        aggregate_unavailable: "Esta conexión no puede ejecutar agregaciones"
       synced: "sincronizado con el constructor"
       out_of_sync: "el constructor no puede leer un campo"
       find: "Buscar"
       find_blocked: "Conserva el texto o reescríbelo desde el constructor antes de ejecutar"
       find_invalid: "Completa las condiciones marcadas antes de ejecutar"
       open_in_editor: "Abrir en el editor"
+      run_pipeline: "Ejecutar pipeline"
       editable_note: "Editable: cada fila conserva su _id"
       section:
         filter: "Filtro"
         project: "Proyección"
         sort: "Orden, límite y salto"
         preview: "Vista previa"
+        group: "Grupo"
+        group_stage: "Etapa de grupo"
       filter:
         conditions:
           one: "%{count} condición"
@@ -713,6 +723,7 @@ document:
         exclude: "Excluir"
         add_field: "campo"
         id_note: "_id siempre se devuelve, así las filas siguen siendo editables."
+        disabled: "No se usa después de una etapa de grupo: los campos de salida son la clave del grupo y los acumuladores."
       sort:
         add_key: "Clave de orden"
         ascending: "Asc"
@@ -721,6 +732,27 @@ document:
         skip: "Saltar"
         invalid_limit: "El límite debe ser un número entero positivo"
         invalid_skip: "El salto debe ser un número entero"
+        aggregate_note: "Después de una etapa de grupo, ordena por la clave del grupo o por un acumulador."
+      match:
+        edit: "Editar"
+        done: "Listo"
+        everything: "sin condiciones: todos los documentos"
+        conflict: "El campo filter tiene cláusulas que el constructor no puede mostrar; el pipeline las deja fuera."
+        groups:
+          one: "%{count} grupo"
+          many: "%{count} grupos"
+      group:
+        add: "Agregar etapa de grupo"
+        add_hint: "Contar, sumar o promediar por un campo. Cambia a Aggregate."
+        group_by: "Agrupar por"
+        all_documents: "todos los documentos en un grupo"
+        add_key: "campo"
+        accumulators: "Acumuladores"
+        add_accumulator: "Acumulador"
+        remove: "Quitar etapa de grupo"
+        no_field: "sin campo"
+        pick_number: "Elige un campo numérico"
+        name_placeholder: "nombre"
       picker:
         search: "Buscar campos"
         sample_note: "Rutas y tipos de una muestra de %{count} documentos. El porcentaje indica con qué frecuencia aparece el campo."

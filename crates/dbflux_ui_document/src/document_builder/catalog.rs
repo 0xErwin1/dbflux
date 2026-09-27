@@ -111,6 +111,47 @@ impl FieldCatalog {
         Self { fields: ordered }
     }
 
+    /// A flat catalog of computed output fields, such as the group keys and
+    /// accumulators after a group stage: every one present in every row.
+    pub fn from_outputs(outputs: Vec<(String, Vec<DocumentFieldType>)>) -> Self {
+        let fields = outputs
+            .into_iter()
+            .map(|(path, types)| CatalogField {
+                name: path.clone(),
+                path,
+                depth: 0,
+                types,
+                presence_percent: 100,
+            })
+            .collect();
+
+        Self { fields }
+    }
+
+    /// The fields sampled with a number type, flattened to the top level:
+    /// what a `$sum` or `$avg` can read.
+    pub fn numeric(&self) -> FieldCatalog {
+        let fields = self
+            .fields
+            .iter()
+            .filter(|field| {
+                field.types.iter().any(|field_type| {
+                    matches!(
+                        field_type,
+                        DocumentFieldType::Integer | DocumentFieldType::Decimal
+                    )
+                })
+            })
+            .map(|field| CatalogField {
+                name: field.path.clone(),
+                depth: 0,
+                ..field.clone()
+            })
+            .collect();
+
+        Self { fields }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }

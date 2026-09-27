@@ -1,6 +1,8 @@
-//! Rendering of the builder rail (IslDocBuilder, IslDocBuilderStates): a
-//! header, the scrolling cards (sync conflict, Filter, Project, Sort / limit
-//! / skip, Preview) and the fixed footer with Open in editor and Find.
+//! Rendering of the builder rail (IslDocBuilder, IslDocBuilderAggregate,
+//! IslDocBuilderStates): a header with the Find / Aggregate switch, the
+//! scrolling cards (sync conflict, Filter, Project, Sort / limit / skip,
+//! Group, Preview) and the fixed footer with Open in editor and Find or Run
+//! pipeline.
 
 use dbflux_components::composites::menu_frame;
 use dbflux_components::controls::{Button, Input};
@@ -13,7 +15,8 @@ use dbflux_components::tokens::{
 };
 use dbflux_components::typography::AppFonts;
 use dbflux_core::{
-    DocumentCombinator, DocumentFieldType, DocumentProjectionMode, DocumentSortDirection,
+    DocumentCombinator, DocumentFieldType, DocumentProjectionMode, DocumentQueryMode,
+    DocumentSortDirection, DocumentSpecProblem,
 };
 use gpui::Focusable;
 use gpui::prelude::*;
@@ -25,7 +28,10 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::Theme;
 
-use super::model::{ConditionDraft, GroupDraft, NodeDraft, NodeId, Operand, ProblemKind};
+use super::model::{
+    AccumulatorDraft, AccumulatorOp, ConditionDraft, GroupDraft, GroupStageDraft, NodeDraft,
+    NodeId, Operand, ProblemKind,
+};
 use super::panel::{DocumentBuilderPanel, PickTarget, is_valid_typed_path};
 use super::values::{ScalarKind, ValueEditor, ValueProblem, format_value, operator_ranges};
 
@@ -46,6 +52,8 @@ const OPERATOR_LIST_HEIGHT: Pixels = px(340.0);
 const PAGING_WIDTH: Pixels = px(70.0);
 /// Chip entry input.
 const CHIP_ENTRY_WIDTH: Pixels = px(110.0);
+/// Output name input of an accumulator.
+const ACCUMULATOR_NAME_WIDTH: Pixels = px(96.0);
 /// Field picker popover.
 const PICKER_WIDTH: Pixels = px(320.0);
 const PICKER_LIST_HEIGHT: Pixels = px(280.0);
@@ -76,11 +84,12 @@ pub(super) fn render_panel(
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
             let keystroke = &event.keystroke;
             if keystroke.key == "enter" && keystroke.modifiers.secondary() {
-                this.request_find(cx);
+                this.request_run(cx);
                 cx.stop_propagation();
             }
         }))
         .child(render_header(panel, &theme, cx))
+        .child(render_mode_switch(panel, &theme, cx))
         .child(render_body(panel, &theme, cx))
         .child(render_footer(panel, &theme, cx))
 }
@@ -120,10 +129,6 @@ fn render_header(
             panel.collection.database.clone(),
             BadgeTone::Neutral,
         ))
-        .child(Badge::new(
-            dbflux_i18n::t!("document.collection.builder.mode.find"),
-            BadgeTone::Accent,
-        ))
         .child(div().flex_1())
         .child(
             Button::new(
@@ -137,18 +142,100 @@ fn render_header(
         )
 }
 
+/// Find | Aggregate under the title, with what the mode means for the
+/// result. Aggregate is disabled, with the reason, when the connection
+/// cannot run aggregations.
+fn render_mode_switch(
+    panel: &DocumentBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> impl IntoElement {
+    let mode = panel.mode();
+    let aggregate_available = panel.aggregate_available();
+
+    let hint = match mode {
+        DocumentQueryMode::Find if !aggregate_available => {
+            dbflux_i18n::t!("document.collection.builder.mode.aggregate_unavailable")
+        }
+        DocumentQueryMode::Find => dbflux_i18n::t!("document.collection.builder.mode.find_hint"),
+        DocumentQueryMode::Aggregate => {
+            dbflux_i18n::t!("document.collection.builder.mode.aggregate_hint")
+        }
+    };
+
+    let aggregate = Button::new(
+        "doc-builder-mode-aggregate",
+        dbflux_i18n::t!("document.collection.builder.mode.aggregate"),
+    )
+    .secondary()
+    .icon(AppIcon::ChartColumnBig)
+    .selected(mode == DocumentQueryMode::Aggregate)
+    .disabled(!aggregate_available)
+    .tab_stop(false)
+    .on_click(cx.listener(|this, _, _, cx| this.set_mode(DocumentQueryMode::Aggregate, cx)));
+    let aggregate = if aggregate_available {
+        aggregate
+    } else {
+        aggregate.tooltip(dbflux_i18n::t!(
+            "document.collection.builder.mode.aggregate_unavailable"
+        ))
+    };
+
+    div()
+        .flex()
+        .flex_shrink_0()
+        .flex_wrap()
+        .items_center()
+        .gap(Spacing::SM)
+        .px(BuilderMetrics::RAIL_PADDING_X)
+        .py(Spacing::SM)
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            Button::new(
+                "doc-builder-mode-find",
+                dbflux_i18n::t!("document.collection.builder.mode.find"),
+            )
+            .secondary()
+            .icon(AppIcon::Search)
+            .selected(mode == DocumentQueryMode::Find)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| this.set_mode(DocumentQueryMode::Find, cx))),
+        )
+        .child(aggregate)
+        .child(
+            div()
+                .id("doc-builder-mode-hint")
+                .min_w_0()
+                .child(caption(hint, theme.muted_foreground)),
+        )
+}
+
 fn render_footer(
     panel: &DocumentBuilderPanel,
     theme: &Theme,
     cx: &mut Context<DocumentBuilderPanel>,
 ) -> impl IntoElement {
-    let can_find = panel.can_find();
-    let find_tooltip = if !panel.sync.held().is_empty() {
+    let aggregate = panel.mode() == DocumentQueryMode::Aggregate;
+    let can_run = panel.can_run();
+    let run_tooltip = if !aggregate && !panel.sync.held().is_empty() {
         Some(dbflux_i18n::t!("document.collection.builder.find_blocked"))
-    } else if !can_find {
+    } else if !can_run {
         Some(dbflux_i18n::t!("document.collection.builder.find_invalid"))
     } else {
         None
+    };
+
+    let (run_id, run_label) = if aggregate {
+        (
+            "doc-builder-run-pipeline",
+            dbflux_i18n::t!("document.collection.builder.run_pipeline"),
+        )
+    } else {
+        (
+            "doc-builder-find",
+            dbflux_i18n::t!("document.collection.builder.find"),
+        )
     };
 
     let can_open = panel.problems.is_empty() && panel.render_error.is_none();
@@ -175,17 +262,14 @@ fn render_footer(
         )
         .child(div().flex_1())
         .child(
-            Button::new(
-                "doc-builder-find",
-                dbflux_i18n::t!("document.collection.builder.find"),
-            )
-            .primary()
-            .icon(AppIcon::Play)
-            .kbd(FIND_SHORTCUT_HINT)
-            .disabled(!can_find)
-            .when_some(find_tooltip, Button::tooltip)
-            .tab_stop(false)
-            .on_click(cx.listener(|this, _, _, cx| this.request_find(cx))),
+            Button::new(run_id, run_label)
+                .primary()
+                .icon(AppIcon::Play)
+                .kbd(FIND_SHORTCUT_HINT)
+                .disabled(!can_run)
+                .when_some(run_tooltip, Button::tooltip)
+                .tab_stop(false)
+                .on_click(cx.listener(|this, _, _, cx| this.request_run(cx))),
         )
 }
 
@@ -198,8 +282,9 @@ fn render_body(
     theme: &Theme,
     cx: &mut Context<DocumentBuilderPanel>,
 ) -> impl IntoElement {
-    let conflict = panel
-        .is_conflicted()
+    let aggregate = panel.mode() == DocumentQueryMode::Aggregate;
+
+    let conflict = (!aggregate && panel.is_conflicted())
         .then(|| render_conflict(panel, theme, cx).into_any_element());
 
     let count = panel.draft.condition_count();
@@ -211,11 +296,98 @@ fn render_body(
         .into_any_element()
     });
 
-    let root = panel.draft.filter.clone();
-    let filter_body = render_group(panel, &root, true, theme, cx);
-    let project_body = render_projection(panel, theme, cx);
-    let sort_body = render_sort(panel, theme, cx);
-    let preview_body = render_preview(panel, theme, cx);
+    let filter_card = if aggregate {
+        render_match_card(panel, filter_badge, theme, cx)
+    } else {
+        let root = panel.draft.filter.clone();
+        card(
+            dbflux_i18n::t!("document.collection.builder.section.filter"),
+            AppIcon::ListFilter,
+            filter_badge,
+            theme,
+            render_group(panel, &root, true, theme, cx),
+        )
+    };
+
+    let project_card = if aggregate {
+        disabled_card(
+            dbflux_i18n::t!("document.collection.builder.section.project"),
+            AppIcon::Columns,
+            theme,
+            div()
+                .id("doc-builder-project-disabled")
+                .child(caption(
+                    dbflux_i18n::t!("document.collection.builder.project.disabled"),
+                    theme.muted_foreground,
+                ))
+                .into_any_element(),
+        )
+    } else {
+        card(
+            dbflux_i18n::t!("document.collection.builder.section.project"),
+            AppIcon::Columns,
+            None,
+            theme,
+            render_projection(panel, theme, cx),
+        )
+    };
+
+    let sort_card = card(
+        dbflux_i18n::t!("document.collection.builder.section.sort"),
+        AppIcon::ArrowUpDown,
+        None,
+        theme,
+        render_sort(panel, theme, cx),
+    );
+
+    let group_card = match panel.draft.group.clone().filter(|_| aggregate) {
+        Some(stage) => card(
+            dbflux_i18n::t!("document.collection.builder.section.group_stage"),
+            AppIcon::ChartColumnBig,
+            None,
+            theme,
+            render_group_stage(panel, &stage, theme, cx),
+        ),
+        None => card(
+            dbflux_i18n::t!("document.collection.builder.section.group"),
+            AppIcon::ChartColumnBig,
+            None,
+            theme,
+            render_add_group_stage(panel, theme, cx),
+        ),
+    };
+
+    let mode_label = match panel.mode() {
+        DocumentQueryMode::Find => "find",
+        DocumentQueryMode::Aggregate => "aggregate",
+    };
+    let preview_card = card(
+        dbflux_i18n::t!("document.collection.builder.section.preview"),
+        AppIcon::Code,
+        Some(Badge::new(mode_label, BadgeTone::Neutral).into_any_element()),
+        theme,
+        render_preview(panel, theme, cx),
+    );
+
+    // Find keeps the Group card last, collapsed; Aggregate puts the stage
+    // right after its $match, where it runs.
+    let cards: Vec<AnyElement> = if aggregate {
+        vec![
+            filter_card,
+            group_card,
+            project_card,
+            sort_card,
+            preview_card,
+        ]
+    } else {
+        vec![
+            filter_card,
+            project_card,
+            sort_card,
+            group_card,
+            preview_card,
+        ]
+    };
 
     let fade = linear_gradient(
         180.,
@@ -238,40 +410,7 @@ fn render_body(
                 .py(BuilderMetrics::SECTION_GAP)
                 .overflow_y_scrollbar()
                 .children(conflict)
-                .child(card(
-                    dbflux_i18n::t!("document.collection.builder.section.filter"),
-                    AppIcon::ListFilter,
-                    filter_badge,
-                    theme,
-                    filter_body,
-                ))
-                .child(card(
-                    dbflux_i18n::t!("document.collection.builder.section.project"),
-                    AppIcon::Columns,
-                    None,
-                    theme,
-                    project_body,
-                ))
-                .child(card(
-                    dbflux_i18n::t!("document.collection.builder.section.sort"),
-                    AppIcon::ArrowUpDown,
-                    None,
-                    theme,
-                    sort_body,
-                ))
-                .child(card(
-                    dbflux_i18n::t!("document.collection.builder.section.preview"),
-                    AppIcon::Code,
-                    Some(
-                        Badge::new(
-                            dbflux_i18n::t!("document.collection.builder.mode.find"),
-                            BadgeTone::Neutral,
-                        )
-                        .into_any_element(),
-                    ),
-                    theme,
-                    preview_body,
-                )),
+                .children(cards),
         )
         .child(
             div()
@@ -320,6 +459,15 @@ fn card(
                 .children(trailing),
         )
         .child(body)
+        .into_any_element()
+}
+
+/// A card for a section that does not apply in the current mode: dimmed,
+/// with the reason as its body.
+fn disabled_card(title: String, icon: AppIcon, theme: &Theme, body: AnyElement) -> AnyElement {
+    div()
+        .opacity(0.6)
+        .child(card(title, icon, None, theme, body))
         .into_any_element()
 }
 
@@ -1168,16 +1316,27 @@ fn render_sort(
         .iter()
         .enumerate()
         .map(|(index, key)| {
-            let types = panel.catalog.types(&key.path);
+            let types = panel.sort_types(&key.path);
             let tag = types
                 .first()
                 .map(|first| crate::labels::document_field_type_tag(*first));
+            let unknown = panel
+                .problems
+                .iter()
+                .find_map(|problem| match &problem.kind {
+                    ProblemKind::Spec(
+                        spec_problem @ DocumentSpecProblem::AggregateSortPathUnknown { path },
+                    ) if *path == key.path => Some(crate::labels::document_builder_problem(
+                        &ProblemKind::Spec(spec_problem.clone()),
+                    )),
+                    _ => None,
+                });
             let drag = SortDrag {
                 index,
                 label: SharedString::from(key.path.clone()),
             };
 
-            div()
+            let row = div()
                 .id(SharedString::from(format!("doc-builder-sort-{index}")))
                 .flex()
                 .items_center()
@@ -1225,7 +1384,16 @@ fn render_sort(
                     .icon_only()
                     .tab_stop(false)
                     .on_click(cx.listener(move |this, _, _, cx| this.remove_sort_key(index, cx))),
-                )
+                );
+
+            div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XS)
+                .child(row)
+                .when_some(unknown, |column, text| {
+                    column.child(caption(text, theme.danger))
+                })
         })
         .collect::<Vec<_>>();
 
@@ -1287,6 +1455,12 @@ fn render_sort(
                 theme.danger,
             ))
         })
+        .when(panel.mode() == DocumentQueryMode::Aggregate, |column| {
+            column.child(caption(
+                dbflux_i18n::t!("document.collection.builder.sort.aggregate_note"),
+                theme.muted_foreground,
+            ))
+        })
         .into_any_element()
 }
 
@@ -1325,6 +1499,493 @@ fn direction_switch(
         },
     )
     .group(format!("doc-builder-sort-dir-{index}"))
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate: $match summary and group stage
+// ---------------------------------------------------------------------------
+
+/// The Filter card in Aggregate mode: a one-line `$match` summary with an
+/// Edit link that opens the full filter again.
+fn render_match_card(
+    panel: &DocumentBuilderPanel,
+    badge: Option<AnyElement>,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let expanded = panel.filter_expanded;
+    let toggle_label = if expanded {
+        dbflux_i18n::t!("document.collection.builder.match.done")
+    } else {
+        dbflux_i18n::t!("document.collection.builder.match.edit")
+    };
+    let toggle = link_button(
+        "doc-builder-match-edit",
+        toggle_label,
+        if expanded {
+            AppIcon::ChevronUp
+        } else {
+            AppIcon::Pencil
+        },
+        cx.listener(|this, _, _, cx| this.toggle_filter_expanded(cx)),
+    )
+    .into_any_element();
+
+    let trailing = div()
+        .flex()
+        .items_center()
+        .gap(Spacing::SM)
+        .children(badge)
+        .child(toggle)
+        .into_any_element();
+
+    let conflict_note = panel.is_conflicted().then(|| {
+        caption(
+            dbflux_i18n::t!("document.collection.builder.match.conflict"),
+            theme.warning,
+        )
+    });
+
+    let body = if expanded {
+        let root = panel.draft.filter.clone();
+        div()
+            .flex()
+            .flex_col()
+            .gap(BuilderMetrics::ROW_GAP)
+            .child(render_group(panel, &root, true, theme, cx))
+            .children(conflict_note)
+            .into_any_element()
+    } else {
+        let summary = match_summary(&panel.draft.filter);
+        let has_problem = panel
+            .problems
+            .iter()
+            .any(|problem| panel.draft.node_ids().contains(&problem.node));
+
+        div()
+            .id("doc-builder-match-summary")
+            .debug_selector(|| "doc-builder-match-summary".to_string())
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::SM)
+                    .font_family(AppFonts::MONO)
+                    .text_size(FontSizes::XS)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(SyntaxColors::for_current(cx).keyword)
+                            .child("$match"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(ChromeColors::strong(theme))
+                            .child(SharedString::from(summary)),
+                    ),
+            )
+            .when(has_problem, |column| {
+                column.child(caption(
+                    dbflux_i18n::t!("document.collection.builder.find_invalid"),
+                    theme.danger,
+                ))
+            })
+            .children(conflict_note)
+            .into_any_element()
+    };
+
+    card(
+        dbflux_i18n::t!("document.collection.builder.section.filter"),
+        AppIcon::ListFilter,
+        Some(trailing),
+        theme,
+        body,
+    )
+}
+
+/// The root conditions in one line, nested groups counted.
+fn match_summary(root: &GroupDraft) -> String {
+    let mut parts = Vec::new();
+    let mut groups = 0;
+
+    for child in &root.children {
+        match child {
+            NodeDraft::Condition(condition) => parts.push(condition_summary(condition)),
+            NodeDraft::Group(_) => groups += 1,
+        }
+    }
+
+    if groups > 0 {
+        parts.push(crate::labels::document_builder_group_count(groups));
+    }
+
+    if parts.is_empty() {
+        dbflux_i18n::t!("document.collection.builder.match.everything")
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn condition_summary(condition: &ConditionDraft) -> String {
+    let operator = crate::labels::document_operator_label(condition.operator);
+    let value = match &condition.operand {
+        Operand::Text { text, .. } => text.clone(),
+        Operand::Toggle(flag) => flag.to_string(),
+        Operand::Chips(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(|item| format_value(item, condition.kind))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Operand::Nested(_) => "{\u{2026}}".to_string(),
+    };
+
+    format!("{} {operator} {value}", condition.path)
+}
+
+/// The collapsed Group card of Find mode.
+fn render_add_group_stage(
+    panel: &DocumentBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let available = panel.aggregate_available();
+
+    let add = link_button(
+        "doc-builder-group-add",
+        dbflux_i18n::t!("document.collection.builder.group.add"),
+        AppIcon::Plus,
+        cx.listener(|this, _, _, cx| this.add_group_stage(cx)),
+    )
+    .disabled(!available);
+    let add = if available {
+        add
+    } else {
+        add.tooltip(dbflux_i18n::t!(
+            "document.collection.builder.mode.aggregate_unavailable"
+        ))
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .child(div().flex().child(add))
+        .child(caption(
+            dbflux_i18n::t!("document.collection.builder.group.add_hint"),
+            theme.muted_foreground,
+        ))
+        .into_any_element()
+}
+
+fn render_group_stage(
+    panel: &DocumentBuilderPanel,
+    stage: &GroupStageDraft,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let keys = stage
+        .keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            let tag = panel
+                .catalog
+                .types(key)
+                .first()
+                .map(|first| crate::labels::document_field_type_tag(*first));
+
+            div()
+                .id(SharedString::from(format!("doc-builder-group-key-{index}")))
+                .flex()
+                .items_center()
+                .gap(Spacing::XS)
+                .px(Spacing::XXS)
+                .bg(theme.secondary)
+                .font_family(AppFonts::MONO)
+                .text_size(FontSizes::XS)
+                .child(SharedString::from(key.clone()))
+                .children(tag.map(|tag| type_tag(tag, theme)))
+                .child(
+                    Button::new(
+                        SharedString::from(format!("doc-builder-group-key-remove-{index}")),
+                        dbflux_i18n::t!("document.collection.builder.filter.remove"),
+                    )
+                    .ghost()
+                    .inline()
+                    .icon(AppIcon::X)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.remove_group_key(index, cx))),
+                )
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    let add_key = div()
+        .relative()
+        .child(link_button(
+            "doc-builder-group-key-add",
+            dbflux_i18n::t!("document.collection.builder.group.add_key"),
+            AppIcon::Plus,
+            cx.listener(|this, _, window, cx| this.open_picker(PickTarget::GroupKey, window, cx)),
+        ))
+        .children(render_picker_if_open(
+            panel,
+            PickTarget::GroupKey,
+            theme,
+            cx,
+        ));
+
+    let keys_row = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(BuilderMetrics::CHIP_GAP)
+        .child(caption(
+            dbflux_i18n::t!("document.collection.builder.group.group_by"),
+            theme.muted_foreground,
+        ))
+        .when(stage.keys.is_empty(), |row| {
+            row.child(caption(
+                dbflux_i18n::t!("document.collection.builder.group.all_documents"),
+                theme.muted_foreground,
+            ))
+        })
+        .children(keys)
+        .child(add_key);
+
+    let accumulators = stage
+        .accumulators
+        .iter()
+        .map(|accumulator| render_accumulator(panel, accumulator, theme, cx))
+        .collect::<Vec<_>>();
+
+    let stage_problem = panel
+        .problems
+        .iter()
+        .filter(|problem| problem.node == stage.id)
+        .find(|problem| {
+            !matches!(
+                problem.kind,
+                ProblemKind::Spec(DocumentSpecProblem::AggregateSortPathUnknown { .. })
+            )
+        })
+        .map(|problem| crate::labels::document_builder_problem(&problem.kind));
+
+    div()
+        .id("doc-builder-group-stage")
+        .debug_selector(|| "doc-builder-group-stage".to_string())
+        .flex()
+        .flex_col()
+        .gap(BuilderMetrics::ROW_GAP)
+        .child(keys_row)
+        .child(caption(
+            dbflux_i18n::t!("document.collection.builder.group.accumulators"),
+            theme.muted_foreground,
+        ))
+        .children(accumulators)
+        .when_some(stage_problem, |column, text| {
+            column.child(caption(text, theme.danger))
+        })
+        .child(
+            div()
+                .flex()
+                .gap(Spacing::SM)
+                .child(link_button(
+                    "doc-builder-acc-add",
+                    dbflux_i18n::t!("document.collection.builder.group.add_accumulator"),
+                    AppIcon::Plus,
+                    cx.listener(|this, _, _, cx| this.add_accumulator(cx)),
+                ))
+                .child(div().flex_1())
+                .child(link_button(
+                    "doc-builder-group-remove",
+                    dbflux_i18n::t!("document.collection.builder.group.remove"),
+                    AppIcon::CircleX,
+                    cx.listener(|this, _, _, cx| this.remove_group_stage(cx)),
+                )),
+        )
+        .into_any_element()
+}
+
+/// One accumulator: its output name, `$count` / `$sum` / `$avg`, the field
+/// it reads (none for `$count`) and its problem, if any.
+fn render_accumulator(
+    panel: &DocumentBuilderPanel,
+    accumulator: &AccumulatorDraft,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let id = accumulator.id;
+    let weak = cx.weak_entity();
+    let op_id = |op: AccumulatorOp| match op {
+        AccumulatorOp::Count => "count",
+        AccumulatorOp::Sum => "sum",
+        AccumulatorOp::Avg => "avg",
+    };
+
+    let op_switch = SegmentedControl::new(
+        AccumulatorOp::ALL
+            .into_iter()
+            .map(|op| SegmentedItem::new(op_id(op), format!("${}", op_id(op))))
+            .collect(),
+        op_id(accumulator.op),
+        move |selected, _, cx| {
+            let op = match selected.as_ref() {
+                "sum" => AccumulatorOp::Sum,
+                "avg" => AccumulatorOp::Avg,
+                _ => AccumulatorOp::Count,
+            };
+            if let Some(panel) = weak.upgrade() {
+                panel.update(cx, |this, cx| this.set_accumulator_op(id, op, cx));
+            }
+        },
+    )
+    .group(format!("doc-builder-acc-op-{id}"));
+
+    let name = panel
+        .accumulator_inputs
+        .get(&id)
+        .map(|input| input.state.clone())
+        .map(|state| {
+            div()
+                .w(ACCUMULATOR_NAME_WIDTH)
+                .flex_shrink_0()
+                .child(
+                    Input::new(&state)
+                        .id(SharedString::from(format!("doc-builder-acc-name-{id}")))
+                        .small()
+                        .placeholder(dbflux_i18n::t!(
+                            "document.collection.builder.group.name_placeholder"
+                        ))
+                        .w_full(),
+                )
+                .into_any_element()
+        });
+
+    let field = if accumulator.op.takes_field() {
+        render_accumulator_field(panel, accumulator, theme, cx)
+    } else {
+        div()
+            .flex_1()
+            .min_w_0()
+            .child(caption(
+                dbflux_i18n::t!("document.collection.builder.group.no_field"),
+                theme.muted_foreground,
+            ))
+            .into_any_element()
+    };
+
+    let problem = panel
+        .problems
+        .iter()
+        .find(|problem| problem.node == id)
+        .map(|problem| match problem.kind {
+            ProblemKind::MissingField => {
+                dbflux_i18n::t!("document.collection.builder.group.pick_number")
+            }
+            ref kind => crate::labels::document_builder_problem(kind),
+        });
+
+    div()
+        .id(SharedString::from(format!("doc-builder-acc-{id}")))
+        .flex()
+        .flex_col()
+        .gap(Spacing::XS)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(BuilderMetrics::ROW_GAP)
+                .children(name)
+                .child(op_switch)
+                .child(field)
+                .child(
+                    Button::new(
+                        SharedString::from(format!("doc-builder-acc-remove-{id}")),
+                        dbflux_i18n::t!("document.collection.builder.filter.remove"),
+                    )
+                    .ghost()
+                    .inline()
+                    .icon(AppIcon::CircleX)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.remove_accumulator(id, cx))),
+                ),
+        )
+        .when_some(problem, |column, text| {
+            column.child(caption(text, theme.danger))
+        })
+        .into_any_element()
+}
+
+fn render_accumulator_field(
+    panel: &DocumentBuilderPanel,
+    accumulator: &AccumulatorDraft,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let id = accumulator.id;
+    let target = PickTarget::Accumulator(id);
+
+    let (label, color) = if accumulator.path.is_empty() {
+        (
+            dbflux_i18n::t!("document.collection.builder.filter.pick_field"),
+            theme.muted_foreground,
+        )
+    } else {
+        (accumulator.path.clone(), ChromeColors::strong(theme))
+    };
+    let tag = (!accumulator.path.is_empty())
+        .then(|| panel.catalog.types(&accumulator.path))
+        .and_then(|types| types.first().copied())
+        .map(crate::labels::document_field_type_tag);
+
+    let trigger = div()
+        .id(SharedString::from(format!("doc-builder-acc-field-{id}")))
+        .relative()
+        .flex()
+        .items_center()
+        .gap(Spacing::XS)
+        .w_full()
+        .h(Heights::ROW_COMPACT)
+        .px(Spacing::SM)
+        .cursor_pointer()
+        .child(
+            Chamfer::new(ChamferCut::CONTROL)
+                .fill(theme.background)
+                .border(theme.input),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_size(FontSizes::XS)
+                .text_color(color)
+                .child(SharedString::from(label)),
+        )
+        .children(tag.map(|tag| type_tag(tag, theme)))
+        .on_click(cx.listener(move |this, _, window, cx| this.open_picker(target, window, cx)));
+
+    div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .child(trigger)
+        .children(render_picker_if_open(panel, target, theme, cx))
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,7 +2106,10 @@ fn render_picker_if_open(
     }
 
     let typed = query.trim().to_string();
-    if is_valid_typed_path(&typed) && catalog.field(&typed).is_none() {
+    if panel.accepts_typed_path(target)
+        && is_valid_typed_path(&typed)
+        && catalog.field(&typed).is_none()
+    {
         rows.push(
             picker_row(
                 "doc-builder-picker-custom".into(),

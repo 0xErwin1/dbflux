@@ -68,6 +68,8 @@ pub(in crate::data_grid_panel) struct PendingAggregateRun {
     /// Native text of the pipeline, shown in the confirmation.
     pub query_text: Option<String>,
     pub suppress: bool,
+    /// The run came from the query builder's Run pipeline.
+    pub from_builder: bool,
 }
 
 /// What happens to a pipeline before it runs.
@@ -217,6 +219,12 @@ pub(in crate::data_grid_panel) struct AggregateViewState {
     pub history: Vec<String>,
     pub history_open: bool,
     pub pending_run: Option<PendingAggregateRun>,
+    /// Set by the query builder right before it runs its pipeline; taken by
+    /// the next run.
+    pub next_run_from_builder: bool,
+    /// Whether the results shown came from the query builder, which then
+    /// explains why they cannot be edited.
+    pub results_from_builder: bool,
     pub confirm_focus: ModalFocus,
     expanded: BTreeSet<String>,
     sort: Option<SortState>,
@@ -267,6 +275,8 @@ impl AggregateViewState {
             history: Vec::new(),
             history_open: false,
             pending_run: None,
+            next_run_from_builder: false,
+            results_from_builder: false,
             confirm_focus: ModalFocus::new(cx),
             expanded: BTreeSet::new(),
             sort: None,
@@ -327,7 +337,10 @@ impl DataGridPanel {
 
         match command {
             Command::RunQuery => {
-                self.run_aggregate(window, cx);
+                match self.document_builder_in_aggregate(cx) {
+                    Some(builder) => builder.update(cx, |builder, cx| builder.request_run(cx)),
+                    None => self.run_aggregate(window, cx),
+                }
                 true
             }
             Command::CycleDocumentView => {
@@ -354,6 +367,7 @@ impl DataGridPanel {
     ) {
         let aggregate = &mut self.collection.aggregate;
         aggregate.history_open = false;
+        let from_builder = std::mem::take(&mut aggregate.next_run_from_builder);
 
         if aggregate.running || aggregate.pending_run.is_some() {
             return;
@@ -433,7 +447,7 @@ impl DataGridPanel {
         });
 
         match gate {
-            AggregateGate::Run => self.execute_aggregate(request, cx),
+            AggregateGate::Run => self.execute_aggregate(request, from_builder, cx),
             AggregateGate::Confirm(kind) => {
                 let aggregate = &mut self.collection.aggregate;
                 aggregate.pending_run = Some(PendingAggregateRun {
@@ -441,6 +455,7 @@ impl DataGridPanel {
                     kind,
                     query_text,
                     suppress: false,
+                    from_builder,
                 });
                 aggregate.confirm_focus.focus(None, window, cx);
                 cx.notify();
@@ -472,7 +487,7 @@ impl DataGridPanel {
             self.emit_aggregate_confirmed_audit_event(kind, cx);
         }
 
-        self.execute_aggregate(pending.request, cx);
+        self.execute_aggregate(pending.request, pending.from_builder, cx);
     }
 
     /// "Cancel" in the confirmation: nothing runs.
@@ -484,7 +499,12 @@ impl DataGridPanel {
         }
     }
 
-    fn execute_aggregate(&mut self, request: CollectionAggregateRequest, cx: &mut Context<Self>) {
+    fn execute_aggregate(
+        &mut self,
+        request: CollectionAggregateRequest,
+        from_builder: bool,
+        cx: &mut Context<Self>,
+    ) {
         let DataSource::Collection { profile_id, .. } = &self.source else {
             return;
         };
@@ -555,6 +575,7 @@ impl DataGridPanel {
 
                     panel.collection.aggregate.running = false;
                     if let Ok(result) = result {
+                        panel.collection.aggregate.results_from_builder = from_builder;
                         panel.apply_aggregate_result(result, cx);
                     }
                     cx.notify();
