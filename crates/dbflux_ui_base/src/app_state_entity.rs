@@ -10,7 +10,6 @@ use dbflux_app::{
     AppState, app_state::ScriptsDirectoryDiagnostic, config_loader::HookLoadDiagnostic,
 };
 use dbflux_core::observability::EventSeverity;
-use dbflux_storage::DocumentQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
 use gpui::{Entity, EventEmitter, Global, WindowHandle};
 use gpui_component::Root;
@@ -248,9 +247,8 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
-        let saved_document_queries = SavedDocumentQueryManager::new(Arc::new(
-            DocumentQueryRepo::new(inner.saved_query_repo.shared_connection()),
-        ));
+        let saved_document_queries =
+            SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -293,9 +291,8 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
-        let saved_document_queries = SavedDocumentQueryManager::new(Arc::new(
-            DocumentQueryRepo::new(inner.saved_query_repo.shared_connection()),
-        ));
+        let saved_document_queries =
+            SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
