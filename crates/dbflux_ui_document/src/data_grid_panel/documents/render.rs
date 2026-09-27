@@ -178,6 +178,7 @@ impl DataGridPanel {
                 ))
             })
             .child(limit)
+            .children(self.render_document_builder_sync_chip(cx))
             .child(
                 Button::new(
                     "collection-find",

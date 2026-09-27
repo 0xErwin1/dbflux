@@ -13,6 +13,7 @@
 //! server copy before it is written.
 
 pub(super) mod aggregate;
+pub(super) mod builder;
 pub(super) mod columns;
 pub(super) mod completion;
 pub(super) mod inspector;
@@ -220,6 +221,8 @@ pub(super) struct CollectionViewState {
     json_baseline: String,
     /// The Aggregate view, held apart from the Documents page.
     pub aggregate: aggregate::AggregateViewState,
+    /// The visual query builder rail.
+    pub builder: builder::DocumentBuilderState,
     /// Refreshes the Document panel's pending-edit highlight when the grid's
     /// staged edits change.
     inspector_edits_observation: Option<Subscription>,
@@ -339,6 +342,7 @@ impl CollectionViewState {
             json_draft: JsonDraft::default(),
             json_baseline: String::new(),
             aggregate: aggregate::AggregateViewState::new(window, cx),
+            builder: builder::DocumentBuilderState::default(),
             inspector_edits_observation: None,
             _subscriptions: subscriptions,
         }
@@ -831,8 +835,9 @@ impl DataGridPanel {
 
         self.collection.history_open = false;
         self.grid_table.reload = super::TableReload::ResetRows;
+        let start = self.document_find_pagination(cx);
         if let DataSource::Collection { pagination, .. } = &mut self.source {
-            *pagination = pagination.clone().reset_offset();
+            *pagination = start;
         }
         self.refresh(window, cx);
         self.focus_table(window, cx);
@@ -1063,6 +1068,9 @@ impl DataGridPanel {
         request.filter = filter;
 
         self.collection.schema_load = SchemaLoad::Loading;
+        if let Some(panel) = self.collection.builder.panel.clone() {
+            panel.update(cx, |builder, cx| builder.set_sampling(true, cx));
+        }
         cx.notify();
 
         let entity = cx.entity().clone();
@@ -1093,6 +1101,9 @@ impl DataGridPanel {
                     cx.update(|cx| {
                         entity.update(cx, |panel, cx| {
                             panel.collection.schema_load = SchemaLoad::Failed(message);
+                            if let Some(builder) = panel.collection.builder.panel.clone() {
+                                builder.update(cx, |builder, cx| builder.set_sampling(false, cx));
+                            }
                             cx.notify();
                         });
                     });
@@ -1104,6 +1115,9 @@ impl DataGridPanel {
 
     fn apply_schema_sample(&mut self, sample: CollectionSchemaSample, cx: &mut Context<Self>) {
         *self.collection.field_paths.borrow_mut() = sample.field_paths();
+        if let Some(builder) = self.collection.builder.panel.clone() {
+            builder.update(cx, |builder, cx| builder.set_schema(&sample, cx));
+        }
         self.collection.schema = Some(sample);
         self.collection.schema_load = SchemaLoad::Idle;
 
@@ -1913,6 +1927,7 @@ impl DataGridPanel {
 
         self.inspector.follow_selection = true;
         self.inspector.inspector_row = Some((row, col));
+        self.mark_document_builder_closed();
 
         // The grid notifies when an edit is staged, reverted or committed;
         // the panel re-reads the staged edits of its document then.

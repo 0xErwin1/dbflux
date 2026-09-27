@@ -2530,6 +2530,138 @@ pub(crate) fn collection_matching_estimated(shown: usize, total: u64) -> String 
     )
 }
 
+/// Operator as the document builder lists it.
+pub(crate) fn document_operator_label(operator: dbflux_core::DocumentOperator) -> String {
+    use dbflux_core::DocumentOperator;
+
+    let label = match operator {
+        DocumentOperator::Eq => "$eq",
+        DocumentOperator::Ne => "$ne",
+        DocumentOperator::Gt => "$gt",
+        DocumentOperator::Gte => "$gte",
+        DocumentOperator::Lt => "$lt",
+        DocumentOperator::Lte => "$lte",
+        DocumentOperator::In => "$in",
+        DocumentOperator::Nin => "$nin",
+        DocumentOperator::Regex => "$regex",
+        DocumentOperator::Exists => "$exists",
+        DocumentOperator::ElemMatch => "$elemMatch",
+        DocumentOperator::Size => "$size",
+        DocumentOperator::All => "$all",
+    };
+
+    label.to_string()
+}
+
+/// Short type tag next to a field path in the document builder.
+pub(crate) fn document_field_type_tag(field_type: dbflux_core::DocumentFieldType) -> String {
+    use dbflux_core::DocumentFieldType;
+
+    match field_type {
+        DocumentFieldType::String => dbflux_i18n::t!("document.collection.builder.type.str"),
+        DocumentFieldType::Integer => dbflux_i18n::t!("document.collection.builder.type.int"),
+        DocumentFieldType::Decimal => dbflux_i18n::t!("document.collection.builder.type.dec"),
+        DocumentFieldType::Date => dbflux_i18n::t!("document.collection.builder.type.date"),
+        DocumentFieldType::Bool => dbflux_i18n::t!("document.collection.builder.type.bool"),
+        DocumentFieldType::ObjectId => dbflux_i18n::t!("document.collection.builder.type.oid"),
+        DocumentFieldType::Array => dbflux_i18n::t!("document.collection.builder.type.arr"),
+        DocumentFieldType::Object => dbflux_i18n::t!("document.collection.builder.type.obj"),
+    }
+}
+
+/// "3 conditions" over the builder's Filter card.
+pub(crate) fn document_builder_condition_count(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.collection.builder.filter.conditions.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.collection.builder.filter.conditions.many",
+            count = count
+        )
+    }
+}
+
+/// Mixed-type warning under a condition, naming the sampled types.
+pub(crate) fn document_builder_mixed_types(types: &[dbflux_core::DocumentFieldType]) -> String {
+    let tags: Vec<String> = types.iter().map(|t| document_field_type_tag(*t)).collect();
+    dbflux_i18n::t!(
+        "document.collection.builder.filter.mixed",
+        types = tags.join(", ")
+    )
+}
+
+/// Why typed text is not a value of the field's type.
+pub(crate) fn document_builder_value_problem(
+    problem: crate::document_builder::ValueProblem,
+) -> String {
+    use crate::document_builder::ValueProblem;
+
+    match problem {
+        ValueProblem::Empty => dbflux_i18n::t!("document.collection.builder.problem.empty"),
+        ValueProblem::NotANumber => {
+            dbflux_i18n::t!("document.collection.builder.problem.not_a_number")
+        }
+        ValueProblem::NotACount => {
+            dbflux_i18n::t!("document.collection.builder.problem.not_a_count")
+        }
+        ValueProblem::NotADate => dbflux_i18n::t!("document.collection.builder.problem.not_a_date"),
+        ValueProblem::NotAnObjectId => {
+            dbflux_i18n::t!("document.collection.builder.problem.not_an_object_id")
+        }
+        ValueProblem::NotABool => dbflux_i18n::t!("document.collection.builder.problem.not_a_bool"),
+        ValueProblem::LooksLikeObjectId => {
+            dbflux_i18n::t!("document.collection.builder.problem.looks_like_object_id")
+        }
+    }
+}
+
+/// Why a condition or group keeps the builder's query from running.
+pub(crate) fn document_builder_problem(kind: &crate::document_builder::ProblemKind) -> String {
+    use crate::document_builder::ProblemKind;
+
+    match kind {
+        ProblemKind::MissingField => {
+            dbflux_i18n::t!("document.collection.builder.problem.missing_field")
+        }
+        ProblemKind::Value(problem) => document_builder_value_problem(*problem),
+        ProblemKind::EmptyList => dbflux_i18n::t!("document.collection.builder.problem.empty_list"),
+        ProblemKind::EmptyGroup => {
+            dbflux_i18n::t!("document.collection.builder.problem.empty_group")
+        }
+        ProblemKind::Spec(problem) => dbflux_i18n::t!(
+            "document.collection.builder.problem.spec",
+            error = problem.to_string()
+        ),
+    }
+}
+
+/// Title of the sync-conflict card for the slot holding unreadable clauses.
+pub(crate) fn document_builder_conflict_title(slot: dbflux_core::DocumentSlot) -> String {
+    let keyword = match slot {
+        dbflux_core::DocumentSlot::Filter => "filter",
+        dbflux_core::DocumentSlot::Projection => "project",
+        dbflux_core::DocumentSlot::Sort => "sort",
+    };
+
+    dbflux_i18n::t!("document.collection.builder.conflict.title", slot = keyword)
+}
+
+/// Note under the field picker naming the sample it lists.
+pub(crate) fn document_builder_sample_note(sampled: u64) -> String {
+    dbflux_i18n::t!(
+        "document.collection.builder.picker.sample_note",
+        count = grouped_count(sampled)
+    )
+}
+
+/// Picker row that uses a typed path the sample never saw.
+pub(crate) fn document_builder_use_path(path: &str) -> String {
+    dbflux_i18n::t!("document.collection.builder.picker.use_path", path = path)
+}
+
 pub(crate) fn collection_inspector_json_failed(error: &str) -> String {
     dbflux_i18n::t!("document.collection.inspector.json_failed", error = error)
 }
