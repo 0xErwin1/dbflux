@@ -72,7 +72,17 @@ impl WhatsNewDialog {
     /// Opens the dialog for the releases after `since`, or for the running
     /// release when `since` is `None` or names no parseable version.
     pub fn open(&mut self, since: Option<String>, cx: &mut Context<Self>) {
-        let (content, releases) = releases_to_show(since, updates::current_version());
+        self.open_for_version(since, updates::current_version(), cx);
+    }
+
+    /// Opens the dialog as if `current_version` were the running version.
+    fn open_for_version(
+        &mut self,
+        since: Option<String>,
+        current_version: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let (content, releases) = releases_to_show(since, current_version);
 
         self.content = content;
         self.releases = releases;
@@ -315,7 +325,11 @@ mod tests {
         let app_state = test_app_state(cx);
         let (dialog, window) = cx.add_window_view(move |_, cx| WhatsNewDialog::new(app_state, cx));
 
-        dialog.update(window, |dialog, cx| dialog.open(None, cx));
+        // Pinned to a release whose section overflows, so the test does not
+        // depend on the size of the running version's changelog section.
+        dialog.update(window, |dialog, cx| {
+            dialog.open_for_version(None, "0.8.0", cx)
+        });
         window.run_until_parked();
 
         let handle = dialog.read_with(window, |dialog, _| dialog.changelog_scroll.clone());

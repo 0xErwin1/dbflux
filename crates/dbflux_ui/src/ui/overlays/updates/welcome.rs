@@ -79,7 +79,12 @@ impl WelcomeDialog {
     }
 
     pub fn open(&mut self, cx: &mut Context<Self>) {
-        self.release = updates::parse_version(updates::current_version())
+        self.open_for_version(updates::current_version(), cx);
+    }
+
+    /// Opens the dialog with the changelog section of `version`.
+    fn open_for_version(&mut self, version: &str, cx: &mut Context<Self>) {
+        self.release = updates::parse_version(version)
             .and_then(|current| changelog::release_for_version(changelog::bundled(), &current));
         self.highlights_scroll.set_offset(Point::default());
         self.visible = true;
@@ -363,7 +368,9 @@ mod tests {
         let (dialog, window) = cx.add_window_view(move |_, cx| WelcomeDialog::new(app_state, cx));
         window.simulate_resize(size(px(1200.0), px(460.0)));
 
-        dialog.update(window, |dialog, cx| dialog.open(cx));
+        // Pinned to a release with enough highlights to overflow, so the test
+        // does not depend on the running version's changelog section.
+        dialog.update(window, |dialog, cx| dialog.open_for_version("0.8.0", cx));
         window.run_until_parked();
 
         let handle = dialog.read_with(window, |dialog, _| dialog.highlights_scroll.clone());
