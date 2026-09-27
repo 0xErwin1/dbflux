@@ -41,3 +41,4 @@ AWS 관리형 NoSQL 키-값 및 문서 데이터베이스입니다.
 - 핵심 요청 계층의 컬렉션 탐색은 여전히 오프셋 기반이지만, 하위 API는 페이지 토큰 기반입니다.
 - 쓰기 권한 프로브가 없습니다. `Connection::probe_write_privilege`는 의도적으로 트레이트 기본값(`WritePrivilege::Unknown`)을 유지합니다. 신뢰할 수 있는 확인에는 `iam:SimulatePrincipalPolicy` 권한이 필요한데, 연결 역할에는 대개 이 권한이 없기 때문입니다.
 - 인스턴스 지표와 인스턴스 검사기가 없습니다(`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`를 선언하지 않음): DynamoDB의 서버 측 지표는 이미 CloudWatch에 있으므로, 드라이버별 `InstanceCatalog`는 새로운 표면을 추가하기보다 그 표면을 중복하게 됩니다.
+- 시각적 문서 쿼리 빌더가 없습니다(`DocumentFeatures::VISUAL_BUILDER`를 선언하지 않음): DynamoDB 테이블에서는 컬렉션 헤더의 빌더 버튼이 비활성화되어 표시됩니다.

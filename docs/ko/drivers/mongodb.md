@@ -26,6 +26,8 @@ DBFlux용 MongoDB 문서 드라이버입니다.
 - **데이터 그리드에서 컬렉션 탐색(`DocumentFeatures::QUERY_SLOTS`)**: 컬렉션 탐색은 필터 외에 프로젝션 문서와 정렬 문서를 받으며, `sample_collection_schema`는 무작위 표본(필터의 `$match` 뒤 `$sample`)을 읽어 필드 경로마다 존재율, 유형 분포(`String`, `Int32`, `Decimal128`, `Object`, `Array` 등), 값 요약을 보고합니다. 그리드는 이 표본으로 쿼리 바의 필드 경로 자동 완성, 열 머리글의 존재율 막대, 스키마 뷰를 제공합니다. 필터가 없는 개수는 `estimatedDocumentCount`에서 가져오며 추정치로 표시됩니다.
 - **필드 편집(`DocumentFeatures::FIELD_PATCH`)**: `patch_document`는 변경된 경로만 담은 `$set` / `$unset`으로 `updateOne`을 보내고 BSON 유형을 유지합니다(소수는 `Decimal128`, 날짜는 `Date`, ObjectId는 `ObjectId`로 남고, 텍스트는 ObjectId로 해석되지 않습니다). `replace_document`는 `_id`를 건드리지 않고 `replaceOne`을 보내며, `fetch_document`는 `_id`로 문서 하나를 읽어 페이지를 불러온 뒤 변경되었는지 그리드가 판단할 수 있게 합니다. 셸 생성기는 서버 변경 확인에 실제로 보낼 쓰기를 보여 줍니다. 예: `db.products.updateOne({ _id: ObjectId("…") }, { $set: { "price.amount": Decimal128("119.00") } })`.
 - **집계 뷰(`DocumentFeatures::AGGREGATE`)**: `aggregate_collection`은 JSON 스테이지로 된 파이프라인을 컬렉션에 실행하며, 요청이 요구하지 않으면 `allowDiskUse`는 꺼져 있습니다. 드라이버는 요청한 상한보다 하나 큰 `$limit`을 덧붙이고, 파이프라인이 더 많은 문서를 내면 결과를 잘림으로 표시합니다. `$out`이나 `$merge`로 끝나는 파이프라인은 그 스테이지를 마지막에 유지하며 문서를 반환하지 않습니다. 결과는 `browse_collection`과 같은 문서 형태로 돌아옵니다. 셸 생성기는 파이프라인을 `db.<collection>.aggregate([...])`로 보여 주고, 언어 서비스는 `$out` 또는 `$merge` 스테이지가 있는 파이프라인을 `MongoAggregateWrite`로 표시하므로 실행 전에 위험 쿼리 확인을 거칩니다.
+- **시각적 쿼리 빌더(`DocumentFeatures::VISUAL_BUILDER`)**: `Connection::document_query_codec()`은 `DocumentQuerySpec`을 `filter` / `project` / `sort` / `limit` 칸, 집계 파이프라인(`$match`, `$count` / `$sum` / `$avg`를 쓰는 `$group`, `$sort`, `$skip`, `$limit`), 셸 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 읽는 코덱을 반환합니다. `$expr`처럼 스펙에 담을 수 없는 절은 버려지지 않고 표현할 수 없는 텍스트로 반환되므로, 빌더는 이를 다시 쓰지 않고 동기화 충돌을 표시합니다. [문서 컬렉션](../QUERY_BUILDER.md#문서-컬렉션)을 참조하세요.
+- **확장 JSON 날짜**: 쿼리 칸, 집계 파이프라인, 문서 쓰기에 있는 `{"$date": "<RFC 3339>"}`는 BSON `Date`로 디코딩됩니다. 이런 위치의 잘못된 날짜 문자열은 하위 문서로 저장되지 않고 오류로 실패합니다.
 - 변경: 삽입, 업데이트(upsert 포함), 삭제(`supports_upsert: true`). `MongoShellGenerator`는 미리 보기와 쿼리로 복사를 위해 `insertOne`/`insertMany`, `updateOne`/`updateMany`(`{ upsert: true }` 포함), `deleteOne`/`deleteMany`를 만들어 냅니다.
 - DDL: 데이터베이스 삭제, 컬렉션 삭제, 인덱스 생성, 인덱스 삭제.
 - 결과의 JSON 내보내기(`EXPORT_JSON`).
@@ -83,3 +85,6 @@ MongoDB `serverStatus` 명령에서 가져온 엄선된 실시간 서버 지표�
 - 그리드에서 쓰는 정수는 들어가면 `Int32`, 아니면 `Int64`로 저장되며 필드의 이전 폭과 무관합니다.
 - 편집기의 셸 파서는 JSON 인수 안의 `NumberDecimal(...)`, `ISODate(...)` 같은 셸 생성자를 읽지 못합니다. 유형이 있는 쓰기는 그리드의 필드 편집을 사용하세요.
 - 서버 변경 확인은 쓰기 직전에 문서를 다시 읽어 페이지의 사본과 비교합니다. 그 읽기와 쓰기 사이에 일어난 변경은 감지되지 않습니다.
+- 쿼리 칸에서 16진수 24자리로 된 텍스트 값은 `ObjectId`로 실행되므로, 그런 문자열은 칸이나 시각적 빌더에서 텍스트로 검색할 수 없습니다.
+- 빌더 조건의 소수 값은 double로 비교되므로 `Decimal128` 필드와 일치하지 않습니다.
+- `{"$date": ...}`는 RFC 3339 문자열만 받습니다. 확장 JSON의 숫자 형식과 `{"$numberLong": ...}` 형식은 디코딩되지 않습니다.
