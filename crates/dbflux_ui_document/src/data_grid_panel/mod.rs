@@ -2136,6 +2136,8 @@ impl DataGridPanel {
                     content: view,
                     content_has_header: true,
                 });
+            } else if self.remount_document_builder(cx) {
+                // The document builder took the rail back.
             } else if self.inspector.value_panel_open {
                 // Re-read this grid's own cell. Reusing the cached content
                 // would leave the rail showing a value from the table the
@@ -2164,7 +2166,10 @@ impl DataGridPanel {
                 // content on screen.
                 cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_open || self.inspector.value_panel_open {
+        } else if self.builder.builder_open
+            || self.collection.builder.open
+            || self.inspector.value_panel_open
+        {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -2187,6 +2192,7 @@ impl DataGridPanel {
         self.pending.value_panel = None;
         self.pending.row_inspector_action = None;
         self.mark_builder_closed();
+        self.mark_document_builder_closed();
     }
 
     /// Records that the builder no longer owns the inspector rail.
@@ -2260,7 +2266,7 @@ impl DataGridPanel {
             return;
         }
 
-        if self.is_grouped_result() || self.builder.builder_open {
+        if self.is_grouped_result() || self.builder.builder_open || self.collection.builder.open {
             return;
         }
 
@@ -2313,6 +2319,7 @@ impl DataGridPanel {
         self.inspector.follow_selection = false;
         self.inspector.inspector_row = None;
         self.inspector.value_panel_open = true;
+        self.mark_document_builder_closed();
         self.pending.value_panel = Some(target);
         cx.notify();
     }
@@ -6347,8 +6354,6 @@ mod tests {
         query_language: dbflux_core::QueryLanguage,
         query: Option<dbflux_core::QueryCapabilities>,
     ) -> (gpui::Entity<AppStateEntity>, Uuid) {
-        init_test_runtime(cx);
-
         let metadata = dbflux_core::DriverMetadata {
             id: "stub-builder".to_string(),
             display_name: "Stub".to_string(),
@@ -6375,6 +6380,17 @@ mod tests {
             editor_profile: None,
         };
 
+        register_stub_connection(cx, Arc::new(StubBuilderConnection { metadata }))
+    }
+
+    /// Registers `connection` under a new profile in an isolated app state and
+    /// returns the app state plus the profile id.
+    pub(super) fn register_stub_connection(
+        cx: &mut TestAppContext,
+        connection: Arc<dyn dbflux_core::Connection>,
+    ) -> (gpui::Entity<AppStateEntity>, Uuid) {
+        init_test_runtime(cx);
+
         let profile_id = Uuid::new_v4();
 
         let app_state = cx.update(|cx| {
@@ -6397,7 +6413,7 @@ mod tests {
                 );
                 let connected = dbflux_core::ConnectedProfile {
                     profile,
-                    connection: Arc::new(StubBuilderConnection { metadata }),
+                    connection,
                     schema: None,
                     mutation_policy: dbflux_core::MutationPolicy::default(),
                     read_only_reason: None,

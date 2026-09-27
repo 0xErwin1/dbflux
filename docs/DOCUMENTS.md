@@ -34,6 +34,15 @@ in the order the page returns them.
   `$out` or `$merge` stage writes to a collection, so it asks for the same
   confirmation as any other dangerous query before it runs. The history button
   brings back an earlier pipeline of the same tab.
+- Drivers that offer it (MongoDB) add a **Builder** button to the collection
+  header. It opens a visual query builder in the right rail that stays in sync
+  with the query bar slots, can group documents with `$count`, `$sum` and
+  `$avg`, and saves queries per collection. While the builder is in Aggregate
+  mode, the query bar and the Aggregate view show a summary of its pipeline
+  instead of the slots and the pipeline editor, and **Run pipeline** runs it in
+  the Aggregate view. On other document drivers the button is disabled. See
+  [Document collections](QUERY_BUILDER.md#document-collections) in the query
+  builder guide.
 - The shortcut or row action that opens the row inspector on a table opens the
   **Document** panel on a collection: the document's size, then its fields as a
   tree of `key : value` rows with the value colored by type and a short type

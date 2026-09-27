@@ -634,6 +634,8 @@ crates/
 
 **持久化**：迁移 `017_qry_saved_queries` 新增了 `qry_*` 表族（根表 + 列/排序/连接子表、级联外键、`UNIQUE (profile_id, name)`），由 `SavedQueryRepo`（`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`）与内存中的 `SavedQueryManager`（`crates/dbflux_ui_base/src/saved_query_manager.rs`）负责前端访问。`TableProbe` 接缝用于在把已保存查询导入另一个连接时验证表是否存在，而无需侵入驱动程序代码。
 
+**文档查询构建器**：文档集合有自己的侧栏，以 `DocumentFeatures::VISUAL_BUILDER` 加上 `Connection::document_query_codec()` 返回的编解码器为门控，从不依据驱动程序 id。`DocumentQuerySpec`（`crates/dbflux_core/src/query/document_query.rs`）描述筛选树、带类型的值、包含/排除投影、排序、限制、跳过以及可选的分组阶段（`$count` / `$sum` / `$avg`）。驱动程序实现 `DocumentQueryCodec`，把 spec 渲染为 find 栏位（`DocumentFindSlots`）、管道和预览文本，并把栏位解析回 spec；无法表示的子句以 `UnrepresentableClause` 返回，使界面显示同步冲突而不是覆盖它们。界面位于 `crates/dbflux_ui_document/src/document_builder/` 与 `data_grid_panel/documents/builder.rs`：Find 写入栏位并通过 `browse_collection` 运行，因此结果保持可编辑；Aggregate 模式（同时以 `DocumentFeatures::AGGREGATE` 为门控）通过聚合视图运行管道，结果为只读。已保存的文档查询使用迁移 `037_qry_saved_document_queries`（spec 以 JSON 存储，`UNIQUE (profile_id, database_name, collection_name, name)`）、`DocumentQueryRepo` 与 `SavedDocumentQueryManager`（`crates/dbflux_ui_base/src/saved_document_query_manager.rs`）。
+
 ### 数据可视化
 
 - **数据表格**：`crates/dbflux_components/src/components/data_table/` 自研的虚拟化表格，支持排序、选区、基于虚拟滚动条模式的横向滚动、键盘导航、列宽调整，以及带 CRUD 操作的右键菜单。

@@ -412,7 +412,7 @@ impl DataGridPanel {
             return false;
         };
 
-        if let Some(total) = self.source.total_rows() {
+        if let Some(total) = self.paged_total() {
             let next_offset = pagination.offset() + pagination.limit() as u64;
             return next_offset < total;
         }
@@ -420,9 +420,22 @@ impl DataGridPanel {
         self.result.row_count() >= pagination.limit() as usize
     }
 
+    /// Rows the pages cover: a collection's page offsets count from the
+    /// builder's skip, so the skipped documents are left out.
+    fn paged_total(&self) -> Option<u64> {
+        let total = self.source.total_rows()?;
+
+        match self.source {
+            DataSource::Collection { .. } => {
+                Some(total.saturating_sub(self.collection.applied_skip))
+            }
+            _ => Some(total),
+        }
+    }
+
     pub(super) fn total_pages(&self) -> Option<u64> {
         let pagination = self.source.pagination()?;
-        let total = self.source.total_rows()?;
+        let total = self.paged_total()?;
         let limit = pagination.limit() as u64;
         if limit == 0 {
             return Some(1);

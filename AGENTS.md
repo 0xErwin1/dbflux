@@ -597,6 +597,13 @@ The right-rail builder composes SELECT / UPDATE / DELETE without writing SQL. It
 - Inline edit on builder-generated SELECT results is driven by `EditableBinding`: the result must be *editable-safe* (maps 1:1 to one table with every PK column projected under its original name); otherwise the grid is read-only. The proof lives in `dbflux_core` over generic spec/metadata types — keep it there, not in `dbflux_ui`.
 - Persistence: migration `017_qry_saved_queries`, the `qry_*` tables, `SavedQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`), and the in-memory `SavedQueryManager` (`crates/dbflux_ui_base/src/saved_query_manager.rs`) wired into `AppStateEntity`. Cross-connection import verifies table existence through a `TableProbe` seam rather than reaching into driver code.
 
+The document query builder is a separate rail for document collections, with the same rules:
+
+- The spec is `DocumentQuerySpec` in `dbflux_core/src/query/document_query.rs`. Drivers implement `DocumentQueryCodec` and return it from `Connection::document_query_codec()`; the codec renders a spec as find slots, a pipeline and preview text, and parses the slots back with the clauses it cannot represent.
+- The UI gates on `DocumentFeatures::VISUAL_BUILDER` (and `DocumentFeatures::AGGREGATE` for Aggregate mode), never on a driver id. It lives in `crates/dbflux_ui_document/src/document_builder/` and `data_grid_panel/documents/builder.rs`.
+- Execution goes through the query slots and `browse_collection` (Find) or the Aggregate view (Aggregate); the builder never executes generated shell text.
+- Persistence: migration `037_qry_saved_document_queries`, `DocumentQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_document_queries.rs`) and `SavedDocumentQueryManager` (`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
+
 ### Language Services
 
 - `LanguageService` trait in `crates/dbflux_core/src/query/language_service.rs` exposes `validate`, `detect_dangerous`, and `editor_diagnostics`. `SqlLanguageService` is the default impl for relational drivers.

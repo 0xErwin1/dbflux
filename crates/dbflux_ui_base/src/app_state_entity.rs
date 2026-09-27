@@ -19,6 +19,7 @@ use crate::dashboard_manager::DashboardManager;
 use crate::notifications::NotificationCenter;
 use crate::object_tree::{ObjectTreeCoordinator, ObjectTreeEvent};
 use crate::saved_chart_manager::SavedChartManager;
+use crate::saved_document_query_manager::SavedDocumentQueryManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
 use crate::user_error::{ErrorKind, UserFacingError};
@@ -177,6 +178,9 @@ pub struct AppStateEntity {
     /// `save`, `rename`, `fork`, `delete`, and `import_to`.
     pub saved_queries: SavedQueryManager,
 
+    /// Queries saved from the document query builder, listed per collection.
+    pub saved_document_queries: SavedDocumentQueryManager,
+
     /// Persisted schema-snapshot manager — mutated via `capture`/`capture_deep`
     /// (on-connect auto-capture and the explicit deep-capture path).
     pub schema_snapshots: SchemaSnapshotManager,
@@ -243,6 +247,8 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let saved_document_queries =
+            SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -253,6 +259,7 @@ impl AppStateEntity {
             saved_charts,
             dashboards,
             saved_queries,
+            saved_document_queries,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
@@ -284,6 +291,8 @@ impl AppStateEntity {
             Arc::clone(&inner.dashboard_panels_repo),
         );
         let saved_queries = SavedQueryManager::new(Arc::clone(&inner.saved_query_repo));
+        let saved_document_queries =
+            SavedDocumentQueryManager::new(Arc::clone(&inner.document_query_repo));
         let schema_snapshots = SchemaSnapshotManager::new(Arc::clone(&inner.schema_snapshot_repo));
         let hook_load_diagnostics = inner.take_hook_load_diagnostics();
         let scripts_directory_diagnostics = inner.take_scripts_directory_diagnostics();
@@ -294,6 +303,7 @@ impl AppStateEntity {
             saved_charts,
             dashboards,
             saved_queries,
+            saved_document_queries,
             schema_snapshots,
             object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,

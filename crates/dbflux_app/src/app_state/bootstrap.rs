@@ -11,7 +11,6 @@ use dbflux_core::{
     SshTunnelProfile,
 };
 
-use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
 use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
 use dbflux_storage::repositories::viz_dashboard_panels::DashboardPanelsRepository;
@@ -19,6 +18,7 @@ use dbflux_storage::repositories::viz_dashboards::DashboardsRepository;
 use dbflux_storage::repositories::viz_saved_chart_binding_y::SavedChartBindingYRepository;
 use dbflux_storage::repositories::viz_saved_chart_series::SavedChartSeriesRepository;
 use dbflux_storage::repositories::viz_saved_charts::SavedChartsRepository;
+use dbflux_storage::{DocumentQueryRepo, SavedQueryRepo};
 
 #[cfg(feature = "mcp")]
 use dbflux_mcp::{
@@ -218,6 +218,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            document_query_repo,
             schema_snapshot_repo,
         ) = Self::build_viz_repositories(&storage_runtime)?;
 
@@ -255,6 +256,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            document_query_repo,
             schema_snapshot_repo,
         };
 
@@ -392,6 +394,7 @@ impl AppState {
             Arc<DashboardsRepository>,
             Arc<DashboardPanelsRepository>,
             Arc<SavedQueryRepo>,
+            Arc<DocumentQueryRepo>,
             Arc<SchemaSnapshotRepo>,
         ),
         dbflux_storage::error::StorageError,
@@ -405,6 +408,7 @@ impl AppState {
         let dashboards_repo = Arc::new(DashboardsRepository::new(Arc::clone(&viz_conn)));
         let dashboard_panels_repo = Arc::new(DashboardPanelsRepository::new(Arc::clone(&viz_conn)));
         let saved_query_repo = Arc::new(SavedQueryRepo::new(Arc::clone(&viz_conn)));
+        let document_query_repo = Arc::new(DocumentQueryRepo::new(Arc::clone(&viz_conn)));
         let schema_snapshot_repo = Arc::new(SchemaSnapshotRepo::new(Arc::clone(&viz_conn)));
 
         Ok((
@@ -414,6 +418,7 @@ impl AppState {
             dashboards_repo,
             dashboard_panels_repo,
             saved_query_repo,
+            document_query_repo,
             schema_snapshot_repo,
         ))
     }

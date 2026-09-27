@@ -28,6 +28,14 @@ const COMMIT_SHORTCUT: &str = "Cmd S";
 #[cfg(not(target_os = "macos"))]
 const COMMIT_SHORTCUT: &str = "Ctrl S";
 
+/// Narrowest the filter slot gets; below it the query bar wraps instead, so
+/// the slot stays readable beside the builder rail.
+const FILTER_SLOT_MIN_WIDTH: Pixels = px(260.0);
+
+/// Space above and below a line of slots, so a single line keeps the
+/// board's row height and wrapped lines keep the same padding.
+const QUERY_ROW_PADDING_Y: Pixels = px(9.0);
+
 /// Color of a type in the schema bars and legends.
 fn type_color(type_name: &str, theme: &gpui_component::Theme, cx: &App) -> Hsla {
     match type_name {
@@ -76,6 +84,7 @@ impl DataGridPanel {
 
         div()
             .id(id)
+            .debug_selector(|| id.to_string())
             .relative()
             .flex()
             .items_center()
@@ -86,7 +95,7 @@ impl DataGridPanel {
             .text_size(CollectionMetrics::SLOT_FONT)
             .map(|slot| match width {
                 Some(width) => slot.w(width).flex_shrink_0(),
-                None => slot.flex_1().min_w_0(),
+                None => slot.flex_1().min_w(FILTER_SLOT_MIN_WIDTH),
             })
             .child(
                 Chamfer::new(ChamferCut::CONTROL)
@@ -106,11 +115,17 @@ impl DataGridPanel {
     }
 
     /// Query bar of a document collection: filter, project, sort and limit
-    /// slots, Find and the query history (P1DocTable).
+    /// slots, Find and the query history (P1DocTable). While the builder
+    /// composes an aggregation the slots are not its query, so the bar shows
+    /// the pipeline summary instead.
     pub(in crate::data_grid_panel) fn render_document_query_bar(
         &self,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
+        if let Some(stages) = self.document_builder_pipeline_stages(cx) {
+            return self.render_builder_pipeline_row(stages, cx);
+        }
+
         let theme = cx.theme().clone();
         let slots = self.has_document_query_slots(cx);
 
@@ -151,10 +166,12 @@ impl DataGridPanel {
         div()
             .key_context(dbflux_components::key_contexts::DOCUMENT_QUERY_BAR)
             .flex()
+            .flex_wrap()
             .flex_shrink_0()
             .items_center()
             .gap(CollectionMetrics::QUERY_ROW_GAP)
-            .h(CollectionMetrics::QUERY_ROW_HEIGHT)
+            .min_h(CollectionMetrics::QUERY_ROW_HEIGHT)
+            .py(QUERY_ROW_PADDING_Y)
             .px(CollectionMetrics::QUERY_ROW_PADDING_X)
             .border_b_1()
             .border_color(theme.border)
@@ -178,6 +195,7 @@ impl DataGridPanel {
                 ))
             })
             .child(limit)
+            .children(self.render_document_builder_sync_chip(cx))
             .child(
                 Button::new(
                     "collection-find",
@@ -218,6 +236,7 @@ impl DataGridPanel {
                     )
                     .when_some(history_menu, |anchor, menu| anchor.child(menu)),
             )
+            .into_any_element()
     }
 
     fn render_query_history_menu(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -542,13 +561,20 @@ impl DataGridPanel {
         Some(crate::labels::collection_document_count(total))
     }
 
-    /// Footer text: page size against the (estimated) match count.
+    /// Footer text: page size against the (estimated) match count, without
+    /// the documents the builder skipped.
     pub(in crate::data_grid_panel) fn document_count_footer(&self) -> String {
         let shown = self.collection.documents.len();
+        let skipped = self.collection.applied_skip;
 
         match self.collection.count {
-            Some(count) if count.exact => crate::labels::collection_matching(shown, count.count),
-            Some(count) => crate::labels::collection_matching_estimated(shown, count.count),
+            Some(count) if count.exact => {
+                crate::labels::collection_matching(shown, count.count.saturating_sub(skipped))
+            }
+            Some(count) => crate::labels::collection_matching_estimated(
+                shown,
+                count.count.saturating_sub(skipped),
+            ),
             None => crate::labels::collection_documents(shown),
         }
     }
