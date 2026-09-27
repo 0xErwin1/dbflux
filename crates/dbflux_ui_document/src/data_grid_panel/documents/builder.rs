@@ -384,6 +384,7 @@ impl DataGridPanel {
                         &format!("Saved document query \"{}\"", summary.name),
                         &summary.id,
                         &scope,
+                        self.collection_driver_id(cx).as_deref(),
                     ),
                     cx,
                 );
@@ -439,8 +440,15 @@ impl DataGridPanel {
         let Some(panel) = self.collection.builder.panel.clone() else {
             return;
         };
+        let Some(scope) = self.document_query_scope() else {
+            return;
+        };
 
-        let loaded = self.app_state.read(cx).saved_document_queries.load(id);
+        let loaded = self
+            .app_state
+            .read(cx)
+            .saved_document_queries
+            .load(id, &scope);
 
         let saved = match loaded {
             Ok(Some(saved)) => saved,
@@ -504,6 +512,7 @@ impl DataGridPanel {
                             "Deleted a saved document query",
                             id,
                             &scope,
+                            self.collection_driver_id(cx).as_deref(),
                         ),
                         cx,
                     );
@@ -518,6 +527,12 @@ impl DataGridPanel {
                 cx,
             ),
         }
+    }
+
+    /// Driver of the collection's connection, for audit events.
+    fn collection_driver_id(&self, cx: &App) -> Option<String> {
+        self.collection_connection(cx)
+            .map(|connection| connection.metadata().id.clone())
     }
 
     fn record_saved_query_audit(&self, event: EventRecord, cx: &App) {
@@ -803,17 +818,19 @@ fn saved_query_entry(summary: SavedDocumentQuerySummary) -> SavedQueryEntry {
     }
 }
 
-/// The `Config` audit event of a change to a saved document query.
+/// The `Config` audit event of a change to a saved document query. The
+/// driver is left unset when the connection is not known.
 fn saved_query_audit_event(
     action: AuditAction,
     summary: &str,
     id: &str,
     scope: &DocumentQueryScope,
+    driver_id: Option<&str>,
 ) -> EventRecord {
     let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
     let details = serde_json::json!({ "collection": scope.collection });
 
-    EventRecord::new(
+    let mut event = EventRecord::new(
         now_ms,
         EventSeverity::Info,
         EventCategory::Config,
@@ -823,9 +840,14 @@ fn saved_query_audit_event(
     .with_typed_action(action)
     .with_origin(EventOrigin::local())
     .with_actor_id("local")
-    .with_connection_context(scope.profile_id.clone(), scope.database.clone(), "")
     .with_object_ref(SAVED_QUERY_OBJECT_TYPE, id)
-    .with_details_json(details.to_string())
+    .with_details_json(details.to_string());
+
+    event.connection_id = Some(scope.profile_id.clone());
+    event.database_name = Some(scope.database.clone());
+    event.driver_id = driver_id.map(str::to_string);
+
+    event
 }
 
 #[cfg(test)]
@@ -2441,12 +2463,30 @@ mod tests {
             dbflux_core::observability::actions::CONFIG_UPDATE,
             dbflux_core::observability::actions::CONFIG_DELETE,
         ] {
-            let event = super::saved_query_audit_event(action, "Saved \"adults\"", "id-1", &scope);
+            let event = super::saved_query_audit_event(
+                action,
+                "Saved \"adults\"",
+                "id-1",
+                &scope,
+                Some("mongodb"),
+            );
 
             dbflux_audit::AuditService::validate_event(&event).expect("a valid config event");
             assert_eq!(event.object_type.as_deref(), Some("saved_document_query"));
             assert_eq!(event.object_id.as_deref(), Some("id-1"));
+            assert_eq!(event.driver_id.as_deref(), Some("mongodb"));
         }
+
+        let event = super::saved_query_audit_event(
+            dbflux_core::observability::actions::CONFIG_DELETE,
+            "Deleted a saved document query",
+            "id-1",
+            &scope,
+            None,
+        );
+        assert_eq!(event.driver_id, None, "an unknown driver is left unset");
+        assert_eq!(event.connection_id.as_deref(), Some("profile-1"));
+        assert_eq!(event.database_name.as_deref(), Some("shop"));
     }
 
     #[gpui::test]

@@ -3,7 +3,9 @@
 //!
 //! Wraps `DocumentQueryRepo` from `dbflux_storage` and caches the list of each
 //! collection scope for synchronous reads. Writes go to the repository first;
-//! the cache of the scope is rebuilt only after a successful write.
+//! the cache of the scope is rebuilt only after a successful write. A write
+//! that committed succeeds even when that rebuild fails: the failure is
+//! logged and the scope is read again on the next `list`, which reports it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,9 +46,14 @@ impl SavedDocumentQueryManager {
         Ok(rows)
     }
 
-    /// The saved query `id` with its spec, or `None` when it no longer exists.
-    pub fn load(&self, id: &str) -> Result<Option<SavedDocumentQuery>, StorageError> {
-        self.repo.get(id)
+    /// The saved query `id` of `scope` with its spec, or `None` when it no
+    /// longer exists there.
+    pub fn load(
+        &self,
+        id: &str,
+        scope: &DocumentQueryScope,
+    ) -> Result<Option<SavedDocumentQuery>, StorageError> {
+        self.repo.get(id, scope)
     }
 
     /// Saves `spec` as `name` in `scope`, replacing a query of that name.
@@ -65,26 +72,34 @@ impl SavedDocumentQueryManager {
         }
 
         let summary = self.repo.upsert_by_name(scope, name, spec)?;
-        self.reload(scope)?;
+        self.reload_after_write(scope);
 
         Ok(summary)
     }
 
     /// Deletes the saved query `id` of `scope`. Returns whether it existed.
     pub fn delete(&mut self, id: &str, scope: &DocumentQueryScope) -> Result<bool, StorageError> {
-        let deleted = self.repo.delete(id)?;
-        self.reload(scope)?;
+        let deleted = self.repo.delete(id, scope)?;
+        self.reload_after_write(scope);
 
         Ok(deleted)
     }
 
-    fn reload(&mut self, scope: &DocumentQueryScope) -> Result<(), StorageError> {
+    /// Rebuilds the cache of `scope` after a committed write. On failure the
+    /// scope stays uncached, so the next `list` reads the repository again.
+    fn reload_after_write(&mut self, scope: &DocumentQueryScope) {
         self.cache.remove(scope);
 
-        let rows = self.repo.list_for_scope(scope)?;
-        self.cache.insert(scope.clone(), rows);
-
-        Ok(())
+        match self.repo.list_for_scope(scope) {
+            Ok(rows) => {
+                self.cache.insert(scope.clone(), rows);
+            }
+            Err(error) => log::warn!(
+                "saved document queries of {}.{} could not be reloaded after a write: {error}",
+                scope.database,
+                scope.collection
+            ),
+        }
     }
 }
 
@@ -97,9 +112,18 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
 
     fn manager() -> SavedDocumentQueryManager {
+        manager_and_connection().0
+    }
+
+    fn manager_and_connection() -> (
+        SavedDocumentQueryManager,
+        Arc<std::sync::Mutex<rusqlite::Connection>>,
+    ) {
         let runtime = StorageRuntime::in_memory().expect("runtime");
         let conn = runtime.viz_connection().expect("connection");
-        SavedDocumentQueryManager::new(Arc::new(DocumentQueryRepo::new(conn)))
+        let manager =
+            SavedDocumentQueryManager::new(Arc::new(DocumentQueryRepo::new(Arc::clone(&conn))));
+        (manager, conn)
     }
 
     fn scope() -> DocumentQueryScope {
@@ -145,9 +169,12 @@ mod tests {
         let mut manager = manager();
         let summary = manager.save(&scope(), "recent", &spec(10)).unwrap();
 
-        let saved = manager.load(&summary.id).unwrap().expect("exists");
+        let saved = manager
+            .load(&summary.id, &scope())
+            .unwrap()
+            .expect("exists");
         assert_eq!(saved.spec, spec(10));
-        assert_eq!(manager.load("missing").unwrap(), None);
+        assert_eq!(manager.load("missing", &scope()).unwrap(), None);
     }
 
     #[test]
@@ -166,5 +193,36 @@ mod tests {
             .map(|summary| summary.name)
             .collect();
         assert_eq!(names, vec!["older".to_string()]);
+    }
+
+    #[test]
+    fn a_committed_write_succeeds_when_the_list_cannot_be_reloaded() {
+        let (mut manager, conn) = manager_and_connection();
+        let kept = manager.save(&scope(), "kept", &spec(1)).unwrap();
+
+        conn.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO qry_saved_document_queries
+                     (id, profile_id, database_name, collection_name, name, mode,
+                      format_version, spec_json, created_at, updated_at)
+                 VALUES ('unlistable', 'profile-1', 'shop', 'orders', 'unlistable', 'find', 1,
+                         '{}', 1, 'not a timestamp')",
+                [],
+            )
+            .unwrap();
+        assert!(manager.repo.list_for_scope(&scope()).is_err());
+
+        let saved = manager.save(&scope(), "recent", &spec(10));
+        assert_eq!(
+            saved.map(|summary| summary.name).ok(),
+            Some("recent".to_string())
+        );
+
+        assert!(matches!(manager.delete(&kept.id, &scope()), Ok(true)));
+        assert!(
+            manager.list(&scope()).is_err(),
+            "the next list reads the repository again"
+        );
     }
 }

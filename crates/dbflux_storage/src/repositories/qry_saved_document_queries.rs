@@ -97,8 +97,13 @@ impl DocumentQueryRepo {
         Ok(rows)
     }
 
-    /// The saved query `id`, or `None` when there is no such row.
-    pub fn get(&self, id: &str) -> Result<Option<SavedDocumentQuery>, StorageError> {
+    /// The saved query `id` of `scope`, or `None` when that collection has
+    /// no such row.
+    pub fn get(
+        &self,
+        id: &str,
+        scope: &DocumentQueryScope,
+    ) -> Result<Option<SavedDocumentQuery>, StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
         let row = conn
@@ -106,8 +111,9 @@ impl DocumentQueryRepo {
                 "SELECT id, profile_id, database_name, collection_name, name, mode, updated_at,
                         spec_json
                  FROM qry_saved_document_queries
-                 WHERE id = ?1",
-                [id],
+                 WHERE id = ?1 AND profile_id = ?2 AND database_name = ?3
+                   AND collection_name = ?4",
+                rusqlite::params![id, scope.profile_id, scope.database, scope.collection],
                 |row| Ok((map_summary_row(row)?, row.get::<_, String>(7)?)),
             )
             .optional()
@@ -187,12 +193,18 @@ impl DocumentQueryRepo {
         })
     }
 
-    /// Deletes the saved query `id`. Returns whether a row was deleted.
-    pub fn delete(&self, id: &str) -> Result<bool, StorageError> {
+    /// Deletes the saved query `id` of `scope`. Returns whether a row was
+    /// deleted.
+    pub fn delete(&self, id: &str, scope: &DocumentQueryScope) -> Result<bool, StorageError> {
         let conn = self.conn.lock().map_err(lock_err)?;
 
         let deleted = conn
-            .execute("DELETE FROM qry_saved_document_queries WHERE id = ?1", [id])
+            .execute(
+                "DELETE FROM qry_saved_document_queries
+                 WHERE id = ?1 AND profile_id = ?2 AND database_name = ?3
+                   AND collection_name = ?4",
+                rusqlite::params![id, scope.profile_id, scope.database, scope.collection],
+            )
             .map_err(sqlite_err)?;
 
         Ok(deleted > 0)
@@ -308,13 +320,16 @@ mod tests {
             .expect("save");
         assert_eq!(summary.mode, DocumentQueryMode::Aggregate);
 
-        let saved = repo.get(&summary.id).expect("get").expect("exists");
+        let saved = repo
+            .get(&summary.id, &scope("orders"))
+            .expect("get")
+            .expect("exists");
         assert_eq!(saved.spec, aggregate_spec());
         assert_eq!(saved.summary.name, "by status");
         assert_eq!(saved.summary.scope, scope("orders"));
         assert_eq!(saved.summary.mode, DocumentQueryMode::Aggregate);
 
-        assert_eq!(repo.get("missing").expect("get"), None);
+        assert_eq!(repo.get("missing", &scope("orders")).expect("get"), None);
     }
 
     #[test]
@@ -331,7 +346,10 @@ mod tests {
         assert_eq!(first.id, second.id);
         assert_eq!(repo.list_for_scope(&scope("orders")).unwrap().len(), 1);
         assert_eq!(
-            repo.get(&first.id).unwrap().expect("exists").spec,
+            repo.get(&first.id, &scope("orders"))
+                .unwrap()
+                .expect("exists")
+                .spec,
             find_spec(21)
         );
     }
@@ -375,9 +393,25 @@ mod tests {
             .upsert_by_name(&scope("orders"), "adults", &find_spec(18))
             .unwrap();
 
-        assert!(repo.delete(&summary.id).unwrap());
-        assert!(!repo.delete(&summary.id).unwrap(), "already gone");
+        assert!(repo.delete(&summary.id, &scope("orders")).unwrap());
+        assert!(
+            !repo.delete(&summary.id, &scope("orders")).unwrap(),
+            "already gone"
+        );
         assert!(repo.list_for_scope(&scope("orders")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_and_delete_stay_inside_their_scope() {
+        let (repo, _) = repo();
+
+        let summary = repo
+            .upsert_by_name(&scope("orders"), "adults", &find_spec(18))
+            .unwrap();
+
+        assert_eq!(repo.get(&summary.id, &scope("customers")).unwrap(), None);
+        assert!(!repo.delete(&summary.id, &scope("customers")).unwrap());
+        assert!(repo.get(&summary.id, &scope("orders")).unwrap().is_some());
     }
 
     #[test]
@@ -397,7 +431,7 @@ mod tests {
             )
             .unwrap();
 
-        let saved = repo.get("old").unwrap().expect("exists");
+        let saved = repo.get("old", &scope("orders")).unwrap().expect("exists");
         assert_eq!(saved.spec.limit, Some(5));
         assert!(saved.spec.sort.is_empty());
     }
@@ -418,6 +452,9 @@ mod tests {
             )
             .unwrap();
 
-        assert!(matches!(repo.get("broken"), Err(StorageError::Data(_))));
+        assert!(matches!(
+            repo.get("broken", &scope("orders")),
+            Err(StorageError::Data(_))
+        ));
     }
 }
