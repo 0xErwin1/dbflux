@@ -1191,9 +1191,27 @@ fn input_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Input);
 
     // Vim-style aliases for the input's own Down / Up, which also move
-    // through an open completion menu.
-    layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::SelectNext);
-    layer.bind(KeyChord::new("k", Modifiers::ctrl()), Command::SelectPrev);
+    // through an open completion menu. The code editor leaves them to the
+    // Editor layer's pane navigation and steps its menus itself.
+    layer.bind_with_predicate(
+        KeyChord::new("j", Modifiers::ctrl()),
+        Command::SelectNext,
+        "Input && !CodeEditor",
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("k", Modifiers::ctrl()),
+        Command::SelectPrev,
+        "Input && !CodeEditor",
+    );
+
+    // The input component binds Ctrl+H to its replace panel at this depth.
+    // Inside the code editor, and its find panel, it moves focus left like
+    // everywhere else; replace moves to Ctrl+Shift+H (see `init_keymap`).
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::ctrl()),
+        Command::FocusLeft,
+        "CodeEditor > Input",
+    );
     layer.bind(
         KeyChord::new("space", Modifiers::ctrl()),
         Command::TriggerCompletion,

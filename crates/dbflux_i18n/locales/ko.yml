@@ -1134,11 +1134,6 @@ document:
       visual: "비주얼"
       visual_line: "비주얼 줄"
       visual_block: "비주얼 블록"
-      search:
-        label: "Vim 검색"
-        placeholder: "앞으로 검색"
-        run: "검색"
-        cancel: "취소"
     output:
       running: "실행 중…"
       stopped: 중지됨

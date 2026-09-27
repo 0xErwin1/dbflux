@@ -213,7 +213,7 @@ impl CodeDocument {
 
         handle.key_context_entries = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).key_context_entries())
+            Box::new(move |cx| e.read(cx).key_context_entries(cx))
         });
 
         handle.tab_tooltip = Some({
