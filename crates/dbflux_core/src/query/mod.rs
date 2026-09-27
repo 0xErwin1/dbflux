@@ -1,4 +1,5 @@
 pub(crate) mod column_kind;
+pub(crate) mod document_query;
 pub(crate) mod generator;
 pub(crate) mod keyset;
 pub(crate) mod language_service;
@@ -16,6 +17,14 @@ pub(crate) mod types;
 pub(crate) mod visual_query;
 
 pub use column_kind::{infer_column_kind, project_aggregate_kinds};
+pub use document_query::{
+    DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator, DocumentCondition,
+    DocumentFieldType, DocumentFilterGroup, DocumentFilterNode, DocumentFindSlots,
+    DocumentGroupStage, DocumentOperator, DocumentProjection, DocumentProjectionMode,
+    DocumentQueryCodec, DocumentQueryMode, DocumentQuerySpec, DocumentSlot, DocumentSlotParse,
+    DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
+    UnrepresentableClause,
+};
 pub use generator::{
     CollectionTemplateRequest, CreateTableSpec, GeneratedMutation, GeneratedQuery, GeneratorError,
     MutationCategory, MutationTemplateOperation, MutationTemplateRequest, QueryGenError,

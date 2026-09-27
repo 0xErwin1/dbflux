@@ -31,6 +31,11 @@ bitflags::bitflags! {
         /// `Connection::aggregate_collection` runs aggregation pipelines.
         /// Gates the Aggregate view of a collection.
         const AGGREGATE = 1 << 2;
+
+        /// `Connection::document_query_codec` returns a codec, so the visual
+        /// query builder can compose find and aggregate queries. Gates the
+        /// Builder button of the document query bar.
+        const VISUAL_BUILDER = 1 << 3;
     }
 }
 
