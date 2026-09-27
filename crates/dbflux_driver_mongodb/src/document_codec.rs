@@ -25,7 +25,7 @@ use dbflux_core::{
     DocumentQueryMode, DocumentQuerySpec, DocumentSlot, DocumentSlotParse, DocumentSortDirection,
     DocumentSortKey, DocumentValue, UnrepresentableClause, normalize_relaxed_json,
 };
-use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{Deserialize, Deserializer, Error as _, MapAccess, SeqAccess, Visitor};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MongoDocumentCodec;
@@ -59,7 +59,11 @@ impl DocumentQueryCodec for MongoDocumentCodec {
         }
 
         if !spec.sort.is_empty() {
-            stages.push(stage("$sort", sort_document(&spec.sort)));
+            let sort = match &spec.group {
+                Some(group) => group_sort_keys(group, &spec.sort),
+                None => spec.sort.clone(),
+            };
+            stages.push(stage("$sort", sort_document(&sort)));
         }
 
         if let Some(skip) = spec.skip {
@@ -263,9 +267,14 @@ impl<'de> Visitor<'de> for JsonVisitor {
         Ok(Json::Array(items))
     }
 
+    /// Rejects duplicate keys: execution keeps only the last one, so reading
+    /// every duplicate would describe a different query than the one that runs.
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
-        let mut entries = Vec::new();
+        let mut entries: Vec<(String, Json)> = Vec::new();
         while let Some((key, value)) = map.next_entry::<String, Json>()? {
+            if entries.iter().any(|(existing, _)| *existing == key) {
+                return Err(A::Error::custom(format!("duplicate key `{key}`")));
+            }
             entries.push((key, value));
         }
         Ok(Json::Object(entries))
@@ -403,7 +412,10 @@ fn condition_entries(condition: &DocumentCondition) -> Result<Vec<(String, Json)
 
 fn value_json(value: &DocumentValue) -> Result<Json, DbError> {
     match value {
-        DocumentValue::String(text) => Ok(Json::string(text.clone())),
+        DocumentValue::String(text) => {
+            ensure_not_object_id_text(text)?;
+            Ok(Json::string(text.clone()))
+        }
         DocumentValue::Integer(number) => Ok(Json::Number((*number).into())),
         DocumentValue::Decimal(number) => serde_json::Number::from_f64(*number)
             .map(Json::Number)
@@ -423,6 +435,7 @@ fn value_json(value: &DocumentValue) -> Result<Json, DbError> {
             Ok(Json::object("$oid", Json::string(hex.clone())))
         }
         DocumentValue::Regex { pattern, options } => {
+            ensure_not_object_id_text(pattern)?;
             let mut entries = vec![("$regex".to_string(), Json::string(pattern.clone()))];
             if !options.is_empty() {
                 entries.push(("$options".to_string(), Json::string(options.clone())));
@@ -440,6 +453,18 @@ fn value_json(value: &DocumentValue) -> Result<Json, DbError> {
 
 fn is_object_id(hex: &str) -> bool {
     hex.len() == 24 && hex.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+/// The driver runs every 24-digit hexadecimal JSON string as an ObjectId, so
+/// such a string cannot be sent as text.
+fn ensure_not_object_id_text(text: &str) -> Result<(), DbError> {
+    if is_object_id(text) {
+        return Err(DbError::query_failed(format!(
+            "`{text}` would run as an ObjectId, not as text; use an ObjectId value instead"
+        )));
+    }
+
+    Ok(())
 }
 
 fn projection_document(projection: &DocumentProjection) -> Json {
@@ -471,6 +496,27 @@ fn sort_document(sort: &[DocumentSortKey]) -> Json {
     )
 }
 
+/// Sort keys over the `$group` output: a single group key is the `_id` field
+/// itself, a compound key is `_id.<output name>`, accumulators keep their name.
+fn group_sort_keys(group: &DocumentGroupStage, sort: &[DocumentSortKey]) -> Vec<DocumentSortKey> {
+    sort.iter()
+        .map(|key| {
+            let path = if !group.keys.contains(&key.path) {
+                key.path.clone()
+            } else if group.keys.len() == 1 {
+                "_id".to_string()
+            } else {
+                format!("_id.{}", group_key_name(&key.path))
+            };
+            DocumentSortKey::new(path, key.direction)
+        })
+        .collect()
+}
+
+fn group_key_name(key: &str) -> String {
+    key.replace('.', "_")
+}
+
 /// The `$group` body. Output field names cannot contain `.` or start with `$`,
 /// so a compound `_id` names each key after its path with `.` replaced by `_`.
 fn group_document(group: &DocumentGroupStage) -> Result<Json, DbError> {
@@ -482,7 +528,7 @@ fn group_document(group: &DocumentGroupStage) -> Result<Json, DbError> {
             let mut entries = Vec::new();
 
             for key in keys {
-                let name = key.replace('.', "_");
+                let name = group_key_name(key);
                 if !names.insert(name.clone()) {
                     return Err(DbError::query_failed(format!(
                         "group keys collide on the output name `{name}`"
@@ -770,6 +816,9 @@ fn parse_operator(
             let Json::String(pattern) = operand else {
                 return Err(());
             };
+            if is_object_id(pattern) {
+                return Err(());
+            }
 
             let options = match siblings.iter().find(|(sibling, _)| sibling == "$options") {
                 None => String::new(),
@@ -812,6 +861,7 @@ fn parse_value(json: &Json) -> Result<DocumentValue, ()> {
             Some(integer) => Ok(DocumentValue::Integer(integer)),
             None => number.as_f64().map(DocumentValue::Decimal).ok_or(()),
         },
+        Json::String(text) if is_object_id(text) => Ok(DocumentValue::ObjectId(text.clone())),
         Json::String(text) => Ok(DocumentValue::String(text.clone())),
         Json::Array(items) => items
             .iter()
@@ -1571,6 +1621,120 @@ mod tests {
                 bson::oid::ObjectId::parse_str(OBJECT_ID).unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn hexadecimal_strings_read_as_the_object_ids_the_driver_runs() {
+        let parsed = MongoDocumentCodec.parse_find(&slots(
+            &format!(
+                r#"{{"owner": "{OBJECT_ID}", "tags": {{"$in": ["{OBJECT_ID}", "x"]}}, "refs": {{"$all": ["{OBJECT_ID}"]}}, "n": {{"$nin": ["{OBJECT_ID}"]}}}}"#
+            ),
+            "",
+            "",
+        ));
+        let object_id = || DocumentValue::ObjectId(OBJECT_ID.to_string());
+
+        assert!(parsed.is_complete(), "{:?}", parsed.unrepresentable);
+        assert_eq!(
+            parsed.spec.filter,
+            group(
+                DocumentCombinator::And,
+                vec![
+                    condition("owner", Eq, object_id()),
+                    condition(
+                        "tags",
+                        In,
+                        DocumentValue::List(vec![object_id(), text("x")])
+                    ),
+                    condition("refs", All, DocumentValue::List(vec![object_id()])),
+                    condition("n", Nin, DocumentValue::List(vec![object_id()])),
+                ]
+            )
+        );
+
+        let filter = format!(r#"{{"code": {{"$regex": "{OBJECT_ID}"}}}}"#);
+        let parsed = MongoDocumentCodec.parse_find(&slots(&filter, "", ""));
+        assert!(parsed.spec.filter.is_empty());
+        assert_eq!(
+            parsed.unrepresentable,
+            vec![clause(DocumentSlot::Filter, &filter)]
+        );
+    }
+
+    #[test]
+    fn hexadecimal_strings_cannot_be_rendered_as_strings() {
+        let codec = MongoDocumentCodec;
+
+        let as_string = find_all(vec![condition("code", Eq, text(OBJECT_ID))]);
+        let error = codec.render_find(&as_string).unwrap_err().to_string();
+        assert!(error.contains("ObjectId"), "{error}");
+
+        let in_list = find_all(vec![condition(
+            "code",
+            In,
+            DocumentValue::List(vec![text(OBJECT_ID)]),
+        )]);
+        assert!(codec.render_find(&in_list).is_err());
+
+        let as_pattern = find_all(vec![condition(
+            "code",
+            Regex,
+            DocumentValue::Regex {
+                pattern: OBJECT_ID.to_string(),
+                options: String::new(),
+            },
+        )]);
+        assert!(codec.render_find(&as_pattern).is_err());
+    }
+
+    #[test]
+    fn duplicate_keys_are_never_parsed() {
+        let cases = [
+            slots(r#"{"a": {"$gt": 1}, "a": {"$lt": 5}}"#, "", ""),
+            slots(
+                r#"{"a": {"$regex": "x", "$options": "i", "$options": "m"}}"#,
+                "",
+                "",
+            ),
+            slots(r#"{"$or": [{"a": 1, "a": 2}]}"#, "", ""),
+            slots("", r#"{"name": 1, "name": 0}"#, ""),
+            slots("", "", r#"{"age": 1, "age": -1}"#),
+        ];
+
+        for case in cases {
+            let parsed = MongoDocumentCodec.parse_find(&case);
+
+            assert_eq!(parsed.spec, DocumentQuerySpec::default(), "{case:?}");
+            assert_eq!(parsed.unrepresentable.len(), 1, "{case:?}");
+        }
+    }
+
+    #[test]
+    fn pipeline_sorts_group_keys_on_their_output_field() {
+        let mut spec = aggregate_spec();
+        spec.sort = vec![
+            DocumentSortKey::new("customer.country", DocumentSortDirection::Ascending),
+            DocumentSortKey::new("orders", DocumentSortDirection::Descending),
+        ];
+        let pipeline = MongoDocumentCodec.render_pipeline(&spec).unwrap();
+        assert!(
+            pipeline.contains(r#"{"$sort": {"_id": 1, "orders": -1}}"#),
+            "{pipeline}"
+        );
+
+        spec.group.as_mut().unwrap().keys =
+            vec!["status".to_string(), "customer.country".to_string()];
+        let pipeline = MongoDocumentCodec.render_pipeline(&spec).unwrap();
+        assert!(
+            pipeline.contains(r#"{"$sort": {"_id.customer_country": 1, "orders": -1}}"#),
+            "{pipeline}"
+        );
+
+        spec.sort = vec![DocumentSortKey::new(
+            "total",
+            DocumentSortDirection::Ascending,
+        )];
+        assert!(MongoDocumentCodec.render_pipeline(&spec).is_err());
     }
 
     #[test]

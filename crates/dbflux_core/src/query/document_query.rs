@@ -115,7 +115,8 @@ impl DocumentOperator {
     pub fn accepts(&self, value: &DocumentValue) -> bool {
         match self {
             DocumentOperator::Eq | DocumentOperator::Ne => {
-                value.is_scalar() || matches!(value, DocumentValue::List(_))
+                value.is_scalar()
+                    || matches!(value, DocumentValue::List(items) if items.iter().all(DocumentValue::is_scalar))
             }
             DocumentOperator::Gt
             | DocumentOperator::Gte
@@ -264,6 +265,18 @@ pub struct DocumentGroupStage {
     pub accumulators: Vec<DocumentAccumulator>,
 }
 
+impl DocumentGroupStage {
+    /// Whether `path` names a field of the group output: one of the group
+    /// keys or an accumulator.
+    pub fn sorts_on(&self, path: &str) -> bool {
+        self.keys.iter().any(|key| key == path)
+            || self
+                .accumulators
+                .iter()
+                .any(|accumulator| accumulator.name.trim() == path)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentAccumulator {
     /// Output field name.
@@ -310,6 +323,13 @@ pub enum DocumentSpecProblem {
     ConditionPathEmpty,
     #[error("a nested group has no conditions")]
     EmptyGroup,
+    /// A path segment starting with `$` would be read as an operator or a
+    /// variable instead of a field.
+    #[error("`{path}` is not a field path: no segment may start with `$`")]
+    PathNamesOperator { path: String },
+    /// After the group stage only group keys and accumulator names exist.
+    #[error("`{path}` is neither a group key nor an accumulator, so it cannot be sorted on")]
+    AggregateSortPathUnknown { path: String },
     #[error("operator {operator:?} does not take that value on `{path}`")]
     OperatorValueMismatch {
         path: String,
@@ -331,6 +351,10 @@ impl DocumentQuerySpec {
                 if hides_id {
                     problems.push(DocumentSpecProblem::ProjectionExcludesId);
                 }
+
+                for field in &self.projection.fields {
+                    check_field_path(field, &mut problems);
+                }
             }
             DocumentQueryMode::Aggregate => {
                 if !self.projection.is_empty() {
@@ -338,8 +362,29 @@ impl DocumentQuerySpec {
                 }
 
                 match &self.group {
-                    Some(group) => validate_accumulators(&group.accumulators, &mut problems),
+                    Some(group) => {
+                        for key in &group.keys {
+                            check_field_path(key, &mut problems);
+                        }
+                        validate_accumulators(&group.accumulators, &mut problems);
+                    }
                     None => problems.push(DocumentSpecProblem::AggregateWithoutGroup),
+                }
+            }
+        }
+
+        for key in &self.sort {
+            check_field_path(&key.path, &mut problems);
+        }
+
+        if self.mode == DocumentQueryMode::Aggregate
+            && let Some(group) = &self.group
+        {
+            for key in &self.sort {
+                if !group.sorts_on(&key.path) {
+                    problems.push(DocumentSpecProblem::AggregateSortPathUnknown {
+                        path: key.path.clone(),
+                    });
                 }
             }
         }
@@ -395,6 +440,8 @@ fn validate_condition(
         problems.push(DocumentSpecProblem::ConditionPathEmpty);
     }
 
+    check_field_path(&condition.path, problems);
+
     if !condition.operator.accepts(&condition.value) {
         problems.push(DocumentSpecProblem::OperatorValueMismatch {
             path: condition.path.clone(),
@@ -405,6 +452,19 @@ fn validate_condition(
 
     if let DocumentValue::Nested(body) = &condition.value {
         validate_group(body, GroupPosition::ElemMatchBody, problems);
+    }
+}
+
+/// Reports `path` when one of its dotted segments starts with `$`, which the
+/// driver would read as an operator (`$where`) or a variable (`$$ROOT`).
+fn check_field_path(path: &str, problems: &mut Vec<DocumentSpecProblem>) {
+    if path
+        .split('.')
+        .any(|segment| segment.trim_start().starts_with('$'))
+    {
+        problems.push(DocumentSpecProblem::PathNamesOperator {
+            path: path.to_string(),
+        });
     }
 }
 
@@ -431,10 +491,14 @@ fn validate_accumulators(
                 Some(path)
             }
         };
-        if path.is_some_and(|path| path.trim().is_empty()) {
-            problems.push(DocumentSpecProblem::AccumulatorPathMissing {
-                name: accumulator.name.clone(),
-            });
+        if let Some(path) = path {
+            if path.trim().is_empty() {
+                problems.push(DocumentSpecProblem::AccumulatorPathMissing {
+                    name: accumulator.name.clone(),
+                });
+            } else {
+                check_field_path(path.trim(), problems);
+            }
         }
     }
 }
@@ -763,6 +827,116 @@ mod tests {
                 "{operator:?} should reject {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn paths_cannot_name_operators() {
+        let mut spec = find_with(vec![
+            condition(
+                "$where",
+                Eq,
+                DocumentValue::String("sleep(1000)".to_string()),
+            ),
+            condition("address.$city", Eq, DocumentValue::Null),
+            condition(
+                "items",
+                ElemMatch,
+                DocumentValue::Nested(DocumentFilterGroup::new(
+                    DocumentCombinator::And,
+                    vec![
+                        condition("$expr", Exists, DocumentValue::Bool(true)),
+                        condition("", Gt, DocumentValue::Integer(1)),
+                    ],
+                )),
+            ),
+        ]);
+        spec.projection.fields = vec!["name".to_string(), "$secret".to_string()];
+        spec.sort = vec![DocumentSortKey::new(
+            "$natural",
+            DocumentSortDirection::Ascending,
+        )];
+
+        let problem = |path: &str| DocumentSpecProblem::PathNamesOperator {
+            path: path.to_string(),
+        };
+        assert_eq!(
+            spec.validate(),
+            vec![
+                problem("$where"),
+                problem("address.$city"),
+                problem("$expr"),
+                problem("$secret"),
+                problem("$natural"),
+            ]
+        );
+
+        let mut spec = aggregate_with(vec![
+            accumulator(
+                "revenue",
+                DocumentAccumulatorKind::Sum {
+                    path: "$total".to_string(),
+                },
+            ),
+            accumulator(
+                "mean",
+                DocumentAccumulatorKind::Avg {
+                    path: "a.$b".to_string(),
+                },
+            ),
+        ]);
+        spec.group.as_mut().unwrap().keys = vec!["$status".to_string()];
+        assert_eq!(
+            spec.validate(),
+            vec![problem("$status"), problem("$total"), problem("a.$b")]
+        );
+    }
+
+    #[test]
+    fn equality_lists_hold_only_plain_values() {
+        let regex = DocumentValue::Regex {
+            pattern: "^a".to_string(),
+            options: String::new(),
+        };
+        let nested_list = DocumentValue::List(vec![DocumentValue::Integer(1)]);
+
+        for (operator, value) in [
+            (Eq, DocumentValue::List(vec![regex])),
+            (Ne, DocumentValue::List(vec![nested_list])),
+        ] {
+            let spec = find_with(vec![condition("tags", operator, value)]);
+            assert_eq!(
+                spec.validate(),
+                vec![DocumentSpecProblem::OperatorValueMismatch {
+                    path: "tags".to_string(),
+                    operator,
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn aggregate_sorts_only_on_group_keys_and_accumulators() {
+        let mut spec = aggregate_with(vec![accumulator("orders", DocumentAccumulatorKind::Count)]);
+        spec.sort = vec![
+            DocumentSortKey::new("status", DocumentSortDirection::Ascending),
+            DocumentSortKey::new("orders", DocumentSortDirection::Descending),
+        ];
+        assert!(spec.validate().is_empty());
+
+        spec.sort.push(DocumentSortKey::new(
+            "amount",
+            DocumentSortDirection::Ascending,
+        ));
+        assert_eq!(
+            spec.validate(),
+            vec![DocumentSpecProblem::AggregateSortPathUnknown {
+                path: "amount".to_string()
+            }]
+        );
+
+        let mut find = find_with(vec![]);
+        find.sort = spec.sort.clone();
+        assert!(find.validate().is_empty());
     }
 
     #[test]
