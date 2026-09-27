@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-26
+
 ### Added
 
 * **Bolt Byzantium redesign** — New look across the whole app in dark and light: Archivo and JetBrains Mono type, byzantium accent, chamfered controls, and an islands layout where the sidebar, documents, inspectors and side panels float as separate panels. Settings and the Connection Manager follow the same layout. The theme choices are Follow system, Dark and Light.
