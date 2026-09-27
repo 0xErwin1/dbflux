@@ -16,6 +16,10 @@ pub use repositories::audit::{
     AppendAuditEvent, AppendAuditEventExtended, AuditAggregateParams, AuditEventDto,
     AuditGroupColumn, AuditQueryFilter, AuditRepository,
 };
+pub use repositories::qry_saved_document_queries::{
+    DOCUMENT_QUERY_FORMAT_VERSION, DocumentQueryRepo, DocumentQueryScope, SavedDocumentQuery,
+    SavedDocumentQuerySummary,
+};
 pub use repositories::qry_saved_queries::{SavedQueryRepo, SavedQuerySummary};
 pub use repositories::sch_schema_snapshots::{SchemaSnapshotRepo, SchemaSnapshotSummary};
 pub use repositories::state::{

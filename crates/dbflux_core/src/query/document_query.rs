@@ -31,6 +31,7 @@ pub enum DocumentCombinator {
 
 /// A combination of conditions and nested groups.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DocumentFilterGroup {
     pub combinator: DocumentCombinator,
     pub children: Vec<DocumentFilterNode>,
@@ -224,6 +225,7 @@ pub enum DocumentProjectionMode {
 
 /// Fields a find returns. No fields means whole documents.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DocumentProjection {
     pub mode: DocumentProjectionMode,
     pub fields: Vec<String>,
@@ -260,6 +262,7 @@ impl DocumentSortKey {
 /// A grouping stage: the documents are grouped by `keys` (all documents
 /// together when empty) and each group reports its accumulators.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DocumentGroupStage {
     pub keys: Vec<String>,
     pub accumulators: Vec<DocumentAccumulator>,
@@ -292,7 +295,11 @@ pub enum DocumentAccumulatorKind {
 }
 
 /// A document query as the visual builder composes it.
+///
+/// Saved queries store this as JSON, so it reads tolerantly: a field missing
+/// from an older payload takes its default and an unknown one is skipped.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DocumentQuerySpec {
     pub mode: DocumentQueryMode,
     pub filter: DocumentFilterGroup,
@@ -970,6 +977,93 @@ mod tests {
                     operator: Size,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_spec_survives_a_json_round_trip() {
+        let spec = DocumentQuerySpec {
+            mode: DocumentQueryMode::Aggregate,
+            filter: DocumentFilterGroup::new(
+                DocumentCombinator::Or,
+                vec![
+                    condition(
+                        "status",
+                        In,
+                        DocumentValue::List(vec![
+                            DocumentValue::String("failed".to_string()),
+                            DocumentValue::Null,
+                        ]),
+                    ),
+                    condition(
+                        "_id",
+                        Eq,
+                        DocumentValue::ObjectId("66f0c2a1b2c3d4e5f6a7b8c9".to_string()),
+                    ),
+                ],
+            ),
+            projection: DocumentProjection {
+                mode: DocumentProjectionMode::Exclude,
+                fields: vec!["secret".to_string()],
+            },
+            sort: vec![DocumentSortKey::new(
+                "total",
+                DocumentSortDirection::Descending,
+            )],
+            limit: Some(50),
+            skip: Some(10),
+            group: Some(DocumentGroupStage {
+                keys: vec!["status".to_string()],
+                accumulators: vec![DocumentAccumulator {
+                    name: "revenue".to_string(),
+                    kind: DocumentAccumulatorKind::Sum {
+                        path: "total".to_string(),
+                    },
+                }],
+            }),
+        };
+
+        let text = serde_json::to_string(&spec).expect("serializes");
+        let back: DocumentQuerySpec = serde_json::from_str(&text).expect("deserializes");
+
+        assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn a_stored_spec_missing_newer_fields_or_holding_unknown_ones_still_reads() {
+        let older = r#"{
+            "mode": "Find",
+            "filter": { "combinator": "And", "children": [
+                { "Condition": { "path": "age", "operator": "Gt", "value": { "Integer": 30 } } }
+            ] },
+            "limit": 20
+        }"#;
+
+        let spec: DocumentQuerySpec = serde_json::from_str(older).expect("an older payload reads");
+        assert_eq!(spec.limit, Some(20));
+        assert_eq!(spec.projection, DocumentProjection::default());
+        assert!(spec.sort.is_empty());
+        assert_eq!(spec.skip, None);
+        assert_eq!(spec.group, None);
+        assert_eq!(spec.filter.children.len(), 1);
+
+        let newer = r#"{
+            "mode": "Aggregate",
+            "filter": { "children": [], "future_flag": true },
+            "group": { "keys": ["status"], "future_stage_option": 3 },
+            "future_field": { "anything": [1, 2] }
+        }"#;
+
+        let spec: DocumentQuerySpec =
+            serde_json::from_str(newer).expect("unknown fields are skipped");
+        assert_eq!(spec.mode, DocumentQueryMode::Aggregate);
+        assert_eq!(spec.filter.combinator, DocumentCombinator::And);
+        assert_eq!(
+            spec.group,
+            Some(DocumentGroupStage {
+                keys: vec!["status".to_string()],
+                accumulators: vec![],
+            })
         );
     }
 }

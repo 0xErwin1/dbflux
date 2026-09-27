@@ -92,6 +92,12 @@ impl SavedQueryRepo {
         Self { conn }
     }
 
+    /// The database connection this repository writes through, for a
+    /// repository of another table in the same database.
+    pub fn shared_connection(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
+
     /// Lists summary rows for all saved queries belonging to `profile_id`,
     /// ordered by `updated_at DESC`.
     pub fn list_for_profile(
