@@ -57,7 +57,7 @@ const CHIP_ENTRY_WIDTH: Pixels = px(110.0);
 /// Output name input of an accumulator.
 const ACCUMULATOR_NAME_WIDTH: Pixels = px(96.0);
 /// Field picker popover.
-pub(super) const PICKER_WIDTH: Pixels = px(320.0);
+const PICKER_WIDTH: Pixels = px(320.0);
 const PICKER_LIST_HEIGHT: Pixels = px(280.0);
 /// Indent per nesting level in the field picker.
 const PICKER_INDENT: Pixels = px(14.0);
