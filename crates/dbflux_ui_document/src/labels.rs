@@ -2569,6 +2569,15 @@ pub(crate) fn document_field_type_tag(field_type: dbflux_core::DocumentFieldType
     }
 }
 
+/// Type tags of a field sampled with several types, space-separated.
+pub(crate) fn document_field_type_tags(types: &[dbflux_core::DocumentFieldType]) -> String {
+    types
+        .iter()
+        .map(|field_type| document_field_type_tag(*field_type))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// "3 conditions" over the builder's Filter card.
 pub(crate) fn document_builder_condition_count(count: usize) -> String {
     if count == 1 {
@@ -6992,6 +7001,19 @@ mod tests {
 
         assert!(io.contains("permission denied"));
         assert_ne!(cancelled, "document.dump_analysis.error.cancelled");
+    }
+
+    #[test]
+    fn document_field_type_tags_name_every_sampled_type() {
+        use super::document_field_type_tags;
+        use dbflux_core::DocumentFieldType;
+
+        assert_eq!(
+            document_field_type_tags(&[DocumentFieldType::Integer, DocumentFieldType::String]),
+            "int str"
+        );
+        assert_eq!(document_field_type_tags(&[DocumentFieldType::Date]), "date");
+        assert_eq!(document_field_type_tags(&[]), "");
     }
 
     #[test]

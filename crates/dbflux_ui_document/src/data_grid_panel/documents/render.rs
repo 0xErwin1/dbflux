@@ -28,6 +28,14 @@ const COMMIT_SHORTCUT: &str = "Cmd S";
 #[cfg(not(target_os = "macos"))]
 const COMMIT_SHORTCUT: &str = "Ctrl S";
 
+/// Narrowest the filter slot gets; below it the query bar wraps instead, so
+/// the slot stays readable beside the builder rail.
+const FILTER_SLOT_MIN_WIDTH: Pixels = px(260.0);
+
+/// Space above and below a line of slots, so a single line keeps the
+/// board's row height and wrapped lines keep the same padding.
+const QUERY_ROW_PADDING_Y: Pixels = px(9.0);
+
 /// Color of a type in the schema bars and legends.
 fn type_color(type_name: &str, theme: &gpui_component::Theme, cx: &App) -> Hsla {
     match type_name {
@@ -76,6 +84,7 @@ impl DataGridPanel {
 
         div()
             .id(id)
+            .debug_selector(|| id.to_string())
             .relative()
             .flex()
             .items_center()
@@ -86,7 +95,7 @@ impl DataGridPanel {
             .text_size(CollectionMetrics::SLOT_FONT)
             .map(|slot| match width {
                 Some(width) => slot.w(width).flex_shrink_0(),
-                None => slot.flex_1().min_w_0(),
+                None => slot.flex_1().min_w(FILTER_SLOT_MIN_WIDTH),
             })
             .child(
                 Chamfer::new(ChamferCut::CONTROL)
@@ -151,10 +160,12 @@ impl DataGridPanel {
         div()
             .key_context(dbflux_components::key_contexts::DOCUMENT_QUERY_BAR)
             .flex()
+            .flex_wrap()
             .flex_shrink_0()
             .items_center()
             .gap(CollectionMetrics::QUERY_ROW_GAP)
-            .h(CollectionMetrics::QUERY_ROW_HEIGHT)
+            .min_h(CollectionMetrics::QUERY_ROW_HEIGHT)
+            .py(QUERY_ROW_PADDING_Y)
             .px(CollectionMetrics::QUERY_ROW_PADDING_X)
             .border_b_1()
             .border_color(theme.border)

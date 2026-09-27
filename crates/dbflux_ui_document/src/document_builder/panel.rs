@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent};
+use dbflux_components::controls::InputEvent;
 use dbflux_core::{
     CollectionRef, CollectionSchemaSample, Connection, DocumentCombinator, DocumentFieldType,
     DocumentFindSlots, DocumentOperator, DocumentProjectionMode, DocumentQueryCodec,
@@ -52,10 +52,12 @@ pub(super) struct NodeInput {
     _subscription: Subscription,
 }
 
+/// The open operator list of one condition.
 pub(super) struct OperatorMenu {
-    pub dropdown: Entity<Dropdown>,
-    pub choices: Vec<DocumentOperator>,
-    _subscription: Subscription,
+    pub condition: NodeId,
+    /// Position of the keyboard highlight in the condition's choices.
+    pub highlighted: usize,
+    pub focus: FocusHandle,
 }
 
 /// Visual find builder for one collection.
@@ -73,7 +75,7 @@ pub struct DocumentBuilderPanel {
     pub(super) picker: Option<FieldPicker>,
     pub(super) chip_problems: HashMap<NodeId, ValueProblem>,
     pub(super) value_inputs: HashMap<NodeId, NodeInput>,
-    pub(super) operator_menus: HashMap<NodeId, OperatorMenu>,
+    pub(super) operator_menu: Option<OperatorMenu>,
     /// Texts to put into value inputs on the next render, which has the
     /// window `set_value` needs.
     pub(super) pending_texts: HashMap<NodeId, String>,
@@ -133,7 +135,7 @@ impl DocumentBuilderPanel {
             picker: None,
             chip_problems: HashMap::new(),
             value_inputs: HashMap::new(),
-            operator_menus: HashMap::new(),
+            operator_menu: None,
             pending_texts: HashMap::new(),
             limit_input,
             skip_input,
@@ -200,6 +202,7 @@ impl DocumentBuilderPanel {
         self.sync.read(&slots, &parse);
 
         self.picker = None;
+        self.operator_menu = None;
         self.chip_problems.clear();
         self.pending_paging_texts = true;
         self.limit_problem = false;
@@ -526,6 +529,105 @@ impl DocumentBuilderPanel {
         }
     }
 
+    // ---- operator list ---------------------------------------------------
+
+    /// Operators the condition `id` offers for its field.
+    pub(super) fn operator_choices_for(&self, id: NodeId) -> Vec<DocumentOperator> {
+        let path = self
+            .draft
+            .condition(id)
+            .map(|condition| condition.path.clone())
+            .unwrap_or_default();
+        operator_choices(&self.types_for(id, &path))
+    }
+
+    /// Opens the operator list of condition `id`, or closes it when open.
+    /// The list takes the keyboard focus so the arrows and Enter pick.
+    pub fn toggle_operator_menu(
+        &mut self,
+        id: NodeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .operator_menu
+            .as_ref()
+            .is_some_and(|menu| menu.condition == id)
+        {
+            self.close_operator_menu(window, cx);
+            return;
+        }
+
+        let current = self.draft.condition(id).map(|condition| condition.operator);
+        let highlighted = self
+            .operator_choices_for(id)
+            .iter()
+            .position(|choice| Some(*choice) == current)
+            .unwrap_or(0);
+
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+
+        self.picker = None;
+        self.operator_menu = Some(OperatorMenu {
+            condition: id,
+            highlighted,
+            focus,
+        });
+        cx.notify();
+    }
+
+    pub fn close_operator_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.operator_menu.take().is_some() {
+            self.focus_handle.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// Moves the keyboard highlight of the open list by `step`, wrapping.
+    pub fn move_operator_highlight(&mut self, step: isize, cx: &mut Context<Self>) {
+        let Some(id) = self.operator_menu.as_ref().map(|menu| menu.condition) else {
+            return;
+        };
+        let count = self.operator_choices_for(id).len();
+        if count == 0 {
+            return;
+        }
+
+        if let Some(menu) = self.operator_menu.as_mut() {
+            let current = menu.highlighted as isize;
+            menu.highlighted = (current + step).rem_euclid(count as isize) as usize;
+            cx.notify();
+        }
+    }
+
+    /// Picks the highlighted operator of the open list.
+    pub fn choose_highlighted_operator(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((id, highlighted)) = self
+            .operator_menu
+            .as_ref()
+            .map(|menu| (menu.condition, menu.highlighted))
+        else {
+            return;
+        };
+
+        if let Some(operator) = self.operator_choices_for(id).get(highlighted).copied() {
+            self.choose_operator(id, operator, window, cx);
+        }
+    }
+
+    /// Sets the operator of condition `id` and closes its list.
+    pub fn choose_operator(
+        &mut self,
+        id: NodeId,
+        operator: DocumentOperator,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_operator_menu(window, cx);
+        self.set_operator(id, operator, cx);
+    }
+
     // ---- field picker ----------------------------------------------------
 
     pub fn open_picker(&mut self, target: PickTarget, window: &mut Window, cx: &mut Context<Self>) {
@@ -632,7 +734,7 @@ impl DocumentBuilderPanel {
 
     /// Creates the inputs the draft needs and flushes pending texts.
     pub(super) fn ensure_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let conditions: Vec<(NodeId, DocumentOperator, Vec<DocumentFieldType>, String)> = self
+        let conditions: Vec<(NodeId, String)> = self
             .draft
             .conditions()
             .into_iter()
@@ -641,16 +743,11 @@ impl DocumentBuilderPanel {
                     Operand::Text { text, .. } => text.clone(),
                     _ => String::new(),
                 };
-                (
-                    condition.id,
-                    condition.operator,
-                    self.types_for(condition.id, &condition.path),
-                    text,
-                )
+                (condition.id, text)
             })
             .collect();
 
-        for (id, operator, types, current_text) in conditions {
+        for (id, current_text) in conditions {
             let wants_text = !matches!(
                 self.draft.condition(id).map(|condition| condition.editor()),
                 Some(ValueEditor::Toggle | ValueEditor::Nested) | None
@@ -684,55 +781,6 @@ impl DocumentBuilderPanel {
                     },
                 );
                 self.pending_texts.remove(&id);
-            }
-
-            let choices = operator_choices(&types);
-            let selected = choices.iter().position(|choice| *choice == operator);
-            let stale_menu = self
-                .operator_menus
-                .get(&id)
-                .is_none_or(|menu| menu.choices != choices);
-
-            if stale_menu {
-                let items: Vec<DropdownItem> = choices
-                    .iter()
-                    .map(|choice| {
-                        DropdownItem::new(crate::labels::document_operator_label(*choice))
-                    })
-                    .collect();
-                let dropdown = cx.new(|_cx| {
-                    Dropdown::new(format!("doc-builder-operator-{id}"))
-                        .items(items)
-                        .selected_index(selected)
-                        .mono_label(true)
-                        .compact_trigger(true)
-                });
-                let menu_choices = choices.clone();
-                let subscription = cx.subscribe(
-                    &dropdown,
-                    move |this, _, event: &DropdownSelectionChanged, cx| {
-                        if let Some(operator) = menu_choices.get(event.index) {
-                            this.set_operator(id, *operator, cx);
-                        }
-                    },
-                );
-                self.operator_menus.insert(
-                    id,
-                    OperatorMenu {
-                        dropdown,
-                        choices,
-                        _subscription: subscription,
-                    },
-                );
-            } else if let Some(menu) = self.operator_menus.get(&id) {
-                let current = menu.dropdown.read(cx).selected_label();
-                let wanted = selected
-                    .and_then(|index| menu.choices.get(index))
-                    .map(|choice| crate::labels::document_operator_label(*choice));
-                if current.as_ref().map(|label| label.to_string()) != wanted {
-                    menu.dropdown
-                        .update(cx, |dropdown, cx| dropdown.set_selected_index(selected, cx));
-                }
             }
         }
 
@@ -805,7 +853,13 @@ impl DocumentBuilderPanel {
 
         self.value_inputs
             .retain(|id, _| ids.contains(id) && wants_text(&self.draft, id));
-        self.operator_menus.retain(|id, _| ids.contains(id));
+        if self
+            .operator_menu
+            .as_ref()
+            .is_some_and(|menu| !ids.contains(&menu.condition))
+        {
+            self.operator_menu = None;
+        }
         self.chip_problems.retain(|id, _| ids.contains(id));
         self.pending_texts.retain(|id, _| ids.contains(id));
     }

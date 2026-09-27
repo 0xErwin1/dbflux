@@ -875,4 +875,191 @@ mod tests {
         });
         assert!(!window.update(|_, cx| panel.read(cx).document_builder_is_open()));
     }
+
+    /// Window content for the rendered tests: the builder rail, as the
+    /// workspace hosts it, or the grid itself.
+    struct RailHost {
+        grid: gpui::Entity<DataGridPanel>,
+        show_builder: bool,
+    }
+
+    impl gpui::Render for RailHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{IntoElement, ParentElement, Styled};
+
+            let builder = self
+                .grid
+                .read(cx)
+                .collection
+                .builder
+                .panel
+                .clone()
+                .filter(|_| self.show_builder);
+
+            let content = match builder {
+                Some(builder) => builder.into_any_element(),
+                None => self.grid.clone().into_any_element(),
+            };
+
+            gpui::div().size_full().child(content)
+        }
+    }
+
+    fn center(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Point<gpui::Pixels> {
+        gpui::point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        )
+    }
+
+    /// Opens the builder of a grid rendered, like the workspace rail, as
+    /// the content of a window `width` wide. The filter slot holds `filter`.
+    fn rendered_rail<'a>(
+        cx: &'a mut TestAppContext,
+        filter: &str,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        gpui::Entity<RailHost>,
+        &'a mut VisualTestContext,
+    ) {
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(StubDocumentConnection::new(
+                DatabaseCategory::Document,
+                builder_features(),
+                true,
+            )),
+        );
+
+        let grid_slot: Rc<RefCell<Option<gpui::Entity<DataGridPanel>>>> =
+            Rc::new(RefCell::new(None));
+        let grid_handle = grid_slot.clone();
+        let (host, window) = cx.add_window_view(|window, cx| {
+            let grid = cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("shop", "orders"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+                DataGridPanel::new_internal(source, app_state, vec![], window, cx)
+            });
+            grid_handle.replace(Some(grid.clone()));
+            RailHost {
+                grid,
+                show_builder: false,
+            }
+        });
+        let grid = grid_slot.borrow().clone().expect("grid");
+
+        set_slot_texts(&grid, window, filter, "");
+        open_builder(&grid, window);
+        host.update(window, |host, cx| {
+            host.show_builder = true;
+            cx.notify();
+        });
+        window.run_until_parked();
+
+        (grid, host, window)
+    }
+
+    fn bounds_of(
+        window: &mut VisualTestContext,
+        selector: String,
+    ) -> Option<gpui::Bounds<gpui::Pixels>> {
+        window.debug_bounds(selector.leak())
+    }
+
+    #[gpui::test]
+    fn clicking_an_operator_option_changes_the_condition_and_its_slot(cx: &mut TestAppContext) {
+        use gpui::Modifiers;
+
+        let (grid, _host, window) = rendered_rail(cx, r#"{"age": {"$gt": 30}}"#);
+        let (id, _, operator) = first_condition(&grid, window);
+        assert_eq!(operator, DocumentOperator::Gt);
+
+        let trigger = bounds_of(window, format!("doc-builder-operator-{id}-trigger"))
+            .expect("the operator select has its own trigger id");
+        window.simulate_click(center(trigger), Modifiers::none());
+        window.run_until_parked();
+
+        // With no sample the field offers every operator; the list holds
+        // them all, the last one included.
+        assert!(bounds_of(window, format!("doc-builder-operator-{id}-option-all")).is_some());
+
+        let option = bounds_of(window, format!("doc-builder-operator-{id}-option-eq"))
+            .expect("every operator is an addressable option");
+        window.simulate_click(center(option), Modifiers::none());
+        window.run_until_parked();
+
+        let (_, _, operator) = first_condition(&grid, window);
+        assert_eq!(operator, DocumentOperator::Eq);
+        assert!(
+            bounds_of(window, format!("doc-builder-operator-{id}-option-eq")).is_none(),
+            "choosing an option closes the list"
+        );
+        assert_eq!(slot_texts(&grid, window).0, r#"{"age": 30}"#);
+    }
+
+    #[gpui::test]
+    fn the_operator_list_answers_the_keyboard(cx: &mut TestAppContext) {
+        use gpui::Modifiers;
+
+        let (grid, _host, window) = rendered_rail(cx, r#"{"age": {"$gt": 30}}"#);
+        let (id, _, _) = first_condition(&grid, window);
+
+        let trigger = bounds_of(window, format!("doc-builder-operator-{id}-trigger"))
+            .expect("operator trigger");
+        window.simulate_click(center(trigger), Modifiers::none());
+        window.run_until_parked();
+
+        window.simulate_keystrokes("down enter");
+        window.run_until_parked();
+
+        let (_, _, operator) = first_condition(&grid, window);
+        assert_eq!(operator, DocumentOperator::Gte, "down from $gt is $gte");
+        assert_eq!(slot_texts(&grid, window).0, r#"{"age": {"$gte": 30}}"#);
+
+        window.simulate_click(center(trigger), Modifiers::none());
+        window.run_until_parked();
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(bounds_of(window, format!("doc-builder-operator-{id}-option-eq")).is_none());
+        assert_eq!(first_condition(&grid, window).2, DocumentOperator::Gte);
+    }
+
+    #[gpui::test]
+    fn the_filter_slot_keeps_a_usable_width_beside_the_rail(cx: &mut TestAppContext) {
+        use gpui::{px, size};
+
+        let (_grid, host, window) = rendered_rail(cx, "");
+        host.update(window, |host, cx| {
+            host.show_builder = false;
+            cx.notify();
+        });
+        window.simulate_resize(size(px(520.0), px(700.0)));
+        window.run_until_parked();
+
+        let filter =
+            bounds_of(window, "collection-slot-filter".to_string()).expect("filter slot rendered");
+        assert!(
+            filter.size.width >= px(240.0),
+            "the filter slot is {:?} wide in a 520 px grid",
+            filter.size.width
+        );
+
+        window.simulate_resize(size(px(1400.0), px(700.0)));
+        window.run_until_parked();
+
+        let filter = bounds_of(window, "collection-slot-filter".to_string()).expect("filter");
+        let limit = bounds_of(window, "collection-slot-limit".to_string()).expect("limit");
+        assert_eq!(
+            filter.origin.y, limit.origin.y,
+            "a wide grid keeps the slots on one line"
+        );
+    }
 }

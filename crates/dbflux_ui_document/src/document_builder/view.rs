@@ -39,6 +39,9 @@ const FIND_SHORTCUT_HINT: &str = "Ctrl \u{21b5}";
 const FIELD_WIDTH: Pixels = px(150.0);
 /// Operator select of a condition row.
 const OPERATOR_WIDTH: Pixels = px(96.0);
+/// Operator list: tall enough for the 13 operators of an unsampled field
+/// before it scrolls.
+const OPERATOR_LIST_HEIGHT: Pixels = px(340.0);
 /// Limit and skip inputs.
 const PAGING_WIDTH: Pixels = px(70.0);
 /// Chip entry input.
@@ -585,13 +588,7 @@ fn render_condition(
 
     let field = render_field_button(panel, condition, &types, in_elem_match, theme, cx);
 
-    let operator = panel.operator_menus.get(&id).map(|menu| {
-        div()
-            .w(OPERATOR_WIDTH)
-            .flex_shrink_0()
-            .child(menu.dropdown.clone())
-            .into_any_element()
-    });
+    let operator = Some(render_operator_select(panel, condition, theme, cx));
 
     let value = render_value(panel, condition, theme, cx);
 
@@ -700,8 +697,8 @@ fn render_field_button(
 
     let tag = if condition.path.is_empty() {
         None
-    } else if let Some(first) = types.first() {
-        Some(crate::labels::document_field_type_tag(*first))
+    } else if !types.is_empty() {
+        Some(crate::labels::document_field_type_tags(types))
     } else if !panel.is_sampled(id, &condition.path) {
         Some(dbflux_i18n::t!(
             "document.collection.builder.filter.unsampled"
@@ -744,6 +741,143 @@ fn render_field_button(
         .flex_shrink_0()
         .child(trigger)
         .children(render_picker_if_open(panel, target, theme, cx))
+        .into_any_element()
+}
+
+/// The operator select of condition `id`: a trigger showing the operator and,
+/// while open, the list of the operators its field offers. The list takes the
+/// keyboard: Up and Down move, Enter picks, Escape closes.
+fn render_operator_select(
+    panel: &DocumentBuilderPanel,
+    condition: &ConditionDraft,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> AnyElement {
+    let id = condition.id;
+    let open = panel
+        .operator_menu
+        .as_ref()
+        .filter(|menu| menu.condition == id);
+
+    let trigger_selector = format!("doc-builder-operator-{id}-trigger");
+    let trigger = div()
+        .id(SharedString::from(trigger_selector.clone()))
+        .debug_selector(move || trigger_selector)
+        .relative()
+        .flex()
+        .items_center()
+        .gap(Spacing::XS)
+        .w_full()
+        .h(Heights::ROW_COMPACT)
+        .px(Spacing::SM)
+        .cursor_pointer()
+        .child(
+            Chamfer::new(ChamferCut::CONTROL)
+                .fill(theme.background)
+                .border(theme.input),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .font_family(AppFonts::MONO)
+                .text_size(FontSizes::XS)
+                .text_color(ChromeColors::strong(theme))
+                .child(SharedString::from(crate::labels::document_operator_label(
+                    condition.operator,
+                ))),
+        )
+        .child(
+            Icon::new(AppIcon::ChevronDown)
+                .small()
+                .color(theme.muted_foreground),
+        )
+        .on_click(
+            cx.listener(move |this, _, window, cx| this.toggle_operator_menu(id, window, cx)),
+        );
+
+    let list = open.map(|menu| {
+        let rows: Vec<AnyElement> = panel
+            .operator_choices_for(id)
+            .into_iter()
+            .enumerate()
+            .map(|(index, operator)| {
+                let label = crate::labels::document_operator_label(operator);
+                let row_selector = format!(
+                    "doc-builder-operator-{id}-option-{}",
+                    label.trim_start_matches('$').to_lowercase()
+                );
+                let highlighted = index == menu.highlighted;
+                let current = operator == condition.operator;
+
+                div()
+                    .id(SharedString::from(row_selector.clone()))
+                    .debug_selector(move || row_selector)
+                    .flex()
+                    .items_center()
+                    .px(Spacing::SM)
+                    .py(Spacing::XS)
+                    .font_family(AppFonts::MONO)
+                    .text_size(FontSizes::XS)
+                    .cursor_pointer()
+                    .when(highlighted, |row| row.bg(theme.accent.opacity(0.2)))
+                    .when(current, |row| row.font_weight(FontWeight::BOLD))
+                    .hover(|row| row.bg(theme.accent.opacity(0.15)))
+                    .child(SharedString::from(label))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.choose_operator(id, operator, window, cx)
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+
+        let popover = menu_frame(cx)
+            .id(SharedString::from(format!(
+                "doc-builder-operator-{id}-menu"
+            )))
+            .absolute()
+            .top_full()
+            .left_0()
+            .mt(Spacing::XS)
+            .min_w(OPERATOR_WIDTH)
+            .occlude()
+            .track_focus(&menu.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                match event.keystroke.key.as_str() {
+                    "down" => this.move_operator_highlight(1, cx),
+                    "up" => this.move_operator_highlight(-1, cx),
+                    "enter" => this.choose_highlighted_operator(window, cx),
+                    "escape" => this.close_operator_menu(window, cx),
+                    _ => return,
+                }
+                cx.stop_propagation();
+            }))
+            .on_mouse_down_out(
+                cx.listener(|this, _, window, cx| this.close_operator_menu(window, cx)),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "doc-builder-operator-{id}-list"
+                    )))
+                    .max_h(OPERATOR_LIST_HEIGHT)
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scrollbar()
+                    .children(rows),
+            );
+
+        deferred(popover).with_priority(2).into_any_element()
+    });
+
+    div()
+        .id(SharedString::from(format!("doc-builder-operator-{id}")))
+        .relative()
+        .w(OPERATOR_WIDTH)
+        .flex_shrink_0()
+        .child(trigger)
+        .children(list)
         .into_any_element()
 }
 
@@ -1386,10 +1520,8 @@ fn picker_row(
     presence: Option<u32>,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    let tags: Vec<AnyElement> = types
-        .iter()
-        .map(|field_type| type_tag(crate::labels::document_field_type_tag(*field_type), theme))
-        .collect();
+    let tags = (!types.is_empty())
+        .then(|| type_tag(crate::labels::document_field_type_tags(&types), theme));
 
     div()
         .id(id)
