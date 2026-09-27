@@ -561,13 +561,20 @@ impl DataGridPanel {
         Some(crate::labels::collection_document_count(total))
     }
 
-    /// Footer text: page size against the (estimated) match count.
+    /// Footer text: page size against the (estimated) match count, without
+    /// the documents the builder skipped.
     pub(in crate::data_grid_panel) fn document_count_footer(&self) -> String {
         let shown = self.collection.documents.len();
+        let skipped = self.collection.applied_skip;
 
         match self.collection.count {
-            Some(count) if count.exact => crate::labels::collection_matching(shown, count.count),
-            Some(count) => crate::labels::collection_matching_estimated(shown, count.count),
+            Some(count) if count.exact => {
+                crate::labels::collection_matching(shown, count.count.saturating_sub(skipped))
+            }
+            Some(count) => crate::labels::collection_matching_estimated(
+                shown,
+                count.count.saturating_sub(skipped),
+            ),
             None => crate::labels::collection_documents(shown),
         }
     }

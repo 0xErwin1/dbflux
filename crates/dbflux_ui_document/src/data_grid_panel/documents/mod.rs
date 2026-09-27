@@ -209,6 +209,9 @@ pub(super) struct CollectionViewState {
     pub count: Option<CollectionCountEstimate>,
     /// Filter the count belongs to, so a new filter recounts.
     pub counted_filter: Option<Option<serde_json::Value>>,
+    /// Documents the builder skipped before the page shown. The page count
+    /// and the match count leave them out.
+    pub applied_skip: u64,
     pub conflict: Option<PendingConflict>,
     queue: VecDeque<DocumentCommit>,
     pub committing: bool,
@@ -333,6 +336,7 @@ impl CollectionViewState {
             history_open: false,
             count: None,
             counted_filter: None,
+            applied_skip: 0,
             conflict: None,
             queue: VecDeque::new(),
             committing: false,

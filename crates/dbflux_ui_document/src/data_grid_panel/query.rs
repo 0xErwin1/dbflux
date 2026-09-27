@@ -658,9 +658,10 @@ impl DataGridPanel {
 
         // The page is counted from the builder's skip; only the request
         // carries the absolute offset.
+        let skip = self.document_builder_skip(cx);
         let request_pagination = Pagination::Offset {
             limit: pagination.limit(),
-            offset: pagination.offset() + self.document_builder_skip(cx),
+            offset: pagination.offset() + skip,
         };
         let mut browse_request =
             CollectionBrowseRequest::new(collection.clone()).with_pagination(request_pagination);
@@ -752,6 +753,7 @@ impl DataGridPanel {
                             panel.runner.complete_primary(task_id, cx);
                             panel.grid_table.reload = reload;
                             panel.grid_table.keep_edits_on_reload = keep_edits;
+                            panel.collection.applied_skip = skip;
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,

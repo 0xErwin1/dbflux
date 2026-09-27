@@ -966,6 +966,16 @@ mod tests {
             self.features
         }
 
+        fn estimate_collection_count(
+            &self,
+            _request: &dbflux_core::CollectionCountRequest,
+        ) -> Result<dbflux_core::CollectionCountEstimate, dbflux_core::DbError> {
+            Ok(dbflux_core::CollectionCountEstimate {
+                count: 800,
+                exact: false,
+            })
+        }
+
         fn browse_collection(
             &self,
             request: &dbflux_core::CollectionBrowseRequest,
@@ -1794,6 +1804,50 @@ mod tests {
             vec![40, 60, 40, 60, 40],
             "find, next, previous (twice, the second stays), next, then a new \
              page size starts over at the skip"
+        );
+    }
+
+    #[gpui::test]
+    fn the_page_count_and_match_count_leave_out_the_skipped_documents(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|window, cx| {
+            rail.update(cx, |rail, cx| rail.set_skip(Some(700), cx));
+            panel.update(cx, |grid, cx| {
+                grid.filter_bar
+                    .limit_input
+                    .update(cx, |input, cx| input.set_value("50", window, cx));
+                grid.find_documents(window, cx);
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.process_pending_actions(window, cx));
+        });
+
+        window.update(|_, cx| {
+            let grid = panel.read(cx);
+            assert_eq!(grid.total_pages(), Some(2), "800 matches, 700 skipped");
+            assert!(grid.can_go_next());
+            assert_eq!(
+                grid.document_count_footer(),
+                crate::labels::collection_matching_estimated(0, 100)
+            );
+        });
+
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.go_to_next_page(window, cx));
+        });
+        window.run_until_parked();
+
+        assert!(
+            !window.update(|_, cx| panel.read(cx).can_go_next()),
+            "the second page is the last"
         );
     }
 
