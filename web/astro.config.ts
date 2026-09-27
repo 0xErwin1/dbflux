@@ -5,8 +5,9 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { repoBlobUrl, routeForRepoPath, titleForRepoPath } from './src/data/nav';
 import { sitemapPathsFor } from './src/data/docs';
-import { CURRENT } from './src/data/versions';
-import { DOCS_MODE, ORIGIN } from './src/data/site';
+import { CURRENT, VERSIONS } from './src/data/versions';
+import { renderedLinkInputs } from './src/data/version-routing.ts';
+import { DOCS_MODE, DOCS_ORIGIN, ORIGIN } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
 import { DEFAULT_LOCALE } from './src/i18n';
 import type { Locale } from './src/i18n';
@@ -191,7 +192,13 @@ export default defineConfig({
     hostRedirects(),
   ],
   markdown: {
-    rehypePlugins: [rehypeRepoLinks, rehypeMermaid],
+    // The options are not read by the plugin. They put what its output depends
+    // on into the serialized config, which is what Astro's rendered-markdown
+    // cache is invalidated by — see `renderedLinkInputs`.
+    rehypePlugins: [
+      [rehypeRepoLinks, renderedLinkInputs(VERSIONS, DOCS_MODE, DOCS_ORIGIN)],
+      rehypeMermaid,
+    ],
     shikiConfig: {
       themes: {
         light: 'ayu-light',
