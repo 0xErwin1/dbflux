@@ -1001,7 +1001,7 @@ DBFlux는 완전한 거버넌스 계층과 함께 AI 클라이언트 통합을 �
 - 빌드: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` 또는 `--release` (AGENTS.md).
 - 실행: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - 테스트: `cargo test --workspace` (AGENTS.md).
-- 린트/포맷: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
+- 린트/포맷: `python3 scripts/lint.py clippy`, `python3 scripts/lint.py fmt` (AGENTS.md).
 - Nix: flake.nix를 사용하는 `nix build` 또는 `nix run`; 개발 셸은 `nix develop`.
 - Arch Linux: AUR에 `dbflux`로 게시됩니다; PKGBUILD는 이 리포지토리가 아닌 외부 AUR 리포지토리에서 유지 관리됩니다.
 - Linux 설치 프로그램: `curl -fsSL .../install.sh | bash`가 릴리스를 다운로드하고 설치합니다.

@@ -224,8 +224,8 @@ cargo run -p dbflux
 
 ```bash
 cargo check --workspace                    # 类型检查
-cargo clippy --workspace -- -D warnings    # Lint
-cargo fmt --all                            # 格式化
+python3 scripts/lint.py clippy             # Lint
+python3 scripts/lint.py fmt                # 格式化
 cargo test --workspace                     # 测试
 ```
 

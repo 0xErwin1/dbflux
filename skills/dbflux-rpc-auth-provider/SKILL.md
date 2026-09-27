@@ -52,5 +52,5 @@ license: MIT
 ```bash
 cargo build
 RUST_LOG=info cargo run -- --socket <socket-id>
-cargo fmt --all -- --check
+python3 scripts/lint.py fmt --check
 ```

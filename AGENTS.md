@@ -35,8 +35,8 @@ cargo build -p dbflux  # MCP included in default features
 # Build without MCP support (smaller binary, no AI integration)
 cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,redshift,s3,lua,aws
 
-cargo fmt --all                      # Format
-cargo clippy --workspace -- -D warnings  # Lint
+python3 scripts/lint.py fmt          # Format
+python3 scripts/lint.py clippy       # Lint
 cargo test --workspace               # All tests
 cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
@@ -54,6 +54,9 @@ nix develop                          # Enter dev shell
 nix build                            # Build package
 nix run                              # Run directly
 ```
+
+`scripts/lint.py` covers only the first-party crates under `crates/` and never
+lints or reformats the vendored crates under `vendor/`.
 
 **Linux build requirement**: `.cargo/config.toml` links the
 `x86_64-unknown-linux-gnu` target with `-fuse-ld=mold`, so the `mold` linker

@@ -1009,7 +1009,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` or `--release` (AGENTS.md).
 - Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
-- Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
+- Lint/format: `python3 scripts/lint.py clippy`, `python3 scripts/lint.py fmt` (AGENTS.md).
 - Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.
 - Arch Linux: published to the AUR as `dbflux`; the PKGBUILD is maintained in the external AUR repository, not in this repo.
 - Linux installer: `curl -fsSL .../install.sh | bash` downloads and installs release.

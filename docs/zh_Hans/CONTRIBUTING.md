@@ -27,10 +27,12 @@ cargo run
 发起拉取请求前请运行：
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+python3 scripts/lint.py fmt --check
+python3 scripts/lint.py clippy
 cargo test --workspace
 ```
+
+`scripts/lint.py` 只覆盖 `crates/` 下的第一方 crate，从不对 `vendor/` 下的第三方 crate 执行 lint 或重新格式化。
 
 也可以使用 [`cargo-nextest`](https://nexte.st) 运行测试（在这个工作区上更快，由 Nix 开发 shell 提供）。注意 nextest 不会运行文档测试：
 
