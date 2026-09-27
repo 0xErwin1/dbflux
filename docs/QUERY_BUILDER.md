@@ -1,8 +1,9 @@
 # Visual Query Builder
 
 For SQL connections you can compose queries without writing SQL. From a table's
-data grid toolbar, click **Builder** to open a right-rail panel. The builder is
-available only on SQL drivers; non-SQL connections do not show it.
+data grid toolbar, click **Builder** to open a right-rail panel. Document
+collections have their own builder, described under
+[Document collections](#document-collections).
 
 The panel has a mode selector at the top — **SELECT**, **UPDATE**, **DELETE** —
 and a live SQL preview that regenerates on every change. The preview is always
@@ -109,3 +110,105 @@ primary-key availability. Overriding the suggestion shows a tradeoff modal.
 **Dangerous-query gate.** An `UPDATE` or `DELETE` with no `WHERE` is gated by the
 dangerous-query confirmation (see
 [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)) before it runs.
+
+## Document collections
+
+Collections on drivers that offer it (MongoDB) have a visual builder for find
+queries and simple aggregations. Click **Builder** in the collection header to
+open it in the right rail; click it again, or the rail's close button, to hide
+it. The draft stays while the tab is open. On a document driver without a
+builder, such as DynamoDB, the button is disabled and its tooltip says why; the
+query slots still work.
+
+The rail has a **Find** / **Aggregate** mode switch, the cards described below,
+and a preview of the query in the driver's own syntax, pinned above the footer.
+The footer runs the query (**Find** in Find mode, **Run pipeline** in Aggregate
+mode) or opens the preview in a query editor (**Open in editor**).
+
+### Find mode
+
+| Card | What it builds |
+|------|----------------|
+| **Filter** | Conditions combined as *all of* (`$and`) or *any of* (`$or`), with nested groups. |
+| **Project** | Fields to include or to exclude. `_id` is always returned, so result rows stay editable. |
+| **Sort, limit and skip** | Sort keys, each ascending or descending, then a limit and a skip. |
+
+A condition is a field, an operator and a value. The operators offered follow
+the field's type in the schema sample, from `$eq`, `$ne`, `$gt`, `$gte`, `$lt`,
+`$lte`, `$in`, `$nin`, `$regex`, `$exists`, `$elemMatch`, `$size` and `$all`. A
+field sampled with more than one type is flagged, and its conditions offer the
+operators of each type. The value input follows the operator:
+
+| Operator or type | Value input |
+|------------------|-------------|
+| `$in`, `$nin`, `$all` | A list of values, one chip each (type a value, press `Enter`). |
+| `$exists`, and `$eq` / `$ne` on a boolean | A true / false switch. |
+| `$regex` | A pattern, `/pattern/flags` or a bare pattern. |
+| `$size` | A whole number of elements. |
+| `$elemMatch` | Conditions that one array element must meet. |
+| Date field | `YYYY-MM-DD`, `YYYY-MM-DD HH:MM` (UTC) or an RFC 3339 timestamp. |
+| ObjectId field | 24 hexadecimal digits. |
+
+Fields come from a picker fed by the Schema view's sample: nested paths, a type
+tag for each and how often the field appears. A path the sample never saw can
+be typed and used with `Enter`; it is marked as unsampled.
+
+**Find** runs the query through the query bar, like the slots do: results are
+ordinary documents, editable, counted and kept in the query history.
+
+### Sync with the query bar
+
+While the rail is open, the builder and the `filter`, `project`, `sort` and
+`limit` slots stay in sync both ways: a builder edit rewrites the slots it
+changes, and a slot edit updates the builder. The skip has no slot; it applies
+while the rail is open.
+
+When a slot holds a clause the builder cannot show, such as `$expr`, the
+builder shows the parts it understands, keeps the rest read-only and shows a
+card with two choices. Edits in the builder that would change that slot wait
+until you choose, and **Find** stays disabled.
+
+| Choice | Effect |
+|--------|--------|
+| **Keep the text** | Discards the waiting builder edits and keeps the slot as written. |
+| **Rewrite from builder** | Replaces the slots with the builder's query, dropping the clauses it could not show. |
+
+### Aggregate mode
+
+Adding a group stage in the **Group** card switches to **Aggregate**, and
+removing it returns to **Find**. Aggregate mode needs a driver that runs
+aggregation pipelines.
+
+- **Group by** takes zero or more fields; with none, all documents form one
+  group.
+- **Accumulators** are `$count`, `$sum` and `$avg`, each with an output name.
+  `$sum` and `$avg` take a number field.
+- The filter becomes a `$match` stage, shown as a summary with **Edit**.
+- **Project** is not used: the output fields are the group key and the
+  accumulators.
+- Sort keys can only be group keys or accumulators.
+
+**Run pipeline** writes the pipeline into the collection's Aggregate view and
+runs it there. Grouped rows are computed, so they have no `_id` to edit: the
+results are read-only and carry a banner that says so. While the builder is in
+Aggregate mode, the query bar and the Aggregate view show a summary of the
+pipeline instead of the slots and the pipeline editor.
+
+### Saved document queries
+
+Name the query in the rail header and click **Save query**. Saved queries
+belong to the collection: its connection profile, database and collection.
+Saving under a name that already exists replaces that query. **Saved queries**
+lists them; opening one loads it in the mode it was saved in.
+
+### Limitations
+
+- A text value of 24 hexadecimal digits runs as an ObjectId, because the driver
+  converts such strings. The builder asks for it as an ObjectId, so a text field
+  holding such a string cannot be searched as text.
+- Decimal values compare as doubles, so they do not match `Decimal128` fields.
+- In the slots, `{"$date": "..."}` accepts only an RFC 3339 timestamp, such as
+  `2024-03-09T14:30:05Z`.
+- The builder has no write stages (`$out`, `$merge`) and does not build updates
+  or deletes.
+- Deleting a saved query does not ask for confirmation.

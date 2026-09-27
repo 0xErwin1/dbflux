@@ -4,6 +4,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Visual query builder for document collections** — MongoDB collections gain a **Builder** button that opens a right-rail builder: filter conditions in all-of / any-of groups with operators that follow each field's type, include or exclude projection, sort, limit and skip, and a group stage with `$count`, `$sum` and `$avg` that runs as a read-only aggregation. Fields come from the collection's schema sample, the builder stays in sync with the query bar, and clauses it cannot show (such as `$expr`) are never overwritten without asking. Document drivers without a builder show the button disabled.
+
+* **Saved document queries** — Queries built in the document builder can be named, saved per collection and reopened in the mode they were saved in.
+
+### Changed
+
+* **MongoDB extended JSON dates** — `{"$date": "<RFC 3339>"}` in the query bar, in aggregation pipelines and in document edits is now stored as a date. An invalid date string there now fails with an error instead of being saved as a nested object.
+
 ## [0.8.1] - 2026-09-27
 
 ### Fixed

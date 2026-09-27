@@ -861,6 +861,28 @@ tablas `qry_*` (raíz + tablas hijas de columns/sorts/joins, FKs en cascada,
 verifica la existencia de la tabla al importar una saved query hacia otra
 conexión sin acceder al código del driver.
 
+**Constructor de consultas de documentos**: las colecciones de documentos
+tienen su propio rail, gated en `DocumentFeatures::VISUAL_BUILDER` más un códec
+de `Connection::document_query_codec()`, nunca en un id de driver.
+`DocumentQuerySpec` (`crates/dbflux_core/src/query/document_query.rs`) modela
+el árbol de filtros, los valores tipados, la proyección de inclusión/exclusión,
+el orden, el límite, el salto y una etapa de grupo opcional (`$count` / `$sum`
+/ `$avg`). El driver implementa `DocumentQueryCodec` para convertir una spec en
+los campos de find (`DocumentFindSlots`), un pipeline y texto de vista previa, y
+para leer los campos de vuelta, devolviendo las cláusulas que no puede
+representar como `UnrepresentableClause`, de modo que la UI muestra un
+conflicto de sincronización en lugar de sobrescribirlas. La UI vive en
+`crates/dbflux_ui_document/src/document_builder/` y
+`data_grid_panel/documents/builder.rs`: Find escribe los campos y se ejecuta con
+`browse_collection`, así que los resultados siguen siendo editables, mientras
+que el modo Aggregate (gated también en `DocumentFeatures::AGGREGATE`) ejecuta
+el pipeline en la vista Agregación con resultados de solo lectura. Las
+consultas de documentos guardadas usan la migración
+`037_qry_saved_document_queries` (spec guardada como JSON,
+`UNIQUE (profile_id, database_name, collection_name, name)`),
+`DocumentQueryRepo` y `SavedDocumentQueryManager`
+(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`).
+
 ### Visualización de Datos
 
 - **Data table**: `crates/dbflux_components/src/components/data_table/` tabla

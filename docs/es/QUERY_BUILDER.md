@@ -2,8 +2,8 @@
 
 Para conexiones SQL puedes componer queries sin escribir SQL. Desde la toolbar
 del data grid de una tabla, haz clic en **Builder** para abrir un panel en el
-rail derecho. El builder solo está disponible en drivers SQL; las conexiones no
-SQL no lo muestran.
+rail derecho. Las colecciones de documentos tienen su propio constructor,
+descrito en [Colecciones de documentos](#colecciones-de-documentos).
 
 El panel tiene un selector de modo en la parte superior — **SELECT**,
 **UPDATE**, **DELETE** — y una vista previa de SQL en vivo que se regenera con
@@ -118,3 +118,117 @@ Anular la sugerencia muestra un modal de tradeoffs.
 **Gate de query peligrosa.** Un `UPDATE` o `DELETE` sin `WHERE` pasa por la
 confirmación de queries peligrosas (ver [Confirmación de queries
 peligrosas](EDITOR.md#confirmación-de-queries-peligrosas)) antes de ejecutarse.
+
+## Colecciones de documentos
+
+Las colecciones de los drivers que lo ofrecen (MongoDB) tienen un constructor
+visual para consultas find y agregaciones sencillas. Haz clic en
+**Constructor** en la cabecera de la colección para abrirlo en el rail derecho;
+vuelve a hacer clic, o usa el botón de cierre del rail, para ocultarlo. El
+borrador se conserva mientras la pestaña está abierta. En un driver de
+documentos sin constructor, como DynamoDB, el botón está deshabilitado y su
+tooltip explica el motivo; los campos de consulta siguen funcionando.
+
+El rail tiene un selector de modo **Find** / **Aggregate**, las tarjetas que se
+describen abajo y una vista previa de la consulta en la sintaxis propia del
+driver, fijada encima del pie. El pie ejecuta la consulta (**Buscar** en modo
+Find, **Ejecutar pipeline** en modo Aggregate) o abre la vista previa en un
+editor de consultas (**Abrir en el editor**).
+
+### Modo Find
+
+| Tarjeta                    | Qué construye                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Filtro**                 | Condiciones combinadas como *todas* (`$and`) o *alguna* (`$or`), con grupos anidados.                         |
+| **Proyección**             | Campos a incluir o a excluir. `_id` siempre se devuelve, así que las filas del resultado siguen siendo editables. |
+| **Orden, límite y salto**  | Claves de orden, cada una ascendente o descendente, y después un límite y un salto.                           |
+
+Una condición es un campo, un operador y un valor. Los operadores ofrecidos
+dependen del tipo del campo en la muestra del esquema, entre `$eq`, `$ne`,
+`$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$regex`, `$exists`, `$elemMatch`,
+`$size` y `$all`. Un campo muestreado con más de un tipo se marca, y sus
+condiciones ofrecen los operadores de cada tipo. El input del valor depende del
+operador:
+
+| Operador o tipo                              | Input del valor                                                         |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| `$in`, `$nin`, `$all`                        | Una lista de valores, un chip por valor (escribe un valor y pulsa `Enter`). |
+| `$exists`, y `$eq` / `$ne` sobre un booleano | Un interruptor true / false.                                            |
+| `$regex`                                     | Un patrón, `/patrón/flags` o un patrón sin delimitadores.               |
+| `$size`                                      | Un número entero de elementos.                                          |
+| `$elemMatch`                                 | Condiciones que debe cumplir un elemento del arreglo.                   |
+| Campo de fecha                               | `YYYY-MM-DD`, `YYYY-MM-DD HH:MM` (UTC) o una marca de tiempo RFC 3339.  |
+| Campo ObjectId                               | 24 dígitos hexadecimales.                                               |
+
+Los campos se eligen en un selector alimentado por la muestra de la vista
+Esquema: rutas anidadas, una etiqueta de tipo para cada una y con qué
+frecuencia aparece el campo. Una ruta que la muestra no vio se puede escribir y
+usar con `Enter`; se marca como sin muestrear.
+
+**Buscar** ejecuta la consulta a través de la barra de consulta, igual que los
+campos: los resultados son documentos normales, editables, contados y
+guardados en el historial de consultas.
+
+### Sincronización con la barra de consulta
+
+Mientras el rail está abierto, el constructor y los campos `filter`, `project`,
+`sort` y `limit` se sincronizan en ambos sentidos: una edición en el
+constructor reescribe los campos que cambia, y una edición en un campo
+actualiza el constructor. El salto no tiene campo; se aplica mientras el rail
+está abierto.
+
+Cuando un campo contiene una cláusula que el constructor no puede mostrar,
+como `$expr`, el constructor muestra las partes que entiende, deja el resto en
+solo lectura y muestra una tarjeta con dos opciones. Las ediciones del
+constructor que cambiarían ese campo esperan hasta que elijas, y **Buscar**
+queda deshabilitado.
+
+| Opción                               | Efecto                                                                                          |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **Conservar el texto**               | Descarta las ediciones pendientes del constructor y conserva el campo tal como está escrito.    |
+| **Reescribir desde el constructor**  | Reemplaza los campos con la consulta del constructor y descarta las cláusulas que no pudo mostrar. |
+
+### Modo Aggregate
+
+Añadir una etapa de grupo en la tarjeta **Grupo** cambia a **Aggregate**, y
+quitarla vuelve a **Find**. El modo Aggregate necesita un driver que ejecute
+pipelines de agregación.
+
+- **Agrupar por** admite cero o más campos; sin ninguno, todos los documentos
+  forman un solo grupo.
+- Los **Acumuladores** son `$count`, `$sum` y `$avg`, cada uno con un nombre de
+  salida. `$sum` y `$avg` toman un campo numérico.
+- El filtro pasa a ser una etapa `$match`, que se muestra como un resumen con
+  **Editar**.
+- La **Proyección** no se usa: los campos de salida son la clave de grupo y los
+  acumuladores.
+- Las claves de orden solo pueden ser claves de grupo o acumuladores.
+
+**Ejecutar pipeline** escribe el pipeline en la vista Agregación de la
+colección y lo ejecuta allí. Las filas agrupadas se calculan, así que no tienen
+un `_id` que editar: los resultados son de solo lectura y llevan un aviso que
+lo indica. Mientras el constructor está en modo Aggregate, la barra de
+consulta y la vista Agregación muestran un resumen del pipeline en lugar de los
+campos y del editor de pipeline.
+
+### Consultas de documentos guardadas
+
+Pon un nombre a la consulta en la cabecera del rail y haz clic en **Guardar
+consulta**. Las consultas guardadas pertenecen a la colección: su perfil de
+conexión, su base de datos y su nombre. Guardar con un nombre que ya existe
+reemplaza esa consulta. **Consultas guardadas** las lista; al abrir una se
+carga en el modo en que se guardó.
+
+### Limitaciones
+
+- Un valor de texto de 24 dígitos hexadecimales se ejecuta como ObjectId,
+  porque el driver convierte esas cadenas. El constructor pide introducirlo
+  como ObjectId, así que un campo de texto que contenga una cadena así no se
+  puede buscar como texto.
+- Los valores decimales se comparan como double, así que no coinciden con
+  campos `Decimal128`.
+- En los campos de consulta, `{"$date": "..."}` solo acepta una marca de tiempo
+  RFC 3339, como `2024-03-09T14:30:05Z`.
+- El constructor no tiene etapas de escritura (`$out`, `$merge`) y no construye
+  actualizaciones ni borrados.
+- Borrar una consulta guardada no pide confirmación.
