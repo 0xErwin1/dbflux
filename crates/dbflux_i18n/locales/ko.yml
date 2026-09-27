@@ -759,6 +759,23 @@ document:
         no_sample: "아직 스키마 샘플이 없습니다. 경로를 입력하고 Enter를 누르세요."
         loading: "문서 샘플링 중…"
         use_path: "%{path} 사용"
+      saved:
+        name_placeholder: "제목 없는 쿼리"
+        save: "쿼리 저장"
+        save_needs_name: "저장하려면 쿼리 이름을 입력하세요"
+        save_invalid: "저장하기 전에 표시된 조건을 완성하세요"
+        list: "저장된 쿼리"
+        empty: "이 컬렉션에 저장된 쿼리가 아직 없습니다"
+        remove: "저장된 쿼리 삭제"
+        toast:
+          saved: "\"%{name}\" 저장됨"
+        error:
+          save_failed: "쿼리를 저장할 수 없습니다"
+          list_failed: "저장된 쿼리를 불러올 수 없습니다"
+          open_failed: "저장된 쿼리를 열 수 없습니다"
+          not_found: "저장된 쿼리가 더 이상 존재하지 않습니다"
+          delete_failed: "저장된 쿼리를 삭제할 수 없습니다"
+          aggregate_unavailable: "이 저장된 쿼리는 집계이며, 이 연결은 집계를 실행할 수 없습니다"
       conflict:
         title: "%{slot} 입력란에 빌더가 표시할 수 없는 내용이 있습니다"
         note: "빌더는 이해하는 부분을 표시하고 나머지는 읽기 전용으로 둡니다. 해당 입력란의 변경은 텍스트를 유지하거나 빌더로 다시 쓸 때까지 대기합니다."

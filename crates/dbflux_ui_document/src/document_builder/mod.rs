@@ -18,7 +18,7 @@ mod view;
 mod tests;
 
 pub use model::{AccumulatorOp, ProblemKind};
-pub use panel::{DocumentBuilderEvent, DocumentBuilderPanel};
+pub use panel::{DocumentBuilderEvent, DocumentBuilderPanel, SavedQueryEntry};
 pub use sync::SlotWrite;
 pub use values::ValueProblem;
 

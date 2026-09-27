@@ -165,13 +165,19 @@ impl BuilderDraft {
     #[cfg(test)]
     pub fn from_spec(spec: &DocumentQuerySpec) -> Self {
         let mut draft = Self::default();
-        draft.load(spec);
-        draft.mode = spec.mode;
-        draft.group = spec
+        draft.load_all(spec);
+        draft
+    }
+
+    /// Replaces the whole draft with `spec`, its mode and group stage
+    /// included, as when a saved query is opened.
+    pub fn load_all(&mut self, spec: &DocumentQuerySpec) {
+        self.load(spec);
+        self.mode = spec.mode;
+        self.group = spec
             .group
             .as_ref()
-            .map(|stage| draft.group_stage_from_spec(stage));
-        draft
+            .map(|stage| self.group_stage_from_spec(stage));
     }
 
     /// Replaces the find parts of the draft with `spec`: filter, projection,
@@ -192,7 +198,6 @@ impl BuilderDraft {
         id
     }
 
-    #[cfg(test)]
     fn group_stage_from_spec(&mut self, stage: &DocumentGroupStage) -> GroupStageDraft {
         let id = self.allocate();
         let accumulators = stage

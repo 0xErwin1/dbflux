@@ -759,6 +759,23 @@ document:
         no_sample: "Todavía no hay muestra del esquema. Escribe una ruta y pulsa Enter."
         loading: "Muestreando documentos…"
         use_path: "Usar %{path}"
+      saved:
+        name_placeholder: "Consulta sin nombre"
+        save: "Guardar consulta"
+        save_needs_name: "Pon un nombre a la consulta para guardarla"
+        save_invalid: "Completa las condiciones marcadas antes de guardar"
+        list: "Consultas guardadas"
+        empty: "Todavía no hay consultas guardadas para esta colección"
+        remove: "Eliminar consulta guardada"
+        toast:
+          saved: "Se guardó \"%{name}\""
+        error:
+          save_failed: "No se pudo guardar la consulta"
+          list_failed: "No se pudieron cargar las consultas guardadas"
+          open_failed: "No se pudo abrir la consulta guardada"
+          not_found: "La consulta guardada ya no existe"
+          delete_failed: "No se pudo eliminar la consulta guardada"
+          aggregate_unavailable: "Esta consulta guardada es una agregación y esta conexión no puede ejecutar agregaciones"
       conflict:
         title: "El campo %{slot} tiene algo que el constructor no puede mostrar"
         note: "El constructor muestra las partes que entiende y deja el resto como solo lectura. Los cambios en ese campo esperan hasta que conserves el texto o lo reescribas desde el constructor."

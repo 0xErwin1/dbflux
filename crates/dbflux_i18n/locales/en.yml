@@ -759,6 +759,23 @@ document:
         no_sample: "No schema sample yet. Type a path and press Enter."
         loading: "Sampling documents…"
         use_path: "Use %{path}"
+      saved:
+        name_placeholder: "Untitled query"
+        save: "Save query"
+        save_needs_name: "Name the query to save it"
+        save_invalid: "Finish the highlighted conditions before saving"
+        list: "Saved queries"
+        empty: "No saved queries for this collection yet"
+        remove: "Delete saved query"
+        toast:
+          saved: "Saved \"%{name}\""
+        error:
+          save_failed: "Could not save the query"
+          list_failed: "Could not load the saved queries"
+          open_failed: "Could not open the saved query"
+          not_found: "The saved query no longer exists"
+          delete_failed: "Could not delete the saved query"
+          aggregate_unavailable: "This saved query is an aggregation, and this connection cannot run aggregations"
       conflict:
         title: "The %{slot} slot has something the builder cannot show"
         note: "The builder shows the parts it understands and keeps the rest read-only. Edits to that slot wait until you keep the text or rewrite it from the builder."

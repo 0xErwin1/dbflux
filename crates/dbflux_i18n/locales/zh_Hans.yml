@@ -759,6 +759,23 @@ document:
         no_sample: "尚无结构样本。输入路径后按 Enter。"
         loading: "正在采样文档…"
         use_path: "使用 %{path}"
+      saved:
+        name_placeholder: "未命名查询"
+        save: "保存查询"
+        save_needs_name: "为查询命名后才能保存"
+        save_invalid: "保存前请完成标出的条件"
+        list: "已保存的查询"
+        empty: "此集合还没有已保存的查询"
+        remove: "删除已保存的查询"
+        toast:
+          saved: "已保存 \"%{name}\""
+        error:
+          save_failed: "无法保存查询"
+          list_failed: "无法加载已保存的查询"
+          open_failed: "无法打开已保存的查询"
+          not_found: "该已保存的查询已不存在"
+          delete_failed: "无法删除已保存的查询"
+          aggregate_unavailable: "此已保存的查询是聚合查询，而此连接无法运行聚合"
       conflict:
         title: "%{slot} 输入框中有构建器无法显示的内容"
         note: "构建器显示它能理解的部分，其余部分保持只读。对该输入框的修改会等待，直到你保留文本或从构建器重写。"

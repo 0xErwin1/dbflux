@@ -1,5 +1,6 @@
 //! Rendering of the builder rail (IslDocBuilder, IslDocBuilderAggregate,
-//! IslDocBuilderStates): a header with the Find / Aggregate switch, the
+//! IslDocBuilderStates): a header with the query name, the saved queries and
+//! Save, the Find / Aggregate switch, the
 //! scrolling cards (sync conflict, Filter, Project, Sort / limit / skip,
 //! Group), the Preview pinned under them and the fixed footer with Open in
 //! editor and Find or Run pipeline.
@@ -63,6 +64,11 @@ const PICKER_INDENT: Pixels = px(14.0);
 const GROUP_BAR_WIDTH: Pixels = px(2.0);
 /// Height of the fade over the bottom of the scrolling cards.
 const FADE_HEIGHT: Pixels = px(28.0);
+/// Query name input in the header.
+const NAME_MIN_WIDTH: Pixels = px(120.0);
+/// Saved queries popover.
+const SAVED_MENU_WIDTH: Pixels = px(300.0);
+const SAVED_LIST_HEIGHT: Pixels = px(280.0);
 
 pub(super) fn render_panel(
     panel: &mut DocumentBuilderPanel,
@@ -99,11 +105,22 @@ pub(super) fn render_panel(
 // Header and footer
 // ---------------------------------------------------------------------------
 
+/// The header: the query name, the collection it reads, the saved queries
+/// of that collection, Save and Close.
 fn render_header(
     panel: &DocumentBuilderPanel,
     theme: &Theme,
     cx: &mut Context<DocumentBuilderPanel>,
 ) -> impl IntoElement {
+    let can_save = panel.can_save(cx);
+    let save_tooltip = if panel.query_name(cx).is_empty() {
+        dbflux_i18n::t!("document.collection.builder.saved.save_needs_name")
+    } else if can_save {
+        dbflux_i18n::t!("document.collection.builder.saved.save")
+    } else {
+        dbflux_i18n::t!("document.collection.builder.saved.save_invalid")
+    };
+
     div()
         .flex()
         .flex_shrink_0()
@@ -119,6 +136,14 @@ fn render_header(
                 .color(ChromeColors::tint(theme)),
         )
         .child(
+            div().flex_1().min_w(NAME_MIN_WIDTH).child(
+                Input::new(&panel.name_input)
+                    .id("doc-builder-query-name")
+                    .small()
+                    .w_full(),
+            ),
+        )
+        .child(
             div()
                 .min_w_0()
                 .truncate()
@@ -130,7 +155,34 @@ fn render_header(
             panel.collection.database.clone(),
             BadgeTone::Neutral,
         ))
-        .child(div().flex_1())
+        .child(
+            div()
+                .relative()
+                .child(
+                    Button::new(
+                        "doc-builder-saved-toggle",
+                        dbflux_i18n::t!("document.collection.builder.saved.list"),
+                    )
+                    .icon(AppIcon::Folder)
+                    .icon_only()
+                    .selected(panel.saved_menu_open)
+                    .tab_stop(false)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_saved_menu(cx))),
+                )
+                .children(render_saved_menu_if_open(panel, theme, cx)),
+        )
+        .child(
+            Button::new(
+                "doc-builder-save",
+                dbflux_i18n::t!("document.collection.builder.saved.save"),
+            )
+            .icon(AppIcon::Save)
+            .icon_only()
+            .disabled(!can_save)
+            .tooltip(save_tooltip)
+            .tab_stop(false)
+            .on_click(cx.listener(|this, _, _, cx| this.request_save(cx))),
+        )
         .child(
             Button::new(
                 "doc-builder-close",
@@ -2050,6 +2102,115 @@ fn render_preview(panel: &DocumentBuilderPanel, theme: &Theme, cx: &App) -> AnyE
             ))
         })
         .into_any_element()
+}
+
+// ---------------------------------------------------------------------------
+// Saved queries
+// ---------------------------------------------------------------------------
+
+/// The saved queries of the collection, under their header button: open
+/// one by its name, delete it with the trailing button.
+fn render_saved_menu_if_open(
+    panel: &DocumentBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<DocumentBuilderPanel>,
+) -> Option<AnyElement> {
+    if !panel.saved_menu_open {
+        return None;
+    }
+
+    let muted = theme.muted_foreground;
+
+    let rows: Vec<AnyElement> = panel
+        .saved_queries()
+        .iter()
+        .map(|entry| {
+            let open_id = entry.id.clone();
+            let remove_id = entry.id.clone();
+            let loaded = panel.loaded_id() == Some(entry.id.as_str());
+            let mode_label = match entry.mode {
+                DocumentQueryMode::Find => "find",
+                DocumentQueryMode::Aggregate => "aggregate",
+            };
+
+            let row_selector = format!("doc-builder-saved-{}", entry.id);
+
+            div()
+                .id(SharedString::from(row_selector.clone()))
+                .debug_selector(move || row_selector)
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .cursor_pointer()
+                .hover(|row| row.bg(theme.accent.opacity(0.15)))
+                .when(loaded, |row| row.bg(theme.accent.opacity(0.1)))
+                .on_click(cx.listener(move |this, _, _, cx| this.request_open_saved(&open_id, cx)))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(FontSizes::XS)
+                        .child(SharedString::from(entry.name.clone())),
+                )
+                .child(type_tag(mode_label.to_string(), theme))
+                .child(
+                    Button::new(
+                        SharedString::from(format!("doc-builder-saved-remove-{}", entry.id)),
+                        dbflux_i18n::t!("document.collection.builder.saved.remove"),
+                    )
+                    .icon(AppIcon::Delete)
+                    .icon_only()
+                    .tab_stop(false)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.request_delete_saved(&remove_id, cx);
+                    })),
+                )
+                .into_any_element()
+        })
+        .collect();
+
+    let body = if rows.is_empty() {
+        div()
+            .id("doc-builder-saved-empty")
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .child(caption(
+                dbflux_i18n::t!("document.collection.builder.saved.empty"),
+                muted,
+            ))
+            .into_any_element()
+    } else {
+        div()
+            .id("doc-builder-saved-list")
+            .max_h(SAVED_LIST_HEIGHT)
+            .flex()
+            .flex_col()
+            .overflow_y_scrollbar()
+            .children(rows)
+            .into_any_element()
+    };
+
+    let popover = menu_frame(cx)
+        .id("doc-builder-saved-menu")
+        .debug_selector(|| "doc-builder-saved-menu".to_string())
+        .absolute()
+        .top_full()
+        .right_0()
+        .mt(Spacing::XS)
+        .w(SAVED_MENU_WIDTH)
+        .occlude()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            if this.saved_menu_open {
+                this.toggle_saved_menu(cx);
+            }
+        }))
+        .child(body);
+
+    Some(deferred(popover).with_priority(2).into_any_element())
 }
 
 // ---------------------------------------------------------------------------

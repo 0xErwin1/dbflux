@@ -12,7 +12,8 @@ use dbflux_components::controls::InputEvent;
 use dbflux_core::{
     CollectionRef, CollectionSchemaSample, Connection, DocumentCombinator, DocumentFeatures,
     DocumentFieldType, DocumentFindSlots, DocumentOperator, DocumentProjectionMode,
-    DocumentQueryCodec, DocumentQueryMode, DocumentSortDirection, parse_aggregate_pipeline,
+    DocumentQueryCodec, DocumentQueryMode, DocumentQuerySpec, DocumentSortDirection,
+    parse_aggregate_pipeline,
 };
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
@@ -40,6 +41,26 @@ pub enum DocumentBuilderEvent {
     OpenInEditorRequested(String),
     /// Hide the rail, keeping the draft.
     CloseRequested,
+    /// Save `spec` under `name` for this collection.
+    SaveRequested {
+        name: String,
+        spec: Box<DocumentQuerySpec>,
+    },
+    /// The saved-queries list opened: send the saved queries of this
+    /// collection with [`DocumentBuilderPanel::set_saved_queries`].
+    SavedQueriesRequested,
+    /// Open the saved query `id` in the builder.
+    OpenSavedRequested { id: String },
+    /// Delete the saved query `id`.
+    DeleteSavedRequested { id: String },
+}
+
+/// A saved query as the rail lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedQueryEntry {
+    pub id: String,
+    pub name: String,
+    pub mode: DocumentQueryMode,
 }
 
 /// What a pick in the field picker fills.
@@ -102,6 +123,15 @@ pub struct DocumentBuilderPanel {
     pub(super) limit_problem: bool,
     pub(super) skip_problem: bool,
     pub(super) pending_paging_texts: bool,
+    /// Name the query is saved under.
+    pub(super) name_input: Entity<InputState>,
+    /// Text to put into the name input on the next render.
+    pending_name: Option<String>,
+    /// The saved query the draft was last saved as or opened from.
+    pub(super) loaded_id: Option<String>,
+    /// Saved queries of the collection, while their list is open.
+    pub(super) saved_queries: Vec<SavedQueryEntry>,
+    pub(super) saved_menu_open: bool,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -123,8 +153,18 @@ impl DocumentBuilderPanel {
     ) -> Self {
         let limit_input = cx.new(|cx| InputState::new(window, cx));
         let skip_input = cx.new(|cx| InputState::new(window, cx).placeholder("0"));
+        let name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.collection.builder.saved.name_placeholder"
+            ))
+        });
 
         let subscriptions = vec![
+            cx.subscribe(&name_input, |_this, _input, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
             cx.subscribe(&limit_input, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = input.read(cx).value().to_string();
@@ -163,6 +203,11 @@ impl DocumentBuilderPanel {
             limit_problem: false,
             skip_problem: false,
             pending_paging_texts: false,
+            name_input,
+            pending_name: None,
+            loaded_id: None,
+            saved_queries: Vec::new(),
+            saved_menu_open: false,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -425,7 +470,135 @@ impl DocumentBuilderPanel {
 
     pub fn request_close(&mut self, cx: &mut Context<Self>) {
         self.picker = None;
+        self.saved_menu_open = false;
         cx.emit(DocumentBuilderEvent::CloseRequested);
+    }
+
+    // ---- saved queries ---------------------------------------------------
+
+    /// The name in the header, trimmed. A name set by opening a saved
+    /// query counts before the next render puts it into the input.
+    pub fn query_name(&self, cx: &App) -> String {
+        match &self.pending_name {
+            Some(name) => name.trim().to_string(),
+            None => self.name_input.read(cx).value().trim().to_string(),
+        }
+    }
+
+    pub fn loaded_id(&self) -> Option<&str> {
+        self.loaded_id.as_deref()
+    }
+
+    /// The saved queries of the collection, as last sent by the grid.
+    pub fn saved_queries(&self) -> &[SavedQueryEntry] {
+        &self.saved_queries
+    }
+
+    #[cfg(test)]
+    pub fn set_query_name(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_name = None;
+        self.name_input.update(cx, |state, cx| {
+            state.set_value(name.to_string(), window, cx)
+        });
+    }
+
+    /// Whether Save can run: the query has a name and describes a spec.
+    pub fn can_save(&self, cx: &App) -> bool {
+        !self.query_name(cx).is_empty() && self.draft.to_spec().is_ok()
+    }
+
+    /// Asks the grid to save the draft under the name in the header.
+    pub fn request_save(&mut self, cx: &mut Context<Self>) {
+        if !self.can_save(cx) {
+            return;
+        }
+        let Ok(spec) = self.draft.to_spec() else {
+            return;
+        };
+
+        cx.emit(DocumentBuilderEvent::SaveRequested {
+            name: self.query_name(cx),
+            spec: Box::new(spec),
+        });
+    }
+
+    /// Records that the draft was saved as `id`.
+    pub fn mark_saved(&mut self, id: String, cx: &mut Context<Self>) {
+        self.loaded_id = Some(id);
+        cx.notify();
+    }
+
+    /// Opens or closes the list of saved queries. Opening asks the grid for
+    /// the current list.
+    pub fn toggle_saved_menu(&mut self, cx: &mut Context<Self>) {
+        self.saved_menu_open = !self.saved_menu_open;
+        if self.saved_menu_open {
+            self.picker = None;
+            self.operator_menu = None;
+            cx.emit(DocumentBuilderEvent::SavedQueriesRequested);
+        }
+        cx.notify();
+    }
+
+    pub fn set_saved_queries(&mut self, entries: Vec<SavedQueryEntry>, cx: &mut Context<Self>) {
+        if self
+            .loaded_id
+            .as_ref()
+            .is_some_and(|id| !entries.iter().any(|entry| &entry.id == id))
+        {
+            self.loaded_id = None;
+        }
+
+        self.saved_queries = entries;
+        cx.notify();
+    }
+
+    pub fn request_open_saved(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.saved_menu_open = false;
+        cx.emit(DocumentBuilderEvent::OpenSavedRequested { id: id.to_string() });
+        cx.notify();
+    }
+
+    pub fn request_delete_saved(&mut self, id: &str, cx: &mut Context<Self>) {
+        cx.emit(DocumentBuilderEvent::DeleteSavedRequested { id: id.to_string() });
+    }
+
+    /// Replaces the draft with the saved query `id`, in its saved mode. A
+    /// find is written to the slots, replacing whatever they held; an
+    /// aggregation leaves them alone. Returns `false`, changing nothing,
+    /// when the query is an aggregation this connection cannot run.
+    pub fn open_saved(
+        &mut self,
+        id: String,
+        name: &str,
+        spec: &DocumentQuerySpec,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if spec.mode == DocumentQueryMode::Aggregate && !self.aggregate_available() {
+            return false;
+        }
+
+        self.draft.load_all(spec);
+        self.loaded_id = Some(id);
+        self.pending_name = Some(name.to_string());
+        self.saved_menu_open = false;
+
+        self.picker = None;
+        self.operator_menu = None;
+        self.filter_expanded = false;
+        self.chip_problems.clear();
+        self.pending_paging_texts = true;
+        self.limit_problem = false;
+        self.skip_problem = false;
+        self.sweep_inputs();
+
+        self.recompute(false, cx);
+        if self.draft.mode == DocumentQueryMode::Find {
+            self.rewrite_from_builder(cx);
+        }
+
+        cx.emit(DocumentBuilderEvent::ModeChanged);
+        true
     }
 
     // ---- mode and group stage --------------------------------------------
@@ -1094,6 +1267,11 @@ impl DocumentBuilderPanel {
                     _subscription: subscription,
                 },
             );
+        }
+
+        if let Some(name) = self.pending_name.take() {
+            self.name_input
+                .update(cx, |state, cx| state.set_value(name, window, cx));
         }
 
         if self.pending_paging_texts {

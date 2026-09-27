@@ -12,21 +12,36 @@
 //! read-only summary of the pipeline instead, and Run pipeline writes the
 //! pipeline text into the Aggregate view and runs it there, through the
 //! ordinary aggregate path.
+//!
+//! Queries saved from the rail belong to the collection: its connection
+//! profile, database and collection name. The rail lists them, and opening
+//! one loads it in the mode it was saved in.
 
 use std::sync::Arc;
 
 use dbflux_components::controls::{Button, InputEvent};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Badge, BadgeTone};
+use dbflux_core::observability::actions as audit_actions;
+use dbflux_core::observability::{
+    AuditAction, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
+};
 use dbflux_core::{
     Connection, DatabaseCategory, DocumentFeatures, DocumentFindSlots, DocumentQueryMode,
-    Pagination,
+    DocumentQuerySpec, Pagination,
 };
+use dbflux_storage::{DocumentQueryScope, SavedDocumentQuerySummary};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 
 use super::CollectionTab;
 use crate::data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
-use crate::document_builder::{DocumentBuilderEvent, DocumentBuilderPanel, SlotWrite};
+use crate::document_builder::{
+    DocumentBuilderEvent, DocumentBuilderPanel, SavedQueryEntry, SlotWrite,
+};
+
+/// Audit object type of a saved document query.
+const SAVED_QUERY_OBJECT_TYPE: &str = "saved_document_query";
 
 /// Whether a collection offers the visual builder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,6 +302,215 @@ impl DataGridPanel {
                 }
             }
             DocumentBuilderEvent::CloseRequested => self.close_document_builder(cx),
+            DocumentBuilderEvent::SaveRequested { name, spec } => {
+                self.save_document_query(name, spec, cx);
+            }
+            DocumentBuilderEvent::SavedQueriesRequested => self.send_saved_document_queries(cx),
+            DocumentBuilderEvent::OpenSavedRequested { id } => {
+                self.open_saved_document_query(id, cx);
+            }
+            DocumentBuilderEvent::DeleteSavedRequested { id } => {
+                self.delete_saved_document_query(id, cx);
+            }
+        }
+    }
+
+    /// The collection saved document queries of this tab belong to.
+    fn document_query_scope(&self) -> Option<DocumentQueryScope> {
+        let DataSource::Collection {
+            profile_id,
+            collection,
+            ..
+        } = &self.source
+        else {
+            return None;
+        };
+
+        Some(DocumentQueryScope::new(
+            profile_id.to_string(),
+            collection.database.clone(),
+            collection.name.clone(),
+        ))
+    }
+
+    fn save_document_query(
+        &mut self,
+        name: &str,
+        spec: &DocumentQuerySpec,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(scope) = self.document_query_scope() else {
+            return;
+        };
+
+        let result = self.app_state.update(cx, |app, _| {
+            let existed = app
+                .saved_document_queries
+                .list(&scope)?
+                .iter()
+                .any(|saved| saved.name == name.trim());
+            let summary = app.saved_document_queries.save(&scope, name, spec)?;
+            Ok::<_, dbflux_storage::error::StorageError>((summary, existed))
+        });
+
+        match result {
+            Ok((summary, existed)) => {
+                if let Some(panel) = self.collection.builder.panel.clone() {
+                    let id = summary.id.clone();
+                    panel.update(cx, |builder, cx| builder.mark_saved(id, cx));
+                }
+                self.send_saved_document_queries(cx);
+
+                let action = if existed {
+                    audit_actions::CONFIG_UPDATE
+                } else {
+                    audit_actions::CONFIG_CREATE
+                };
+                self.record_saved_query_audit(
+                    saved_query_audit_event(
+                        action,
+                        &format!("Saved document query \"{}\"", summary.name),
+                        &summary.id,
+                        &scope,
+                    ),
+                    cx,
+                );
+
+                dbflux_ui_base::toast::Toast::success(dbflux_i18n::t!(
+                    "document.collection.builder.saved.toast.saved",
+                    name = summary.name
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
+            }
+            Err(error) => report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.collection.builder.saved.error.save_failed"),
+                )
+                .with_cause(error.to_string()),
+                cx,
+            ),
+        }
+    }
+
+    /// Sends the saved queries of this collection to the rail.
+    fn send_saved_document_queries(&mut self, cx: &mut Context<Self>) {
+        let Some(scope) = self.document_query_scope() else {
+            return;
+        };
+        let Some(panel) = self.collection.builder.panel.clone() else {
+            return;
+        };
+
+        let result = self
+            .app_state
+            .update(cx, |app, _| app.saved_document_queries.list(&scope));
+
+        match result {
+            Ok(saved) => {
+                let entries = saved.into_iter().map(saved_query_entry).collect();
+                panel.update(cx, |builder, cx| builder.set_saved_queries(entries, cx));
+            }
+            Err(error) => report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.collection.builder.saved.error.list_failed"),
+                )
+                .with_cause(error.to_string()),
+                cx,
+            ),
+        }
+    }
+
+    fn open_saved_document_query(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(panel) = self.collection.builder.panel.clone() else {
+            return;
+        };
+
+        let loaded = self.app_state.read(cx).saved_document_queries.load(id);
+
+        let saved = match loaded {
+            Ok(Some(saved)) => saved,
+            Ok(None) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::User,
+                        dbflux_i18n::t!("document.collection.builder.saved.error.not_found"),
+                    ),
+                    cx,
+                );
+                self.send_saved_document_queries(cx);
+                return;
+            }
+            Err(error) => {
+                report_error(
+                    UserFacingError::new(
+                        ErrorKind::Storage,
+                        dbflux_i18n::t!("document.collection.builder.saved.error.open_failed"),
+                    )
+                    .with_cause(error.to_string()),
+                    cx,
+                );
+                return;
+            }
+        };
+
+        let opened = panel.update(cx, |builder, cx| {
+            builder.open_saved(saved.summary.id, &saved.summary.name, &saved.spec, cx)
+        });
+
+        if !opened {
+            report_error(
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!(
+                        "document.collection.builder.saved.error.aggregate_unavailable"
+                    ),
+                ),
+                cx,
+            );
+        }
+    }
+
+    fn delete_saved_document_query(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(scope) = self.document_query_scope() else {
+            return;
+        };
+
+        let result = self
+            .app_state
+            .update(cx, |app, _| app.saved_document_queries.delete(id, &scope));
+
+        match result {
+            Ok(deleted) => {
+                self.send_saved_document_queries(cx);
+                if deleted {
+                    self.record_saved_query_audit(
+                        saved_query_audit_event(
+                            audit_actions::CONFIG_DELETE,
+                            "Deleted a saved document query",
+                            id,
+                            &scope,
+                        ),
+                        cx,
+                    );
+                }
+            }
+            Err(error) => report_error(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.collection.builder.saved.error.delete_failed"),
+                )
+                .with_cause(error.to_string()),
+                cx,
+            ),
+        }
+    }
+
+    fn record_saved_query_audit(&self, event: EventRecord, cx: &App) {
+        if let Err(error) = self.app_state.read(cx).audit_service().record(event) {
+            log::error!("saved document query audit event failed to record: {error}");
         }
     }
 
@@ -540,6 +764,39 @@ impl DataGridPanel {
 
         Some(div().id(id).flex_shrink_0().child(badge).into_any_element())
     }
+}
+
+fn saved_query_entry(summary: SavedDocumentQuerySummary) -> SavedQueryEntry {
+    SavedQueryEntry {
+        id: summary.id,
+        name: summary.name,
+        mode: summary.mode,
+    }
+}
+
+/// The `Config` audit event of a change to a saved document query.
+fn saved_query_audit_event(
+    action: AuditAction,
+    summary: &str,
+    id: &str,
+    scope: &DocumentQueryScope,
+) -> EventRecord {
+    let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
+    let details = serde_json::json!({ "collection": scope.collection });
+
+    EventRecord::new(
+        now_ms,
+        EventSeverity::Info,
+        EventCategory::Config,
+        EventOutcome::Success,
+    )
+    .with_summary(summary)
+    .with_typed_action(action)
+    .with_origin(EventOrigin::local())
+    .with_actor_id("local")
+    .with_connection_context(scope.profile_id.clone(), scope.database.clone(), "")
+    .with_object_ref(SAVED_QUERY_OBJECT_TYPE, id)
+    .with_details_json(details.to_string())
 }
 
 #[cfg(test)]
@@ -1509,6 +1766,245 @@ mod tests {
             DocumentQueryMode::Aggregate
         );
         assert_preview_is_pinned(window);
+    }
+
+    fn set_query_name(
+        rail: &gpui::Entity<crate::document_builder::DocumentBuilderPanel>,
+        window: &mut VisualTestContext,
+        name: &str,
+    ) {
+        window.update(|window, cx| {
+            rail.update(cx, |rail, cx| rail.set_query_name(name, window, cx));
+        });
+    }
+
+    fn stored_queries(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> Vec<dbflux_storage::SavedDocumentQuerySummary> {
+        window.update(|_, cx| {
+            let grid = panel.read(cx);
+            let scope = grid.document_query_scope().expect("a collection tab");
+            grid.app_state.clone().update(cx, |app, _| {
+                app.saved_document_queries.list(&scope).expect("list")
+            })
+        })
+    }
+
+    fn sync_slots(panel: &gpui::Entity<DataGridPanel>, window: &mut VisualTestContext) {
+        window.update(|_, cx| {
+            panel.update(cx, |grid, cx| grid.sync_slots_into_document_builder(cx));
+        });
+    }
+
+    #[gpui::test]
+    fn a_saved_find_reopens_from_the_list_and_rewrites_the_slots(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        assert!(
+            !window.update(|_, cx| rail.read(cx).can_save(cx)),
+            "a query needs a name before it can be saved"
+        );
+        set_query_name(&rail, window, "  adults ");
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_save(cx)));
+        window.run_until_parked();
+
+        let saved = stored_queries(&panel, window);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "adults");
+        assert_eq!(saved[0].mode, DocumentQueryMode::Find);
+        assert_eq!(
+            window.update(|_, cx| rail.read(cx).loaded_id().map(str::to_string)),
+            Some(saved[0].id.clone())
+        );
+
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        sync_slots(&panel, window);
+        set_query_name(&rail, window, "");
+        assert_eq!(first_condition(&panel, window).1, "status");
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.toggle_saved_menu(cx)));
+        window.run_until_parked();
+        let listed = window.update(|_, cx| rail.read(cx).saved_queries().to_vec());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "adults");
+
+        window
+            .update(|_, cx| rail.update(cx, |rail, cx| rail.request_open_saved(&listed[0].id, cx)));
+        window.run_until_parked();
+
+        let (_, path, operator) = first_condition(&panel, window);
+        assert_eq!((path.as_str(), operator), ("age", DocumentOperator::Gt));
+        assert_eq!(slot_texts(&panel, window).0, r#"{"age": {"$gt": 30}}"#);
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert_eq!(rail.mode(), DocumentQueryMode::Find);
+            assert_eq!(rail.query_name(cx), "adults");
+            assert!(!rail.is_conflicted());
+        });
+    }
+
+    #[gpui::test]
+    fn a_saved_aggregation_reopens_in_aggregate_mode_and_leaves_the_slots(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, aggregate_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        set_query_name(&rail, window, "failures by status");
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_save(cx)));
+        window.run_until_parked();
+
+        let saved = stored_queries(&panel, window);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].mode, DocumentQueryMode::Aggregate);
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.remove_group_stage(cx)));
+        window.run_until_parked();
+        set_slot_texts(&panel, window, r#"{"other": 1}"#, "");
+        sync_slots(&panel, window);
+
+        window
+            .update(|_, cx| rail.update(cx, |rail, cx| rail.request_open_saved(&saved[0].id, cx)));
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| rail.read(cx).mode()),
+            DocumentQueryMode::Aggregate
+        );
+        assert_eq!(first_condition(&panel, window).1, "status");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            r#"{"other": 1}"#,
+            "opening an aggregation writes no slot"
+        );
+        let stages = window
+            .update(|_, cx| panel.read(cx).document_builder_pipeline_stages(cx))
+            .expect("the query bar shows the pipeline");
+        assert!(stages.contains(&"$group".to_string()), "{stages:?}");
+    }
+
+    #[gpui::test]
+    fn an_aggregation_does_not_open_where_aggregations_cannot_run(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ "status": "failed" }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        let id = window.update(|_, cx| {
+            let grid = panel.read(cx);
+            let scope = grid.document_query_scope().expect("scope");
+            let spec = dbflux_core::DocumentQuerySpec {
+                mode: DocumentQueryMode::Aggregate,
+                group: Some(dbflux_core::DocumentGroupStage::default()),
+                ..dbflux_core::DocumentQuerySpec::default()
+            };
+            grid.app_state.clone().update(cx, |app, _| {
+                app.saved_document_queries
+                    .save(&scope, "grouped", &spec)
+                    .expect("save")
+                    .id
+            })
+        });
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_open_saved(&id, cx)));
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert_eq!(rail.mode(), DocumentQueryMode::Find);
+            assert_eq!(rail.loaded_id(), None);
+        });
+        assert_eq!(first_condition(&panel, window).1, "status");
+    }
+
+    #[gpui::test]
+    fn deleting_a_saved_query_removes_it_from_the_list(cx: &mut TestAppContext) {
+        let (panel, window) = collection_panel(
+            cx,
+            StubDocumentConnection::new(DatabaseCategory::Document, builder_features(), true),
+        );
+        set_slot_texts(&panel, window, r#"{ age: { $gt: 30 } }"#, "");
+        open_builder(&panel, window);
+        let rail = builder(&panel, window);
+
+        set_query_name(&rail, window, "adults");
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_save(cx)));
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.toggle_saved_menu(cx)));
+        window.run_until_parked();
+
+        let id = window.update(|_, cx| rail.read(cx).saved_queries()[0].id.clone());
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_delete_saved(&id, cx)));
+        window.run_until_parked();
+
+        assert!(stored_queries(&panel, window).is_empty());
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert!(rail.saved_queries().is_empty());
+            assert_eq!(
+                rail.loaded_id(),
+                None,
+                "the deleted query is no longer the loaded one"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn clicking_a_saved_query_in_the_list_opens_it(cx: &mut TestAppContext) {
+        use gpui::Modifiers;
+
+        let (grid, _host, window) = rendered_rail(cx, r#"{"age": {"$gt": 30}}"#);
+        let rail = builder(&grid, window);
+
+        set_query_name(&rail, window, "adults");
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.request_save(cx)));
+        set_slot_texts(&grid, window, r#"{"status": "failed"}"#, "");
+        sync_slots(&grid, window);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.toggle_saved_menu(cx)));
+        window.run_until_parked();
+
+        assert!(bounds_of(window, "doc-builder-saved-menu".to_string()).is_some());
+        let id = stored_queries(&grid, window)[0].id.clone();
+        let row = bounds_of(window, format!("doc-builder-saved-{id}")).expect("a row per query");
+        window.simulate_click(center(row), Modifiers::none());
+        window.run_until_parked();
+
+        assert!(
+            bounds_of(window, "doc-builder-saved-menu".to_string()).is_none(),
+            "opening a query closes the list"
+        );
+        assert_eq!(first_condition(&grid, window).1, "age");
+        assert_eq!(slot_texts(&grid, window).0, r#"{"age": {"$gt": 30}}"#);
+    }
+
+    #[test]
+    fn saved_query_audit_events_pass_config_validation() {
+        let scope = dbflux_storage::DocumentQueryScope::new("profile-1", "shop", "orders");
+
+        for action in [
+            dbflux_core::observability::actions::CONFIG_CREATE,
+            dbflux_core::observability::actions::CONFIG_UPDATE,
+            dbflux_core::observability::actions::CONFIG_DELETE,
+        ] {
+            let event = super::saved_query_audit_event(action, "Saved \"adults\"", "id-1", &scope);
+
+            dbflux_audit::AuditService::validate_event(&event).expect("a valid config event");
+            assert_eq!(event.object_type.as_deref(), Some("saved_document_query"));
+            assert_eq!(event.object_id.as_deref(), Some("id-1"));
+        }
     }
 
     #[gpui::test]
