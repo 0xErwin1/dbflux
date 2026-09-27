@@ -174,14 +174,23 @@ guardados en el historial de consultas.
 Mientras el rail está abierto, el constructor y los campos `filter`, `project`,
 `sort` y `limit` se sincronizan en ambos sentidos: una edición en el
 constructor reescribe los campos que cambia, y una edición en un campo
-actualiza el constructor. El salto no tiene campo; se aplica mientras el rail
-está abierto.
+recarga el constructor, lo que descarta una condición sin terminar. Los campos
+que cambiaron mientras el rail estaba cerrado, o mientras el constructor estaba
+en modo Aggregate, se vuelven a leer cuando el rail se reabre o el constructor
+vuelve a Find: una parte que el constructor no cambió mientras tanto toma la
+consulta del campo. Ejecutar una consulta del historial también recarga el
+constructor y borra su salto.
+
+El salto no tiene campo; se aplica mientras el rail está abierto, y la
+paginación cuenta desde él: retroceder una página se detiene en el salto, y un nuevo
+tamaño de página vuelve a empezar allí.
 
 Cuando un campo contiene una cláusula que el constructor no puede mostrar,
 como `$expr`, el constructor muestra las partes que entiende, deja el resto en
 solo lectura y muestra una tarjeta con dos opciones. Las ediciones del
 constructor que cambiarían ese campo esperan hasta que elijas, y **Buscar**
-queda deshabilitado.
+queda deshabilitado mientras haya una edición en espera. Sin ediciones en
+espera, **Buscar** ejecuta los campos tal como están escritos.
 
 | Opción                               | Efecto                                                                                          |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
@@ -209,7 +218,9 @@ colección y lo ejecuta allí. Las filas agrupadas se calculan, así que no tien
 un `_id` que editar: los resultados son de solo lectura y llevan un aviso que
 lo indica. Mientras el constructor está en modo Aggregate, la barra de
 consulta y la vista Agregación muestran un resumen del pipeline en lugar de los
-campos y del editor de pipeline.
+campos y del editor de pipeline. Mientras la vista Agregación ejecuta un
+pipeline o espera una confirmación, **Ejecutar pipeline** no la toca e indica
+que no se ejecutó nada.
 
 ### Consultas de documentos guardadas
 
@@ -217,7 +228,8 @@ Pon un nombre a la consulta en la cabecera del rail y haz clic en **Guardar
 consulta**. Las consultas guardadas pertenecen a la colección: su perfil de
 conexión, su base de datos y su nombre. Guardar con un nombre que ya existe
 reemplaza esa consulta. **Consultas guardadas** las lista; al abrir una se
-carga en el modo en que se guardó.
+carga en el modo en que se guardó. Abrir un find guardado reemplaza los cuatro
+campos, incluidas las cláusulas que el constructor no puede mostrar.
 
 ### Limitaciones
 

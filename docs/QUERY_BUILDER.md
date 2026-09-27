@@ -160,13 +160,21 @@ ordinary documents, editable, counted and kept in the query history.
 
 While the rail is open, the builder and the `filter`, `project`, `sort` and
 `limit` slots stay in sync both ways: a builder edit rewrites the slots it
-changes, and a slot edit updates the builder. The skip has no slot; it applies
-while the rail is open.
+changes, and a slot edit reloads the builder, which discards a condition you
+have not finished. Slots changed while the rail was closed, or while the
+builder was in Aggregate mode, are read again when the rail reopens or the
+builder returns to Find: a part the builder did not change in the meantime
+takes the slot's query. Running a query from the history also reloads the
+builder and clears its skip.
+
+The skip has no slot; it applies while the rail is open, and paging counts from
+it: going back a page stops at the skip, and a new page size starts over there.
 
 When a slot holds a clause the builder cannot show, such as `$expr`, the
 builder shows the parts it understands, keeps the rest read-only and shows a
 card with two choices. Edits in the builder that would change that slot wait
-until you choose, and **Find** stays disabled.
+until you choose, and **Find** stays disabled while such an edit is waiting.
+With no edit waiting, **Find** runs the slots as written.
 
 | Choice | Effect |
 |--------|--------|
@@ -192,14 +200,17 @@ aggregation pipelines.
 runs it there. Grouped rows are computed, so they have no `_id` to edit: the
 results are read-only and carry a banner that says so. While the builder is in
 Aggregate mode, the query bar and the Aggregate view show a summary of the
-pipeline instead of the slots and the pipeline editor.
+pipeline instead of the slots and the pipeline editor. While the Aggregate view
+is running a pipeline or waiting for a confirmation, **Run pipeline** leaves it
+alone and says that nothing ran.
 
 ### Saved document queries
 
 Name the query in the rail header and click **Save query**. Saved queries
 belong to the collection: its connection profile, database and collection.
 Saving under a name that already exists replaces that query. **Saved queries**
-lists them; opening one loads it in the mode it was saved in.
+lists them; opening one loads it in the mode it was saved in. Opening a saved
+find replaces all four slots, including clauses the builder cannot show.
 
 ### Limitations
 
