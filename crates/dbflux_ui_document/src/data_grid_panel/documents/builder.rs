@@ -1990,6 +1990,108 @@ mod tests {
         assert_eq!(slot_texts(&grid, window).0, r#"{"age": {"$gt": 30}}"#);
     }
 
+    /// A schema sample with a string `tier` and a numeric `price`.
+    fn give_rail_a_sample(
+        rail: &gpui::Entity<crate::document_builder::DocumentBuilderPanel>,
+        window: &mut VisualTestContext,
+    ) {
+        let field = |path: &str, type_name: &str| dbflux_core::FieldSchemaStats {
+            path: path.to_string(),
+            presence: 10,
+            types: vec![dbflux_core::FieldTypeShare {
+                type_name: type_name.to_string(),
+                count: 10,
+            }],
+            summary: dbflux_core::FieldValueSummary::Empty,
+        };
+        let sample = dbflux_core::CollectionSchemaSample {
+            sampled_documents: 10,
+            total_documents: Some(10),
+            fields: (0..20)
+                .map(|index| field(&format!("attribute{index:02}"), "String"))
+                .chain([field("tier", "String"), field("price", "Double")])
+                .collect(),
+        };
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.set_schema(&sample, cx)));
+        window.run_until_parked();
+    }
+
+    fn click(window: &mut VisualTestContext, selector: String) {
+        let bounds =
+            bounds_of(window, selector.clone()).unwrap_or_else(|| panic!("{selector} is rendered"));
+        window.simulate_click(center(bounds), gpui::Modifiers::none());
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn picking_a_field_adds_the_group_key(cx: &mut TestAppContext) {
+        let (grid, _host, window) = rendered_rail_with(cx, "", aggregate_features());
+        window.simulate_resize(gpui::size(gpui::px(540.0), gpui::px(760.0)));
+        let rail = builder(&grid, window);
+        give_rail_a_sample(&rail, window);
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        window.run_until_parked();
+
+        click(window, "doc-builder-group-key-add".to_string());
+
+        // Twenty fields sort before `tier`, so its row starts below the
+        // list's visible height until the search narrows the list.
+        let list = bounds_of(window, "doc-builder-picker-list".to_string()).expect("list");
+        let row = bounds_of(window, "doc-builder-picker-field-tier".to_string()).expect("row");
+        assert!(
+            row.origin.y >= list.bottom(),
+            "{row:?} is scrolled out of {list:?}"
+        );
+
+        window.simulate_input("tier");
+        window.run_until_parked();
+        click(window, "doc-builder-picker-field-tier".to_string());
+
+        window.update(|_, cx| {
+            let rail = rail.read(cx);
+            assert_eq!(
+                rail.draft().group.as_ref().map(|stage| stage.keys.clone()),
+                Some(vec!["tier".to_string()])
+            );
+        });
+        let pipeline = window.update(|_, cx| rail.read(cx).pipeline_text());
+        assert!(
+            pipeline
+                .as_deref()
+                .is_some_and(|text| text.contains(r#""_id": "$tier""#)),
+            "{pipeline:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn picking_a_field_sets_the_accumulator_field(cx: &mut TestAppContext) {
+        let (grid, _host, window) = rendered_rail_with(cx, "", aggregate_features());
+        let rail = builder(&grid, window);
+        give_rail_a_sample(&rail, window);
+
+        let id = window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                rail.add_group_stage(cx);
+                let id = rail.draft().group.as_ref().unwrap().accumulators[0].id;
+                rail.set_accumulator_op(id, AccumulatorOp::Sum, cx);
+                id
+            })
+        });
+        window.run_until_parked();
+
+        click(window, format!("doc-builder-acc-field-{id}"));
+        click(window, "doc-builder-picker-field-price".to_string());
+
+        let path = window.update(|_, cx| {
+            rail.read(cx)
+                .draft()
+                .accumulator(id)
+                .map(|accumulator| accumulator.path.clone())
+        });
+        assert_eq!(path.as_deref(), Some("price"));
+    }
+
     #[test]
     fn saved_query_audit_events_pass_config_validation() {
         let scope = dbflux_storage::DocumentQueryScope::new("profile-1", "shop", "orders");

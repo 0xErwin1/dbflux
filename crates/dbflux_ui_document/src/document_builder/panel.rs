@@ -224,6 +224,11 @@ impl DocumentBuilderPanel {
         &self.draft
     }
 
+    #[cfg(test)]
+    pub fn pipeline_text(&self) -> Option<String> {
+        self.pipeline.clone()
+    }
+
     pub fn skip(&self) -> Option<u64> {
         self.draft.skip
     }

@@ -1764,6 +1764,7 @@ fn render_group_stage(
         .collect::<Vec<_>>();
 
     let add_key = div()
+        .debug_selector(|| "doc-builder-group-key-add".to_string())
         .relative()
         .child(link_button(
             "doc-builder-group-key-add",
@@ -1985,6 +1986,7 @@ fn render_accumulator_field(
 
     let trigger = div()
         .id(SharedString::from(format!("doc-builder-acc-field-{id}")))
+        .debug_selector(move || format!("doc-builder-acc-field-{id}"))
         .relative()
         .flex()
         .items_center()
@@ -2327,6 +2329,7 @@ fn render_picker_if_open(
         .child(
             div()
                 .id("doc-builder-picker-list")
+                .debug_selector(|| "doc-builder-picker-list".to_string())
                 .max_h(PICKER_LIST_HEIGHT)
                 .flex()
                 .flex_col()
@@ -2354,8 +2357,11 @@ fn picker_row(
     let tags = (!types.is_empty())
         .then(|| type_tag(crate::labels::document_field_type_tags(&types), theme));
 
+    let selector = id.to_string();
+
     div()
         .id(id)
+        .debug_selector(move || selector)
         .flex()
         .items_center()
         .gap(Spacing::SM)
