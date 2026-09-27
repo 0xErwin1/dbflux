@@ -1,8 +1,8 @@
 //! Rendering of the builder rail (IslDocBuilder, IslDocBuilderAggregate,
 //! IslDocBuilderStates): a header with the Find / Aggregate switch, the
 //! scrolling cards (sync conflict, Filter, Project, Sort / limit / skip,
-//! Group, Preview) and the fixed footer with Open in editor and Find or Run
-//! pipeline.
+//! Group), the Preview pinned under them and the fixed footer with Open in
+//! editor and Find or Run pipeline.
 
 use dbflux_components::composites::menu_frame;
 use dbflux_components::controls::{Button, Input};
@@ -91,6 +91,7 @@ pub(super) fn render_panel(
         .child(render_header(panel, &theme, cx))
         .child(render_mode_switch(panel, &theme, cx))
         .child(render_body(panel, &theme, cx))
+        .child(render_preview_pane(panel, &theme, cx))
         .child(render_footer(panel, &theme, cx))
 }
 
@@ -241,6 +242,8 @@ fn render_footer(
     let can_open = panel.problems.is_empty() && panel.render_error.is_none();
 
     div()
+        .id("doc-builder-footer")
+        .debug_selector(|| "doc-builder-footer".to_string())
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -357,36 +360,12 @@ fn render_body(
         ),
     };
 
-    let mode_label = match panel.mode() {
-        DocumentQueryMode::Find => "find",
-        DocumentQueryMode::Aggregate => "aggregate",
-    };
-    let preview_card = card(
-        dbflux_i18n::t!("document.collection.builder.section.preview"),
-        AppIcon::Code,
-        Some(Badge::new(mode_label, BadgeTone::Neutral).into_any_element()),
-        theme,
-        render_preview(panel, theme, cx),
-    );
-
     // Find keeps the Group card last, collapsed; Aggregate puts the stage
     // right after its $match, where it runs.
     let cards: Vec<AnyElement> = if aggregate {
-        vec![
-            filter_card,
-            group_card,
-            project_card,
-            sort_card,
-            preview_card,
-        ]
+        vec![filter_card, group_card, project_card, sort_card]
     } else {
-        vec![
-            filter_card,
-            project_card,
-            sort_card,
-            group_card,
-            preview_card,
-        ]
+        vec![filter_card, project_card, sort_card, group_card]
     };
 
     let fade = linear_gradient(
@@ -396,6 +375,7 @@ fn render_body(
     );
 
     div()
+        .debug_selector(|| "doc-builder-body".to_string())
         .relative()
         .flex_1()
         .min_h(px(0.))
@@ -1992,6 +1972,28 @@ fn render_accumulator_field(
 // Preview
 // ---------------------------------------------------------------------------
 
+/// The Preview card, fixed between the scrolling cards and the footer so
+/// the query stays in view however far the cards are scrolled.
+fn render_preview_pane(panel: &DocumentBuilderPanel, theme: &Theme, cx: &App) -> AnyElement {
+    let mode_label = match panel.mode() {
+        DocumentQueryMode::Find => "find",
+        DocumentQueryMode::Aggregate => "aggregate",
+    };
+
+    div()
+        .flex_shrink_0()
+        .px(BuilderMetrics::RAIL_PADDING_X)
+        .pb(BuilderMetrics::SECTION_GAP)
+        .child(card(
+            dbflux_i18n::t!("document.collection.builder.section.preview"),
+            AppIcon::Code,
+            Some(Badge::new(mode_label, BadgeTone::Neutral).into_any_element()),
+            theme,
+            render_preview(panel, theme, cx),
+        ))
+        .into_any_element()
+}
+
 fn render_preview(panel: &DocumentBuilderPanel, theme: &Theme, cx: &App) -> AnyElement {
     let keyword = SyntaxColors::for_current(cx).keyword;
     let highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = operator_ranges(&panel.preview)
@@ -2015,11 +2017,15 @@ fn render_preview(panel: &DocumentBuilderPanel, theme: &Theme, cx: &App) -> AnyE
 
     div()
         .id("doc-builder-preview")
+        .debug_selector(|| "doc-builder-preview".to_string())
         .flex()
         .flex_col()
         .gap(Spacing::SM)
         .child(
             div()
+                .id("doc-builder-preview-text")
+                .h(BuilderMetrics::PREVIEW_HEIGHT)
+                .overflow_y_scrollbar()
                 .font_family(AppFonts::MONO)
                 .text_size(FontSizes::XS)
                 .text_color(ChromeColors::strong(theme))

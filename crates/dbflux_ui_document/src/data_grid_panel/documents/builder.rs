@@ -1456,6 +1456,61 @@ mod tests {
         );
     }
 
+    /// Asserts the preview sits between the scrolling cards and the footer,
+    /// inside the window.
+    fn assert_preview_is_pinned(window: &mut VisualTestContext) -> gpui::Bounds<gpui::Pixels> {
+        let sections = bounds_of(window, "doc-builder-body".to_string()).expect("scrolling body");
+        let preview = bounds_of(window, "doc-builder-preview".to_string()).expect("preview");
+        let footer = bounds_of(window, "doc-builder-footer".to_string()).expect("footer");
+
+        assert!(
+            preview.origin.y >= sections.bottom(),
+            "the preview ({preview:?}) is outside the scrolling cards ({sections:?})"
+        );
+        assert!(
+            preview.bottom() <= footer.origin.y,
+            "the preview ({preview:?}) sits above the footer ({footer:?})"
+        );
+
+        preview
+    }
+
+    #[gpui::test]
+    fn the_preview_stays_pinned_above_the_footer_in_both_modes(cx: &mut TestAppContext) {
+        let (grid, _host, window) =
+            rendered_rail_with(cx, r#"{"status": "failed"}"#, aggregate_features());
+        let rail = builder(&grid, window);
+
+        let before = assert_preview_is_pinned(window);
+
+        window.update(|_, cx| {
+            rail.update(cx, |rail, cx| {
+                let root = rail.draft().filter.id;
+                for _ in 0..12 {
+                    rail.add_condition(root, cx);
+                }
+            });
+        });
+        window.run_until_parked();
+
+        // The empty conditions add the "not run yet" line under the text, so
+        // the pane grows upwards; it stays anchored to the footer.
+        let after = assert_preview_is_pinned(window);
+        assert_eq!(
+            before.bottom(),
+            after.bottom(),
+            "more cards scroll behind the preview instead of moving it"
+        );
+
+        window.update(|_, cx| rail.update(cx, |rail, cx| rail.add_group_stage(cx)));
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| rail.read(cx).mode()),
+            DocumentQueryMode::Aggregate
+        );
+        assert_preview_is_pinned(window);
+    }
+
     #[gpui::test]
     fn the_filter_slot_keeps_a_usable_width_beside_the_rail(cx: &mut TestAppContext) {
         use gpui::{px, size};
