@@ -26,6 +26,8 @@
 - **在数据网格中浏览集合（`DocumentFeatures::QUERY_SLOTS`）**：浏览集合时，除筛选外还可传入投影文档和排序文档；`sample_collection_schema` 读取随机样本（`$sample`，位于筛选的 `$match` 之后），报告每个字段路径的出现率、类型分布（`String`、`Int32`、`Decimal128`、`Object`、`Array` 等）和值摘要。网格用该样本为查询栏提供字段路径补全、在列标题中绘制出现率条，并提供“结构”视图。无筛选时的计数来自 `estimatedDocumentCount`，并标注为估计值。
 - **字段编辑（`DocumentFeatures::FIELD_PATCH`）**：`patch_document` 以 `updateOne` 发送仅包含已修改路径的 `$set` / `$unset`，并保留 BSON 类型（小数仍为 `Decimal128`，日期仍为 `Date`，ObjectId 仍为 `ObjectId`，文本不会被当作 ObjectId）。`replace_document` 以 `replaceOne` 发送且不改动 `_id`；`fetch_document` 按 `_id` 读取单个文档，使网格能判断页面加载后文档是否被修改。Shell 生成器会在服务器更改确认中显示确切的写入，例如 `db.products.updateOne({ _id: ObjectId("…") }, { $set: { "price.amount": Decimal128("119.00") } })`。
 - **聚合视图（`DocumentFeatures::AGGREGATE`）**：`aggregate_collection` 对集合运行由 JSON 阶段组成的管道，除非请求要求，否则 `allowDiskUse` 保持关闭。驱动会追加一个比请求上限多一的 `$limit`，当管道返回更多文档时将结果标记为已截断；以 `$out` 或 `$merge` 结尾的管道会保持该阶段位于最后，并且不返回文档。结果使用与 `browse_collection` 相同的文档形态。Shell 生成器将管道显示为 `db.<collection>.aggregate([...])`，语言服务会将包含 `$out` 或 `$merge` 阶段的管道标记为 `MongoAggregateWrite`，因此它在运行前会经过危险查询确认。
+- **可视化查询构建器（`DocumentFeatures::VISUAL_BUILDER`）**：`Connection::document_query_codec()` 返回一个编解码器，它将 `DocumentQuerySpec` 转换为 `filter` / `project` / `sort` / `limit` 栏位、聚合管道（`$match`、带 `$count` / `$sum` / `$avg` 的 `$group`、`$sort`、`$skip`、`$limit`）以及 Shell 预览文本，并将栏位读回为 spec。spec 无法容纳的子句（例如 `$expr`）会作为无法表示的文本返回，而不会被丢弃，因此构建器会显示同步冲突，而不是重写它们。参见[文档集合](../QUERY_BUILDER.md#文档集合)。
+- **扩展 JSON 日期**：查询栏位、聚合管道和文档写入中的 `{"$date": "<RFC 3339>"}` 会解码为 BSON `Date`。这些位置中无效的日期字符串会报错，而不是被存储为子文档。
 - 变更：插入、更新（含 upsert）与删除（`supports_upsert: true`）。`MongoShellGenerator` 会生成 `insertOne`/`insertMany`、`updateOne`/`updateMany`（带 `{ upsert: true }`）与 `deleteOne`/`deleteMany`，用于预览与「复制为查询」。
 - DDL：删除数据库、删除集合、创建索引与删除索引。
 - 结果的 JSON 导出（`EXPORT_JSON`）。
@@ -76,3 +78,6 @@
 - 从网格写入的整数在能容纳时存为 `Int32`，否则存为 `Int64`，与字段原先的宽度无关。
 - 编辑器的 Shell 解析器不识别 JSON 参数中的 `NumberDecimal(...)`、`ISODate(...)` 等构造函数；带类型的写入请通过网格的字段编辑完成。
 - 服务器更改检查在写入前重新读取文档并与页面中的副本比较；在这次读取与写入之间发生的更改无法被检测到。
+- 查询栏位中由 24 位十六进制数字组成的文本值会作为 `ObjectId` 运行，因此无法通过栏位或可视化构建器将此类字符串作为文本搜索。
+- 构建器条件中的小数值按 double 比较，因此不会匹配 `Decimal128` 字段。
+- `{"$date": ...}` 只接受 RFC 3339 字符串；扩展 JSON 的数值形式和 `{"$numberLong": ...}` 形式不会被解码。

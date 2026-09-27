@@ -1021,6 +1021,9 @@ impl DataGridPanel {
             .when(self.collection_tabs(cx).len() > 1, |header| {
                 header.child(self.render_collection_tabs(cx))
             })
+            .when_some(self.render_document_builder_toggle(cx), |header, toggle| {
+                header.child(toggle)
+            })
     }
 
     /// Filter row: WHERE filter and LIMIT in one field (flex_1) | view toggle
@@ -3654,6 +3657,15 @@ impl DataGridPanel {
             })
             .when_some(self.presence_footer(), |d, note| {
                 d.child(div().min_w_0().truncate().child(note))
+            })
+            .when_some(self.document_builder_footer(cx), |d, note| {
+                d.child(
+                    div()
+                        .id("footer-builder-editable")
+                        .min_w_0()
+                        .truncate()
+                        .child(footer_item(AppIcon::Pencil, note)),
+                )
             })
             .when_some(sort_info, |d, (col_name, direction, is_server)| {
                 let arrow_icon = match direction {

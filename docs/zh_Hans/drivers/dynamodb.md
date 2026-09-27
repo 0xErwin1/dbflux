@@ -41,3 +41,4 @@ AWS 托管的 NoSQL 键值与文档数据库。
 - 核心请求层的集合浏览仍基于偏移量，而底层 API 基于分页令牌。
 - 没有写入权限探测：`Connection::probe_write_privilege` 有意保持 trait 默认值（`WritePrivilege::Unknown`），因为可靠的检查需要 `iam:SimulatePrincipalPolicy`，而连接所用的角色通常不具备该权限。
 - 没有实例指标与实例检查器（未声明 `INSTANCE_METRICS`/`INSTANCE_INSPECTOR`）：DynamoDB 自身的服务端指标已经存在于 CloudWatch 中，因此再提供一个按驱动程序的 `InstanceCatalog` 只会重复这一层，而不是新增能力。
+- 没有可视化文档查询构建器（未声明 `DocumentFeatures::VISUAL_BUILDER`）：对于 DynamoDB 表，集合标题栏中的构建器按钮处于禁用状态。

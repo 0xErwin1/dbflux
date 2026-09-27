@@ -1562,6 +1562,13 @@ pub trait Connection: Send + Sync {
         crate::DocumentFeatures::empty()
     }
 
+    /// Converts visual document queries to and from this connection's native
+    /// query slots. Connections that return one report
+    /// `DocumentFeatures::VISUAL_BUILDER`.
+    fn document_query_codec(&self) -> Option<&dyn crate::DocumentQueryCodec> {
+        None
+    }
+
     /// Count documents matching a filter, allowing the driver to answer from
     /// collection metadata instead of scanning.
     ///

@@ -637,6 +637,8 @@ crates/
 
 **영속성**: 마이그레이션 `017_qry_saved_queries`는 `qry_*` 테이블 계열(루트 + columns/sorts/joins 하위 테이블, 계단식 FK, `UNIQUE (profile_id, name)`)을 추가하며, `SavedQueryRepo`(`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`)와 인메모리 `SavedQueryManager`(`crates/dbflux_ui_base/src/saved_query_manager.rs`)가 이를 앞단에서 지원합니다. `TableProbe` 접점은 저장된 쿼리를 다른 연결로 가져올 때 드라이버 코드에 들어가지 않고 테이블 존재 여부를 검증합니다.
 
+**문서 쿼리 빌더**: 문서 컬렉션에는 별도의 레일이 있으며, 드라이버 id가 아니라 `DocumentFeatures::VISUAL_BUILDER`와 `Connection::document_query_codec()`이 반환하는 코덱으로 게이트됩니다. `DocumentQuerySpec`(`crates/dbflux_core/src/query/document_query.rs`)은 필터 트리, 유형이 있는 값, 포함/제외 프로젝션, 정렬, 제한, 건너뛰기, 선택적 그룹 단계(`$count` / `$sum` / `$avg`)를 표현합니다. 드라이버는 `DocumentQueryCodec`을 구현해 스펙을 find 칸(`DocumentFindSlots`), 파이프라인, 미리보기 텍스트로 렌더링하고 칸을 다시 스펙으로 파싱합니다. 표현할 수 없는 절은 `UnrepresentableClause`로 반환되므로 UI는 이를 덮어쓰지 않고 동기화 충돌을 표시합니다. UI는 `crates/dbflux_ui_document/src/document_builder/`와 `data_grid_panel/documents/builder.rs`에 있습니다. Find는 칸을 쓰고 `browse_collection`으로 실행하므로 결과는 편집 가능하게 유지되고, Aggregate 모드(`DocumentFeatures::AGGREGATE`로도 게이트됨)는 집계 뷰에서 파이프라인을 실행하며 결과는 읽기 전용입니다. 저장된 문서 쿼리는 마이그레이션 `037_qry_saved_document_queries`(스펙은 JSON으로 저장, `UNIQUE (profile_id, database_name, collection_name, name)`), `DocumentQueryRepo`, `SavedDocumentQueryManager`(`crates/dbflux_ui_base/src/saved_document_query_manager.rs`)를 사용합니다.
+
 ### 데이터 시각화
 
 - **데이터 테이블**: `crates/dbflux_components/src/components/data_table/` — 정렬, 선택, phantom scroller 패턴을 통한 가로 스크롤, 키보드 탐색, 열 크기 조정, CRUD 작업이 있는 상황에 맞는 메뉴를 갖춘 사용자 정의 가상화 테이블입니다.

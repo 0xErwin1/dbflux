@@ -1434,6 +1434,10 @@ impl Workspace {
                     } => {
                         this.workspace_inspector.update(cx, |insp, cx| {
                             insp.open_with(content.clone(), title.clone(), *content_has_header, cx);
+                            insp.set_content_min_width(
+                                dbflux_ui_document::inspector_min_width(content),
+                                cx,
+                            );
                         });
                     }
                     TabManagerEvent::CloseInspector => {

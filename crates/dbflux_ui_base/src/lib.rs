@@ -18,6 +18,7 @@ pub mod object_tree;
 pub mod open_external;
 pub mod platform;
 pub mod saved_chart_manager;
+pub mod saved_document_query_manager;
 pub mod saved_query_manager;
 pub mod schema_snapshot_manager;
 pub mod sql_preview_modal;
@@ -49,6 +50,7 @@ pub use object_tree::{
     project_object_tree, project_profile_tree,
 };
 pub use saved_chart_manager::SavedChartManager;
+pub use saved_document_query_manager::SavedDocumentQueryManager;
 pub use saved_query_manager::{ConnectionTableProbe, SavedQueryManager, TableProbe};
 pub use schema_snapshot_manager::{CaptureOutcome, SchemaSnapshotManager};
 pub use user_error::{ErrorKind, UserFacingError, report_error, report_error_async};

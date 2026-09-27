@@ -55,6 +55,7 @@ pub mod viz_saved_chart_source_metric_dimensions;
 pub mod viz_saved_chart_source_metric_series;
 pub mod viz_saved_charts;
 
+pub mod qry_saved_document_queries;
 pub mod qry_saved_queries;
 
 pub mod sch_schema_snapshots;

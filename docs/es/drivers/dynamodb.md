@@ -95,3 +95,6 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
   `INSTANCE_INSPECTOR` no se declaran): las métricas del lado del servidor de
   DynamoDB ya viven en CloudWatch, así que un `InstanceCatalog` por driver
   duplicaría esa superficie en lugar de agregar una nueva.
+- Sin constructor visual de consultas de documentos (`DocumentFeatures::VISUAL_BUILDER`
+  no se declara): el botón Constructor de la cabecera de la colección aparece
+  deshabilitado para las tablas de DynamoDB.

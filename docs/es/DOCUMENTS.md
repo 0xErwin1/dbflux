@@ -39,6 +39,16 @@ página.
   escribe en una colección, así que pide la misma confirmación que cualquier
   otra consulta peligrosa antes de ejecutarse. El botón de historial recupera
   un pipeline anterior de la misma pestaña.
+- Los drivers que lo ofrecen (MongoDB) añaden un botón **Constructor** en la
+  cabecera de la colección. Abre un constructor visual de consultas en el rail
+  derecho que se mantiene sincronizado con los campos de la barra de consulta,
+  puede agrupar documentos con `$count`, `$sum` y `$avg`, y guarda consultas
+  por colección. Mientras el constructor está en modo Aggregate, la barra de
+  consulta y la vista Agregación muestran un resumen de su pipeline en lugar de
+  los campos y del editor de pipeline, y **Ejecutar pipeline** lo ejecuta en la
+  vista Agregación. En otros drivers de documentos el botón está deshabilitado.
+  Ver [Colecciones de documentos](QUERY_BUILDER.md#colecciones-de-documentos)
+  en la guía del constructor de queries.
 - El atajo o la acción de fila que abre el inspector de filas en una tabla abre
   el panel **Documento** en una colección: el tamaño del documento y luego sus
   campos como un árbol de filas `clave : valor`, con el valor coloreado según su

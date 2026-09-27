@@ -52,6 +52,9 @@ pub struct WorkspaceInspector {
     title: SharedString,
     /// The content draws its own title bar, so the rail shows none.
     content_has_header: bool,
+    /// Width the current content needs at least; the rail widens to it
+    /// without changing the width the user chose for other content.
+    content_min_width: Option<Pixels>,
     width: Pixels,
     is_open: bool,
     is_resizing: bool,
@@ -85,6 +88,7 @@ impl WorkspaceInspector {
             content: None,
             title: SharedString::default(),
             content_has_header: false,
+            content_min_width: None,
             width,
             is_open: false,
             is_resizing: false,
@@ -106,6 +110,22 @@ impl WorkspaceInspector {
         self.width
     }
 
+    /// Width the rail draws at: the chosen width, widened to what the current
+    /// content needs.
+    pub fn rail_width(&self) -> Pixels {
+        match self.content_min_width {
+            Some(minimum) => self.width.max(minimum),
+            None => self.width,
+        }
+    }
+
+    fn resize_min_width(&self) -> Pixels {
+        match self.content_min_width {
+            Some(minimum) => INSPECTOR_MIN_WIDTH.max(minimum),
+            None => INSPECTOR_MIN_WIDTH,
+        }
+    }
+
     pub fn title(&self) -> &SharedString {
         &self.title
     }
@@ -113,7 +133,9 @@ impl WorkspaceInspector {
     /// Open / replace the inspector content. Reuses the rail if already open.
     ///
     /// `content_has_header` is set for content that draws its own title bar
-    /// (the row inspector); the rail then shows only the content.
+    /// (the row inspector); the rail then shows only the content. The new
+    /// content needs no minimum width until [`Self::set_content_min_width`]
+    /// says otherwise.
     pub fn open_with(
         &mut self,
         content: AnyView,
@@ -124,8 +146,18 @@ impl WorkspaceInspector {
         self.content = Some(content);
         self.title = title;
         self.content_has_header = content_has_header;
+        self.content_min_width = None;
         self.is_open = true;
         cx.notify();
+    }
+
+    /// Widens the rail to at least `min_width` while the current content
+    /// shows; `None` goes back to the chosen width.
+    pub fn set_content_min_width(&mut self, min_width: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.content_min_width != min_width {
+            self.content_min_width = min_width;
+            cx.notify();
+        }
     }
 
     /// Hide the rail without forgetting its content or emitting `Closed`.
@@ -162,7 +194,7 @@ impl WorkspaceInspector {
     pub(crate) fn begin_resize(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.is_resizing = true;
         self.resize_start_x = Some(event.position.x);
-        self.resize_start_width = Some(self.width);
+        self.resize_start_width = Some(self.rail_width());
         cx.notify();
     }
 
@@ -173,7 +205,7 @@ impl WorkspaceInspector {
     pub fn fake_begin_resize_at(&mut self, position_x: Pixels, cx: &mut Context<Self>) {
         self.is_resizing = true;
         self.resize_start_x = Some(position_x);
-        self.resize_start_width = Some(self.width);
+        self.resize_start_width = Some(self.rail_width());
         cx.notify();
     }
 
@@ -190,7 +222,7 @@ impl WorkspaceInspector {
         };
         // Drag-left grows the rail (rail lives on the right edge).
         let delta = position_x - start_x;
-        let new_width = (start_width - delta).clamp(INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
+        let new_width = (start_width - delta).clamp(self.resize_min_width(), INSPECTOR_MAX_WIDTH);
         self.width = new_width;
         cx.notify();
     }
@@ -226,6 +258,7 @@ impl Render for WorkspaceInspector {
         let title = self.title.clone();
         let content = self.content.clone();
         let close_entity = cx.entity().clone();
+        let rail_width = self.rail_width();
 
         let header = (!self.content_has_header).then(|| {
             div()
@@ -270,7 +303,7 @@ impl Render for WorkspaceInspector {
             .id("workspace-inspector")
             .key_context(dbflux_components::key_contexts::ROW_INSPECTOR)
             .h_full()
-            .w(self.width + IslandMetrics::GAP)
+            .w(rail_width + IslandMetrics::GAP)
             .pl(IslandMetrics::GAP)
             .flex_shrink_0()
             .flex()
@@ -279,7 +312,7 @@ impl Render for WorkspaceInspector {
             .child(
                 Island::new()
                     .h_full()
-                    .w(self.width)
+                    .w(rail_width)
                     .when_some(header, |body, header| body.child(header))
                     .child(
                         div()
@@ -308,5 +341,50 @@ impl Render for WorkspaceInspector {
                             ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Explicit imports: a glob of `gpui::*` would shadow the built-in
+    // `#[test]` that `#[gpui::test]` expands to.
+    use super::WorkspaceInspector;
+    use gpui::{
+        AnyView, AppContext, Context, IntoElement, Render, TestAppContext, Window, div, px,
+    };
+
+    struct EmptyContent;
+
+    impl Render for EmptyContent {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn content_with_a_minimum_widens_the_rail_only_while_it_shows(cx: &mut TestAppContext) {
+        let inspector = cx.new(|cx| WorkspaceInspector::new(px(380.0), cx));
+        let content = cx.new(|_| EmptyContent);
+
+        cx.update(|cx| {
+            inspector.update(cx, |inspector, cx| {
+                inspector.open_with(AnyView::from(content.clone()), "Builder".into(), true, cx);
+                inspector.set_content_min_width(Some(px(540.0)), cx);
+                assert_eq!(inspector.rail_width(), px(540.0));
+                assert_eq!(inspector.width(), px(380.0));
+
+                inspector.fake_begin_resize_at(px(1000.0), cx);
+                inspector.update_resize(px(1200.0), cx);
+                assert_eq!(
+                    inspector.rail_width(),
+                    px(540.0),
+                    "the rail cannot shrink below what its content needs"
+                );
+                inspector.finish_resize(cx);
+
+                inspector.open_with(AnyView::from(content.clone()), "Row".into(), true, cx);
+                assert_eq!(inspector.rail_width(), inspector.width());
+            });
+        });
     }
 }

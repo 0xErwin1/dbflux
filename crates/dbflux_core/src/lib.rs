@@ -182,6 +182,14 @@ pub use query::{
     render_semantic_filter_sql, sql_statement_keywords, strip_leading_comments,
     substitute_time_macros,
 };
+pub use query::{
+    DocumentAccumulator, DocumentAccumulatorKind, DocumentCombinator, DocumentCondition,
+    DocumentFieldType, DocumentFilterGroup, DocumentFilterNode, DocumentFindSlots,
+    DocumentGroupStage, DocumentOperator, DocumentProjection, DocumentProjectionMode,
+    DocumentQueryCodec, DocumentQueryMode, DocumentQuerySpec, DocumentSlot, DocumentSlotParse,
+    DocumentSortDirection, DocumentSortKey, DocumentSpecProblem, DocumentValue,
+    UnrepresentableClause,
+};
 pub use query::{normalize_relaxed_json, parse_relaxed_json};
 
 pub use query::relational_filter::{
