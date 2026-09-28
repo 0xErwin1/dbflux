@@ -578,6 +578,10 @@ solo fuera de los campos de texto.
 | `r` | Alternar la vista JSON sin formato |
 | `/` / `Ctrl+f` | Buscar; `n` / `Shift+n` coincidencia siguiente / anterior, `Escape` cierra |
 
+El campo de búsqueda y el editor de valores en línea conservan las letras que
+escribís. En el campo de búsqueda, `Enter` devuelve el teclado al árbol y mantiene
+las coincidencias, así `n` y `Shift+n` las recorren, y `Escape` cierra la búsqueda.
+
 ## Explorador clave-valor
 
 | Teclas | Acción |

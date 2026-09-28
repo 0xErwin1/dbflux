@@ -48,6 +48,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Show in tree in the chart point inspector** — The Show in tree button now acts only when it is clicked, on release, instead of on any press inside the point inspector. While a chart point is under the pointer, the Toolbar submenu of the table menu offers the same action from the keyboard.
 * **Slash in the query history fields** — Typing / in the query history's search, rename or save-name field now inserts the character. Before, the key was taken as the shortcut that focuses the search, so it never reached the field. From the history list, / still focuses the search.
 * **Enter in the pane actions menu opened from the editor** — With the pane actions menu opened by Shift+F10 from the code editor text, Enter now runs the highlighted entry instead of breaking the line in the editor, and Escape returns the keyboard to the editor.
+* **Typing in the document tree search** — The search field of a document tree now types every letter. Before, letters the tree binds, such as J, K, H, L, G, E, T, R and N, ran tree actions instead of reaching the field, and the field took the keyboard back on every redraw. Enter in the field now returns the keyboard to the tree with the matches kept, so N and Shift+N step through them, and Escape closes the search. The inline value editor keeps its letters too.
 * **Tab inside dialogs** — Tab and Shift+Tab now cycle through the controls of an open dialog and wrap around, instead of moving focus to the panels behind it.
 
 ## [0.8.3] - 2026-09-29

@@ -553,6 +553,10 @@ text fields.
 | `r` | Toggle the raw JSON view |
 | `/` / `Ctrl+f` | Search; `n` / `Shift+n` next / previous match, `Escape` closes |
 
+The search field and the inline value editor keep the letters you type. In the
+search field, `Enter` returns the keyboard to the tree with the matches kept, so
+`n` and `Shift+n` step through them, and `Escape` closes the search.
+
 ## Key-value browser
 
 | Keys | Action |

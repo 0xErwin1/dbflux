@@ -1613,6 +1613,97 @@ fn document_tree_key_presses_run_the_tree_actions(cx: &mut gpui::TestAppContext)
     );
 }
 
+/// The search field types the letters the tree binds, Enter hands the
+/// keyboard back to the tree with the matches kept, and Escape closes the
+/// search from the field.
+#[gpui::test]
+fn document_tree_search_field_types_the_tree_letters(cx: &mut gpui::TestAppContext) {
+    use dbflux_components::components::document_tree::{DocumentTree, DocumentTreeState, NodeId};
+    use dbflux_core::Value;
+    use gpui::{AppContext as _, VisualTestContext};
+
+    cx.update(gpui_component::init);
+    cx.update(dbflux_components::theme::init);
+    cx.update(init_keymap);
+
+    let state = cx.update(|cx| {
+        cx.new(|cx| {
+            let mut state = DocumentTreeState::new(cx);
+            state.load_from_values(
+                vec![
+                    ("jgt".to_string(), Value::Int(1)),
+                    ("other".to_string(), Value::Int(2)),
+                    ("third".to_string(), Value::Int(3)),
+                ],
+                cx,
+            );
+            state
+        })
+    });
+    let (_tree, window) = cx.add_window_view({
+        let state = state.clone();
+        move |_, cx| DocumentTree::new("test-document-tree-search", state, cx)
+    });
+
+    window.update(|window, cx| state.update(cx, |state, cx| state.focus(window, cx)));
+    window.run_until_parked();
+
+    let cursor =
+        |window: &mut VisualTestContext| window.update(|_, cx| state.read(cx).cursor().cloned());
+    let query = |window: &mut VisualTestContext| {
+        window.update(|_, cx| state.read(cx).search_query().map(str::to_string))
+    };
+
+    window.simulate_keystrokes("/");
+    window.run_until_parked();
+
+    window.simulate_keystrokes("j g t");
+    window.run_until_parked();
+    assert_eq!(
+        query(window).as_deref(),
+        Some("jgt"),
+        "letters type in the search"
+    );
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(0)),
+        "typing leaves the cursor on the match"
+    );
+
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| state.read(cx).is_search_visible()),
+        "Enter keeps the search open",
+    );
+
+    window.simulate_keystrokes("j");
+    window.run_until_parked();
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(1)),
+        "after Enter, j moves the tree cursor"
+    );
+    assert_eq!(query(window).as_deref(), Some("jgt"), "the query is kept");
+
+    window.simulate_keystrokes("n");
+    window.run_until_parked();
+    assert_eq!(
+        cursor(window),
+        Some(NodeId::root(0)),
+        "n jumps to the match"
+    );
+
+    window.simulate_keystrokes("/");
+    window.run_until_parked();
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(
+        !window.update(|_, cx| state.read(cx).is_search_visible()),
+        "Escape in the search field closes the search",
+    );
+}
+
 /// A rebinding reaches the effective keymap and the generated native
 /// bindings at once, a key sequence works, and resetting it restores the
 /// default key. This is the only test that changes the process-wide

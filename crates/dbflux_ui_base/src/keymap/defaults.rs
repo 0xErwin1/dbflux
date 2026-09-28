@@ -1202,8 +1202,9 @@ fn schema_viz_layer() -> KeymapLayer {
 ///
 /// The tree handles these as its own GPUI actions inside its own key
 /// context, which keeps the precedence it has always had over the window
-/// root and under the text inputs nested in it (search box, inline value
-/// editor).
+/// root. The text inputs nested in it (search box, inline value editor)
+/// keep their typed letters: only Escape and Ctrl+F reach the tree from
+/// them.
 fn document_tree_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::DocumentTree);
 
@@ -1267,11 +1268,19 @@ fn document_tree_layer() -> KeymapLayer {
     );
 
     // Search
-    layer.bind(KeyChord::new("f", Modifiers::ctrl()), Command::FocusSearch);
+    layer.bind_with_predicate(
+        KeyChord::new("f", Modifiers::ctrl()),
+        Command::FocusSearch,
+        "DocumentTree",
+    );
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
     layer.bind(KeyChord::new("n", Modifiers::none()), Command::NextMatch);
     layer.bind(KeyChord::new("n", Modifiers::shift()), Command::PrevMatch);
-    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind_with_predicate(
+        KeyChord::new("escape", Modifiers::none()),
+        Command::Cancel,
+        "DocumentTree",
+    );
 
     layer
 }

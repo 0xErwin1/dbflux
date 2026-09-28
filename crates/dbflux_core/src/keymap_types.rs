@@ -1484,6 +1484,7 @@ impl ContextId {
             ContextId::Chart => "Chart && !Input && !Dropdown",
             ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
             ContextId::AddPanelPicker => "AddPanelPicker && !Input",
+            ContextId::DocumentTree => "DocumentTree && !Input",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

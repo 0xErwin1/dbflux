@@ -109,12 +109,21 @@ impl DocumentTree {
         });
 
         let state = self.state.clone();
-        let subscription = cx.subscribe(&input, move |_this, input, event, cx| {
-            if let InputEvent::Change = event {
-                let value = input.read(cx).value().to_string();
-                state.update(cx, |s, cx| s.set_search(&value, cx));
-            }
-        });
+        let subscription =
+            cx.subscribe_in(&input, window, move |_this, input, event, window, cx| {
+                match event {
+                    InputEvent::Change => {
+                        let value = input.read(cx).value().to_string();
+                        state.update(cx, |s, cx| s.set_search(&value, cx));
+                    }
+                    // Enter keeps the matches and hands the keyboard back to
+                    // the tree, where n / Shift+N step through them.
+                    InputEvent::PressEnter { .. } => {
+                        state.update(cx, |s, cx| s.focus(window, cx));
+                    }
+                    _ => {}
+                }
+            });
 
         self.search_input = Some(input.clone());
         self._search_subscription = Some(subscription);
@@ -150,10 +159,13 @@ impl Render for DocumentTree {
         // Lazily initialize search input when search is visible
         let search_input = if is_search_visible {
             let input = self.ensure_search_input(window, cx);
-            // Focus the search input when search opens
-            input.update(cx, |input_state, cx| {
-                input_state.focus(window, cx);
-            });
+
+            if self.state.update(cx, |s, _| s.take_search_focus_request()) {
+                input.update(cx, |input_state, cx| {
+                    input_state.focus(window, cx);
+                });
+            }
+
             Some(input)
         } else {
             self.search_input.clone()
@@ -282,8 +294,11 @@ impl Render for DocumentTree {
             })
             .on_action({
                 let state = self.state.clone();
-                move |_: &CloseSearch, _window, cx| {
-                    state.update(cx, |s, cx| s.close_search(cx));
+                move |_: &CloseSearch, window, cx| {
+                    state.update(cx, |s, cx| {
+                        s.close_search(cx);
+                        s.focus(window, cx);
+                    });
                 }
             })
             .on_click(cx.listener(|this, _, window, cx| {
