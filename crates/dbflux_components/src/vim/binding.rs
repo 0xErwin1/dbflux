@@ -22,12 +22,13 @@
 //! because the element re-applies its read-only flag to the state every frame.
 
 use super::machine::{self, VimCommand, VimKey};
-use super::{VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
+use super::{LeaderCommand, VimMode, VimSettingGlobal, vim_enabled, vim_mode_label};
 use crate::actions::{RunCommand, last_keystroke};
 use crate::controls::{Rope, RopeExt};
 use crate::primitives::Text;
 use crate::tokens::{Heights, Spacing};
 use dbflux_core::LogErr;
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Action, App, Context, Div, Entity, EntityId, EntityInputHandler as _, Focusable as _,
@@ -319,6 +320,33 @@ impl VimBinding {
         Some((super::VIM_MODE_KEY.into(), mode.context_id().into()))
     }
 
+    /// Whether the leader key starts a sequence in this editor: Vim mode is on
+    /// in Normal or a Visual mode, and the find panel is closed, because its
+    /// fields take every key as typed text.
+    pub fn leader_active(&self, cx: &App) -> bool {
+        self.mode().is_some_and(|mode| !mode.accepts_text())
+            && !self.input.read(cx).search_session().open
+    }
+
+    /// The key context identifier of the Vim leader bindings while
+    /// [`VimBinding::leader_active`], for a host that builds the key context
+    /// of the editor's container itself.
+    pub fn leader_key_context(&self, cx: &App) -> Option<&'static str> {
+        self.leader_active(cx)
+            .then_some(ContextId::VimNormal.as_gpui_context())
+    }
+
+    /// `element` with the key context of the Vim leader bindings while
+    /// [`VimBinding::leader_active`]. `element` is the container of the
+    /// editor and must not set a key context of its own, which this one would
+    /// replace.
+    pub fn leader_scope(&self, element: Div, cx: &App) -> Div {
+        match self.leader_key_context(cx) {
+            Some(identifier) => element.key_context(identifier),
+            None => element,
+        }
+    }
+
     /// The mode indicator row, with the pending command keys, while Vim mode
     /// is on.
     pub fn render_indicator(&self, cx: &App) -> Option<Stateful<Div>> {
@@ -349,10 +377,17 @@ impl VimBinding {
     }
 
     /// Installs Vim's listeners on the element that wraps the editor: the
-    /// editor's Escape, Undo and Redo actions in their capture phase, and the
-    /// command keys ahead of the editor.
+    /// editor's Escape, Undo and Redo actions in their capture phase, the
+    /// leader command the editor answers itself, and the command keys ahead
+    /// of the editor.
     pub fn wire<H: VimHost>(element: Div, input: EntityId, cx: &mut Context<H>) -> Div {
         element
+            .capture_action(
+                cx.listener(move |host, action: &LeaderCommand, window, cx| {
+                    Self::leader_command(host, input, action, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .capture_action(cx.listener(
                 move |host, _: &gpui_component::input::Escape, window, cx| {
                     if Self::escape_action(host, input, window, cx) {
@@ -514,6 +549,39 @@ impl VimBinding {
             .is_some_and(|binding| binding.handle_vim_key_down(event, window, cx));
         Self::report_text_change(host, input, cx);
         consumed
+    }
+
+    /// Runs the command of a leader sequence. Focus search opens the editor's
+    /// own find panel, as `/` does; any other command goes up to the host as
+    /// a `RunCommand` that Vim leaves alone, and does nothing when no host
+    /// handles it. A half-typed count or operator is dropped either way.
+    fn leader_command<H: VimHost>(
+        host: &mut H,
+        input: EntityId,
+        action: &LeaderCommand,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        Self::refresh_host(host, input, cx);
+        let Some(binding) = host.vim_mut(input) else {
+            return;
+        };
+
+        binding.clear_vim_count_and_notify(cx);
+
+        if action.command.as_ref() == Command::FocusSearch.id() {
+            if binding.vim_owns_keys(window, cx) {
+                binding
+                    .input
+                    .update(cx, |state, cx| state.open_search(false, cx));
+            }
+            return;
+        }
+
+        window.dispatch_action(
+            Box::new(RunCommand::from_user_binding(action.command.clone())),
+            cx,
+        );
     }
 
     /// See `handle_vim_escape_action`.

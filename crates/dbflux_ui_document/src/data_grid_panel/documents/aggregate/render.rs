@@ -88,9 +88,13 @@ impl DataGridPanel {
     }
 
     fn render_pipeline_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let input = self.collection.aggregate.pipeline_vim.input_id();
-        let editor_container =
-            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx);
+        let vim = &self.collection.aggregate.pipeline_vim;
+        let input = vim.input_id();
+        let editor_container = VimBinding::capture_run_command(
+            VimBinding::wire(vim.leader_scope(div(), cx), input, cx),
+            input,
+            cx,
+        );
         let theme = cx.theme().clone();
         let aggregate = &self.collection.aggregate;
         let error = aggregate.pipeline_error.clone();

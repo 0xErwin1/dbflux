@@ -619,8 +619,11 @@ impl DataGridPanel {
         let editable = self.commits_document_patches(cx);
         let vim = &self.collection.json_vim;
         let input = vim.input_id();
-        let container =
-            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx);
+        let container = VimBinding::capture_run_command(
+            VimBinding::wire(vim.leader_scope(div(), cx), input, cx),
+            input,
+            cx,
+        );
         let theme = cx.theme();
 
         container

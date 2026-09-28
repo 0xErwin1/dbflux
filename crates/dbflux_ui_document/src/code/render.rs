@@ -545,6 +545,9 @@ impl CodeDocument {
         // ring of its own.
         let mut key_context = KeyContext::default();
         key_context.add(CODE_EDITOR_KEY_CONTEXT);
+        if let Some(identifier) = self.vim.leader_key_context(cx) {
+            key_context.add(identifier);
+        }
         for (key, value) in self.key_context_entries(cx) {
             key_context.set(key, value);
         }

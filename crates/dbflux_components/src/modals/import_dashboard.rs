@@ -229,7 +229,7 @@ impl Render for ModalImportDashboard {
         // Escape leaves Insert mode instead of cancelling, and in Normal mode
         // Enter moves down instead of confirming.
         let input = self.vim.input_id();
-        let vim_editor_container = VimBinding::wire(div(), input, cx);
+        let vim_editor_container = VimBinding::wire(self.vim.leader_scope(div(), cx), input, cx);
         let vim_editor_container = VimBinding::capture_action::<crate::actions::Cancel, _>(
             vim_editor_container,
             input,

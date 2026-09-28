@@ -3572,6 +3572,7 @@ settings:
       toggle_favorite: Toggle favorite
       run_query: Run query
       run_query_in_new_tab: Run query in new tab
+      explain_query: Explain query
       cancel_query: Cancel query
       open_history: Toggle history dropdown
       open_saved_queries: Open saved queries
@@ -3733,6 +3734,7 @@ settings:
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
       migrate_wizard: "Migrate Wizard"
+      vim_normal: "Vim Normal"
     category:
       global: Global
       focus: Focus

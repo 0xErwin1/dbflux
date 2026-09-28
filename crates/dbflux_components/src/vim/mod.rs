@@ -9,10 +9,30 @@ pub mod machine;
 pub use binding::{VimBinding, VimHost};
 pub use machine::VimMode;
 
-use gpui::{App, Global};
+use gpui::{Action, App, Global, SharedString};
 
 /// Key under which an editor reports its Vim mode in the key context.
 pub const VIM_MODE_KEY: &str = "vim_mode";
+
+/// Runs a keymap command from a Vim leader sequence (`<leader> a`).
+///
+/// The editor's Vim wrapper takes it and runs the command as a
+/// `RunCommand` of its own, so the sequence's last key never reaches Vim or
+/// the editor, even when nothing handles the command.
+#[derive(Clone, Debug, PartialEq, Eq, Action)]
+#[action(namespace = dbflux, no_json)]
+pub struct LeaderCommand {
+    /// The command's action id (`Command::action_id`).
+    pub command: SharedString,
+}
+
+impl LeaderCommand {
+    pub fn new(command: impl Into<SharedString>) -> Self {
+        Self {
+            command: command.into(),
+        }
+    }
+}
 
 /// Mode indicator shown under an editor while Vim mode is enabled.
 pub fn vim_mode_label(mode: VimMode) -> String {

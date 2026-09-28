@@ -1056,7 +1056,7 @@ impl ModalAddPanelPicker {
         // dialog's Escape leaves Insert mode instead of cancelling, and in
         // Normal mode Enter moves down instead of submitting.
         let input = self.query_vim.input_id();
-        let query_container = VimBinding::wire(div(), input, cx);
+        let query_container = VimBinding::wire(self.query_vim.leader_scope(div(), cx), input, cx);
         let query_container = VimBinding::capture_action::<dbflux_components::actions::Cancel, _>(
             query_container,
             input,

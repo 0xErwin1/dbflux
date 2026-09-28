@@ -635,7 +635,11 @@ fn render_preview_body(
     let container = match panel.sql_preview_vim.as_ref() {
         Some(vim) => {
             let input = vim.input_id();
-            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx)
+            VimBinding::capture_run_command(
+                VimBinding::wire(vim.leader_scope(div(), cx), input, cx),
+                input,
+                cx,
+            )
         }
         None => div(),
     };

@@ -4083,3 +4083,118 @@ fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppCont
     editor.keys("2 ctrl-z");
     assert_eq!(pending(&mut editor), "");
 }
+
+/// The leader key starts a sequence in Normal and Visual modes: Space then
+/// `a` reaches the workspace as the pane-actions command, and the buffer and
+/// the mode stay as they were.
+#[gpui::test]
+fn leader_a_opens_the_pane_actions_in_normal_and_visual_modes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space a");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions], "Normal");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.text(), "abc");
+
+    editor.keys("v space a");
+    assert_eq!(editor.commands().len(), 2, "Visual");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+    assert_eq!(editor.text(), "abc");
+}
+
+/// Space followed by a key no leader binding uses types nothing: Space is
+/// replayed to Vim, which has no command for it, and the second key runs as
+/// it would on its own.
+#[gpui::test]
+fn leader_then_an_unmapped_key_types_nothing_and_stays_in_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\ndef", true);
+
+    editor.keys("space j");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.cursor(), 4, "j still moves down after the leader");
+    assert!(editor.commands().is_empty());
+
+    editor.keys("space q");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(editor.commands().is_empty());
+}
+
+/// Insert mode keeps Space as typed text, so no leader sequence starts.
+#[gpui::test]
+fn insert_mode_types_the_leader_key(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("i space a escape");
+    assert_eq!(editor.text(), " aabc");
+    assert!(editor.commands().is_empty());
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+/// A new leader takes over the sequences live: after switching to `,`,
+/// `, a` opens the pane actions and Space is no longer a prefix.
+#[gpui::test]
+fn a_new_leader_moves_the_leader_sequences(cx: &mut TestAppContext) {
+    use dbflux_app::keymap::{KeyChord, Modifiers};
+    use dbflux_ui_base::keymap::{default_vim_leader, set_vim_leader};
+
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor
+        .window
+        .update(|_, cx| set_vim_leader(KeyChord::new(",", Modifiers::none()), cx));
+    editor.window.run_until_parked();
+
+    editor.keys(", a");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions]);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("space l");
+    assert_eq!(
+        editor.commands().len(),
+        1,
+        "Space no longer starts a sequence"
+    );
+    assert_eq!(editor.cursor(), 1, "l moved right on its own");
+
+    editor
+        .window
+        .update(|_, cx| set_vim_leader(default_vim_leader(), cx));
+}
+
+/// `<leader> f` opens the editor's own find panel, as `/` does, without
+/// reaching the workspace.
+#[gpui::test]
+fn leader_f_opens_the_find_panel(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space f");
+    assert!(editor.native_search_open());
+    assert!(editor.commands().is_empty());
+}
+
+/// Space alone waits for the next key only until GPUI's pending-key
+/// timeout; then it is replayed to Vim, which ignores it, and a later `a`
+/// is Vim's append again.
+#[gpui::test]
+fn the_leader_alone_times_out_without_typing(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("space");
+    editor
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    editor.window.run_until_parked();
+    assert_eq!(editor.text(), "abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("a");
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Insert),
+        "a appends after the timeout"
+    );
+    assert!(editor.commands().is_empty());
+}

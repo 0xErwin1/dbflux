@@ -182,7 +182,7 @@ impl Render for DocumentTree {
         // keyboard back to the tree.
         let raw_json_editor = self.raw_json_vim.as_ref().map(|vim| {
             let input = vim.input_id();
-            let container = VimBinding::wire(div(), input, cx);
+            let container = VimBinding::wire(vim.leader_scope(div(), cx), input, cx);
             let container = VimBinding::capture_action::<CloseSearch, _>(container, input, cx);
 
             container

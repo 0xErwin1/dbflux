@@ -260,7 +260,8 @@ Todo lo demás en modo Normal:
 
 | Entrada | Comportamiento en modo Normal |
 |---------|-------------------------------|
-| Otras letras no admitidas, puntuación, `Space` | Nada |
+| Otras letras no admitidas y puntuación | Nada |
+| `Space` | Inicia una secuencia de líder (ver **Tecla líder** más abajo); sola, nada |
 | `Tab` / `Shift+Tab` | Mover el foco al panel siguiente / anterior, igual que fuera del editor (también en los modos Visual); no indenta |
 | `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
 | Pegar (`Cmd+v` o el menú contextual) | Nada |
@@ -293,6 +294,32 @@ Visual `c` por caracteres o líneas cambia la selección inclusiva mediante edic
 Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, también con contador. Todo lo escrito en una sesión ordinaria de modo Insertar es un paso; cada nueva sesión empieza otro. Un grupo de deshacer tiene un límite de 1000 cambios: una sesión larga puede requerir varios pasos. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitación del IME.** Si una señal tardía de fin de composición anterior llega después de iniciar la siguiente, puede confirmar prematuramente la composición nativa activa y dividir el grupo de deshacer de Vim. Al pasar a solo lectura o modo Normal, el texto de preedición pendiente que se muestra se confirma tal cual, sin aceptar una propuesta posterior. En modo Reemplazar, el texto que llega sin pulsar una tecla, como una confirmación del IME, se inserta en lugar de sobrescribir, y `Backspace` no restaura caracteres a su alrededor. No se garantiza la seguridad completa del IME ni se ha validado la interfaz en vivo.
+
+**Tecla líder.** En modo Normal y en los modos Visual, la tecla líder inicia
+una secuencia de dos teclas que ejecuta un comando sin salir de la fila
+central del teclado. La tecla líder es `Space`. Después de ella, DBFlux espera
+hasta un segundo la tecla siguiente: una tecla que ninguna secuencia usa actúa
+como lo haría sola, y si no llega ninguna, la tecla líder no hace nada. En los
+modos Insertar y Reemplazar, y mientras el panel de búsqueda tiene el foco, la
+tecla líder escribe como siempre.
+
+| Teclas | Acción |
+|--------|--------|
+| `Leader a` | Abre el menú de acciones del panel, como `Shift+F10` |
+| `Leader r` | Ejecuta la consulta |
+| `Leader e` | Explica la consulta (editor de código) |
+| `Leader s` | Guarda |
+| `Leader f` | Abre el panel de búsqueda del editor, como `/` |
+| `Leader h` / `Leader l` | Pestaña anterior / siguiente del panel, como `Alt+h` / `Alt+l` |
+| `Leader p` | Abre la paleta de comandos |
+
+Un comando que el documento del editor no ofrece no hace nada, y la tecla que
+sigue a la líder nunca llega a Vim. Las secuencias funcionan en todos los
+editores con modo Vim salvo los que están dentro de un diálogo, que conservan
+sus propias teclas. Aparecen en **Vim Normal** en **Settings → Keybindings**,
+donde se cambian como cualquier otro atajo. Al grabar teclas que empiezan por
+la tecla líder se guarda la propia líder, mostrada como `Leader`, así que el
+atajo sigue a la tecla líder cuando esta cambia.
 
 **Editores de solo lectura** (definiciones de rutinas): aceptan los
 movimientos, `yy` y `y` con movimiento; `x`, `r`, `R`, `dd`, `cc`, `c` / `d` con movimiento, `c` en Visual y `u`

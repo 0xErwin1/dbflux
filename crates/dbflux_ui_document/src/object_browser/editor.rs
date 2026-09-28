@@ -694,7 +694,9 @@ impl ObjectBrowserDocument {
             )
             .child(text);
         let indicator = editor.vim.render_indicator(cx);
-        let wrapper = div().flex_1().flex().flex_col().min_h_0();
+        let wrapper = editor
+            .vim
+            .leader_scope(div().flex_1().flex().flex_col().min_h_0(), cx);
 
         let input = editor.vim.input_id();
 

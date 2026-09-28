@@ -381,7 +381,7 @@ impl Render for ValuePanelContent {
             .child(self.render_header(cx))
             .child(
                 VimBinding::capture_run_command(
-                    VimBinding::wire(div(), self.vim.input_id(), cx),
+                    VimBinding::wire(self.vim.leader_scope(div(), cx), self.vim.input_id(), cx),
                     self.vim.input_id(),
                     cx,
                 )
@@ -604,7 +604,7 @@ impl ValuePanelContent {
 #[cfg(test)]
 mod vim_tests {
     use super::{ValuePanelContent, ValuePanelTarget};
-    use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+    use crate::keyboard_test_support::{KeymapHost, host_document, init_keyboard_runtime};
     use dbflux_app::keymap::{Command, ContextId};
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 
@@ -614,6 +614,18 @@ mod vim_tests {
         cx: &mut TestAppContext,
         vim: bool,
     ) -> (Entity<ValuePanelContent>, &mut VisualTestContext) {
+        let (_host, panel, window) = open_panel_with_host(cx, vim);
+        (panel, window)
+    }
+
+    fn open_panel_with_host(
+        cx: &mut TestAppContext,
+        vim: bool,
+    ) -> (
+        Entity<KeymapHost<ValuePanelContent>>,
+        Entity<ValuePanelContent>,
+        &mut VisualTestContext,
+    ) {
         init_keyboard_runtime(cx);
         cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, vim));
 
@@ -653,7 +665,7 @@ mod vim_tests {
         window.update(|window, cx| panel.update(cx, |panel, cx| panel.focus_editor(window, cx)));
         window.run_until_parked();
 
-        (panel, window)
+        (host, panel, window)
     }
 
     fn text_and_cursor(
@@ -699,5 +711,25 @@ mod vim_tests {
 
         assert_eq!(text_and_cursor(&panel, window).0, "jab\ncd");
         assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
+    }
+
+    /// The leader works outside the code editor: `space a` in Normal mode
+    /// reaches the host as the pane-actions command, and Insert mode types
+    /// the space.
+    #[gpui::test]
+    fn leader_sequences_reach_the_host_from_the_value_editor(cx: &mut TestAppContext) {
+        let (host, panel, window) = open_panel_with_host(cx, true);
+        let host_commands =
+            |window: &mut VisualTestContext| window.update(|_, cx| host.read(cx).commands.clone());
+
+        window.simulate_keystrokes("space a");
+        window.run_until_parked();
+        assert_eq!(host_commands(window), vec![Command::OpenPaneActions]);
+        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 0));
+
+        window.simulate_keystrokes("i space escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window).0, " ab\ncd");
+        assert_eq!(host_commands(window).len(), 1);
     }
 }

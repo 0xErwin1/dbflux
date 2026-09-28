@@ -230,7 +230,8 @@ impl Render for CellEditorModal {
             .width(CELL_EDITOR_WIDTH)
             .child(
                 vim_wrapper(
-                    div()
+                    self.vim
+                        .leader_scope(div(), cx)
                         .flex_1()
                         .min_h_0()
                         .flex()

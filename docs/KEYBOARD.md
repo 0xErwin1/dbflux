@@ -245,7 +245,8 @@ Everything else in Normal mode:
 
 | Input | Behavior in Normal mode |
 |-------|-------------------------|
-| Other unsupported letters, punctuation, `Space` | Nothing |
+| Other unsupported letters and punctuation | Nothing |
+| `Space` | Starts a leader sequence (see **Leader key** below); on its own, nothing |
 | `Tab` / `Shift+Tab` | Cycle focus forward / backward between panels, as outside the editor (also in the Visual modes); no indent |
 | `Ctrl+v` | Enter Visual Block mode (not paste) |
 | Paste (`Cmd+v` or the context menu) | Nothing |
@@ -277,6 +278,31 @@ Visual character and line `c` change the inclusive selection through native edit
 Each `x`, `dd`, or motion-based `d` invocation is one undo step, including counted commands. Everything typed in one ordinary Insert session is one undo step, and each new Insert session starts another. An undo group is capped at 1000 changes, so a long session may require multiple undo steps. `u` undoes the same steps as `Ctrl+z` / `Cmd+z`.
 
 **IME limitation.** A late stale unmark from a prior composition after the next composition starts can prematurely commit the active native composition and split the Vim undo group. On a read-only or Normal-mode transition, pending displayed preedit is finalized as-is rather than accepting a later candidate. In Replace mode, text that arrives without a key press, such as an IME commit, is inserted rather than overwriting, and `Backspace` does not restore characters around it. This is not a claim of full IME safety; live UI behavior has not been validated.
+
+**Leader key.** In Normal mode and the Visual modes, the leader key starts a
+two-key sequence that runs a command without leaving the home row. The leader
+is `Space`. After it, DBFlux waits up to one second for the next key: a key no
+sequence uses runs as it would on its own, and when no key follows, the leader
+does nothing. The leader types as usual in Insert and Replace modes and while
+the find panel has focus.
+
+| Keys | Action |
+|------|--------|
+| `Leader a` | Open the pane actions menu, as `Shift+F10` |
+| `Leader r` | Run the query |
+| `Leader e` | Explain the query (code editor) |
+| `Leader s` | Save |
+| `Leader f` | Open the editor's find panel, as `/` |
+| `Leader h` / `Leader l` | Previous / next tab of the panel, as `Alt+h` / `Alt+l` |
+| `Leader p` | Open the command palette |
+
+A command the editor's document does not offer does nothing, and the key after
+the leader never reaches Vim. The sequences apply to every editor with Vim
+mode except the ones inside a dialog, which keep their own keys. They are
+listed under **Vim Normal** in **Settings → Keybindings**, where they can be
+changed like any other binding. Recording keys that start with the leader key
+stores the leader itself, shown as `Leader`, so the binding moves with the
+leader.
 
 **Read-only editors** (routine definitions) accept motions, `yy`, and
 motion-based `y`; `x`, `r`, `R`, `dd`, `cc`, motion-based `c` / `d`, Visual `c`, and `u` do nothing there.

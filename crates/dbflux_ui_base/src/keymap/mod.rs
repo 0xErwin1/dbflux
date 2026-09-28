@@ -25,7 +25,7 @@ mod tests;
 
 use dbflux_app::keymap::{
     BindingSlot, Command, ContextId, EffectiveBinding, KeyChord, KeySequence, KeymapOverrides,
-    KeymapStack, Modifiers, PredicateOverlap,
+    KeymapStack, LEADER_KEY, Modifiers, PredicateOverlap,
 };
 use dbflux_components::actions as component_actions;
 use dbflux_components::components::{data_table, document_tree};
@@ -153,6 +153,7 @@ fn display_key(key: &str) -> String {
         "end" => "End".to_string(),
         "pageup" => "PgUp".to_string(),
         "pagedown" => "PgDn".to_string(),
+        LEADER_KEY => "Leader".to_string(),
         _ => key.to_uppercase(),
     }
 }
@@ -207,17 +208,28 @@ pub fn default_keymap() -> &'static KeymapStack {
 
 struct EffectiveKeymap {
     overrides: KeymapOverrides,
+    /// The key the leader placeholder of Vim leader bindings stands for.
+    leader: KeyChord,
     keymap: Arc<KeymapStack>,
 }
 
+/// The leader key until the settings say otherwise.
+pub fn default_vim_leader() -> KeyChord {
+    KeyChord::new("space", Modifiers::none())
+}
+
 static EFFECTIVE_KEYMAP: LazyLock<RwLock<EffectiveKeymap>> = LazyLock::new(|| {
+    let leader = default_vim_leader();
+
     RwLock::new(EffectiveKeymap {
         overrides: KeymapOverrides::new(),
-        keymap: Arc::new(default_keymap().clone()),
+        keymap: Arc::new(default_keymap().with_leader(&leader)),
+        leader,
     })
 });
 
-/// The keymap in force: the defaults with the user's overrides applied.
+/// The keymap in force: the defaults with the user's overrides applied and
+/// the leader placeholder resolved to the configured leader key.
 ///
 /// Every shortcut label reads this, so a change made in the settings shows
 /// on the next render.
@@ -238,16 +250,54 @@ pub fn keymap_overrides() -> KeymapOverrides {
         .clone()
 }
 
+/// The key Vim leader bindings start with.
+pub fn vim_leader() -> KeyChord {
+    EFFECTIVE_KEYMAP
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .leader
+        .clone()
+}
+
 /// Rebuilds the effective keymap from `overrides` without touching the GPUI
 /// bindings. [`apply_keymap_overrides`] is the entry point for the app.
 fn install_keymap_overrides(overrides: KeymapOverrides) {
-    let keymap = Arc::new(overrides.apply(default_keymap()));
-
     let mut effective = EFFECTIVE_KEYMAP
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    effective.keymap = Arc::new(
+        overrides
+            .apply(default_keymap())
+            .with_leader(&effective.leader),
+    );
     effective.overrides = overrides;
-    effective.keymap = keymap;
+}
+
+/// Makes `leader` the key Vim leader bindings start with, and regenerates the
+/// native GPUI bindings when it changed, so every window follows at once.
+///
+/// Overrides are stored with the leader placeholder rather than the key, so a
+/// binding the user moved keeps following the leader.
+pub fn set_vim_leader(leader: KeyChord, cx: &mut App) {
+    {
+        let mut effective = EFFECTIVE_KEYMAP
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if effective.leader == leader {
+            return;
+        }
+
+        effective.keymap = Arc::new(
+            effective
+                .overrides
+                .apply(default_keymap())
+                .with_leader(&leader),
+        );
+        effective.leader = leader;
+    }
+
+    refresh_derived_keybindings(cx);
 }
 
 /// Makes `overrides` the user's keymap customization: rebuilds the effective
@@ -360,7 +410,17 @@ fn refresh_derived_keybindings(cx: &mut App) {
 /// error in the log: predicates are validated before they are saved, so this
 /// only happens to rows edited outside the app.
 pub fn keymap_keybindings() -> Vec<KeyBinding> {
-    native_bindings(&keymap_overrides().effective_bindings(default_keymap()))
+    let leader = vim_leader();
+    let bindings: Vec<EffectiveBinding> = keymap_overrides()
+        .effective_bindings(default_keymap())
+        .into_iter()
+        .map(|binding| EffectiveBinding {
+            keys: binding.keys.with_leader(&leader),
+            ..binding
+        })
+        .collect();
+
+    native_bindings(&bindings)
 }
 
 /// `bindings` as native GPUI bindings, preceded by the copies of the global
@@ -458,6 +518,11 @@ fn element_action(context: ContextId, command: Command) -> Option<Box<dyn Action
         ContextId::CellEditorModal | ContextId::DocumentPreviewModal => {
             modal_editor_action(command)
         }
+        // The Vim wrapper runs every leader command itself (see
+        // `dbflux_components::vim::LeaderCommand`).
+        ContextId::VimNormal => Some(Box::new(dbflux_components::vim::LeaderCommand::new(
+            command.action_id(),
+        ))),
         _ => None,
     }
 }
@@ -891,13 +956,23 @@ fn overlap_stacks() -> Vec<Vec<KeyContext>> {
         "visual_line",
         "visual_block",
     ] {
+        let leader_context = matches!(mode, "normal" | "visual" | "visual_line" | "visual_block");
+        let editor = if leader_context {
+            format!(
+                "{CODE_EDITOR_KEY_CONTEXT} {}",
+                ContextId::VimNormal.as_gpui_context()
+            )
+        } else {
+            CODE_EDITOR_KEY_CONTEXT.to_string()
+        };
+
         stacks.push(vec![
             root_key_context(
                 WORKSPACE_KEY_CONTEXT,
                 ContextId::Editor,
                 &[(VIM_MODE_KEY.into(), mode.into())],
             ),
-            element(CODE_EDITOR_KEY_CONTEXT),
+            element(&editor),
             element("Input"),
         ]);
     }

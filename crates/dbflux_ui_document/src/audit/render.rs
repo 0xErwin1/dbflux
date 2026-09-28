@@ -1405,8 +1405,12 @@ impl AuditDocument {
                 self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
             let details_rows = Self::event_code_rows(&pretty_details, 4);
             let input_id = details_input.entity_id();
+            let scope = match self.external_details_vims.get(&input_id) {
+                Some(vim) => vim.leader_scope(div(), cx),
+                None => div(),
+            };
             let container = VimBinding::capture_run_command(
-                VimBinding::wire(div(), input_id, cx),
+                VimBinding::wire(scope, input_id, cx),
                 input_id,
                 cx,
             );

@@ -593,7 +593,8 @@ impl Render for SqlPreviewModal {
         // leaves Insert mode instead of closing, and in Normal mode Enter
         // moves down instead of copying.
         let vim_input = self.sql_display_vim.input_id();
-        let query_container = VimBinding::wire(div(), vim_input, cx);
+        let query_container =
+            VimBinding::wire(self.sql_display_vim.leader_scope(div(), cx), vim_input, cx);
         let query_container = VimBinding::capture_action::<component_actions::Cancel, _>(
             query_container,
             vim_input,

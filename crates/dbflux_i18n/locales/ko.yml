@@ -3572,6 +3572,7 @@ settings:
       toggle_favorite: 즐겨찾기 전환
       run_query: 쿼리 실행
       run_query_in_new_tab: 새 탭에서 쿼리 실행
+      explain_query: 쿼리 실행 계획
       cancel_query: 쿼리 취소
       open_history: 기록 드롭다운 전환
       open_saved_queries: 저장된 쿼리 열기
@@ -3732,6 +3733,7 @@ settings:
       add_panel_picker: "패널 추가 선택기"
       mcp_approvals: "MCP 승인"
       migrate_wizard: "마이그레이션 마법사"
+      vim_normal: "Vim 노멀 모드"
     category:
       global: 전역
       focus: 포커스

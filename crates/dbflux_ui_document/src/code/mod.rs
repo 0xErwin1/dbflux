@@ -1779,6 +1779,10 @@ impl CodeDocument {
                 self.run_query_in_new_tab(window, cx);
                 true
             }
+            Command::ExplainQuery => {
+                self.run_explain(window, cx);
+                true
+            }
             Command::ToggleComment => self.toggle_comment(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);

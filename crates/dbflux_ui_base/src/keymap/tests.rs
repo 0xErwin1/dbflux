@@ -2396,3 +2396,157 @@ fn migrate_wizard_keys_step_the_wizard_and_drive_each_step() {
         "Escape brings the keyboard back from a wizard field"
     );
 }
+
+// ============================================================================
+// Vim leader
+// ============================================================================
+
+fn leader_then(key: &str) -> KeySequence {
+    KeySequence::new(vec![
+        KeyChord::leader(),
+        KeyChord::new(key, Modifiers::none()),
+    ])
+    .expect("two chords")
+}
+
+/// The key context stack of an editor's text while the leader is active:
+/// the workspace root for the editor, the editor's container with the
+/// `VimNormal` identifier, and the input.
+fn leader_stack() -> Vec<KeyContext> {
+    element_stack(
+        root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), "normal".into())],
+        ),
+        &[
+            &format!(
+                "{CODE_EDITOR_KEY_CONTEXT} {}",
+                ContextId::VimNormal.as_gpui_context()
+            ),
+            "Input",
+        ],
+    )
+}
+
+/// Whether `action` is the leader action of `command`, which the Vim wrapper
+/// runs so that the sequence's last key never reaches Vim.
+fn runs_ahead_of_vim(action: &dyn Action, command: Command) -> bool {
+    action
+        .as_any()
+        .downcast_ref::<dbflux_components::vim::LeaderCommand>()
+        .is_some_and(|leader| leader.command.as_ref() == command.action_id())
+}
+
+/// With the default leader, Space waits for its second key where the
+/// leader is active, each default sequence runs its command ahead of Vim, and
+/// neither a dialog nor an editor without the context sees them.
+#[test]
+fn default_leader_sequences_run_their_commands_where_the_leader_is_active() {
+    let keymap = native_keymap();
+    let stack = leader_stack();
+
+    let (_, pending) = keymap.bindings_for_input(&parse_keys("space"), &stack);
+    assert!(pending, "Space waits for the key after the leader");
+
+    for (key, command) in [
+        ("a", Command::OpenPaneActions),
+        ("r", Command::RunQuery),
+        ("e", Command::ExplainQuery),
+        ("s", Command::SaveQuery),
+        ("f", Command::FocusSearch),
+        ("h", Command::PrevPanelTab),
+        ("l", Command::NextPanelTab),
+        ("p", Command::ToggleCommandPalette),
+    ] {
+        let action = top_action(&keymap, &format!("space {key}"), &stack)
+            .unwrap_or_else(|| panic!("`space {key}` is bound"));
+        assert!(
+            runs_ahead_of_vim(action.as_ref(), command),
+            "`space {key}` must run {command:?} ahead of Vim, got {}",
+            action.name()
+        );
+    }
+
+    let insert = element_stack(
+        root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), "insert".into())],
+        ),
+        &[CODE_EDITOR_KEY_CONTEXT, "Input"],
+    );
+    assert!(top_action(&keymap, "space a", &insert).is_none());
+
+    let in_dialog = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]),
+        &[
+            "Modal CellEditorModal",
+            ContextId::VimNormal.as_gpui_context(),
+            "Input",
+        ],
+    );
+    assert!(
+        top_action(&keymap, "space a", &in_dialog).is_none(),
+        "a dialog's editor keeps the workspace commands out"
+    );
+}
+
+/// The leader shows as its own keycap in the key bindings list.
+#[test]
+fn the_leader_placeholder_reads_leader() {
+    assert_eq!(key_sequence_label(&leader_then("a")), "Leader  a");
+}
+
+/// Changing the leader moves every leader sequence to the new key at once,
+/// and a user's leader binding follows it, because the override is keyed by
+/// the default keys and stores the leader placeholder.
+#[gpui::test]
+fn changing_the_leader_moves_default_and_user_leader_bindings(cx: &mut gpui::TestAppContext) {
+    cx.update(init_keymap);
+
+    let comma = KeyChord::new(",", Modifiers::none());
+    let slot = BindingSlot::new(
+        ContextId::VimNormal,
+        Command::OpenPaneActions,
+        leader_then("a"),
+    );
+
+    let mut overrides = KeymapOverrides::new();
+    overrides.set(slot.clone(), Some(leader_then("x")));
+    let stored = overrides.to_dtos();
+    assert_eq!(stored[0].default_keys, "<leader> a");
+    assert_eq!(stored[0].keys.as_deref(), Some("<leader> x"));
+
+    cx.update(|cx| {
+        apply_keymap_overrides(overrides.clone(), cx);
+        set_vim_leader(comma.clone(), cx);
+    });
+
+    let reloaded = KeymapOverrides::from_dtos(default_keymap(), &stored);
+    assert_eq!(reloaded, overrides, "the override matches its default slot");
+
+    let keymap = native_keymap();
+    let stack = leader_stack();
+
+    let action = top_action(&keymap, ", x", &stack).expect("the user binding follows the leader");
+    assert!(runs_ahead_of_vim(action.as_ref(), Command::OpenPaneActions));
+    let action = top_action(&keymap, ", r", &stack).expect("a default follows the leader");
+    assert!(runs_ahead_of_vim(action.as_ref(), Command::RunQuery));
+    assert!(top_action(&keymap, "space r", &stack).is_none());
+    assert!(top_action(&keymap, ", a", &stack).is_none());
+
+    assert_eq!(
+        effective_keymap()
+            .keys_for_command(ContextId::VimNormal, Command::RunQuery)
+            .map(KeySequence::to_storage_string)
+            .as_deref(),
+        Some(", r"),
+        "labels show the configured leader"
+    );
+
+    cx.update(|cx| {
+        set_vim_leader(default_vim_leader(), cx);
+        apply_keymap_overrides(KeymapOverrides::new(), cx);
+    });
+}

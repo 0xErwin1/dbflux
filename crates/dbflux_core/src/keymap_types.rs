@@ -66,6 +66,9 @@ pub enum Command {
     // === Editor ===
     RunQuery,
     RunQueryInNewTab,
+    /// Runs the editor's query under the driver's explain plan, as the
+    /// toolbar's Explain button does.
+    ExplainQuery,
     CancelQuery,
     ToggleHistoryDropdown,
     OpenSavedQueries,
@@ -365,6 +368,7 @@ impl Command {
 
             Command::RunQuery => "Run query",
             Command::RunQueryInNewTab => "Run query in new tab",
+            Command::ExplainQuery => "Explain query",
             Command::CancelQuery => "Cancel query",
             Command::ToggleHistoryDropdown => "Toggle history dropdown",
             Command::OpenSavedQueries => "Open saved queries",
@@ -558,6 +562,7 @@ impl Command {
 
             Command::RunQuery => "run_query",
             Command::RunQueryInNewTab => "run_query_in_new_tab",
+            Command::ExplainQuery => "explain_query",
             Command::CancelQuery => "cancel_query",
             Command::ToggleHistoryDropdown => "open_history",
             Command::OpenSavedQueries => "open_saved_queries",
@@ -769,6 +774,7 @@ impl Command {
             Command::ToggleFavorite,
             Command::RunQuery,
             Command::RunQueryInNewTab,
+            Command::ExplainQuery,
             Command::CancelQuery,
             Command::ToggleHistoryDropdown,
             Command::OpenSavedQueries,
@@ -956,6 +962,7 @@ impl Command {
 
             Command::RunQuery
             | Command::RunQueryInNewTab
+            | Command::ExplainQuery
             | Command::CancelQuery
             | Command::ToggleHistoryDropdown
             | Command::OpenSavedQueries
@@ -1262,6 +1269,10 @@ pub enum ContextId {
 
     /// The table migration wizard document (its steps and footer).
     MigrateWizard,
+
+    /// An editor with Vim mode in Normal or Visual mode, where the leader
+    /// key starts a sequence (`<leader> a`).
+    VimNormal,
 }
 
 impl ContextId {
@@ -1306,6 +1317,7 @@ impl ContextId {
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
             ContextId::MigrateWizard => Some(ContextId::Global),
+            ContextId::VimNormal => None,
         }
     }
 
@@ -1397,6 +1409,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
             ContextId::MigrateWizard => "Migrate Wizard",
+            ContextId::VimNormal => "Vim Normal",
         }
     }
 
@@ -1438,6 +1451,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
             ContextId::MigrateWizard => "migrate_wizard",
+            ContextId::VimNormal => "vim_normal",
         }
     }
 
@@ -1479,6 +1493,7 @@ impl ContextId {
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
             ContextId::MigrateWizard,
+            ContextId::VimNormal,
         ]
     }
 
@@ -1520,6 +1535,7 @@ impl ContextId {
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
             ContextId::MigrateWizard => "MigrateWizard",
+            ContextId::VimNormal => "VimNormal",
         }
     }
 
@@ -1557,6 +1573,9 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
             ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
+            // A leader binding dispatches to the workspace, which must not act
+            // on the document behind a dialog's editor.
+            ContextId::VimNormal => "VimNormal && !Modal",
             context => context.as_gpui_context(),
         }
     }
@@ -1574,6 +1593,7 @@ impl ContextId {
                 | ContextId::SqlPreviewModal
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
+                | ContextId::VimNormal
         )
     }
 }

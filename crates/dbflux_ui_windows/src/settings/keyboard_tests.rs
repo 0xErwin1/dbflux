@@ -414,3 +414,66 @@ fn the_about_links_open_from_the_keyboard(cx: &mut TestAppContext) {
         Some(env!("CARGO_PKG_REPOSITORY"))
     );
 }
+
+/// Recording a Vim leader binding stores the leader key pressed first as
+/// the leader itself, so the new keys keep following the leader when it
+/// changes.
+#[gpui::test]
+fn recording_a_leader_binding_keeps_it_relative_to_the_leader(cx: &mut TestAppContext) {
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{
+        apply_keymap_overrides, default_vim_leader, effective_keymap, keymap_overrides,
+        set_vim_leader,
+    };
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    let leader_then = |key: &str| {
+        KeySequence::new(vec![
+            KeyChord::leader(),
+            KeyChord::new(key, Modifiers::none()),
+        ])
+        .expect("two chords")
+    };
+    let slot = BindingSlot::new(
+        ContextId::VimNormal,
+        Command::OpenPaneActions,
+        leader_then("a"),
+    );
+
+    window.update(|_, cx| {
+        keybindings.update(cx, |section, cx| {
+            section.start_recording(slot.clone(), ContextId::VimNormal, cx)
+        })
+    });
+    window.simulate_keystrokes("space x");
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    window.run_until_parked();
+
+    assert_eq!(
+        keymap_overrides().effective_keys(&slot),
+        Some(leader_then("x")),
+        "Space pressed first is recorded as the leader"
+    );
+
+    window.update(|_, cx| set_vim_leader(KeyChord::new(",", Modifiers::none()), cx));
+    assert_eq!(
+        effective_keymap()
+            .keys_for_command(ContextId::VimNormal, Command::OpenPaneActions)
+            .map(KeySequence::to_storage_string)
+            .as_deref(),
+        Some(", x"),
+        "the recorded binding follows the new leader"
+    );
+
+    window.update(|_, cx| {
+        set_vim_leader(default_vim_leader(), cx);
+        apply_keymap_overrides(dbflux_app::keymap::KeymapOverrides::new(), cx);
+    });
+}

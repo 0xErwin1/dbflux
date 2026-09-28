@@ -3572,6 +3572,7 @@ settings:
       toggle_favorite: 切换收藏
       run_query: 执行查询
       run_query_in_new_tab: 在新标签页中执行查询
+      explain_query: 解释查询
       cancel_query: 取消查询
       open_history: 切换历史下拉菜单
       open_saved_queries: 打开已保存查询
@@ -3733,6 +3734,7 @@ settings:
       add_panel_picker: "添加面板选择器"
       mcp_approvals: "MCP 审批"
       migrate_wizard: "迁移向导"
+      vim_normal: "Vim 普通模式"
     category:
       global: 全局
       focus: 聚焦

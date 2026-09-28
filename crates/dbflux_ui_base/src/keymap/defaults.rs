@@ -43,6 +43,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
     stack.add_layer(migrate_wizard_layer());
+    stack.add_layer(vim_normal_layer());
 
     stack
 });
@@ -53,6 +54,37 @@ fn sequence(text: &str) -> KeySequence {
         Ok(keys) => keys,
         Err(error) => unreachable!("default key sequence `{text}` does not parse: {error}"),
     }
+}
+
+/// The leader followed by `key`: `<leader> a`. The leader is a placeholder the
+/// keymap resolves to the configured key (Settings > General).
+fn leader(key: &str) -> KeySequence {
+    match KeySequence::new(vec![
+        KeyChord::leader(),
+        KeyChord::new(key, Modifiers::none()),
+    ]) {
+        Some(keys) => keys,
+        None => unreachable!("a leader sequence has two chords"),
+    }
+}
+
+/// Leader sequences of an editor in Vim's Normal or Visual mode. The editor
+/// opens its own find panel for Focus search; every other command goes to
+/// the workspace, which hands it to the active document, and a document
+/// without the command ignores it.
+fn vim_normal_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::VimNormal);
+
+    layer.bind(leader("a"), Command::OpenPaneActions);
+    layer.bind(leader("r"), Command::RunQuery);
+    layer.bind(leader("e"), Command::ExplainQuery);
+    layer.bind(leader("s"), Command::SaveQuery);
+    layer.bind(leader("f"), Command::FocusSearch);
+    layer.bind(leader("h"), Command::PrevPanelTab);
+    layer.bind(leader("l"), Command::NextPanelTab);
+    layer.bind(leader("p"), Command::ToggleCommandPalette);
+
+    layer
 }
 
 fn global_layer() -> KeymapLayer {

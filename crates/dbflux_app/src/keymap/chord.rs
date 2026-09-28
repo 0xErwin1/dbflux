@@ -80,11 +80,16 @@ impl Modifiers {
         }
     }
 
-    #[allow(dead_code)]
     pub fn has_any(&self) -> bool {
         self.ctrl || self.alt || self.shift || self.platform
     }
 }
+
+/// Key name of the placeholder chord that stands for the Vim leader key in a
+/// binding's keys (`<leader> a`). The placeholder is resolved to the
+/// configured leader when bindings are registered, so the stored keys of a
+/// leader binding do not change when the leader does.
+pub const LEADER_KEY: &str = "<leader>";
 
 /// A normalized key chord (key + modifiers) for keybinding matching.
 ///
@@ -102,6 +107,19 @@ impl KeyChord {
             key: Self::normalize_key(&key.into()),
             modifiers,
         }
+    }
+
+    /// The placeholder chord for the Vim leader key, see [`LEADER_KEY`].
+    pub fn leader() -> Self {
+        Self {
+            key: LEADER_KEY.to_string(),
+            modifiers: Modifiers::none(),
+        }
+    }
+
+    /// Whether this chord is the Vim leader placeholder.
+    pub fn is_leader(&self) -> bool {
+        self.key == LEADER_KEY && !self.modifiers.has_any()
     }
 
     /// Parses a key chord from a string like "Ctrl+Shift+P" or "j".
@@ -273,6 +291,7 @@ impl fmt::Display for KeyChord {
             "end" => "End",
             "pageup" => "PageUp",
             "pagedown" => "PageDown",
+            LEADER_KEY => "Leader",
             _ => &self.key,
         };
 
@@ -326,6 +345,28 @@ impl KeySequence {
     /// the keyboard waiting to see whether `other` follows.
     pub fn is_prefix_of(&self, other: &KeySequence) -> bool {
         self.0.len() < other.0.len() && other.0.starts_with(&self.0)
+    }
+
+    /// Whether the sequence starts with the Vim leader placeholder.
+    pub fn starts_with_leader(&self) -> bool {
+        self.first().is_leader()
+    }
+
+    /// The sequence with every leader placeholder replaced by `leader`, the
+    /// keys a user actually presses.
+    pub fn with_leader(&self, leader: &KeyChord) -> KeySequence {
+        Self(
+            self.0
+                .iter()
+                .map(|chord| {
+                    if chord.is_leader() {
+                        leader.clone()
+                    } else {
+                        chord.clone()
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Parses chords in [`KeyChord::parse`] form separated by whitespace
@@ -510,6 +551,38 @@ mod tests {
         assert!(!g_g.is_prefix_of(&g_g));
         assert!(!g_g.is_prefix_of(&g));
         assert!(!g_h.is_prefix_of(&g_g));
+    }
+
+    #[test]
+    fn leader_placeholder_round_trips_and_resolves_to_the_configured_key() {
+        let keys = KeySequence::new(vec![
+            KeyChord::leader(),
+            KeyChord::new("a", Modifiers::none()),
+        ])
+        .expect("two chords");
+
+        assert!(keys.starts_with_leader());
+        assert_eq!(keys.to_storage_string(), "<leader> a");
+        assert_eq!(
+            KeySequence::from_storage_string("<leader> a"),
+            Ok(keys.clone())
+        );
+        assert_eq!(keys.to_string(), "Leader a");
+
+        let comma = KeyChord::new(",", Modifiers::none());
+        assert_eq!(
+            keys.with_leader(&comma),
+            KeySequence::parse(", a").expect("valid")
+        );
+        assert_eq!(
+            keys.with_leader(&KeyChord::new("space", Modifiers::none()))
+                .to_storage_string(),
+            "space a"
+        );
+
+        let plain = KeySequence::parse("g g").expect("valid");
+        assert!(!plain.starts_with_leader());
+        assert_eq!(plain.with_leader(&comma), plain);
     }
 
     #[test]

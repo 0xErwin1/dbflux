@@ -11,7 +11,7 @@ use dbflux_core::LogErr;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{
     GpuiPredicateOverlap, PredicateError, apply_keymap_overrides, key_chord_from_gpui,
-    keymap_overrides, validate_predicate,
+    keymap_overrides, validate_predicate, vim_leader,
 };
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::*;
@@ -234,6 +234,7 @@ impl KeybindingsSection {
             return;
         }
 
+        let chord = self.leader_relative(chord);
         let outcome = self.recorder.handle_chord(
             chord,
             dbflux_ui_base::keymap::default_keymap(),
@@ -242,6 +243,22 @@ impl KeybindingsSection {
         );
 
         self.apply_recording_outcome(outcome, cx);
+    }
+
+    /// `chord` as the recorder stores it: the leader placeholder when it is the
+    /// leader key pressed first for a Vim leader binding, so the binding keeps
+    /// following the leader when the leader changes; `chord` otherwise.
+    fn leader_relative(&self, chord: KeyChord) -> KeyChord {
+        let records_leader_binding = self
+            .recorder
+            .target()
+            .is_some_and(|slot| slot.context == ContextId::VimNormal);
+
+        if records_leader_binding && self.recorder.captured().is_empty() && chord == vim_leader() {
+            KeyChord::leader()
+        } else {
+            chord
+        }
     }
 
     /// Saves a finished sequence, or arms the pause that finishes it when

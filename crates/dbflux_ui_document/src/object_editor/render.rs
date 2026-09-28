@@ -197,7 +197,9 @@ impl ObjectEditorDocument {
                             .h_full(),
                     );
                 let indicator = buffer.vim.render_indicator(cx);
-                let wrapper = div().flex_1().min_h_0().flex().flex_col();
+                let wrapper = buffer
+                    .vim
+                    .leader_scope(div().flex_1().min_h_0().flex().flex_col(), cx);
 
                 let input = buffer.vim.input_id();
 

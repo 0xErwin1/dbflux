@@ -83,6 +83,24 @@ impl KeymapLayer {
     pub fn bindings(&self) -> &HashMap<KeySequence, Command> {
         &self.bindings
     }
+
+    /// This layer with the leader placeholder in its keys replaced by
+    /// `leader`, keeping the order and predicates of its bindings.
+    fn with_leader(&self, leader: &KeyChord) -> KeymapLayer {
+        let mut layer = KeymapLayer::new(self.context);
+
+        for (keys, command) in self.ordered_bindings() {
+            let resolved = keys.with_leader(leader);
+
+            if let Some(predicate) = self.predicates.get(keys) {
+                layer.bind_with_predicate(resolved, command, predicate);
+            } else {
+                layer.bind(resolved, command);
+            }
+        }
+
+        layer
+    }
 }
 
 /// Manages keybindings across all contexts with hierarchical resolution.
@@ -115,6 +133,18 @@ impl KeymapStack {
     /// Returns the layer holding the bindings declared for `context` itself.
     pub fn layer(&self, context: ContextId) -> Option<&KeymapLayer> {
         self.layers.get(&context)
+    }
+
+    /// This stack with every leader placeholder replaced by `leader`: the
+    /// keys the user presses, for lookups and labels.
+    pub fn with_leader(&self, leader: &KeyChord) -> KeymapStack {
+        KeymapStack {
+            layers: self
+                .layers
+                .iter()
+                .map(|(context, layer)| (*context, layer.with_leader(leader)))
+                .collect(),
+        }
     }
 
     /// Resolves a single chord to a command, checking the given context
@@ -243,6 +273,46 @@ mod tests {
             Some(Command::SelectNext)
         );
         assert_eq!(stack.resolve(ContextId::Editor, &chord_j), None);
+    }
+
+    #[test]
+    fn with_leader_resolves_the_placeholder_and_keeps_order_and_predicates() {
+        let leader_a = KeySequence::new(vec![
+            KeyChord::leader(),
+            KeyChord::new("a", Modifiers::none()),
+        ])
+        .expect("two chords");
+        let leader_r = KeySequence::new(vec![
+            KeyChord::leader(),
+            KeyChord::new("r", Modifiers::none()),
+        ])
+        .expect("two chords");
+
+        let mut layer = KeymapLayer::new(ContextId::VimNormal);
+        layer.bind(leader_a, Command::OpenPaneActions);
+        layer.bind_with_predicate(leader_r, Command::RunQuery, "VimNormal");
+
+        let mut stack = KeymapStack::new();
+        stack.add_layer(layer);
+
+        let resolved = stack.with_leader(&KeyChord::new(",", Modifiers::none()));
+        let layer = resolved.layer(ContextId::VimNormal).expect("layer kept");
+        let bindings: Vec<(String, Command)> = layer
+            .ordered_bindings()
+            .map(|(keys, command)| (keys.to_storage_string(), command))
+            .collect();
+
+        assert_eq!(
+            bindings,
+            vec![
+                (", a".to_string(), Command::OpenPaneActions),
+                (", r".to_string(), Command::RunQuery),
+            ]
+        );
+        assert_eq!(
+            layer.predicate_for(&KeySequence::parse(", r").expect("valid")),
+            "VimNormal"
+        );
     }
 
     #[test]
