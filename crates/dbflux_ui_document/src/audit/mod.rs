@@ -50,7 +50,9 @@ use super::types::{DocumentIcon, DocumentId, DocumentKind, DocumentState};
 pub enum AuditContextMenuAction {
     CopyRowAsCsv,
     CopySummary,
+    CopyJson,
     FilterByCorrelation,
+    OpenApproval,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +150,8 @@ pub struct AuditDocument {
     pending_initial_load: bool,
     pending_toast: Option<PendingToast>,
     export_menu_open: bool,
+    /// Highlighted format of the open export menu, for the keyboard.
+    export_menu_selected: usize,
     search_input: Entity<InputState>,
     /// Owns the time-range dropdown, date picker, and hour/minute dropdowns.
     /// The audit document reads sub-entities from it for rendering and
@@ -562,6 +566,7 @@ impl AuditDocument {
             pending_initial_load: true,
             pending_toast: None,
             export_menu_open: false,
+            export_menu_selected: 0,
             search_input,
             time_range_panel,
             custom_date_range_picker,
@@ -1477,6 +1482,7 @@ impl AuditDocument {
 
     fn toggle_export_menu(&mut self, cx: &mut Context<Self>) {
         self.export_menu_open = !self.export_menu_open;
+        self.export_menu_selected = 0;
         cx.notify();
     }
 
@@ -1484,6 +1490,9 @@ impl AuditDocument {
         self.export_menu_open = false;
         self.do_export(format.to_string(), cx);
     }
+
+    /// The export menu's formats, in the order it lists them.
+    const EXPORT_FORMATS: [&'static str; 2] = ["csv", "json"];
 
     fn time_range_for_index(index: usize) -> Option<TimeRange> {
         match index {
@@ -2372,6 +2381,93 @@ mod tests {
         assert!(
             !ring_on_time(window),
             "Right on the last preset moves the ring on"
+        );
+    }
+
+    /// Ctrl+E opens the export menu with the menu keys in it, and Alt+L /
+    /// Alt+H switch the internal log between the table and the chart.
+    #[gpui::test]
+    fn export_menu_and_view_switch_keys(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_app::keymap::ContextId;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let audit_repo = app_state
+                    .read(cx)
+                    .storage_runtime()
+                    .audit()
+                    .expect("audit repo should open in test");
+                cx.new(|cx| AuditDocument::new(audit_repo, app_state, window, cx))
+            },
+            |document, _| document.active_context(),
+            AuditDocument::dispatch_command,
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+
+        window.update(|window, cx| {
+            let focus_handle = document.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        let export_menu = |window: &mut gpui::VisualTestContext| {
+            window.update(|_, cx| {
+                let document = document.read(cx);
+                document
+                    .export_menu_open
+                    .then_some(document.export_menu_selected)
+            })
+        };
+
+        window.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-e"
+        } else {
+            "ctrl-e"
+        });
+        assert_eq!(export_menu(window), Some(0), "Ctrl+E opens the export menu");
+        assert_eq!(
+            window.update(|_, cx| document.read(cx).active_context()),
+            ContextId::ContextMenu
+        );
+
+        window.simulate_keystrokes("j");
+        assert_eq!(export_menu(window), Some(1), "j highlights JSON");
+
+        window.simulate_keystrokes("j");
+        assert_eq!(export_menu(window), Some(0), "the highlight wraps");
+
+        window.simulate_keystrokes("escape");
+        assert_eq!(export_menu(window), None, "Escape closes the export menu");
+
+        window.simulate_keystrokes("alt-l");
+        assert!(
+            window.update(|_, cx| matches!(
+                document.read(cx).view_mode,
+                super::chart_view::AuditViewMode::Chart
+            )),
+            "Alt+L shows the chart"
+        );
+
+        window.simulate_keystrokes("alt-h");
+        assert!(
+            window.update(|_, cx| matches!(
+                document.read(cx).view_mode,
+                super::chart_view::AuditViewMode::Table
+            )),
+            "Alt+H shows the table again"
         );
     }
 

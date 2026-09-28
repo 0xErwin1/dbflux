@@ -617,6 +617,21 @@ las coincidencias, así `n` y `Shift+n` las recorren, y `Escape` cierra la búsq
 `Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
 un campo de texto.
 
+## Visor de auditoría
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Evento siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primer / último evento |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Bajar / subir un cuarto de página |
+| `]` / `[` | Página siguiente / anterior |
+| `Enter` / `Space` | Expandir o contraer el evento seleccionado |
+| `f` / `/` | Entrar a la barra de filtros; `h` / `l` se mueven, `Enter` activa, `Escape` sale |
+| `r` | Actualizar |
+| `Ctrl+e` / `Cmd+e` | Abrir el menú de exportación: las teclas del menú contextual pasan entre CSV y JSON, `Enter` exporta y `Escape` lo cierra |
+| `Alt+l` / `Alt+h` | Cambiar entre la tabla de eventos y el gráfico |
+| `m` (o `Shift+F10`) | Menú contextual del evento seleccionado: copiar como CSV, copiar el resumen, copiar como JSON, filtrar por su id de correlación y abrir una aprobación pendiente |
+
 ## Aprobaciones MCP
 
 | Teclas | Acción |

@@ -211,15 +211,10 @@ impl AuditDocument {
 
     pub(super) fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.context_menu.as_ref()?;
+        self.events.get(menu.row)?;
 
-        let event = self.events.get(menu.row)?;
-        let has_correlation = event
-            .correlation_id
-            .as_deref()
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
-
-        let items = Self::context_menu_items(has_correlation);
+        let row = menu.row;
+        let items = self.menu_items_for_row(row);
         let selected_index = menu.selected_index;
 
         let mut menu_elements: Vec<AnyElement> = Vec::new();
@@ -229,10 +224,6 @@ impl AuditDocument {
                 menu_elements.push(render_separator(cx).into_any_element());
                 continue;
             }
-
-            let Some(action) = item.action else {
-                continue;
-            };
 
             let is_selected = idx == selected_index;
 
@@ -257,44 +248,7 @@ impl AuditDocument {
                     }
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    // Resolve the action again — the menu may have changed.
-                    let has_corr = this
-                        .context_menu
-                        .as_ref()
-                        .and_then(|m| this.events.get(m.row))
-                        .and_then(|e| e.correlation_id.as_deref())
-                        .map(|c| !c.is_empty())
-                        .unwrap_or(false);
-                    let items = Self::context_menu_items(has_corr);
-                    if let Some(item) = items.get(idx)
-                        && item.action == Some(action)
-                        && let Some(menu) = this.context_menu.clone()
-                    {
-                        let event = this.events.get(menu.row).cloned();
-                        this.close_context_menu(window, cx);
-                        match action {
-                            AuditContextMenuAction::CopyRowAsCsv => {
-                                if let Some(event) = event {
-                                    let csv = Self::event_to_csv_row(&event);
-                                    cx.write_to_clipboard(ClipboardItem::new_string(csv));
-                                }
-                            }
-                            AuditContextMenuAction::CopySummary => {
-                                if let Some(event) = event {
-                                    let summary = event.summary.clone().unwrap_or_default();
-                                    cx.write_to_clipboard(ClipboardItem::new_string(summary));
-                                }
-                            }
-                            AuditContextMenuAction::FilterByCorrelation => {
-                                if let Some(event) = event
-                                    && let Some(correlation_id) =
-                                        event.correlation_id.clone().filter(|c| !c.is_empty())
-                                {
-                                    this.filter_by_correlation(correlation_id, cx);
-                                }
-                            }
-                        }
-                    }
+                    this.run_menu_item_at(row, idx, window, cx);
                 }))
                 .into_any_element(),
             );
@@ -1518,9 +1472,15 @@ impl AuditDocument {
             menu_row(
                 SharedString::from(format!("audit-export-{}", index)),
                 &MenuItem::new(label).icon(AppIcon::Download),
-                false,
+                index == self.export_menu_selected,
                 cx,
             )
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if this.export_menu_selected != index {
+                    this.export_menu_selected = index;
+                    cx.notify();
+                }
+            }))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.export_with_format(format, cx);
             }))

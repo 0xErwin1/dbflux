@@ -590,6 +590,21 @@ search field, `Enter` returns the keyboard to the tree with the matches kept, so
 
 `Ctrl+j` and `t` apply while the key list has focus, not inside a text field.
 
+## Audit viewer
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous event |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last event |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Move a quarter page down / up |
+| `]` / `[` | Next / previous page |
+| `Enter` / `Space` | Expand or collapse the selected event |
+| `f` / `/` | Enter the filter toolbar; `h` / `l` move, `Enter` activates, `Escape` leaves |
+| `r` | Refresh |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move between CSV and JSON, `Enter` exports, `Escape` closes it |
+| `Alt+l` / `Alt+h` | Switch between the event table and the chart |
+| `m` (or `Shift+F10`) | Context menu of the selected event: copy as CSV, copy the summary, copy as JSON, filter by its correlation id, and open a pending approval |
+
 ## MCP approvals
 
 | Keys | Action |

@@ -19,7 +19,7 @@ impl AuditDocument {
     /// - `TextInput`   — while the search input has keyboard focus (Editing)
     /// - `Audit`       — row list or toolbar focus-ring navigation
     pub fn active_context(&self) -> ContextId {
-        if self.context_menu.is_some() {
+        if self.context_menu.is_some() || self.export_menu_open {
             return ContextId::ContextMenu;
         }
 
@@ -113,8 +113,13 @@ impl AuditDocument {
 
     // ── Context menu ──────────────────────────────────────────────────────
 
-    /// Static menu item table — separators have `action: None`.
-    pub(super) fn context_menu_items(has_correlation: bool) -> Vec<AuditMenuItem> {
+    /// Static menu item table — separators have `action: None`. The row
+    /// menu offers what the row's detail offers: the copies, filtering by
+    /// its correlation id, and opening a pending approval.
+    pub(super) fn context_menu_items(
+        has_correlation: bool,
+        can_open_approval: bool,
+    ) -> Vec<AuditMenuItem> {
         let mut items = vec![
             AuditMenuItem::item(
                 dbflux_i18n::t!("document.audit.menu.copy_row_as_csv"),
@@ -125,6 +130,11 @@ impl AuditDocument {
                 dbflux_i18n::t!("document.audit.menu.copy_summary"),
                 AuditContextMenuAction::CopySummary,
                 AppIcon::Layers,
+            ),
+            AuditMenuItem::item(
+                dbflux_i18n::t!("document.audit.action.copy_json"),
+                AuditContextMenuAction::CopyJson,
+                AppIcon::Copy,
             ),
         ];
 
@@ -137,7 +147,62 @@ impl AuditDocument {
             ));
         }
 
+        if can_open_approval {
+            items.push(AuditMenuItem::separator());
+            items.push(AuditMenuItem::item(
+                dbflux_i18n::t!("document.audit.action.open_approval"),
+                AuditContextMenuAction::OpenApproval,
+                AppIcon::Bot,
+            ));
+        }
+
         items
+    }
+
+    /// The menu items for the row `row`, or none when it no longer exists.
+    pub(super) fn menu_items_for_row(&self, row: usize) -> Vec<AuditMenuItem> {
+        let Some(event) = self.events.get(row) else {
+            return Vec::new();
+        };
+
+        let has_correlation = event
+            .correlation_id
+            .as_deref()
+            .is_some_and(|correlation| !correlation.is_empty());
+        let can_open_approval = cfg!(feature = "mcp") && Self::is_pending_approval(event);
+
+        Self::context_menu_items(has_correlation, can_open_approval)
+    }
+
+    /// Runs a row menu action on `event`, from a key or a click.
+    pub(super) fn run_menu_action(
+        &mut self,
+        action: AuditContextMenuAction,
+        event: AuditEventDto,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            AuditContextMenuAction::CopyRowAsCsv => {
+                let csv = Self::event_to_csv_row(&event);
+                cx.write_to_clipboard(ClipboardItem::new_string(csv));
+            }
+            AuditContextMenuAction::CopySummary => {
+                let summary = event.summary.clone().unwrap_or_default();
+                cx.write_to_clipboard(ClipboardItem::new_string(summary));
+            }
+            AuditContextMenuAction::CopyJson => match serde_json::to_string_pretty(&event) {
+                Ok(json) => cx.write_to_clipboard(ClipboardItem::new_string(json)),
+                Err(error) => log::warn!("audit event could not be serialized: {error}"),
+            },
+            AuditContextMenuAction::FilterByCorrelation => {
+                if let Some(correlation_id) = event.correlation_id.filter(|c| !c.is_empty()) {
+                    self.filter_by_correlation(correlation_id, cx);
+                }
+            }
+            AuditContextMenuAction::OpenApproval => {
+                cx.emit(super::super::handle::DocumentEvent::RequestOpenApprovals);
+            }
+        }
     }
 
     pub(super) fn open_context_menu_at_selection(
@@ -206,36 +271,15 @@ impl AuditDocument {
         }
     }
 
-    #[allow(dead_code)]
-    fn context_menu_item_count(&self) -> usize {
-        let Some(menu) = &self.context_menu else {
-            return 0;
-        };
-
-        let event = self.events.get(menu.row);
-        let has_correlation = event
-            .and_then(|e| e.correlation_id.as_deref())
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
-
-        Self::context_menu_items(has_correlation)
-            .iter()
-            .filter(|i| !i.is_separator())
-            .count()
-    }
-
     fn navigate_menu_down(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.context_menu.as_ref().map(|menu| menu.row) else {
+            return;
+        };
+        let items = self.menu_items_for_row(row);
         let Some(ref mut menu) = self.context_menu else {
             return;
         };
 
-        let event = self.events.get(menu.row);
-        let has_correlation = event
-            .and_then(|e| e.correlation_id.as_deref())
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
-
-        let items = Self::context_menu_items(has_correlation);
         let navigable: Vec<usize> = items
             .iter()
             .enumerate()
@@ -258,17 +302,14 @@ impl AuditDocument {
     }
 
     fn navigate_menu_up(&mut self, cx: &mut Context<Self>) {
+        let Some(row) = self.context_menu.as_ref().map(|menu| menu.row) else {
+            return;
+        };
+        let items = self.menu_items_for_row(row);
         let Some(ref mut menu) = self.context_menu else {
             return;
         };
 
-        let event = self.events.get(menu.row);
-        let has_correlation = event
-            .and_then(|e| e.correlation_id.as_deref())
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
-
-        let items = Self::context_menu_items(has_correlation);
         let navigable: Vec<usize> = items
             .iter()
             .enumerate()
@@ -300,46 +341,62 @@ impl AuditDocument {
             return;
         };
 
-        let event = self.events.get(menu.row).cloned();
-        let has_correlation = event
-            .as_ref()
-            .and_then(|e| e.correlation_id.as_deref())
-            .map(|c| !c.is_empty())
-            .unwrap_or(false);
+        self.run_menu_item_at(menu.row, menu.selected_index, window, cx);
+    }
 
-        let items = Self::context_menu_items(has_correlation);
-        let Some(item) = items.get(menu.selected_index) else {
+    /// Closes the row menu and runs its item at `index`, if that item still
+    /// is an action for the row `row`.
+    pub(super) fn run_menu_item_at(
+        &mut self,
+        row: usize,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let action = self
+            .menu_items_for_row(row)
+            .get(index)
+            .and_then(|item| item.action);
+        let Some(action) = action else {
             return;
         };
-
-        let Some(action) = item.action else {
+        let Some(event) = self.events.get(row).cloned() else {
             return;
         };
 
         self.close_context_menu(window, cx);
+        self.run_menu_action(action, event, cx);
+    }
 
-        match action {
-            AuditContextMenuAction::CopyRowAsCsv => {
-                if let Some(event) = event {
-                    let csv = Self::event_to_csv_row(&event);
-                    cx.write_to_clipboard(ClipboardItem::new_string(csv));
-                }
+    /// Moves the export menu highlight, wrapping at either end.
+    fn step_export_menu(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let count = Self::EXPORT_FORMATS.len();
+        self.export_menu_selected = if forward {
+            (self.export_menu_selected + 1) % count
+        } else {
+            (self.export_menu_selected + count - 1) % count
+        };
+        cx.notify();
+    }
+
+    /// The keys of the open export menu: the menu keys move and pick a
+    /// format, Escape or the export shortcut close it.
+    fn dispatch_export_menu_command(&mut self, cmd: Command, cx: &mut Context<Self>) -> bool {
+        match cmd {
+            Command::MenuDown | Command::SelectNext => self.step_export_menu(true, cx),
+            Command::MenuUp | Command::SelectPrev => self.step_export_menu(false, cx),
+            Command::MenuSelect | Command::Execute => {
+                let format = Self::EXPORT_FORMATS[self.export_menu_selected];
+                self.export_with_format(format, cx);
             }
-            AuditContextMenuAction::CopySummary => {
-                if let Some(event) = event {
-                    let summary = event.summary.clone().unwrap_or_default();
-                    cx.write_to_clipboard(ClipboardItem::new_string(summary));
-                }
+            Command::MenuBack | Command::Cancel | Command::ExportResults => {
+                self.export_menu_open = false;
+                cx.notify();
             }
-            AuditContextMenuAction::FilterByCorrelation => {
-                if let Some(event) = event
-                    && let Some(correlation_id) =
-                        event.correlation_id.clone().filter(|c| !c.is_empty())
-                {
-                    self.filter_by_correlation(correlation_id, cx);
-                }
-            }
+            _ => return false,
         }
+
+        true
     }
 
     /// Left and Right on the time presets move the selected preset; at
@@ -416,6 +473,10 @@ impl AuditDocument {
         // While the context menu is open, all commands go to the menu.
         if self.context_menu.is_some() {
             return self.dispatch_menu_command(cmd, window, cx);
+        }
+
+        if self.export_menu_open {
+            return self.dispatch_export_menu_command(cmd, cx);
         }
 
         // ── Open dropdown in toolbar ──────────────────────────────────────
@@ -553,6 +614,17 @@ impl AuditDocument {
                 self.refresh(cx);
                 true
             }
+            Command::ExportResults => {
+                self.toggle_export_menu(cx);
+                true
+            }
+            // Alt+L / Alt+H switch the view of the internal audit log
+            // between the event table and the chart.
+            Command::NextPanelTab | Command::PrevPanelTab if !self.is_external_event_stream() => {
+                let to_chart = matches!(self.view_mode, super::chart_view::AuditViewMode::Table);
+                self.set_view_mode(to_chart, cx);
+                true
+            }
             Command::FocusToolbar | Command::FocusSearch => {
                 self.filter_bar.enter(0);
                 cx.notify();
@@ -649,17 +721,30 @@ mod tests {
 
     #[test]
     fn context_menu_items_includes_correlation_entry_only_when_present() {
-        let without_correlation = AuditDocument::context_menu_items(false);
-        let with_correlation = AuditDocument::context_menu_items(true);
+        let without_correlation = AuditDocument::context_menu_items(false, false);
+        let with_correlation = AuditDocument::context_menu_items(true, false);
 
-        assert_eq!(without_correlation.len(), 2);
+        assert_eq!(without_correlation.len(), 3);
         assert!(
             !without_correlation
                 .iter()
                 .any(|item| item.action == Some(AuditContextMenuAction::FilterByCorrelation))
         );
 
-        assert_eq!(with_correlation.len(), 4);
+        assert_eq!(with_correlation.len(), 5);
+
+        let pending_approval = AuditDocument::context_menu_items(false, true);
+        assert_eq!(
+            pending_approval.last().and_then(|item| item.action),
+            Some(AuditContextMenuAction::OpenApproval),
+            "a pending approval row offers to open it"
+        );
+        assert!(
+            without_correlation
+                .iter()
+                .any(|item| item.action == Some(AuditContextMenuAction::CopyJson)),
+            "every row offers Copy row as JSON, like its detail"
+        );
         assert!(
             with_correlation
                 .iter()

@@ -1116,6 +1116,16 @@ fn audit_layer() -> KeymapLayer {
         Command::RefreshSchema,
     );
 
+    // Export menu (CSV / JSON), driven by the context menu keys once open.
+    layer.bind(
+        KeyChord::new("e", Modifiers::primary()),
+        Command::ExportResults,
+    );
+
+    // Table / chart view of the internal audit log.
+    layer.bind(KeyChord::new("l", Modifiers::alt()), Command::NextPanelTab);
+    layer.bind(KeyChord::new("h", Modifiers::alt()), Command::PrevPanelTab);
+
     // Dismiss / exit toolbar navigation.
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
