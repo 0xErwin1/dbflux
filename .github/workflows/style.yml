@@ -119,6 +119,11 @@ jobs:
       - name: Check formatting
         run: python3 scripts/lint.py fmt --check
 
+      # Activations belong in on_click; a left-button on_mouse_down must be a
+      # press handler listed in scripts/mouse_down_allowlist.txt.
+      - name: Check mouse-down handlers
+        run: python3 scripts/lint.py mouse-down
+
   # Gated at the job level, unlike cross-platform-check in tests.yml: the
   # required "Clippy" context is carried by clippy-result below, not by these
   # matrix legs. Fail-open like every other gate: `always()` keeps this job

@@ -291,6 +291,8 @@ Actions defined with `actions!(namespace, [SomeAction])` macro or `#[derive(Acti
 
 ### Keyboard & Mouse Patterns
 
+**Activation vs press**: Use `.on_click(...)` for activations (open, toggle, select, run); it fires on release and gives the element an accessibility click action. Use `.on_mouse_down(MouseButton::Left, ...)` only for press semantics (drag start, resize grip, focus guard, backdrop dismiss, keyboard cursor sync), list each such handler in `scripts/mouse_down_allowlist.txt`, and check with `python3 scripts/lint.py mouse-down`.
+
 **Focus tracking**: Use `.track_focus(&focus_handle)` on container elements to receive key events:
 
 ```rust
