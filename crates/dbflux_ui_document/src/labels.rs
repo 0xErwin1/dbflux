@@ -582,22 +582,12 @@ pub(crate) fn live_output_truncated_label(limit: usize) -> String {
     dbflux_i18n::t!("document.code.output.truncated", limit = limit)
 }
 
+pub(crate) use dbflux_components::vim::vim_mode_label;
+
 /// Label for the collapsed results bar's tab count.
 ///
 /// Uses the singular catalog bucket only for exactly one result tab; every
 /// other count, including zero, uses the plural bucket.
-/// Mode indicator shown under the code editor while Vim mode is enabled.
-pub(crate) fn vim_mode_label(mode: crate::code::VimMode) -> String {
-    match mode {
-        crate::code::VimMode::Normal => dbflux_i18n::t!("document.code.vim.normal"),
-        crate::code::VimMode::Insert => dbflux_i18n::t!("document.code.vim.insert"),
-        crate::code::VimMode::Replace => dbflux_i18n::t!("document.code.vim.replace"),
-        crate::code::VimMode::Visual => dbflux_i18n::t!("document.code.vim.visual"),
-        crate::code::VimMode::VisualLine => dbflux_i18n::t!("document.code.vim.visual_line"),
-        crate::code::VimMode::VisualBlock => dbflux_i18n::t!("document.code.vim.visual_block"),
-    }
-}
-
 pub(crate) fn result_tab_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.code.result.count.one", count = count)

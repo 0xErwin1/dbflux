@@ -629,8 +629,8 @@ pub const SETTINGS_WINDOW_KEY_CONTEXT: &str = "SettingsWindow";
 /// Identifier the connection manager window root always carries.
 pub const CONNECTION_MANAGER_WINDOW_KEY_CONTEXT: &str = "ConnectionManagerWindow";
 
-/// Key under which the code editor reports its Vim mode.
-pub const VIM_MODE_KEY: &str = "vim_mode";
+/// Key under which an editor reports its Vim mode.
+pub use dbflux_components::vim::VIM_MODE_KEY;
 
 /// Key under which the code editor reports its query language.
 pub const LANGUAGE_KEY: &str = "language";

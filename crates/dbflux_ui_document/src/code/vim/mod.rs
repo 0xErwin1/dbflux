@@ -20,18 +20,16 @@
 //!    workspace keymap. Keys with Ctrl, Alt, Cmd or Fn always pass through, so
 //!    application shortcuts keep working in both modes.
 
-mod machine;
-
 use super::*;
+use dbflux_components::vim::machine::{self, VimCommand, VimKey};
 use dbflux_core::LogErr;
 use gpui_base::input::{EditAnchor, EditAnchorAffinity};
 use gpui_component::input::{Redo, Undo};
-use machine::{VimCommand, VimKey};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
 
-pub use machine::VimMode;
+pub use dbflux_components::vim::VimMode;
 
 /// Which history action a Normal-mode undo shortcut runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

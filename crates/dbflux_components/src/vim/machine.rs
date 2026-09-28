@@ -7,7 +7,7 @@
 //! cursor sits on a character, so it never rests on a line terminator (`\n`, or
 //! the `\r` of a CRLF pair) unless the line is empty.
 
-use dbflux_components::controls::{Rope, RopeExt};
+use crate::controls::{Rope, RopeExt};
 use std::ops::Range;
 
 /// Editing mode of a code editor while Vim mode is enabled.
@@ -36,14 +36,14 @@ impl VimMode {
     }
 
     /// Insert and Replace let the native input edit text; the other modes lock it.
-    pub(crate) fn accepts_text(self) -> bool {
+    pub fn accepts_text(self) -> bool {
         matches!(self, VimMode::Insert | VimMode::Replace)
     }
 }
 
 /// What a key does in the current mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VimCommand {
+pub enum VimCommand {
     MoveLeft,
     MoveRight,
     MoveUp,
@@ -79,7 +79,7 @@ pub(crate) enum VimCommand {
 
 /// The parts of a keystroke the machine needs.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct VimKey<'a> {
+pub struct VimKey<'a> {
     /// GPUI key name, such as `"h"`, `"enter"` or `"escape"`.
     pub key: &'a str,
     pub shift: bool,
@@ -90,7 +90,7 @@ pub(crate) struct VimKey<'a> {
 
 /// Maps a key to its command in `mode`. `None` means the key is not Vim's to
 /// handle and continues to the editor and the application keymap.
-pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
+pub fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> {
     if key.command_modifier {
         return None;
     }
@@ -171,7 +171,7 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 }
 
 /// The mode a command leaves the editor in.
-pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
+pub fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
         VimCommand::EnterInsert => VimMode::Insert,
         VimCommand::EnterReplace => VimMode::Replace,
@@ -241,13 +241,13 @@ impl Line {
 
 /// Moves `offset` onto a character of its line: a cursor past the last
 /// character comes back onto it.
-pub(crate) fn clamp_to_character(text: &Rope, offset: usize) -> usize {
+pub fn clamp_to_character(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     line.start + line.column_of(offset).min(line.last_column())
 }
 
 /// One character left, stopping at the line start.
-pub(crate) fn step_left(text: &Rope, offset: usize) -> usize {
+pub fn step_left(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
 
@@ -261,7 +261,7 @@ pub(crate) fn step_left(text: &Rope, offset: usize) -> usize {
 }
 
 /// One character right, stopping on the last character of the line.
-pub(crate) fn step_right(text: &Rope, offset: usize) -> usize {
+pub fn step_right(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
 
@@ -275,7 +275,7 @@ pub(crate) fn step_right(text: &Rope, offset: usize) -> usize {
 }
 
 /// Absolute logical line motion, using Vim's first nonblank column.
-pub(crate) fn absolute_line(text: &Rope, row: usize) -> usize {
+pub fn absolute_line(text: &Rope, row: usize) -> usize {
     let line = Line::at_row(text, row.min(text.lines_len().saturating_sub(1)));
     line.start
         + line
@@ -285,11 +285,11 @@ pub(crate) fn absolute_line(text: &Rope, row: usize) -> usize {
             .map_or(0, |(column, _)| column)
 }
 
-pub(crate) fn line_start(text: &Rope, offset: usize) -> usize {
+pub fn line_start(text: &Rope, offset: usize) -> usize {
     Line::containing(text, offset).start
 }
 
-pub(crate) fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
+pub fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     line.start
         + line
@@ -299,14 +299,14 @@ pub(crate) fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
             .map_or(0, |(column, _)| column)
 }
 
-pub(crate) fn line_end(text: &Rope, offset: usize) -> usize {
+pub fn line_end(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     line.start + line.content.len()
 }
 
 /// Keys that edit or move the cursor through editor actions instead of
 /// delivering text.
-pub(crate) fn is_editing_key(key: &str) -> bool {
+pub fn is_editing_key(key: &str) -> bool {
     matches!(
         key,
         "backspace"
@@ -328,7 +328,7 @@ pub(crate) fn is_editing_key(key: &str) -> bool {
 /// The line break `r<CR>` inserts: the line's own terminator (on an unterminated
 /// last line, the buffer's first CRLF or else LF), then the line's leading
 /// whitespace, as Vim's autoindent keeps it.
-pub(crate) fn line_break_with_indent(text: &Rope, offset: usize) -> String {
+pub fn line_break_with_indent(text: &Rope, offset: usize) -> String {
     let line = Line::containing(text, offset);
     let content = text.to_string();
     let after = content
@@ -348,7 +348,7 @@ pub(crate) fn line_break_with_indent(text: &Rope, offset: usize) -> String {
     format!("{}{indent}", if crlf { "\r\n" } else { "\n" })
 }
 
-pub(crate) fn append_after(text: &Rope, offset: usize) -> usize {
+pub fn append_after(text: &Rope, offset: usize) -> usize {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
     line.start
@@ -377,13 +377,13 @@ fn word_class(character: char, big: bool) -> WordClass {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WordMotion {
+pub enum WordMotion {
     End,
     Forward,
     Backward,
 }
 
-pub(crate) fn change_word_range_with_class(
+pub fn change_word_range_with_class(
     text: &Rope,
     offset: usize,
     count: usize,
@@ -424,11 +424,11 @@ pub(crate) fn change_word_range_with_class(
     (end > offset).then_some(offset..end)
 }
 
-pub(crate) fn word_offsets(text: &Rope) -> Vec<(usize, char)> {
+pub fn word_offsets(text: &Rope) -> Vec<(usize, char)> {
     text.to_string().char_indices().collect()
 }
 
-pub(crate) fn step_word(
+pub fn step_word(
     text: &Rope,
     chars: &[(usize, char)],
     offset: usize,
@@ -499,7 +499,7 @@ pub(crate) fn step_word(
 
 /// Characterwise operator range. Word starts are exclusive; word ends include
 /// the entire character under the destination cursor.
-pub(crate) fn word_operator_range(
+pub fn word_operator_range(
     text: &Rope,
     offset: usize,
     motion: WordMotion,
@@ -541,7 +541,7 @@ pub(crate) fn word_operator_range(
 
 /// Horizontal operator motions exclude the destination for `h` and include it
 /// for `l`, without crossing a logical line or including its separator.
-pub(crate) fn horizontal_operator_range(
+pub fn horizontal_operator_range(
     text: &Rope,
     offset: usize,
     right: bool,
@@ -567,7 +567,7 @@ pub(crate) fn horizontal_operator_range(
 }
 
 /// Change to the right removes the requested characters, not the destination.
-pub(crate) fn change_horizontal_right_range(
+pub fn change_horizontal_right_range(
     text: &Rope,
     offset: usize,
     count: usize,
@@ -583,7 +583,7 @@ pub(crate) fn change_horizontal_right_range(
 }
 
 /// Whole current and destination logical lines, clamping at either edge.
-pub(crate) fn vertical_operator_range(
+pub fn vertical_operator_range(
     text: &Rope,
     offset: usize,
     down: bool,
@@ -606,11 +606,7 @@ pub(crate) fn vertical_operator_range(
 }
 
 /// Inclusive logical lines between the cursor and an absolute, clamped row.
-pub(crate) fn absolute_operator_range(
-    text: &Rope,
-    offset: usize,
-    target_row: usize,
-) -> Range<usize> {
+pub fn absolute_operator_range(text: &Rope, offset: usize, target_row: usize) -> Range<usize> {
     let row = text.offset_to_point(offset).row;
     let target = target_row.min(text.lines_len().saturating_sub(1));
     let first = row.min(target);
@@ -624,7 +620,7 @@ pub(crate) fn absolute_operator_range(
 
 /// Keep the separator after changed rows when later rows remain; consume it
 /// entirely (leaving no dangling empty line) when the range reaches EOF.
-pub(crate) fn change_line_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+pub fn change_line_range(text: &Rope, range: Range<usize>) -> Range<usize> {
     let content = text.to_string();
     let selected = content.get(range.clone()).unwrap_or_default();
     let separator = if selected.ends_with("\r\n") {
@@ -643,7 +639,7 @@ pub(crate) fn change_line_range(text: &Rope, range: Range<usize>) -> Range<usize
 
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct VerticalStep {
+pub struct VerticalStep {
     pub offset: usize,
     /// Character column the move aimed for. Passing it to the next vertical move
     /// keeps the column across shorter lines, as Vim does.
@@ -653,7 +649,7 @@ pub(crate) struct VerticalStep {
 /// Moves `delta` lines up (negative) or down, aiming for `goal_column` (in
 /// characters) or, when `None`, for the cursor's current column. Returns `None`
 /// when the target line is outside the buffer.
-pub(crate) fn step_vertical(
+pub fn step_vertical(
     text: &Rope,
     offset: usize,
     delta: isize,
@@ -676,12 +672,7 @@ pub(crate) fn step_vertical(
 
 /// Byte range of the character under the cursor, or `None` on an empty line.
 /// Never includes a line terminator, so `x` cannot join lines.
-pub(crate) fn visual_range(
-    text: &Rope,
-    anchor: usize,
-    cursor: usize,
-    linewise: bool,
-) -> Range<usize> {
+pub fn visual_range(text: &Rope, anchor: usize, cursor: usize, linewise: bool) -> Range<usize> {
     if linewise {
         let start = line_start(text, anchor.min(cursor));
         let end_line = Line::containing(text, anchor.max(cursor));
@@ -702,7 +693,7 @@ pub(crate) fn visual_range(
 /// Rows of a Visual Block that reach its left column, each with the byte range
 /// of its block columns. Columns count Unicode scalars, as the native columnar
 /// selection does; rows shorter than the left column are skipped, like Vim.
-pub(crate) fn block_rows(text: &Rope, anchor: usize, cursor: usize) -> Vec<(usize, Range<usize>)> {
+pub fn block_rows(text: &Rope, anchor: usize, cursor: usize) -> Vec<(usize, Range<usize>)> {
     let column = |offset: usize| {
         let line = Line::containing(text, offset);
         (line.row, line.char_count_before(line.column_of(offset)))
@@ -730,13 +721,13 @@ pub(crate) fn block_rows(text: &Rope, anchor: usize, cursor: usize) -> Vec<(usiz
 }
 
 /// Byte length of a logical line, without its terminator.
-pub(crate) fn line_content_len(text: &Rope, row: usize) -> usize {
+pub fn line_content_len(text: &Rope, row: usize) -> usize {
     Line::at_row(text, row).content.len()
 }
 
 /// Whole logical lines, including their terminators when present. The final
 /// unterminated line has no invented newline in the returned range.
-pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Range<usize> {
+pub fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Range<usize> {
     let row = text.offset_to_point(offset).row;
     let end_row = row.saturating_add(count).min(text.lines_len());
     text.line_start_offset(row)..if end_row < text.lines_len() {
@@ -748,7 +739,7 @@ pub(crate) fn counted_line_range(text: &Rope, offset: usize, count: usize) -> Ra
 
 /// An empty trailing logical line yanks the separator that created it.
 /// Other line selections retain their original bytes, including an unterminated EOF.
-pub(crate) fn line_yank_text(content: &str, range: Range<usize>) -> Option<&str> {
+pub fn line_yank_text(content: &str, range: Range<usize>) -> Option<&str> {
     if range.is_empty() && range.start == content.len() {
         let prefix = &content[..range.start];
         if prefix.ends_with("\r\n") {
@@ -762,7 +753,7 @@ pub(crate) fn line_yank_text(content: &str, range: Range<usize>) -> Option<&str>
 }
 
 /// Deleting the last logical line also removes the separator before it.
-pub(crate) fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize> {
+pub fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize> {
     if range.end != text.len() || range.start == 0 {
         return range;
     }
@@ -773,17 +764,13 @@ pub(crate) fn line_delete_range(text: &Rope, range: Range<usize>) -> Range<usize
 }
 
 #[cfg(test)]
-pub(crate) fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
+pub fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
     counted_character_range(text, offset, 1)
 }
 
 /// Selects at most `count` characters from one line without copying the line
 /// again for each character. A zero count selects nothing.
-pub(crate) fn counted_character_range(
-    text: &Rope,
-    offset: usize,
-    count: usize,
-) -> Option<Range<usize>> {
+pub fn counted_character_range(text: &Rope, offset: usize, count: usize) -> Option<Range<usize>> {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
     let width: usize = line.content[column..]
