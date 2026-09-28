@@ -1311,10 +1311,18 @@ impl CodeDocument {
                             .source_query_mode_dropdown
                             .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
                     }
+                    // The list takes the keyboard while open: its own keys
+                    // move and toggle, and Escape returns focus to this ring.
                     ContextBarSlot::SourceTargets => {
-                        self.source
-                            .source_targets
-                            .update(cx, |multi_select, cx| multi_select.toggle_open(cx));
+                        self.source.source_targets.update(cx, |multi_select, cx| {
+                            if !multi_select.is_open() {
+                                multi_select.toggle_open(cx);
+                            }
+
+                            if multi_select.is_open() {
+                                multi_select.focus(window, cx);
+                            }
+                        });
                     }
                     ContextBarSlot::SourceStart => {
                         self.source

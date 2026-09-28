@@ -457,4 +457,59 @@ mod tests {
         assert!(!open, "Escape closes the interval list");
         assert!(document_focused, "focus returns to the editor pane");
     }
+
+    /// Enter on the target list of the context bar opens it with keyboard
+    /// focus, so its own keys drive it: j / k move, Space toggles and Escape
+    /// hands focus back to the ring (see the multi-select's own tests).
+    #[gpui::test]
+    fn enter_on_the_target_list_hands_it_the_keyboard(cx: &mut TestAppContext) {
+        use crate::code::{ContextBarSlot, SqlQueryFocus};
+        use dbflux_components::controls::DropdownItem;
+
+        let (document, window) = open_sql_document(cx);
+
+        let targets = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.focus_mode = SqlQueryFocus::ContextBar;
+                document.context_bar_slot = ContextBarSlot::SourceTargets;
+                document.focus_handle.focus(window, cx);
+
+                let targets = document.source.source_targets.clone();
+                targets.update(cx, |targets, cx| {
+                    targets.set_items(
+                        vec![DropdownItem::new("orders"), DropdownItem::new("payments")],
+                        cx,
+                    );
+                });
+                targets
+            })
+        });
+
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(Command::Execute, window, cx)
+            })
+        });
+        assert!(handled);
+
+        let (open, focused) = window.update(|window, cx| {
+            let targets = targets.read(cx);
+            (targets.is_open(), targets.is_focused(window))
+        });
+        assert!(open && focused, "the target list opens with keyboard focus");
+
+        let (focus_mode, return_target) = window.update(|window, cx| {
+            let document = document.read(cx);
+            (
+                document.focus_mode,
+                document.focus_handle.is_focused(window),
+            )
+        });
+        assert_eq!(
+            focus_mode,
+            SqlQueryFocus::ContextBar,
+            "the ring stays active"
+        );
+        assert!(!return_target, "the list, not the ring, has the keys now");
+    }
 }

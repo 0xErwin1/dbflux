@@ -528,7 +528,11 @@ que el desplegable no usa pasan al panel que lo contiene.
 Al elegir un elemento o pulsar `Escape`, el foco vuelve al control que lo tenía
 antes del desplegable. Los desplegables que forman parte de un anillo de teclado,
 como la barra de contexto de ejecución y los filtros de auditoría, siguen
-respondiendo a las teclas de ese anillo.
+respondiendo a las teclas de ese anillo. La única selección múltiple de la barra
+de contexto de ejecución, la lista de destinos de una fuente como un grupo de
+logs o un flujo de eventos, es la excepción: `Enter` sobre ella abre la lista con
+el foco del teclado, así que la manejan las teclas de arriba, y al cerrarla el
+foco vuelve a la barra.
 
 ## Menú contextual
 

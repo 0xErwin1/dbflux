@@ -507,7 +507,10 @@ panel around it.
 Choosing an item or pressing `Escape` gives focus back to the control that held
 it before the dropdown. Dropdowns that belong to a keyboard ring, such as the
 execution context bar and the audit filters, are still driven by that ring's
-keys.
+keys. The one multi-select of the execution context bar, the targets list of a
+source such as a log group or event stream, is the exception: `Enter` on it
+opens the list with keyboard focus, so the keys above drive it, and closing it
+returns focus to the bar.
 
 ## Context menu
 
