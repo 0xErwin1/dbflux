@@ -10,6 +10,7 @@ use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
 use gpui::{
@@ -17,10 +18,20 @@ use gpui::{
     IntoElement, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+impl VimHost for ModalAddPanelPicker {
+    fn vim(&self) -> Option<&VimBinding> {
+        Some(&self.query_vim)
+    }
+
+    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
+        Some(&mut self.query_vim)
+    }
+}
 
 /// Outcome emitted when the user resolves the add-panel picker.
 #[derive(Clone, Debug)]
@@ -183,6 +194,8 @@ pub struct ModalAddPanelPicker {
     // Query-tab state.
     query_name_input: Entity<InputState>,
     query_input: Entity<EditorState>,
+    /// Vim mode for the query editor.
+    query_vim: VimBinding,
     query_chart_kind: ChartKind,
 
     // Metric-tab state.
@@ -248,7 +261,9 @@ impl ModalAddPanelPicker {
             s
         });
 
-        Self {
+        let query_vim = VimBinding::new(query_input.clone(), window, cx);
+
+        let mut picker = Self {
             request: None,
             visible: false,
             active_tab: AddPanelTab::default(),
@@ -259,6 +274,7 @@ impl ModalAddPanelPicker {
             saved_list_focus: cx.focus_handle().tab_stop(true),
             query_name_input,
             query_input,
+            query_vim,
             query_chart_kind: ChartKind::Line,
             metric_name_input,
             metric_namespace_filter_input,
@@ -273,7 +289,10 @@ impl ModalAddPanelPicker {
             namespace_list_focus: cx.focus_handle().tab_stop(true),
             metric_list_focus: cx.focus_handle().tab_stop(true),
             _subscriptions: Vec::new(),
-        }
+        };
+
+        VimBinding::follow_setting(&mut picker, cx);
+        picker
     }
 
     pub fn is_visible(&self) -> bool {
@@ -1032,6 +1051,19 @@ impl ModalAddPanelPicker {
     }
 
     fn render_query_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+        // Vim's listeners on the query editor's container. In Insert mode the
+        // dialog's Escape leaves Insert mode instead of cancelling, and in
+        // Normal mode Enter moves down instead of submitting.
+        let query_container = VimBinding::wire(div(), cx);
+        let query_container = VimBinding::capture_action::<dbflux_components::actions::Cancel, _>(
+            query_container,
+            cx,
+        );
+        let query_container = VimBinding::capture_action::<dbflux_components::actions::Execute, _>(
+            query_container,
+            cx,
+        );
+
         let name_row = div()
             .flex()
             .flex_col()
@@ -1053,7 +1085,7 @@ impl ModalAddPanelPicker {
                     .into_any_element(),
             )
             .child(
-                div()
+                query_container
                     .border_1()
                     .border_color(theme.border)
                     .rounded(Radii::SM)
@@ -1062,7 +1094,8 @@ impl ModalAddPanelPicker {
                     .p(Spacing::SM)
                     .overflow_hidden()
                     .child(
-                        Editor::new(&self.query_input)
+                        self.query_vim
+                            .editor(false)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
@@ -1071,6 +1104,7 @@ impl ModalAddPanelPicker {
                     )
                     .into_any_element(),
             )
+            .children(self.query_vim.render_indicator(cx))
             .into_any_element();
 
         let kind_row = div()
@@ -2186,5 +2220,62 @@ mod keyboard_tests {
             outcomes.borrow().as_slice(),
             [AddPanelOutcome::Cancelled]
         ));
+    }
+
+    /// With Vim mode on, the query editor keeps its keys: `j` moves down,
+    /// the first Escape leaves Insert mode, Enter in Normal mode never
+    /// submits, and Escape in Normal mode cancels the dialog.
+    #[gpui::test]
+    fn the_query_editor_takes_vim_keys(cx: &mut TestAppContext) {
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+        let (modal, _outside, window, outcomes) = open_modal(cx);
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.active_tab = AddPanelTab::Query;
+                modal.query_name_input.update(cx, |state, cx| {
+                    state.set_value("Latency", window, cx);
+                });
+                modal.query_input.update(cx, |state, cx| {
+                    state.set_value("SELECT 1\nFROM t", window, cx);
+                    state.set_selected_range(0..0, cx);
+                    state.focus(window, cx);
+                });
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        let text_and_cursor = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let state = modal.read(cx).query_input.read(cx);
+                (state.value().to_string(), state.cursor())
+            })
+        };
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(window), ("SELECT 1\nFROM t".into(), 9));
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert!(
+            outcomes.borrow().is_empty(),
+            "Enter in Normal mode submitted"
+        );
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(window).0, "SELECT 1\nXFROM t");
+        assert!(
+            window.update(|_, cx| modal.read(cx).is_visible()),
+            "the first Escape only leaves Insert mode"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }
