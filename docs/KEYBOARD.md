@@ -344,7 +344,7 @@ Apply still asks for the same confirmation as the button.
 | `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Select the next table in that direction and center on it |
 | `Alt` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected table |
 | `r` / `s` / `c` | Left to right / Snowflake / Compact layout |
-| `m` | Open context menu |
+| `m` | Open context menu: zoom in / out, reset the view to 100%, fit to view, layout, arrange the tables, copy as DBML or SQL, show column types, show indexes, and for a selected table inspect and focus |
 | `Escape` | Clear the selection |
 
 ## Charts

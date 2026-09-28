@@ -2804,6 +2804,11 @@ document:
       copy_as_sql: 复制为 SQL
       focus_table: 聚焦此表
       inspect_schema: 检查 Schema
+      reset_view: "重置视图 (100%)"
+      fit: "适应视图"
+      arrange: "重新排列表"
+      show_types: "显示列类型"
+      show_indexes: "显示索引"
       layout: 布局
       zoom_in: 放大
       zoom_out: 缩小

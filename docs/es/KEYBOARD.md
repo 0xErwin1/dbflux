@@ -362,7 +362,7 @@ Aplicar sigue pidiendo la misma confirmación que el botón.
 | `Shift` + `h` / `j` / `k` / `l` (o flechas) | Seleccionar la siguiente tabla en esa dirección y centrarla |
 | `Alt` + `h` / `j` / `k` / `l` (o flechas)   | Mover la tabla seleccionada                                 |
 | `r` / `s` / `c`                             | Diseño De izquierda a derecha / Copo de nieve / Compacto    |
-| `m`                                         | Abrir menú contextual                                       |
+| `m`                                         | Abrir menú contextual: acercar / alejar, restablecer la vista al 100%, ajustar a la vista, disposición, reorganizar las tablas, copiar como DBML o SQL, mostrar tipos de columna, mostrar índices y, con una tabla seleccionada, inspeccionar y enfocar |
 | `Escape`                                    | Quitar la selección                                         |
 
 ## Gráficos

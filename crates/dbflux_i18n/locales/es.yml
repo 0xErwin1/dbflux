@@ -2804,6 +2804,11 @@ document:
       copy_as_sql: Copiar como SQL
       focus_table: Enfocar esta tabla
       inspect_schema: Inspeccionar esquema
+      reset_view: "Restablecer vista (100%)"
+      fit: "Ajustar a la vista"
+      arrange: "Reorganizar tablas"
+      show_types: "Mostrar tipos de columna"
+      show_indexes: "Mostrar índices"
       layout: Diseño
       zoom_in: Acercar
       zoom_out: Alejar

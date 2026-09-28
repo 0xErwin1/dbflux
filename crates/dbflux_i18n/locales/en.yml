@@ -2804,6 +2804,11 @@ document:
       copy_as_sql: Copy as SQL
       focus_table: Focus on this table
       inspect_schema: Inspect schema
+      reset_view: "Reset view (100%)"
+      fit: "Fit to view"
+      arrange: "Arrange tables"
+      show_types: "Show column types"
+      show_indexes: "Show indexes"
       layout: Layout
       zoom_in: Zoom in
       zoom_out: Zoom out

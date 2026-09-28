@@ -2804,6 +2804,11 @@ document:
       copy_as_sql: SQL로 복사
       focus_table: 이 테이블에 포커스
       inspect_schema: 스키마 검사
+      reset_view: "보기 초기화 (100%)"
+      fit: "화면에 맞추기"
+      arrange: "테이블 정렬"
+      show_types: "열 유형 표시"
+      show_indexes: "인덱스 표시"
       layout: 레이아웃
       zoom_in: 확대
       zoom_out: 축소
