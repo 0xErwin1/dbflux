@@ -45,6 +45,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Show the Connections / Scripts / Dashboards view of the sidebar |
 | `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the notifications center |
 | `Ctrl+Shift+X` / `Cmd+Shift+X` | Open the most recent error in the audit viewer |
+| `Ctrl+Shift+Y` / `Cmd+Shift+Y` | Open the buttons of the newest toast in a menu |
 | `Ctrl+Shift+L` / `Cmd+Shift+L` | Open auth profile login |
 | `Ctrl+Shift+O` / `Cmd+Shift+O` | Open the AWS SSO wizard |
 | `Ctrl+Shift+C` / `Cmd+Shift+C` | Open a saved chart |
@@ -52,7 +53,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+M` / `Cmd+Shift+M` | Open MCP approvals |
 | `Ctrl+Shift+G` / `Cmd+Shift+G` | Refresh MCP governance |
 
-`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
+`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. `Ctrl+Shift+Y` lists the buttons of the newest toast on screen, such as **Copy**, **View in Audit** or **Reconnect now**, then **Show details** or **Hide details** when it has details, and **Dismiss**; the context menu keys drive it, and with no toast on screen it opens nothing. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
 
 ## Sidebar
 

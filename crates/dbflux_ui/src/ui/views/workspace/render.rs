@@ -1,10 +1,11 @@
+use super::pane_actions::PaneActionsOwner;
 use super::*;
 use dbflux_components::composites::Island;
 use dbflux_components::controls::Button;
 use dbflux_components::modals::Modal;
 use dbflux_components::modals::ModalVariant;
 use dbflux_components::primitives::Text;
-use dbflux_components::tokens::{ChromeColors, IslandMetrics, ShellMetrics, TabMetrics};
+use dbflux_components::tokens::{ChromeColors, Feedback, IslandMetrics, ShellMetrics, TabMetrics};
 use dbflux_ui_document::DocumentSidePanel;
 use gpui_component::resizable::ResizablePanel;
 
@@ -143,6 +144,12 @@ impl Render for Workspace {
             let refocus_parent = !palette_command_opens_native_window(command_id)
                 && !palette_command_focuses_a_popover(command_id);
             defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
+                // Focus leaves the closed palette's input first, so a menu
+                // the command opens returns focus to the workspace, not to
+                // that input.
+                if refocus_parent {
+                    this.focus_handle.focus(window, cx);
+                }
                 this.handle_command(command_id, window, cx);
                 if refocus_parent {
                     this.focus_handle.focus(window, cx);
@@ -246,7 +253,8 @@ impl Render for Workspace {
 
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
-        let pane_actions_menu = (!self.pane_actions_menu_is_for_tasks())
+        let menu_owner = self.pane_actions_menu_owner();
+        let pane_actions_menu = matches!(menu_owner, Some(PaneActionsOwner::Document(_)))
             .then(|| self.render_pane_actions_menu(cx))
             .flatten()
             .map(|menu| {
@@ -356,6 +364,10 @@ impl Render for Workspace {
             .ml(IslandMetrics::GAP)
             .when(has_tabs, |island| island.child(self.tab_bar.clone()))
             .child(div().flex_1().min_h_0().child(document_panes));
+
+        let toast_actions_menu = matches!(menu_owner, Some(PaneActionsOwner::Toast(_)))
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten();
 
         let focus_handle = self.focus_handle.clone();
         let root_key_context = self.root_key_context(cx);
@@ -872,8 +884,22 @@ impl Render for Workspace {
                         .with_priority(1)
                     })
             })
+            // The toast menu opens where the toasts stack, under the title
+            // bar at the right edge.
+            .when_some(toast_actions_menu, |this, menu| {
+                this.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .top(ShellMetrics::TITLE_BAR_HEIGHT + Feedback::TOAST_STACK_INSET)
+                            .right(Feedback::TOAST_STACK_INSET)
+                            .child(menu),
+                    )
+                    .with_priority(2),
+                )
+            })
             // A click outside the pane-actions menu closes it; the menu itself
-            // is drawn in the document area.
+            // is drawn over the pane that offered it.
             .when(self.has_pane_actions_menu(), |this| {
                 use crate::ui::components::context_menu as ctx;
 

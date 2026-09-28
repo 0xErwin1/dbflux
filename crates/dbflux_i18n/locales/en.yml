@@ -3251,6 +3251,8 @@ palette:
       name: Open audit viewer
     open_last_error_in_audit:
       name: "Open last error in audit"
+    open_toast_actions:
+      name: "Open toast actions…"
     open_saved_chart:
       name: "Open chart…"
     new_dashboard:
@@ -3557,6 +3559,7 @@ settings:
       open_sso_wizard: Open AWS SSO wizard
       open_audit_viewer: Open audit viewer
       open_last_error_in_audit: "Open last error in audit"
+      open_toast_actions: "Open toast actions"
       toggle_notifications: "Toggle notifications"
       mark_notification_read: "Mark notification read"
       mark_all_notifications_read: "Mark all notifications read"
@@ -4603,6 +4606,7 @@ toast:
     copy: Copy
     show_details: Show details
     hide_details: Hide details
+    dismiss: Dismiss
 workspace:
   rail:
     connections: "Connections"

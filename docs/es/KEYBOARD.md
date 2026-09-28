@@ -46,6 +46,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Mostrar la vista Connections / Scripts / Dashboards de la sidebar |
 | `Ctrl+Shift+B` / `Cmd+Shift+B`                   | Abrir o cerrar el centro de notificaciones                        |
 | `Ctrl+Shift+X` / `Cmd+Shift+X`                   | Abrir el error más reciente en el visor de auditoría              |
+| `Ctrl+Shift+Y` / `Cmd+Shift+Y`                   | Abrir en un menú los botones del toast más reciente               |
 | `Ctrl+Shift+L` / `Cmd+Shift+L`                   | Abrir el inicio de sesión de Auth Profile                         |
 | `Ctrl+Shift+O` / `Cmd+Shift+O`                   | Abrir el asistente de AWS SSO                                     |
 | `Ctrl+Shift+C` / `Cmd+Shift+C`                   | Abrir un gráfico guardado                                         |
@@ -53,7 +54,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+M` / `Cmd+Shift+M`                   | Abrir aprobaciones de MCP                                         |
 | `Ctrl+Shift+G` / `Cmd+Shift+G`                   | Actualizar gobernanza de MCP                                      |
 
-`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
+`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
 
 ## Sidebar
 

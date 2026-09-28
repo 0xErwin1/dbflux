@@ -699,6 +699,10 @@ fn workspace_command_chords() -> Vec<(Command, KeyChord)> {
             KeyChord::new("x", Modifiers::primary_shift()),
         ),
         (
+            Command::OpenToastActions,
+            KeyChord::new("y", Modifiers::primary_shift()),
+        ),
+        (
             Command::OpenLoginModal,
             KeyChord::new("l", Modifiers::primary_shift()),
         ),

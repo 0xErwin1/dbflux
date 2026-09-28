@@ -192,6 +192,10 @@ fn bind_workspace_commands(layer: &mut KeymapLayer) {
         KeyChord::new("x", Modifiers::primary_shift()),
         Command::OpenLastErrorInAudit,
     );
+    layer.bind(
+        KeyChord::new("y", Modifiers::primary_shift()),
+        Command::OpenToastActions,
+    );
 
     layer.bind(
         KeyChord::new("l", Modifiers::primary_shift()),

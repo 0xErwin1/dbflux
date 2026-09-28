@@ -3251,6 +3251,8 @@ palette:
       name: Abrir visor de auditoría
     open_last_error_in_audit:
       name: "Abrir el último error en auditoría"
+    open_toast_actions:
+      name: "Abrir acciones del toast…"
     open_saved_chart:
       name: "Abrir gráfico…"
     new_dashboard:
@@ -3557,6 +3559,7 @@ settings:
       open_sso_wizard: Abrir asistente de AWS SSO
       open_audit_viewer: Abrir visor de auditoría
       open_last_error_in_audit: "Abrir el último error en auditoría"
+      open_toast_actions: "Abrir acciones del toast"
       toggle_notifications: "Mostrar u ocultar notificaciones"
       mark_notification_read: "Marcar notificación como leída"
       mark_all_notifications_read: "Marcar todas las notificaciones como leídas"
@@ -4603,6 +4606,7 @@ toast:
     copy: Copiar
     show_details: Mostrar detalles
     hide_details: Ocultar detalles
+    dismiss: Descartar
 workspace:
   rail:
     connections: "Conexiones"

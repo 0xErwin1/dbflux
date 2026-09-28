@@ -1438,6 +1438,64 @@ mod tests {
         assert_eq!(context, ContextId::Notifications);
     }
 
+    fn toast_count(harness: &mut Harness<'_>) -> usize {
+        harness.window.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .toast_count()
+        })
+    }
+
+    /// The toast shortcut lists the newest toast's buttons in a menu, with
+    /// focus left in a code editor: the menu keys drive it instead of
+    /// typing, and View in Audit opens the audit viewer.
+    #[gpui::test]
+    fn the_toast_shortcut_runs_the_newest_toast_actions(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+        harness.window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| workspace.new_query_tab(window, cx));
+        });
+        harness.redraw();
+        harness.report_error("Export failed");
+
+        harness.keys(&global_keys(Command::OpenToastActions));
+        for id in [
+            "pane-action-toast-action-copy-error",
+            "pane-action-toast-action-view-in-audit",
+            "pane-action-toast-details",
+            "pane-action-toast-dismiss",
+        ] {
+            assert!(harness.is_rendered(id), "{id} is listed");
+        }
+
+        harness.keys("j enter");
+
+        assert!(!harness.is_rendered("pane-actions-menu"));
+        assert_eq!(active_tab_icon(&mut harness), Some(DocumentIcon::Audit));
+    }
+
+    /// Dismiss in the toast menu closes the toast, like its close button;
+    /// with no toast on screen the shortcut opens nothing.
+    #[gpui::test]
+    fn the_toast_menu_dismisses_the_toast(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let keys = global_keys(Command::OpenToastActions);
+
+        harness.keys(&keys);
+        assert!(!harness.is_rendered("pane-actions-menu"));
+
+        harness.report_error("Export failed");
+        assert_eq!(toast_count(&mut harness), 1);
+
+        harness.keys(&keys);
+        harness.keys("j j j enter");
+
+        assert_eq!(toast_count(&mut harness), 0);
+    }
+
     #[gpui::test]
     fn open_last_error_in_audit_follows_the_most_recent_error(cx: &mut TestAppContext) {
         let mut harness = open_workspace(cx);

@@ -35,6 +35,7 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 | `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | 显示侧边栏的连接 / 脚本 / 仪表盘视图 |
 | `Ctrl+Shift+B` / `Cmd+Shift+B`                   | 打开或关闭通知中心                   |
 | `Ctrl+Shift+X` / `Cmd+Shift+X`                   | 在审计查看器中打开最近的错误         |
+| `Ctrl+Shift+Y` / `Cmd+Shift+Y`                   | 在菜单中打开最新提示的按钮           |
 | `Ctrl+Shift+L` / `Cmd+Shift+L`                   | 打开认证配置文件登录                 |
 | `Ctrl+Shift+O` / `Cmd+Shift+O`                   | 打开 AWS SSO 向导                    |
 | `Ctrl+Shift+C` / `Cmd+Shift+C`                   | 打开已保存的图表                     |
@@ -42,7 +43,7 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 | `Ctrl+Shift+M` / `Cmd+Shift+M`                   | 打开 MCP 审批                        |
 | `Ctrl+Shift+G` / `Cmd+Shift+G`                   | 刷新 MCP 治理                        |
 
-`Ctrl+Shift+X` 会在审计查看器中打开本次会话最近报告的错误，与错误提示中的 **在审计中查看** 相同；尚无错误时显示用户错误。`Ctrl+Shift+5` .. `Ctrl+Shift+7` 的行为与活动栏相同：选择当前已显示的视图会折叠侧边栏。MCP 快捷键仅在支持 MCP 的构建中存在。**导出连接** 和 **从 JSON 导入仪表盘** 通过命令面板执行。
+`Ctrl+Shift+X` 会在审计查看器中打开本次会话最近报告的错误，与错误提示中的 **在审计中查看** 相同；尚无错误时显示用户错误。`Ctrl+Shift+5` .. `Ctrl+Shift+7` 的行为与活动栏相同：选择当前已显示的视图会折叠侧边栏。`Ctrl+Shift+Y` 列出屏幕上最新提示的按钮，例如 **复制**、**在审计中查看** 或 **立即重新连接**，有详情时还有 **显示详情** 或 **隐藏详情**，最后是 **关闭**；用上下文菜单的按键操作，屏幕上没有提示时不打开任何内容。MCP 快捷键仅在支持 MCP 的构建中存在。**导出连接** 和 **从 JSON 导入仪表盘** 通过命令面板执行。
 
 ## 侧边栏
 

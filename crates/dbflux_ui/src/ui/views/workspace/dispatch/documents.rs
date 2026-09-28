@@ -58,7 +58,7 @@ impl Workspace {
             // pane offers.
             Command::OpenPaneActions => {
                 if self.has_pane_actions_menu() {
-                    self.close_pane_actions(cx);
+                    self.close_pane_actions_from_keyboard(window, cx);
                     return Some(true);
                 }
 
@@ -69,7 +69,7 @@ impl Workspace {
                         mgr.dispatch_active(Command::OpenPaneActions, window, cx)
                     });
 
-                Some(handled_by_document || self.open_pane_actions(cx))
+                Some(handled_by_document || self.open_pane_actions(window, cx))
             }
 
             // Context menu commands — route to the pane-actions menu or the

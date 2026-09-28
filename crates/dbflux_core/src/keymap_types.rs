@@ -130,6 +130,8 @@ pub enum Command {
     /// Open the audit viewer filtered to the most recent user-facing error,
     /// the same target as the error toast's "View in Audit".
     OpenLastErrorInAudit,
+    /// Lists the buttons of the newest toast (its actions, the details toggle and Dismiss) in a keyboard menu.
+    OpenToastActions,
     /// Open or close the title-bar notifications popover.
     ToggleNotifications,
     /// Marks the notification selected in the notifications center read.
@@ -242,6 +244,7 @@ impl Command {
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
             "open_audit_viewer" => Some(Command::OpenAuditViewer),
             "open_last_error_in_audit" => Some(Command::OpenLastErrorInAudit),
+            "open_toast_actions" => Some(Command::OpenToastActions),
             "toggle_notifications" => Some(Command::ToggleNotifications),
             "show_connections_view" => Some(Command::ShowConnectionsView),
             "show_scripts_view" => Some(Command::ShowScriptsView),
@@ -362,6 +365,7 @@ impl Command {
             Command::OpenSsoWizard => "Open AWS SSO wizard",
             Command::OpenAuditViewer => "Open audit viewer",
             Command::OpenLastErrorInAudit => "Open last error in audit",
+            Command::OpenToastActions => "Open toast actions",
             Command::ToggleNotifications => "Toggle notifications",
             Command::MarkNotificationRead => "Mark notification read",
             Command::MarkAllNotificationsRead => "Mark all notifications read",
@@ -530,6 +534,7 @@ impl Command {
             Command::OpenSsoWizard => "open_sso_wizard",
             Command::OpenAuditViewer => "open_audit_viewer",
             Command::OpenLastErrorInAudit => "open_last_error_in_audit",
+            Command::OpenToastActions => "open_toast_actions",
             Command::ToggleNotifications => "toggle_notifications",
             Command::MarkNotificationRead => "mark_notification_read",
             Command::MarkAllNotificationsRead => "mark_all_notifications_read",
@@ -713,6 +718,7 @@ impl Command {
             Command::OpenSsoWizard,
             Command::OpenAuditViewer,
             Command::OpenLastErrorInAudit,
+            Command::OpenToastActions,
             Command::ToggleNotifications,
             Command::MarkNotificationRead,
             Command::MarkAllNotificationsRead,
@@ -877,6 +883,7 @@ impl Command {
             | Command::OpenSsoWizard
             | Command::OpenAuditViewer
             | Command::OpenLastErrorInAudit
+            | Command::OpenToastActions
             | Command::ToggleNotifications
             | Command::MarkNotificationRead
             | Command::MarkAllNotificationsRead
@@ -973,6 +980,7 @@ impl Command {
                 | Command::OpenSsoWizard
                 | Command::OpenAuditViewer
                 | Command::OpenLastErrorInAudit
+                | Command::OpenToastActions
                 | Command::ToggleNotifications
                 | Command::ShowConnectionsView
                 | Command::ShowScriptsView
@@ -1492,6 +1500,7 @@ mod tests {
     fn new_shell_commands_have_palette_ids() {
         for command in [
             Command::OpenLastErrorInAudit,
+            Command::OpenToastActions,
             Command::ToggleNotifications,
             Command::ShowConnectionsView,
             Command::ShowScriptsView,

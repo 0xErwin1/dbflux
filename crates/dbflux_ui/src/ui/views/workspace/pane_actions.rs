@@ -5,22 +5,25 @@
 //! Documents fill `PaneHandle::pane_actions`; the workspace only lists and
 //! runs the entries, so it never knows which document it is serving. The
 //! background tasks panel, which the workspace draws itself, offers its
-//! actions through the same menu.
+//! actions through the same menu, and so does the newest toast.
 
 use super::Workspace;
 use crate::keymap::{Command, CommandDispatcher, ContextId, FocusTarget};
 use dbflux_components::composites::{MenuItem, menu_row, render_menu_container};
 use dbflux_components::icons::AppIcon;
+use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
 use dbflux_ui_document::DocumentId;
 use dbflux_ui_document::pane::{PaneAction, PaneActionRun};
 use gpui::prelude::*;
-use gpui::{AnyElement, App, Context, Window};
+use gpui::{AnyElement, App, Context, FocusHandle, Window};
 
 /// The pane that offered the entries of an open menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PaneActionsOwner {
     Document(DocumentId),
     BackgroundTasks,
+    /// A toast, by its id in the toast host.
+    Toast(u64),
 }
 
 /// The open pane-actions menu: the entries the pane offered when it
@@ -29,6 +32,10 @@ pub(super) struct PaneActionsMenu {
     owner: PaneActionsOwner,
     actions: Vec<PaneAction>,
     selected_index: usize,
+    /// The element that had keyboard focus when the menu opened. The menu
+    /// takes focus so a text field under it (the code editor) does not
+    /// consume Enter, and hands it back when it closes from the keyboard.
+    return_focus: Option<FocusHandle>,
 }
 
 impl PaneActionsMenu {
@@ -41,6 +48,7 @@ impl PaneActionsMenu {
             owner,
             actions,
             selected_index,
+            return_focus: None,
         })
     }
 
@@ -84,18 +92,99 @@ impl Workspace {
         self.pane_actions_menu.is_some()
     }
 
+    /// The pane that offered the open menu's entries.
+    pub(super) fn pane_actions_menu_owner(&self) -> Option<PaneActionsOwner> {
+        self.pane_actions_menu.as_ref().map(|menu| menu.owner)
+    }
+
     /// Whether the open menu belongs to the background tasks panel, which
     /// draws it over itself instead of over the document area.
     pub(super) fn pane_actions_menu_is_for_tasks(&self) -> bool {
-        self.pane_actions_menu
-            .as_ref()
-            .is_some_and(|menu| menu.owner == PaneActionsOwner::BackgroundTasks)
+        self.pane_actions_menu_owner() == Some(PaneActionsOwner::BackgroundTasks)
+    }
+
+    /// Opens a menu of the newest toast's buttons: its actions, its details
+    /// toggle and Dismiss. Returns `false` when no toast is on screen.
+    pub(super) fn open_toast_actions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let host = cx.global::<ToastGlobal>().host.clone();
+        let Some(toast_id) = host.read(cx).latest_toast_id() else {
+            return false;
+        };
+        let Some(controls) = host.read(cx).toast_controls(toast_id) else {
+            return false;
+        };
+
+        let mut actions: Vec<PaneAction> = controls
+            .actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, action)| {
+                let host = host.clone();
+                PaneAction::callback(
+                    format!("toast-action-{}", action.id),
+                    action.label,
+                    move |_, cx| ToastHost::run_action(&host, toast_id, index, cx),
+                )
+                .enabled(action.enabled)
+            })
+            .collect();
+
+        if let Some(collapsed) = controls.details_toggle {
+            let label = if collapsed {
+                dbflux_i18n::t!("toast.action.show_details")
+            } else {
+                dbflux_i18n::t!("toast.action.hide_details")
+            };
+            let host = host.clone();
+            actions.push(PaneAction::callback(
+                "toast-details",
+                label,
+                move |_, cx| host.update(cx, |host, cx| host.toggle_collapsed(toast_id, cx)),
+            ));
+        }
+
+        actions.push(
+            PaneAction::callback("toast-dismiss", dbflux_i18n::t!("toast.action.dismiss"), {
+                let host = host.clone();
+                move |_, cx| host.update(cx, |host, cx| host.dismiss(toast_id, cx))
+            })
+            .icon(AppIcon::CircleX),
+        );
+
+        let Some(menu) = PaneActionsMenu::new(PaneActionsOwner::Toast(toast_id), actions) else {
+            return false;
+        };
+
+        self.show_pane_actions_menu(menu, window, cx);
+        true
+    }
+
+    /// Shows `menu` with keyboard focus on the workspace root, whose key
+    /// context reports the menu, remembering where focus was.
+    fn show_pane_actions_menu(
+        &mut self,
+        mut menu: PaneActionsMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        menu.return_focus = window.focused(cx);
+        self.focus_handle.focus(window, cx);
+        self.pane_actions_menu = Some(menu);
+        cx.notify();
     }
 
     /// Opens the pane-actions menu of the focused pane: the background tasks
     /// panel, or else the active document. Returns `false` when that pane
     /// offers no action that can be chosen now.
-    pub(super) fn open_pane_actions(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn open_pane_actions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let menu = if self.focus_target == FocusTarget::BackgroundTasks {
             PaneActionsMenu::new(
                 PaneActionsOwner::BackgroundTasks,
@@ -117,14 +206,34 @@ impl Workspace {
             return false;
         };
 
-        self.pane_actions_menu = Some(menu);
-        cx.notify();
+        self.show_pane_actions_menu(menu, window, cx);
         true
     }
 
+    /// Closes the menu without moving focus: a click outside it lands where
+    /// the pointer is.
     pub(super) fn close_pane_actions(&mut self, cx: &mut Context<Self>) {
         if self.pane_actions_menu.take().is_some() {
             cx.notify();
+        }
+    }
+
+    /// Closes the menu and gives keyboard focus back to where it was when
+    /// the menu opened.
+    pub(super) fn close_pane_actions_from_keyboard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(menu) = self.pane_actions_menu.take() {
+            Self::restore_pane_actions_focus(&menu, window, cx);
+            cx.notify();
+        }
+    }
+
+    fn restore_pane_actions_focus(menu: &PaneActionsMenu, window: &mut Window, cx: &mut App) {
+        if let Some(handle) = &menu.return_focus {
+            handle.focus(window, cx);
         }
     }
 
@@ -154,7 +263,7 @@ impl Workspace {
                 }
             }
             Command::MenuBack | Command::OpenPaneActions | Command::OpenContextMenu => {
-                self.close_pane_actions(cx);
+                self.close_pane_actions_from_keyboard(window, cx);
             }
             _ => {}
         }
@@ -225,6 +334,12 @@ impl Workspace {
                 self.tab_manager.read(cx).active_id() == Some(document_id)
             }
             PaneActionsOwner::BackgroundTasks => self.focus_target == FocusTarget::BackgroundTasks,
+            PaneActionsOwner::Toast(toast_id) => cx
+                .global::<ToastGlobal>()
+                .host
+                .read(cx)
+                .toast_controls(toast_id)
+                .is_some(),
         }
     }
 
@@ -235,6 +350,7 @@ impl Workspace {
             return;
         };
         cx.notify();
+        Self::restore_pane_actions_focus(&menu, window, cx);
 
         let Some(action) = menu.actions.get(index).filter(|action| action.enabled) else {
             return;
@@ -441,6 +557,42 @@ mod tests {
         assert!(
             menu_ids(&workspace, window).is_empty(),
             "Escape closes the menu"
+        );
+    }
+
+    /// Opened from the editor text, the menu takes the keyboard, so Enter
+    /// runs the entry instead of breaking the line, and Escape gives the
+    /// keyboard back to the editor.
+    #[gpui::test]
+    fn the_menu_opened_from_the_editor_text_owns_enter_and_escape(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| workspace.new_query_tab(window, cx));
+        });
+        window.run_until_parked();
+        let context = |window: &mut VisualTestContext| {
+            window
+                .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)))
+        };
+        assert_eq!(context(window), ContextId::Editor);
+
+        keys(window, "shift-f10 escape");
+        assert!(menu_ids(&workspace, window).is_empty());
+        assert_eq!(
+            context(window),
+            ContextId::Editor,
+            "Escape returns to the text"
+        );
+
+        keys(window, "shift-f10 j j j enter");
+        assert!(
+            menu_ids(&workspace, window).is_empty(),
+            "Enter runs the entry"
+        );
+        assert!(
+            side_panel_ids(&workspace, window).contains(&"query-history".to_string()),
+            "the History entry opens the query history"
         );
     }
 

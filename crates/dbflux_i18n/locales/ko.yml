@@ -3251,6 +3251,8 @@ palette:
       name: 감사 뷰어 열기
     open_last_error_in_audit:
       name: "감사에서 마지막 오류 열기"
+    open_toast_actions:
+      name: "토스트 작업 열기…"
     open_saved_chart:
       name: "차트 열기…"
     new_dashboard:
@@ -3557,6 +3559,7 @@ settings:
       open_sso_wizard: AWS SSO 마법사 열기
       open_audit_viewer: 감사 뷰어 열기
       open_last_error_in_audit: "감사에서 마지막 오류 열기"
+      open_toast_actions: "토스트 작업 열기"
       toggle_notifications: "알림 전환"
       mark_notification_read: "알림 읽음으로 표시"
       mark_all_notifications_read: "모든 알림 읽음으로 표시"
@@ -4602,6 +4605,7 @@ toast:
     copy: 복사
     show_details: 세부 정보 표시
     hide_details: 세부 정보 숨기기
+    dismiss: 닫기
 workspace:
   rail:
     connections: "연결"

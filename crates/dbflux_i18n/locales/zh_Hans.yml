@@ -3251,6 +3251,8 @@ palette:
       name: 打开审计查看器
     open_last_error_in_audit:
       name: "在审计中打开最近的错误"
+    open_toast_actions:
+      name: "打开提示操作…"
     open_saved_chart:
       name: 打开图表…
     new_dashboard:
@@ -3557,6 +3559,7 @@ settings:
       open_sso_wizard: 打开 AWS SSO 向导
       open_audit_viewer: 打开审计查看器
       open_last_error_in_audit: "在审计中打开最近的错误"
+      open_toast_actions: "打开提示操作"
       toggle_notifications: "切换通知"
       mark_notification_read: "将通知标记为已读"
       mark_all_notifications_read: "将所有通知标记为已读"
@@ -4601,6 +4604,7 @@ toast:
     copy: 复制
     show_details: 显示详情
     hide_details: 隐藏详情
+    dismiss: 关闭
 workspace:
   rail:
     connections: "连接"

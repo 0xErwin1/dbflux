@@ -25,6 +25,7 @@ impl Workspace {
                 self.toggle_notifications(window, cx);
                 Some(true)
             }
+            Command::OpenToastActions => Some(self.open_toast_actions(window, cx)),
             Command::ShowConnectionsView => {
                 self.show_sidebar_view(SidebarTab::Connections, cx);
                 Some(true)

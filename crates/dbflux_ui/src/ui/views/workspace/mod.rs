@@ -1954,6 +1954,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.open_last_error_in_audit.name"),
                 dbflux_i18n::t!("palette.category.view"),
             ),
+            PaletteCommand::new(
+                "open_toast_actions",
+                dbflux_i18n::t!("palette.command.open_toast_actions.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
             // Charts / Dashboards
             PaletteCommand::new(
                 "open_saved_chart",

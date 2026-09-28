@@ -117,6 +117,23 @@ impl ToastAction {
     }
 }
 
+/// One action button of a toast, as [`ToastHost::toast_controls`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToastControlAction {
+    pub id: SharedString,
+    pub label: SharedString,
+    /// The button has a handler; without one it is drawn disabled.
+    pub enabled: bool,
+}
+
+/// The controls of one toast besides its close button.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToastControls {
+    pub actions: Vec<ToastControlAction>,
+    /// `Some(collapsed)` when the toast can show or hide its details.
+    pub details_toggle: Option<bool>,
+}
+
 /// Maximum number of action buttons rendered per toast — beyond this the
 /// extras are silently dropped to keep the action row scannable.
 const MAX_ACTIONS: usize = 3;
@@ -372,13 +389,41 @@ impl ToastHost {
         }
     }
 
-    fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// Closes toast `id`, like its close button.
+    pub fn dismiss(&mut self, id: u64, cx: &mut Context<Self>) {
         self.toasts.retain(|t| t.id != id);
         self.collapsed.remove(&id);
         cx.notify();
     }
 
-    fn toggle_collapsed(&mut self, id: u64, cx: &mut Context<Self>) {
+    /// The newest toast on screen, which the keyboard acts on.
+    pub fn latest_toast_id(&self) -> Option<u64> {
+        self.toasts.last().map(|toast| toast.id)
+    }
+
+    /// What a toast offers besides its close button, for a keyboard menu:
+    /// its action buttons (the ones drawn), and its details toggle.
+    pub fn toast_controls(&self, id: u64) -> Option<ToastControls> {
+        let toast = self.toasts.iter().find(|toast| toast.id == id)?;
+        let can_collapse = toast.details_collapsible && toast.has_collapsible_content();
+
+        Some(ToastControls {
+            actions: toast
+                .actions
+                .iter()
+                .take(MAX_ACTIONS)
+                .map(|action| ToastControlAction {
+                    id: action.id.clone(),
+                    label: action.label.clone(),
+                    enabled: action.callback.is_some(),
+                })
+                .collect(),
+            details_toggle: can_collapse.then(|| self.collapsed.contains(&id)),
+        })
+    }
+
+    /// Shows or hides the details of toast `id`, like its toggle link.
+    pub fn toggle_collapsed(&mut self, id: u64, cx: &mut Context<Self>) {
         if !self.collapsed.insert(id) {
             self.collapsed.remove(&id);
         }
@@ -413,6 +458,7 @@ mod i18n_tests {
         "toast.action.copy",
         "toast.action.show_details",
         "toast.action.hide_details",
+        "toast.action.dismiss",
     ];
 
     #[test]
