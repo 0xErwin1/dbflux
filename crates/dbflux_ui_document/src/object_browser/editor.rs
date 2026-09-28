@@ -42,7 +42,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::input::EditorState;
+use gpui_component::input::{Editor as GpuiEditor, EditorState};
 
 /// Diameter of the dirty indicator inside the "modified" pill.
 const DIRTY_DOT: Pixels = px(7.0);
@@ -571,6 +571,26 @@ impl ObjectBrowserDocument {
         let is_dirty = editor.dirty;
         let is_editable = editor.is_editable();
 
+        // The editor element re-applies its read-only flag to the buffer on
+        // every render, so the flag must follow the buffer's editability. Only
+        // a decoded view goes through `ReadOnlyEditor`, which also reports it
+        // read-only to accessibility and UI automation.
+        let buffer = if is_editable {
+            GpuiEditor::new(&editor.input)
+                .appearance(false)
+                .readonly(false)
+                .w_full()
+                .h_full()
+                .into_any_element()
+        } else {
+            ReadOnlyEditor::new(&editor.input)
+                .appearance(false)
+                .disabled(true)
+                .w_full()
+                .h_full()
+                .into_any_element()
+        };
+
         div()
             .flex_1()
             .flex()
@@ -589,13 +609,7 @@ impl ObjectBrowserDocument {
                             cx.stop_propagation();
                         }),
                     )
-                    .child(
-                        ReadOnlyEditor::new(&editor.input)
-                            .appearance(false)
-                            .disabled(!is_editable)
-                            .w_full()
-                            .h_full(),
-                    ),
+                    .child(buffer),
             )
             .child(self.render_editor_footer(is_dirty, is_saving, is_editable, position, cx))
             .into_any_element()
@@ -821,5 +835,202 @@ mod tests {
             GuardedNavigation::ClosePreview.description(),
             "close this preview"
         );
+    }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Whether the rendered preview editor is reported read-only.
+    fn editor_is_reported_read_only(capture: &FrameCapture) -> bool {
+        let guard = capture.0.lock().expect("frame capture lock");
+        let frame = guard.as_ref().expect("the window rendered a frame");
+
+        frame
+            .nodes()
+            .find_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == gpui::Role::MultilineTextInput)
+                    .then(|| accessible.is_read_only())
+            })
+            .expect("the preview editor is rendered as a multi-line text input")
+    }
+
+    /// Draws the document's preview side panel the way the workspace does:
+    /// the preview is not part of the document's own render.
+    struct PreviewHost {
+        doc: gpui::Entity<super::ObjectBrowserDocument>,
+    }
+
+    impl gpui::Render for PreviewHost {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{ParentElement as _, Styled as _};
+
+            let panel = self
+                .doc
+                .update(cx, |doc, cx| doc.preview_side_panel(window, cx));
+
+            gpui::div()
+                .size_full()
+                .flex()
+                .children(panel.map(|panel| panel.content))
+        }
+    }
+
+    /// Opens `key` in the preview with a buffer of `text` from `source`,
+    /// renders it, and gives the buffer keyboard focus the way a click does.
+    fn open_rendered_editor<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        key: &str,
+        text: &str,
+        source: super::TextSource,
+    ) -> (
+        gpui::Entity<super::ObjectBrowserDocument>,
+        &'a mut gpui::VisualTestContext,
+        std::sync::Arc<FrameCapture>,
+    ) {
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+
+        let (host, window) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+
+            let doc = cx.new(|cx| {
+                super::ObjectBrowserDocument::new(
+                    uuid::Uuid::new_v4(),
+                    "my-bucket".to_string(),
+                    app_state,
+                    window,
+                    cx,
+                )
+            });
+
+            PreviewHost { doc }
+        });
+
+        let doc = window.update(|_window, cx| host.read(cx).doc.clone());
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview(key.to_string(), cx);
+            doc.install_text_editor(
+                super::PendingTextBody {
+                    key: key.to_string(),
+                    body: crate::object_text::TextBody {
+                        text: text.to_string(),
+                        line_ending: crate::object_text::LineEnding::Lf,
+                        byte_len: text.len() as u64,
+                    },
+                    content_type: Some("text/plain".to_string()),
+                    source,
+                },
+                window,
+                cx,
+            );
+        });
+
+        settle_frame(window);
+
+        doc.update_in(window, |doc, window, cx| doc.focus_editor(window, cx));
+
+        settle_frame(window);
+
+        (doc, window, capture)
+    }
+
+    fn settle_frame(window: &mut gpui::VisualTestContext) {
+        window.update(|window, _cx| window.refresh());
+        window.run_until_parked();
+    }
+
+    /// Typing into the rendered preview of an object's own text changes the
+    /// buffer, marks it dirty, and a landed save makes the typed text the new
+    /// baseline.
+    #[gpui::test]
+    fn typing_into_an_editable_preview_edits_and_saves_the_buffer(cx: &mut gpui::TestAppContext) {
+        let (doc, window, capture) =
+            open_rendered_editor(cx, "logs/app.log", "before", super::TextSource::Raw);
+
+        assert!(!editor_is_reported_read_only(&capture));
+
+        window.simulate_input("edited ");
+        settle_frame(window);
+
+        let typed = doc.update(window, |doc, cx| {
+            let typed = doc
+                .editor_text_for_test(cx)
+                .expect("the preview must have a buffer");
+
+            assert!(typed.contains("edited "), "typing was refused: {typed:?}");
+            assert!(doc.editor_is_dirty());
+
+            typed
+        });
+
+        doc.update(window, |doc, cx| {
+            let byte_len = typed.len() as u64;
+            doc.apply_save_outcome(
+                "logs/app.log".to_string(),
+                typed.clone(),
+                byte_len,
+                true,
+                0,
+                cx,
+            );
+
+            let editor = doc.editor.as_ref().expect("the buffer survives a save");
+            assert_eq!(editor.baseline, typed);
+            assert!(!doc.editor_is_dirty());
+        });
+    }
+
+    /// A decoded view stays read-only in the rendered preview: typing does not
+    /// reach the buffer, and it is reported read-only to accessibility and UI
+    /// automation.
+    #[gpui::test]
+    fn a_decoded_preview_stays_read_only(cx: &mut gpui::TestAppContext) {
+        let (doc, window, capture) = open_rendered_editor(
+            cx,
+            "logs/app.log.gz",
+            "decoded",
+            super::TextSource::Decoded(dbflux_core::Encoding::Gzip),
+        );
+
+        assert!(editor_is_reported_read_only(&capture));
+
+        window.simulate_input("edited ");
+        settle_frame(window);
+
+        doc.update(window, |doc, cx| {
+            assert_eq!(doc.editor_text_for_test(cx).as_deref(), Some("decoded"));
+            assert!(!doc.editor_is_dirty());
+        });
     }
 }
