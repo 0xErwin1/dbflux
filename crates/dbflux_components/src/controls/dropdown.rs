@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::actions::RunCommand;
 use crate::controls::{ButtonVariant, button_colors};
 use crate::density;
 use crate::icons::AppIcon;
@@ -7,11 +8,13 @@ use crate::primitives::{Chamfer, ChamferRing, EnvTag, Icon};
 use crate::tokens::{ChamferCut, ChromeColors, ChromeEdgeRole, Fields, Heights, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::ConnectionEnvironment;
+use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    Anchor, ClickEvent, Context, ElementId, EventEmitter, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
+    Anchor, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, Hsla, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred,
+    div, point, px,
 };
 use gpui_component::ActiveTheme;
 
@@ -157,6 +160,14 @@ pub struct Dropdown {
     label_environment: Option<ConnectionEnvironment>,
     menu_scroll_handle: ScrollHandle,
     on_select: Option<Arc<dyn Fn(usize, &DropdownItem, &mut Context<Self>) + Send + Sync>>,
+    /// Created the first time the dropdown is focused from the keyboard
+    /// (see [`Dropdown::focus`]); a dropdown only ever driven by its owner
+    /// never takes focus.
+    focus_handle: Option<FocusHandle>,
+    /// Where focus was before [`Dropdown::focus`], given back when the menu
+    /// is confirmed or dismissed from the keyboard.
+    return_focus: Option<FocusHandle>,
+    _focus_out: Option<Subscription>,
 }
 
 #[allow(dead_code)]
@@ -186,6 +197,9 @@ impl Dropdown {
             label_environment: None,
             menu_scroll_handle: ScrollHandle::new(),
             on_select: None,
+            focus_handle: None,
+            return_focus: None,
+            _focus_out: None,
         }
     }
 
@@ -490,6 +504,120 @@ impl Dropdown {
         cx.notify();
     }
 
+    /// Moves keyboard focus to the dropdown, so it answers the `Dropdown`
+    /// keys itself: Enter or Space opens it, j / k and the arrows move, Enter
+    /// or Space confirms and Escape closes. Confirming or closing from the
+    /// keyboard gives focus back to the element that held it before.
+    ///
+    /// An owner that drives the dropdown from its own key handling (a
+    /// focus ring over several controls) never calls this, so the keys keep
+    /// reaching the owner.
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let handle = self.ensure_focus_handle(window, cx);
+
+        if !handle.contains_focused(window, cx) {
+            self.return_focus = window.focused(cx);
+        }
+
+        handle.focus(window, cx);
+        cx.notify();
+    }
+
+    /// [`Dropdown::focus`], then opens the menu.
+    pub fn focus_and_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus(window, cx);
+        self.open(cx);
+    }
+
+    /// Whether keyboard focus is on the dropdown.
+    pub fn is_focused(&self, window: &Window) -> bool {
+        self.focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(window))
+    }
+
+    fn ensure_focus_handle(&mut self, window: &mut Window, cx: &mut Context<Self>) -> FocusHandle {
+        if let Some(handle) = &self.focus_handle {
+            return handle.clone();
+        }
+
+        let handle = cx.focus_handle();
+
+        // Focus leaving by any other route (Tab, a click elsewhere) closes the
+        // menu and forgets the element to go back to.
+        self._focus_out = Some(
+            cx.on_focus_out(&handle, window, |this, _event, _window, cx| {
+                this.return_focus = None;
+
+                if let Some(transition) = dropdown_dismiss_transition(this.open) {
+                    this.open = transition.open;
+                    this.highlighted_index = transition.highlighted_index;
+                    cx.emit(DropdownDismissed);
+                    cx.notify();
+                }
+            }),
+        );
+
+        self.focus_handle = Some(handle.clone());
+        handle
+    }
+
+    fn give_focus_back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(previous) = self.return_focus.take() else {
+            return;
+        };
+
+        if self.is_focused(window) {
+            previous.focus(window, cx);
+        }
+    }
+
+    /// Answers the `Dropdown` keys while the dropdown has focus. A key it
+    /// has no use for in its current state propagates to the pane around it.
+    fn handle_run_command(
+        &mut self,
+        action: &RunCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let handled = match Command::from_action_id(&action.command) {
+            Some(Command::SelectNext) if self.open => {
+                self.select_next_item(cx);
+                true
+            }
+            Some(Command::SelectPrev) if self.open => {
+                self.select_prev_item(cx);
+                true
+            }
+            Some(Command::Execute | Command::ExpandCollapse) if self.open => {
+                self.accept_selection(cx);
+                self.give_focus_back(window, cx);
+                true
+            }
+            Some(Command::Execute | Command::ExpandCollapse)
+                if !self.disabled && !self.items.is_empty() =>
+            {
+                self.open(cx);
+                true
+            }
+            Some(Command::Cancel) if self.open => {
+                self.close(cx);
+                cx.emit(DropdownDismissed);
+                self.give_focus_back(window, cx);
+                true
+            }
+            Some(Command::Cancel) if self.return_focus.is_some() => {
+                self.give_focus_back(window, cx);
+                true
+            }
+            _ => false,
+        };
+
+        if !handled {
+            cx.propagate();
+        }
+    }
+
     fn handle_trigger_click(
         &mut self,
         _event: &ClickEvent,
@@ -573,8 +701,9 @@ impl Dropdown {
                 } else {
                     row = row.cursor_pointer().on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
+                        cx.listener(move |this, _event, window, cx| {
                             this.select_item(index, cx);
+                            this.give_focus_back(window, cx);
                         }),
                     );
                 }
@@ -624,6 +753,7 @@ impl Dropdown {
         &self,
         label: SharedString,
         disabled: bool,
+        keyboard_focused: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = cx.theme();
@@ -716,7 +846,7 @@ impl Dropdown {
                         .interactive("dropdown-trigger-shape");
                 }
 
-                if self.focus_ring_visible {
+                if self.focus_ring_visible || keyboard_focused {
                     shape = shape.ring(ChamferRing::focus(
                         self.focus_ring_color
                             .unwrap_or_else(|| ChromeColors::tint(theme)),
@@ -768,14 +898,15 @@ impl Dropdown {
 }
 
 impl Render for Dropdown {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_disabled = self.disabled;
         let disabled = is_disabled || self.items.is_empty();
         let label = self
             .selected_label()
             .unwrap_or_else(|| self.placeholder.clone());
         let variant = self.trigger_variant();
-        let trigger = self.render_trigger(label, disabled, cx);
+        let keyboard_focused = self.is_focused(window);
+        let trigger = self.render_trigger(label, disabled, keyboard_focused, cx);
 
         div()
             .id(self.id.clone())
@@ -783,6 +914,11 @@ impl Render for Dropdown {
                 let id = self.id.to_string();
                 move || id.clone()
             })
+            .key_context(ContextId::Dropdown.as_gpui_context())
+            .when_some(self.focus_handle.as_ref(), |element, handle| {
+                element.track_focus(handle)
+            })
+            .on_action(cx.listener(Self::handle_run_command))
             .w_full()
             .when(
                 matches!(
@@ -798,6 +934,29 @@ impl Render for Dropdown {
 
 impl EventEmitter<DropdownSelectionChanged> for Dropdown {}
 impl EventEmitter<DropdownDismissed> for Dropdown {}
+
+/// The keys the app keymap binds in the `Dropdown` context (see the dropdown
+/// layer in `dbflux_ui_base::keymap`), for component tests that run without
+/// the app keymap.
+#[cfg(test)]
+pub(crate) fn bind_dropdown_keys_for_tests(cx: &mut gpui::TestAppContext) {
+    use gpui::KeyBinding;
+
+    let context = Some(ContextId::Dropdown.as_gpui_context());
+    let run = |command: Command| RunCommand::new(command.id());
+
+    cx.update(|cx| {
+        cx.bind_keys([
+            KeyBinding::new("j", run(Command::SelectNext), context),
+            KeyBinding::new("down", run(Command::SelectNext), context),
+            KeyBinding::new("k", run(Command::SelectPrev), context),
+            KeyBinding::new("up", run(Command::SelectPrev), context),
+            KeyBinding::new("enter", run(Command::Execute), context),
+            KeyBinding::new("space", run(Command::ExpandCollapse), context),
+            KeyBinding::new("escape", run(Command::Cancel), context),
+        ]);
+    });
+}
 
 #[cfg(test)]
 mod tests {
@@ -940,6 +1099,238 @@ mod tests {
 
         assert_eq!(chrome.edge, ChromeEdgeRole::Control);
         assert_eq!(chrome.cut, ChamferCut::OVERLAY);
+    }
+
+    /// Keyboard tests against a real window: the keys the app keymap binds
+    /// in the `Dropdown` context are bound here the same way (see
+    /// `bind_dropdown_keys_for_tests`), and an owner view stands in for the
+    /// pane hosting the dropdown and records every command that reaches it.
+    mod keyboard {
+        use super::super::{
+            Dropdown, DropdownItem, DropdownSelectionChanged, bind_dropdown_keys_for_tests,
+        };
+        use crate::actions::RunCommand;
+        use dbflux_core::keymap_types::Command;
+        use gpui::{
+            AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+            ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext, Window,
+            div,
+        };
+
+        struct Owner {
+            focus: FocusHandle,
+            dropdown: Entity<Dropdown>,
+            commands: Vec<Command>,
+            selections: Vec<usize>,
+            _subscription: gpui::Subscription,
+        }
+
+        impl Render for Owner {
+            fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .size_full()
+                    .key_context("Owner")
+                    .track_focus(&self.focus)
+                    .on_action(cx.listener(|this, action: &RunCommand, _window, _cx| {
+                        if let Some(command) = Command::from_action_id(&action.command) {
+                            this.commands.push(command);
+                        }
+                    }))
+                    .child(self.dropdown.clone())
+            }
+        }
+
+        struct Setup<'a> {
+            owner: Entity<Owner>,
+            window: &'a mut VisualTestContext,
+        }
+
+        fn setup(cx: &mut TestAppContext) -> Setup<'_> {
+            cx.update(gpui_component::init);
+            bind_dropdown_keys_for_tests(cx);
+
+            // The owner's own bindings on the same keys, like a pane whose
+            // key handling drives a dropdown it keeps unfocused.
+            cx.update(|cx| {
+                cx.bind_keys([
+                    gpui::KeyBinding::new(
+                        "j",
+                        RunCommand::new(Command::SelectNext.id()),
+                        Some("Owner"),
+                    ),
+                    gpui::KeyBinding::new(
+                        "enter",
+                        RunCommand::new(Command::Execute.id()),
+                        Some("Owner"),
+                    ),
+                ]);
+            });
+
+            let (owner, window) = cx.add_window_view(|window, cx| {
+                let dropdown = cx.new(|_cx| {
+                    Dropdown::new("keyboard-dropdown").items(vec![
+                        DropdownItem::new("One"),
+                        DropdownItem::new("Two"),
+                        DropdownItem::new("Three"),
+                    ])
+                });
+
+                let subscription = cx.subscribe_in(
+                    &dropdown,
+                    window,
+                    |this: &mut Owner, _, event: &DropdownSelectionChanged, _window, _cx| {
+                        this.selections.push(event.index);
+                    },
+                );
+
+                Owner {
+                    focus: cx.focus_handle(),
+                    dropdown,
+                    commands: Vec::new(),
+                    selections: Vec::new(),
+                    _subscription: subscription,
+                }
+            });
+            window.run_until_parked();
+
+            let setup = Setup { owner, window };
+            let owner = setup.owner.clone();
+            setup.window.update(|window, cx| {
+                let focus = owner.read(cx).focus.clone();
+                focus.focus(window, cx);
+            });
+            setup.window.run_until_parked();
+
+            setup
+        }
+
+        impl Setup<'_> {
+            fn dropdown(&mut self) -> Entity<Dropdown> {
+                let owner = self.owner.clone();
+                self.window.update(|_, cx| owner.read(cx).dropdown.clone())
+            }
+
+            fn focus_dropdown(&mut self) {
+                let dropdown = self.dropdown();
+                self.window.update(|window, cx| {
+                    dropdown.update(cx, |dropdown, cx| dropdown.focus(window, cx));
+                });
+                self.window.run_until_parked();
+            }
+
+            fn keys(&mut self, keystrokes: &str) {
+                self.window.simulate_keystrokes(keystrokes);
+                self.window.run_until_parked();
+            }
+
+            fn is_open(&mut self) -> bool {
+                let dropdown = self.dropdown();
+                self.window.update(|_, cx| dropdown.read(cx).is_open())
+            }
+
+            fn highlighted(&mut self) -> Option<usize> {
+                let dropdown = self.dropdown();
+                self.window
+                    .update(|_, cx| dropdown.read(cx).highlighted_index)
+            }
+
+            fn selected(&mut self) -> Option<usize> {
+                let dropdown = self.dropdown();
+                self.window.update(|_, cx| dropdown.read(cx).selected_index)
+            }
+
+            fn dropdown_focused(&mut self) -> bool {
+                let dropdown = self.dropdown();
+                self.window
+                    .update(|window, cx| dropdown.read(cx).is_focused(window))
+            }
+
+            fn owner_focused(&mut self) -> bool {
+                let owner = self.owner.clone();
+                self.window
+                    .update(|window, cx| owner.read(cx).focus.is_focused(window))
+            }
+
+            fn commands(&mut self) -> Vec<Command> {
+                let owner = self.owner.clone();
+                self.window.update(|_, cx| owner.read(cx).commands.clone())
+            }
+
+            fn selections(&mut self) -> Vec<usize> {
+                let owner = self.owner.clone();
+                self.window
+                    .update(|_, cx| owner.read(cx).selections.clone())
+            }
+        }
+
+        #[gpui::test]
+        fn a_focused_dropdown_opens_moves_and_selects_by_keys(cx: &mut TestAppContext) {
+            let mut setup = setup(cx);
+            setup.focus_dropdown();
+            assert!(setup.dropdown_focused(), "the dropdown takes focus");
+
+            setup.keys("enter");
+            assert!(setup.is_open(), "Enter opens the menu");
+            assert_eq!(setup.highlighted(), Some(0));
+
+            setup.keys("j down");
+            assert_eq!(setup.highlighted(), Some(2), "j and Down move down");
+
+            setup.keys("k");
+            assert_eq!(setup.highlighted(), Some(1), "k moves up");
+
+            setup.keys("enter");
+            assert!(!setup.is_open(), "Enter confirms and closes");
+            assert_eq!(setup.selected(), Some(1));
+            assert_eq!(setup.selections(), vec![1]);
+            assert!(setup.owner_focused(), "focus returns to where it came from");
+            assert!(setup.commands().is_empty(), "{:?}", setup.commands());
+        }
+
+        #[gpui::test]
+        fn space_opens_and_escape_closes_without_selecting(cx: &mut TestAppContext) {
+            let mut setup = setup(cx);
+            setup.focus_dropdown();
+
+            setup.keys("space");
+            assert!(setup.is_open(), "Space opens the menu");
+
+            setup.keys("down escape");
+            assert!(!setup.is_open(), "Escape closes the menu");
+            assert_eq!(setup.selected(), None, "Escape selects nothing");
+            assert!(setup.selections().is_empty());
+            assert!(setup.owner_focused(), "Escape hands focus back");
+            assert!(setup.commands().is_empty(), "{:?}", setup.commands());
+        }
+
+        #[gpui::test]
+        fn a_closed_focused_dropdown_lets_other_keys_through(cx: &mut TestAppContext) {
+            let mut setup = setup(cx);
+            setup.focus_dropdown();
+
+            setup.keys("j");
+
+            assert!(!setup.is_open());
+            assert_eq!(setup.commands(), vec![Command::SelectNext]);
+        }
+
+        #[gpui::test]
+        fn an_unfocused_open_dropdown_leaves_the_keys_to_its_owner(cx: &mut TestAppContext) {
+            let mut setup = setup(cx);
+            let dropdown = setup.dropdown();
+            setup
+                .window
+                .update(|_, cx| dropdown.update(cx, |dropdown, cx| dropdown.open(cx)));
+
+            setup.keys("j enter");
+
+            assert!(setup.is_open(), "the owner drives a dropdown it keeps");
+            assert_eq!(setup.highlighted(), Some(0));
+            assert_eq!(
+                setup.commands(),
+                vec![Command::SelectNext, Command::Execute]
+            );
+        }
     }
 
     #[test]

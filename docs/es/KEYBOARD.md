@@ -471,6 +471,25 @@ parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como
 y del método de autenticación SSH. En el visor de auditoría, `Left` / `Right`
 sobre los intervalos de tiempo cambian el intervalo.
 
+## Desplegables
+
+Estas teclas se aplican a un desplegable o a una selección múltiple con el foco
+del teclado, por ejemplo después de que una entrada de menú lo abra. Las teclas
+que el desplegable no usa pasan al panel que lo contiene.
+
+| Teclas | Acción |
+|--------|--------|
+| `Enter` / `Space` | Abrir la lista |
+| `j` / `k` (o `Down` / `Up`) | Mover abajo / arriba en la lista abierta |
+| `Enter` | Elegir el elemento resaltado, o cerrar una selección múltiple |
+| `Space` | Elegir el elemento resaltado; marcarlo o desmarcarlo en una selección múltiple |
+| `Escape` | Cerrar la lista sin elegir |
+
+Al elegir un elemento o pulsar `Escape`, el foco vuelve al control que lo tenía
+antes del desplegable. Los desplegables que forman parte de un anillo de teclado,
+como la barra de contexto de ejecución y los filtros de auditoría, siguen
+respondiendo a las teclas de ese anillo.
+
 ## Menú contextual
 
 | Teclas                      | Acción                          |

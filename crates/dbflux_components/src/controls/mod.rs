@@ -8,6 +8,8 @@ pub use button::{
     Button, ButtonFills, ButtonSize, ButtonVariant, button_colors, is_activation_key,
 };
 pub use checkbox::Checkbox;
+#[cfg(test)]
+pub(crate) use dropdown::bind_dropdown_keys_for_tests;
 pub use dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
 pub use input::{
     CodeActionProvider, CompletionProvider, GpuiInput, INPUT_CONTEXT, Input, InputContentType,

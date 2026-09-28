@@ -1126,6 +1126,10 @@ fn document_tree_layer() -> KeymapLayer {
     layer
 }
 
+/// Keys of a dropdown or multi-select. A window root reports this context
+/// while its owner drives an open dropdown (the key-value new key dialog);
+/// a dropdown focused from the keyboard carries it on itself and answers the
+/// keys directly, passing on the ones it has no use for.
 fn dropdown_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Dropdown);
 
@@ -1145,6 +1149,12 @@ fn dropdown_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
 
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    // Opens a closed dropdown, confirms an open one, and toggles the
+    // highlighted item of a multi-select.
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
     layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 

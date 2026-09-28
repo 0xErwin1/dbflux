@@ -1675,3 +1675,32 @@ fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext
     window.simulate_keystrokes("t");
     assert_eq!(*cycles.borrow(), 3, "the reset restores the default key");
 }
+
+/// A dropdown or multi-select focused from the keyboard carries the
+/// `Dropdown` key context itself, so its keys win over the pane around it
+/// (here the code editor's context bar, which binds the same letters) and
+/// reach the control as keymap commands.
+#[test]
+fn a_focused_dropdown_takes_its_keys_before_the_pane() {
+    let keymap = native_keymap();
+    let stack = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::ContextBar, &[]),
+        &["Dropdown"],
+    );
+
+    for (keys, command) in [
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("enter", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("escape", Command::Cancel),
+    ] {
+        let action = top_action(&keymap, keys, &stack).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` in a focused dropdown must run {command:?}"
+        );
+    }
+}

@@ -455,6 +455,25 @@ anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
 of the SSH authentication method. In the audit viewer, `Left` / `Right` on the
 time presets change the preset.
 
+## Dropdowns
+
+These keys apply to a dropdown or a multi-select that has keyboard focus, for
+example after a menu entry opens one. Keys a dropdown does not use pass to the
+panel around it.
+
+| Keys | Action |
+|------|--------|
+| `Enter` / `Space` | Open the list |
+| `j` / `k` (or `Down` / `Up`) | Move down / up in the open list |
+| `Enter` | Choose the highlighted item, or close a multi-select |
+| `Space` | Choose the highlighted item; toggle it in a multi-select |
+| `Escape` | Close the list without choosing |
+
+Choosing an item or pressing `Escape` gives focus back to the control that held
+it before the dropdown. Dropdowns that belong to a keyboard ring, such as the
+execution context bar and the audit filters, are still driven by that ring's
+keys.
+
 ## Context menu
 
 | Keys | Action |
