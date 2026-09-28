@@ -619,6 +619,10 @@ impl DataGridPanel {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        if self.chrome.export_menu_open {
+            return self.dispatch_export_menu_command(cmd, window, cx);
+        }
+
         // The Aggregate view has its own editor and result views; commands
         // meant for the documents grid must not reach the hidden grid.
         if self.collection.tab == super::documents::CollectionTab::Aggregate {

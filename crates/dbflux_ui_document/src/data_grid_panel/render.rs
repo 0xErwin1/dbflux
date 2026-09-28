@@ -1,3 +1,4 @@
+use super::context_menu::ExportMenuEntry;
 use super::{
     ChartRailTab, DataGridPanel, DataSource, EditState, GridFocusMode, GridState, ToolbarFocus,
     documents,
@@ -3736,7 +3737,9 @@ impl DataGridPanel {
         formats: &[dbflux_export::ExportFormat],
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
+        let entries = self.export_menu_entries();
+        let selected = self.chrome.export_menu_selected;
+        let mut items: Vec<AnyElement> = Vec::with_capacity(entries.len() + 3);
 
         items.push(
             render_menu_header(
@@ -3746,72 +3749,95 @@ impl DataGridPanel {
             .into_any_element(),
         );
 
-        for (idx, &format) in formats.iter().enumerate() {
-            let item =
-                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Download);
-
-            items.push(
-                menu_row(
-                    SharedString::from(format!("export-save-{}", idx)),
-                    &item,
-                    false,
-                    cx,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.export_with_format(format, window, cx);
-                }))
-                .into_any_element(),
-            );
-        }
-
-        items.push(render_separator(cx).into_any_element());
-
-        items.push(
-            render_menu_header(
-                &MenuItem::header(dbflux_i18n::t!(
-                    "document.data.grid.export.copy_to_clipboard"
-                )),
-                cx,
-            )
-            .into_any_element(),
-        );
-
-        for (idx, &format) in formats.iter().enumerate() {
-            let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
-            let mut item =
-                MenuItem::new(crate::labels::export_format_label(format)).icon(AppIcon::Copy);
-            if !copyable {
-                item = item.disabled();
+        for (index, &entry) in entries.iter().enumerate() {
+            if index == formats.len() {
+                items.push(render_separator(cx).into_any_element());
+                items.push(
+                    render_menu_header(
+                        &MenuItem::header(dbflux_i18n::t!(
+                            "document.data.grid.export.copy_to_clipboard"
+                        )),
+                        cx,
+                    )
+                    .into_any_element(),
+                );
             }
 
-            items.push(
-                menu_row(
-                    SharedString::from(format!("export-copy-{}", idx)),
-                    &item,
-                    false,
-                    cx,
-                )
-                .when(copyable, |row| {
-                    row.on_click(cx.listener(move |this, _, window, cx| {
-                        this.copy_to_clipboard_with_format(format, window, cx);
-                    }))
-                })
-                .into_any_element(),
-            );
+            items.push(self.render_export_menu_row(index, entry, index == selected, cx));
         }
 
         deferred(
             menu_frame(cx)
+                .id("export-menu")
                 .absolute()
                 .bottom_full()
                 .right_0()
                 .mb(Spacing::XS)
                 .w(EXPORT_MENU_WIDTH)
                 .occlude()
+                .track_focus(&self.focus.export_menu_focus)
+                // The grid reports the ContextMenu context while the menu is
+                // open, so the menu keys arrive here first.
+                .on_action(cx.listener(
+                    |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
+                        let handled =
+                            dbflux_ui_base::keymap::run_command(action).is_some_and(|command| {
+                                this.dispatch_export_menu_command(command, window, cx)
+                            });
+
+                        if !handled {
+                            cx.propagate();
+                        }
+                    },
+                ))
                 .children(items),
         )
         // Above the backdrop, which shares the deferred layer.
         .with_priority(2)
+    }
+
+    /// One export menu row. Hovering it highlights it, as the menu keys do.
+    fn render_export_menu_row(
+        &self,
+        index: usize,
+        entry: ExportMenuEntry,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (id, format, icon) = match entry {
+            ExportMenuEntry::Save(format) => ("export-save", format, AppIcon::Download),
+            ExportMenuEntry::Copy(format) => ("export-copy", format, AppIcon::Copy),
+        };
+        let row_index = match entry {
+            ExportMenuEntry::Save(_) => index,
+            ExportMenuEntry::Copy(_) => {
+                index - dbflux_export::available_formats(&self.result.shape).len()
+            }
+        };
+
+        let mut item = MenuItem::new(crate::labels::export_format_label(format)).icon(icon);
+        if !entry.is_enabled() {
+            item = item.disabled();
+        }
+
+        menu_row(
+            SharedString::from(format!("{id}-{row_index}")),
+            &item,
+            selected,
+            cx,
+        )
+        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+            if this.chrome.export_menu_selected != index {
+                this.chrome.export_menu_selected = index;
+                cx.notify();
+            }
+        }))
+        .when(entry.is_enabled(), |row| {
+            row.on_click(cx.listener(move |this, _, window, cx| {
+                this.run_export_menu_entry(entry, window, cx);
+            }))
+        })
+        .into_any_element()
     }
 
     /// Full-panel layer under the export menu.
@@ -3823,10 +3849,9 @@ impl DataGridPanel {
     fn render_export_backdrop(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The press must end here: the Export button below toggles the menu
         // on click, so a press that reached it would reopen what this closed.
-        let close = |this: &mut Self, cx: &mut Context<Self>| {
-            this.chrome.export_menu_open = false;
+        let close = |this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+            this.close_export_menu(window, cx);
             cx.stop_propagation();
-            cx.notify();
         };
 
         deferred(
@@ -3838,13 +3863,13 @@ impl DataGridPanel {
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| close(this, cx)),
+                    cx.listener(move |this, _, window, cx| close(this, window, cx)),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, _, _, cx| close(this, cx)),
+                    cx.listener(move |this, _, window, cx| close(this, window, cx)),
                 )
-                .on_scroll_wheel(cx.listener(move |this, _, _, cx| close(this, cx))),
+                .on_scroll_wheel(cx.listener(move |this, _, window, cx| close(this, window, cx))),
         )
         .with_priority(1)
     }

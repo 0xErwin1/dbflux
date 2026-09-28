@@ -284,7 +284,7 @@ A read-only delete does not change the clipboard.
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
-| `Ctrl+e` / `Cmd+e` | Export results |
+| `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
 | `/` | Focus search/filter |
 | `x` | Delete row |

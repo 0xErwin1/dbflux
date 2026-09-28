@@ -132,6 +132,50 @@ pub(super) fn place_context_menu(
     }
 }
 
+/// One row of the data grid's export menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExportMenuEntry {
+    /// Write the result to a file in this format.
+    Save(ExportFormat),
+    /// Put the result on the clipboard in this format.
+    Copy(ExportFormat),
+}
+
+impl ExportMenuEntry {
+    /// Raw binary has no text form, so it cannot go to the clipboard.
+    pub(super) fn is_enabled(self) -> bool {
+        !matches!(self, ExportMenuEntry::Copy(ExportFormat::Binary))
+    }
+}
+
+/// The export menu row one step from `from`, wrapping at both ends and
+/// passing over disabled rows. Returns `from` when no other row is enabled.
+pub(super) fn step_export_selection(
+    entries: &[ExportMenuEntry],
+    from: usize,
+    forward: bool,
+) -> usize {
+    let count = entries.len();
+    if count == 0 {
+        return 0;
+    }
+
+    let mut index = from.min(count - 1);
+    for _ in 0..count {
+        index = if forward {
+            (index + 1) % count
+        } else {
+            (index + count - 1) % count
+        };
+
+        if entries[index].is_enabled() {
+            return index;
+        }
+    }
+
+    from
+}
+
 impl DataGridPanel {
     fn restore_focus_after_context_menu(
         &mut self,
@@ -667,7 +711,7 @@ impl DataGridPanel {
             .map(|ts| ts.read(cx).is_editing_text_input())
             .unwrap_or(false);
 
-        if self.context_menu.is_some() {
+        if self.context_menu.is_some() || self.chrome.export_menu_open {
             ContextId::ContextMenu
         } else if inline_text_input_active || self.focus.edit_state == EditState::Editing {
             ContextId::TextInput
@@ -1098,7 +1142,14 @@ impl DataGridPanel {
 
     // === Export ===
 
+    /// Opens the export menu with the keyboard in it, or closes it when it is
+    /// already open (`Command::ExportResults`, the Export button).
     pub fn export_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+            return;
+        }
+
         if self.result.rows.is_empty()
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
@@ -1111,20 +1162,95 @@ impl DataGridPanel {
             return;
         }
 
-        let _ = window;
-        let _formats = dbflux_export::available_formats(&self.result.shape);
-
-        self.chrome.export_menu_open = !self.chrome.export_menu_open;
+        self.chrome.export_menu_open = true;
+        self.chrome.export_menu_selected = 0;
+        self.focus.export_menu_focus.focus(window, cx);
+        cx.emit(DataGridEvent::Focused);
         cx.notify();
+    }
+
+    /// Closes the export menu and hands the keyboard back to the grid.
+    pub(super) fn close_export_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.chrome.export_menu_open = false;
+
+        let is_document_view = self.view_config.mode == crate::DataViewMode::Document;
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
+        cx.notify();
+    }
+
+    /// The rows of the export menu, in the order it draws them: a save row
+    /// per format, then a copy row per format.
+    pub(super) fn export_menu_entries(&self) -> Vec<ExportMenuEntry> {
+        let formats = dbflux_export::available_formats(&self.result.shape);
+
+        formats
+            .iter()
+            .map(|&format| ExportMenuEntry::Save(format))
+            .chain(formats.iter().map(|&format| ExportMenuEntry::Copy(format)))
+            .collect()
+    }
+
+    /// Handles the context-menu keys while the export menu is open: move,
+    /// run the highlighted row, or close. Every other command is refused, as
+    /// the cell menu refuses them.
+    pub(super) fn dispatch_export_menu_command(
+        &mut self,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let entries = self.export_menu_entries();
+
+        match cmd {
+            Command::MenuDown | Command::SelectNext => {
+                self.chrome.export_menu_selected =
+                    step_export_selection(&entries, self.chrome.export_menu_selected, true);
+                cx.notify();
+                true
+            }
+            Command::MenuUp | Command::SelectPrev => {
+                self.chrome.export_menu_selected =
+                    step_export_selection(&entries, self.chrome.export_menu_selected, false);
+                cx.notify();
+                true
+            }
+            Command::MenuSelect | Command::Execute => {
+                if let Some(&entry) = entries.get(self.chrome.export_menu_selected)
+                    && entry.is_enabled()
+                {
+                    self.run_export_menu_entry(entry, window, cx);
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel | Command::ExportResults => {
+                self.close_export_menu(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn run_export_menu_entry(
+        &mut self,
+        entry: ExportMenuEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match entry {
+            ExportMenuEntry::Save(format) => self.export_with_format(format, window, cx),
+            ExportMenuEntry::Copy(format) => self.copy_to_clipboard_with_format(format, window, cx),
+        }
     }
 
     pub fn export_with_format(
         &mut self,
         format: ExportFormat,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.chrome.export_menu_open = false;
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+        }
 
         let result = self.result.clone();
         let base_name = self.export_base_name();
@@ -1243,10 +1369,12 @@ impl DataGridPanel {
     pub fn copy_to_clipboard_with_format(
         &mut self,
         format: ExportFormat,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.chrome.export_menu_open = false;
+        if self.chrome.export_menu_open {
+            self.close_export_menu(window, cx);
+        }
 
         if matches!(format, ExportFormat::Binary) {
             self.pending.toast = Some(PendingToast {
@@ -4045,7 +4173,27 @@ mod tests {
     use super::DataGridPanel;
     use super::QueryGroupSeparators;
     use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
+    use super::{ExportMenuEntry, step_export_selection};
+    use dbflux_export::ExportFormat;
     use gpui::{Pixels, Point, Size, px};
+
+    /// The binary copy row cannot run, so the menu keys pass over it in both
+    /// directions and wrap at the ends.
+    #[test]
+    fn export_selection_wraps_and_skips_the_binary_copy_row() {
+        let entries = [
+            ExportMenuEntry::Save(ExportFormat::Binary),
+            ExportMenuEntry::Save(ExportFormat::Hex),
+            ExportMenuEntry::Copy(ExportFormat::Binary),
+            ExportMenuEntry::Copy(ExportFormat::Hex),
+        ];
+
+        assert_eq!(step_export_selection(&entries, 1, true), 3);
+        assert_eq!(step_export_selection(&entries, 3, false), 1);
+        assert_eq!(step_export_selection(&entries, 3, true), 0);
+        assert_eq!(step_export_selection(&entries, 0, false), 3);
+        assert_eq!(step_export_selection(&[], 0, true), 0);
+    }
 
     fn panel() -> Size<Pixels> {
         Size {
