@@ -102,12 +102,9 @@ impl Render for AboutSection {
                                                 .id("about-link-issues")
                                                 .cursor_pointer()
                                                 .hover(|d| d.underline())
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, _, cx| {
-                                                        cx.open_url(&issues_url);
-                                                    },
-                                                )
+                                                .on_click(move |_, _, cx| {
+                                                    cx.open_url(&issues_url);
+                                                })
                                                 .child(
                                                     Text::body(dbflux_i18n::t!(
                                                         "settings.about.report_bug"
@@ -121,7 +118,7 @@ impl Render for AboutSection {
                                                 .id("about-link-repo")
                                                 .cursor_pointer()
                                                 .hover(|d| d.underline())
-                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                .on_click(|_, _, cx| {
                                                     cx.open_url(REPOSITORY);
                                                 })
                                                 .child(
