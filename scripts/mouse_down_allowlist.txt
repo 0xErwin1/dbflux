@@ -117,7 +117,6 @@ crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_content_body: foc
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_export_backdrop: outside-press dismiss
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
 crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_filter_row: cursor sync
-crates/dbflux_ui_document/src/data_grid_panel/render.rs:render_point_inspector: unverified
 crates/dbflux_ui_document/src/history_panel.rs:render: focus on press
 crates/dbflux_ui_document/src/key_value/console.rs:render_console: cursor sync
 crates/dbflux_ui_document/src/key_value/render.rs:render: focus on press

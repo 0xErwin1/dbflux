@@ -298,7 +298,7 @@ A read-only delete does not change the clipboard.
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
-| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, maximize, hide) with their shortcuts |
+| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer in the table, maximize, hide) with their shortcuts |
 
 ## Schema diagram
 

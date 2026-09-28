@@ -29,6 +29,7 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Tab in the find panel** — Tab and Shift+Tab no longer get stuck in the editor's find panel when the replace field is hidden: they move focus between panes. With the replace field shown they still switch between the two fields.
 * **Escape in the sidebar search** — Escape in the sidebar search field now returns focus to the tree and keeps the typed filter.
+* **Show in tree in the chart point inspector** — The Show in tree button now acts only when it is clicked, on release, instead of on any press inside the point inspector. While a chart point is under the pointer, the Toolbar submenu of the table menu offers the same action from the keyboard.
 * **Tab inside dialogs** — Tab and Shift+Tab now cycle through the controls of an open dialog and wrap around, instead of moving focus to the panels behind it.
 
 ## [0.8.3] - 2026-09-29

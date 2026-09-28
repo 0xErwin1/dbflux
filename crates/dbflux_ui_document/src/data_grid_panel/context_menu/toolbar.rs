@@ -41,6 +41,9 @@ pub(crate) enum ToolbarAction {
     ToggleStatsRail,
     /// Save chart in the chart toolbar.
     SaveChart,
+    /// "Show in tree" in the chart's point inspector: scrolls the table to
+    /// the source row of the point under the pointer.
+    ShowPointInTable(usize),
     /// Maximize or restore in the embedded panel's header.
     ToggleMaximize,
     /// Hide in the embedded panel's header.
@@ -61,6 +64,7 @@ impl ToolbarAction {
             ToolbarAction::AutoRefresh => "auto-refresh",
             ToolbarAction::ToggleStatsRail => "stats",
             ToolbarAction::SaveChart => "save-chart",
+            ToolbarAction::ShowPointInTable(_) => "show-in-tree",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
         }
@@ -78,6 +82,7 @@ impl ToolbarAction {
             ToolbarAction::AutoRefresh => AppIcon::Clock,
             ToolbarAction::ToggleStatsRail => AppIcon::Sigma,
             ToolbarAction::SaveChart => AppIcon::Save,
+            ToolbarAction::ShowPointInTable(_) => AppIcon::Table,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
         }
@@ -158,6 +163,17 @@ impl DataGridPanel {
             ) {
                 actions.push(ToolbarAction::SaveChart);
             }
+
+            let hovered_source = self
+                .chart
+                .chart_shell
+                .as_ref()
+                .and_then(|shell| shell.read(cx).hovered_data_point(cx))
+                .and_then(|point| self.chart_host_source_for_point(point, cx));
+
+            if let Some(source) = hovered_source {
+                actions.push(ToolbarAction::ShowPointInTable(source.row_idx));
+            }
         }
 
         if self.chrome.show_panel_controls {
@@ -201,6 +217,9 @@ impl DataGridPanel {
             }
             ToolbarAction::ToggleStatsRail => dbflux_i18n::t!("document.chart.toolbar.stats"),
             ToolbarAction::SaveChart => dbflux_i18n::t!("document.chart.toolbar.save_chart"),
+            ToolbarAction::ShowPointInTable(_) => {
+                dbflux_i18n::t!("chart.point_inspector.show_in_tree")
+            }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")
             }
@@ -287,6 +306,7 @@ impl DataGridPanel {
                 }
             }
             ToolbarAction::SaveChart => self.open_collection_chart_save(window, cx),
+            ToolbarAction::ShowPointInTable(row_idx) => self.chart_host_scroll_to_row(row_idx, cx),
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
         }

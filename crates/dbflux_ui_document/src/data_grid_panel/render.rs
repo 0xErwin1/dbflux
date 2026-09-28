@@ -2125,20 +2125,11 @@ impl DataGridPanel {
                 None,
                 None,
                 &chart_colors,
-            ))
-            // Overlay listener: catch mousedown events bubbling up from the
-            // "Show in tree" button and scroll the table to the source row.
-            // The action button's element ID encodes the row index; the mousedown
-            // target check is coarse (any click in the inspector dock scrolls to
-            // the hovered source row). Precise per-button wiring would require
-            // element hit-test support that GPUI does not expose in listeners.
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                cx.listener(move |this, _: &ClickEvent, _window, cx| {
                     this.chart_host_scroll_to_row(row_idx, cx);
                     cx.notify();
                 }),
-            )
+            ))
     }
 
     /// Render the legend row below the chart canvas.
