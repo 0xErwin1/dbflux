@@ -335,20 +335,6 @@ impl CodeDocument {
                     }
                 }),
             )
-            .capture_action(cx.listener(
-                |this, _: &gpui_component::input::IndentInline, window, cx| {
-                    if this.vim_swallows_indent_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
-            .capture_action(cx.listener(
-                |this, _: &gpui_component::input::OutdentInline, window, cx| {
-                    if this.vim_swallows_indent_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                },
-            ))
             .capture_action(
                 cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
                     this.clear_vim_count_and_notify(cx);

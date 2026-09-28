@@ -239,8 +239,11 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
     /// staying in the panel.
     ///
     /// There are only 2 inputs, so the forward and the backward are the same.
+    /// Without the replace row there is nothing to cycle, so the key propagates
+    /// to the next binding and focus can leave the panel.
     fn cycle_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.session.replace_mode || !self.replaceable(cx) {
+            cx.propagate();
             return;
         }
 

@@ -104,9 +104,15 @@ impl CommandDispatcher for Workspace {
 
         if self.focus_target == FocusTarget::Sidebar
             && self.sidebar.read(cx).search_input_is_focused(window, cx)
-            && sidebar_tree_command_is_blocked_by_search_focus(cmd)
         {
-            return false;
+            if cmd == Command::Cancel {
+                self.set_focus(FocusTarget::Sidebar, window, cx);
+                return true;
+            }
+
+            if sidebar_tree_command_is_blocked_by_search_focus(cmd) {
+                return false;
+            }
         }
 
         // When context menu is open, only allow menu-related commands

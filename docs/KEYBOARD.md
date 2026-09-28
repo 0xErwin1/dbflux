@@ -78,6 +78,8 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Shift+n` | Create folder |
 | `Ctrl+l` | Focus panel to the right |
 
+`Escape` in the search field returns focus to the tree and keeps the typed filter.
+
 ## Editor
 
 | Keys | Action |
@@ -101,6 +103,11 @@ and returns to the editor, as `Escape` does, and `Ctrl+h` / `Ctrl+k` close it
 before moving focus. The same find-and-replace keys toggle the replace field
 while the panel is open. In Vim Normal mode the editor is read-only, so the find
 panel opens without its replace field.
+
+While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
+`Ctrl+h` / `Ctrl+j` / `Ctrl+k` to leave the editor. In the find panel, `Tab` /
+`Shift+Tab` move between the query and replace fields while the replace field is
+shown; otherwise they cycle focus between panels, as they do outside the editor.
 
 ## Vim mode (opt-in)
 
@@ -199,7 +206,7 @@ Everything else in Normal mode:
 | Input | Behavior in Normal mode |
 |-------|-------------------------|
 | Other unsupported letters, punctuation, `Space` | Nothing |
-| `Tab` / `Shift+Tab` | Nothing: no indent, and focus stays in the editor |
+| `Tab` / `Shift+Tab` | Cycle focus forward / backward between panels, as outside the editor (also in the Visual modes); no indent |
 | `Ctrl+v` | Enter Visual Block mode (not paste) |
 | Paste (`Cmd+v` or the context menu) | Nothing |
 | Input method (IME) composition and commit | Dropped |

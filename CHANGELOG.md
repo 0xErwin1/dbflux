@@ -16,6 +16,12 @@ All notable changes to DBFlux will be documented in this file.
 
 * **MongoDB extended JSON dates** — `{"$date": "<RFC 3339>"}` in the query bar, in aggregation pipelines and in document edits is now stored as a date. An invalid date string there now fails with an error instead of being saved as a nested object.
 * **Global shortcuts while typing** — Shortcuts that hold Ctrl or Cmd, such as Ctrl+Tab, Ctrl+1 to Ctrl+9, Ctrl+W and Ctrl+Shift+P, now work while a text field outside a dialog has focus, such as the sidebar search or the execution context bar. Letters, Tab, Escape, Enter and the arrows stay with the field, and dialogs, menus, dropdowns and pickers keep the shortcuts out until they close.
+* **Tab in the code editor** — In Vim Normal and Visual modes, Tab and Shift+Tab now move focus to the next or previous pane instead of doing nothing. Insert mode and editors without Vim keep Tab for indentation.
+
+### Fixed
+
+* **Tab in the find panel** — Tab and Shift+Tab no longer get stuck in the editor's find panel when the replace field is hidden: they move focus between panes. With the replace field shown they still switch between the two fields.
+* **Escape in the sidebar search** — Escape in the sidebar search field now returns focus to the tree and keeps the typed filter.
 
 ## [0.8.3] - 2026-09-29
 

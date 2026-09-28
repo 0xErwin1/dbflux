@@ -74,8 +74,6 @@ pub(crate) enum VimCommand {
     Undo,
     OpenSearch,
     RepeatSearch(bool),
-    /// Consumed without effect, so the key neither edits nor reaches other handlers.
-    Swallow,
     EnterReplace,
 }
 
@@ -123,11 +121,6 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                     VimCommand::EnterVisualLine
                 });
             }
-            // Tab and Shift+Tab would otherwise indent or move focus out of the editor.
-            if key.key == "tab" {
-                return Some(VimCommand::Swallow);
-            }
-
             if key.shift {
                 return match key.key {
                     "a" if !visual => Some(VimCommand::AppendLine),
@@ -870,7 +863,6 @@ mod tests {
             ("u", VimCommand::Undo),
             ("/", VimCommand::OpenSearch),
             ("n", VimCommand::RepeatSearch(false)),
-            ("tab", VimCommand::Swallow),
         ];
 
         for (name, command) in expected {
@@ -881,21 +873,16 @@ mod tests {
             );
         }
 
-        for name in ["o", "p", "escape", "backspace", "space"] {
+        for name in ["o", "p", "escape", "backspace", "space", "tab"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
     }
 
     #[test]
     fn shifted_keys_are_not_their_lowercase_commands() {
-        for name in ["h", "j", "k", "l", "x", "u", "enter"] {
+        for name in ["h", "j", "k", "l", "x", "u", "enter", "tab"] {
             assert_eq!(command_for(VimMode::Normal, shifted(name)), None, "{name}");
         }
-
-        assert_eq!(
-            command_for(VimMode::Normal, shifted("tab")),
-            Some(VimCommand::Swallow)
-        );
     }
 
     #[test]
@@ -962,7 +949,6 @@ mod tests {
             VimCommand::MoveDown,
             VimCommand::DeleteChar,
             VimCommand::Undo,
-            VimCommand::Swallow,
         ] {
             assert_eq!(mode_after(VimMode::Normal, command), VimMode::Normal);
         }

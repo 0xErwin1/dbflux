@@ -1431,14 +1431,24 @@ impl Sidebar {
         self.active_tab
     }
 
-    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
-        let input = match self.active_tab {
+    fn active_search_input(&self) -> &Entity<InputState> {
+        match self.active_tab {
             SidebarTab::Connections => &self.connections_search_input,
             SidebarTab::Scripts => &self.scripts_search_input,
             SidebarTab::Dashboards => &self.dashboards_search_input,
-        };
+        }
+    }
 
-        input.read(cx).focus_handle(cx).is_focused(window)
+    pub fn search_input_is_focused(&self, window: &Window, cx: &App) -> bool {
+        self.active_search_input()
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    }
+
+    /// The filter typed into the active view's search field.
+    pub fn active_search_query(&self, cx: &App) -> String {
+        self.active_search_input().read(cx).value().to_string()
     }
 
     pub fn search_input_has_focus_state(&self) -> bool {

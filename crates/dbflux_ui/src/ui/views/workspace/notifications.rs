@@ -1201,6 +1201,58 @@ mod tests {
         );
     }
 
+    /// Escape in the sidebar search hands the keyboard back to the tree and
+    /// keeps the typed filter.
+    #[gpui::test]
+    fn escape_in_the_sidebar_search_returns_focus_to_the_tree(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+
+        harness.window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        harness.window.run_until_parked();
+
+        harness.window.simulate_keystrokes("/");
+        harness.redraw();
+        harness.window.simulate_input("abc");
+        harness.redraw();
+
+        harness.window.simulate_keystrokes("escape");
+        harness.redraw();
+
+        let (search_focused, tree_focused, focus_target, query) =
+            harness.window.update(|window, cx| {
+                let workspace = workspace.read(cx);
+                let sidebar = workspace.sidebar.read(cx);
+                (
+                    sidebar.search_input_is_focused(window, cx),
+                    workspace.focus_handle.is_focused(window),
+                    workspace.focus_target,
+                    sidebar.active_search_query(cx),
+                )
+            });
+
+        assert!(!search_focused, "Escape leaves the search field");
+        assert!(tree_focused, "Escape returns the keyboard to the tree");
+        assert_eq!(focus_target, FocusTarget::Sidebar);
+        assert_eq!(query, "abc", "Escape keeps the typed filter");
+
+        harness.window.simulate_keystrokes("/");
+        harness.redraw();
+        let search_focused = harness.window.update(|window, cx| {
+            workspace
+                .read(cx)
+                .sidebar
+                .read(cx)
+                .search_input_is_focused(window, cx)
+        });
+        assert!(search_focused, "`/` returns to the search afterwards");
+    }
+
     #[test]
     fn the_palette_lists_the_keyboard_shell_commands() {
         let ids: Vec<&str> = Workspace::palette_commands_for_test()

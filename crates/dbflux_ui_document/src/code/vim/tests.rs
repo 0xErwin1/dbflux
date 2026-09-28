@@ -3089,17 +3089,41 @@ fn normal_mode_blocks_enter_tab_paste_and_deletion_keys(cx: &mut TestAppContext)
     editor.window.run_until_parked();
 
     assert_eq!(editor.text(), "abc\ndef");
-    assert!(
-        !editor.commands().contains(&Command::CycleFocusForward)
-            && !editor.commands().contains(&Command::CycleFocusBackward),
-        "Tab must not reach the workspace keymap in Normal mode: {:?}",
-        editor.commands()
-    );
     assert!(editor.editor_focused());
 
     editor.keys("enter");
     assert_eq!(editor.text(), "abc\ndef", "Enter must not insert a newline");
     assert_eq!(editor.cursor(), 4, "Enter moves down one line");
+}
+
+/// Normal and Visual modes are not text entry, so Tab and Shift+Tab reach
+/// the workspace pane cycle instead of indenting or being dropped.
+#[gpui::test]
+fn tab_outside_text_entry_cycles_the_workspace_panes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc\ndef", true);
+
+    editor.keys("tab shift-tab");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::CycleFocusForward, Command::CycleFocusBackward]
+    );
+
+    editor.keys("v l tab");
+    assert_eq!(editor.text(), "abc\ndef");
+    assert_eq!(
+        editor.commands().last(),
+        Some(&Command::CycleFocusForward),
+        "Visual mode cycles too"
+    );
+
+    editor.keys("escape i tab");
+    assert_eq!(
+        editor.text(),
+        "a  bc\ndef",
+        "Insert mode keeps Tab as indent"
+    );
+    assert_eq!(editor.commands().len(), 3);
 }
 
 #[gpui::test]
@@ -3531,6 +3555,30 @@ fn ctrl_shift_h_opens_replace_and_toggles_it_inside_the_panel(
         assert_eq!(editor.text(), "abc abc", "{setup}");
         assert!(editor.commands().is_empty(), "{setup}");
     }
+}
+
+/// With only the query field shown, Tab leaves the find panel through the
+/// workspace pane cycle; with the replace row shown it moves between the two
+/// fields.
+#[cfg(not(target_os = "macos"))]
+#[gpui::test]
+fn tab_in_the_find_panel_cycles_panes_unless_the_replace_row_is_shown(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc abc", false);
+    editor.open_native_search();
+
+    editor.keys("tab shift-tab");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::CycleFocusForward, Command::CycleFocusBackward]
+    );
+    assert!(editor.native_search_open());
+
+    editor.keys("ctrl-shift-h");
+    assert!(editor.native_replace_mode());
+
+    editor.keys("tab shift-tab");
+    assert_eq!(editor.commands().len(), 2, "the replace row keeps Tab");
+    assert_eq!(editor.text(), "abc abc");
 }
 
 #[gpui::test]

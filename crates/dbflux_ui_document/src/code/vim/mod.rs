@@ -567,8 +567,7 @@ impl CodeDocument {
             VimCommand::DeleteChar
             | VimCommand::ReplaceOnce
             | VimCommand::EnterReplace
-            | VimCommand::Undo
-            | VimCommand::Swallow => {}
+            | VimCommand::Undo => {}
         }
     }
 
@@ -676,29 +675,6 @@ impl CodeDocument {
         self.dismiss_editor_menus(cx);
         self.schedule_editor_refocus(window, cx);
         true
-    }
-
-    /// Whether the editor's Tab and Shift+Tab indent actions must be swallowed.
-    ///
-    /// In Normal mode the locked input does not register its indent handlers, so
-    /// the keys would fall through to the root's focus navigation and move focus
-    /// out of the editor. Checked in the actions' capture phase, because key
-    /// bindings are dispatched before any key listener runs.
-    pub(super) fn vim_swallows_indent_action(
-        &mut self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        self.clear_vim_count_and_notify(cx);
-        self.vim_owns_keys(window, cx)
-            && machine::command_for(
-                self.vim.mode,
-                VimKey {
-                    key: "tab",
-                    shift: false,
-                    command_modifier: false,
-                },
-            ) == Some(VimCommand::Swallow)
     }
 
     pub(super) fn editor_menu_open(&self, cx: &App) -> bool {

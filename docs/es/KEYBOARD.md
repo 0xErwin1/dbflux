@@ -79,6 +79,8 @@ foco toma `Enter` y `Space` para sí.
 | `Shift+n`                                     | Crear carpeta                                          |
 | `Ctrl+l`                                      | Enfocar el panel de la derecha                         |
 
+`Escape` en el campo de búsqueda devuelve el foco al árbol y conserva el filtro escrito.
+
 ## Editor
 
 | Teclas                         | Acción                                   |
@@ -103,6 +105,12 @@ vuelve al editor, igual que `Escape`, y `Ctrl+h` / `Ctrl+k` lo cierran antes de
 mover el foco. Las mismas teclas de buscar y reemplazar muestran u ocultan el
 campo de reemplazo con el panel abierto. En el modo Normal de Vim el editor es de
 solo lectura, así que el panel de búsqueda se abre sin el campo de reemplazo.
+
+Mientras se escribe texto, `Tab` indenta y `Shift+Tab` quita la indentación, así
+que para salir del editor se usan `Ctrl+h` / `Ctrl+j` / `Ctrl+k`. En el panel de
+búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
+reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
+entre paneles, igual que fuera del editor.
 
 ## Modo Vim (opcional)
 
@@ -207,7 +215,7 @@ Todo lo demás en modo Normal:
 | Entrada | Comportamiento en modo Normal |
 |---------|-------------------------------|
 | Otras letras no admitidas, puntuación, `Space` | Nada |
-| `Tab` / `Shift+Tab` | Nada: no indenta y el focus se queda en el editor |
+| `Tab` / `Shift+Tab` | Mover el foco al panel siguiente / anterior, igual que fuera del editor (también en los modos Visual); no indenta |
 | `Ctrl+v` | Entrar en Visual Bloque (no pegar) |
 | Pegar (`Cmd+v` o el menú contextual) | Nada |
 | Composición y confirmación del método de entrada (IME) | Se descartan |
