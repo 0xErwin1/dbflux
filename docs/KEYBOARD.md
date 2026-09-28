@@ -659,6 +659,22 @@ or `Space` presses the focused button, and `Escape` cancels.
 
 The keys are listed under the MCP Approvals context in Settings > Keybindings.
 
+## Migrate wizard
+
+| Keys | Action |
+|------|--------|
+| `Alt+l` / `Alt+h` | Continue / back, like the footer buttons (also from a text field, except on macOS) |
+| `Ctrl+Enter` / `Cmd+Enter` | Continue; on the Confirm step, start the migration |
+| `j` / `k` (or `Down` / `Up`) | Move the cursor of the step |
+| `h` / `l` (or `Left` / `Right`) | Source and Target: collapse or expand the node, or move between the two trees. Tables Mapping: move between a row's target name, mode and **Columns…** |
+| `Enter` / `i` | Check a source table, choose the target database, type in a field, open a dropdown or the column drill-in |
+| `Space` | Toggle the item under the cursor; on Confirm, check the destructive-plan acknowledgment |
+| `Shift+k` / `Shift+j` | Move a table up / down in the load order |
+| `Escape` | Leave a text field or close the column drill-in |
+| `m` (or `Shift+F10`) | Pane actions: Continue, Back, set every table's mode, accept the load order, the acknowledgment, Start migration, Cancel migration while it runs and Close once it is done |
+
+The keys are listed under the Migrate Wizard context in Settings > Keybindings.
+
 ## Text fields
 
 | Keys | Action |

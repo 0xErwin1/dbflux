@@ -6,7 +6,6 @@ use crate::handle::DocumentEvent;
 use crate::pane::{BoxedDocEventCallback, PaneHandle};
 use crate::types::{DocumentIcon, DocumentKind, DocumentMetaSnapshot};
 use dbflux_core::RefreshPolicy;
-use dbflux_core::keymap_types::ContextId;
 use gpui::{App, Entity, IntoElement};
 
 impl MigrateWizard {
@@ -18,7 +17,7 @@ impl MigrateWizard {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::MigrateWizard,
             // render
@@ -31,8 +30,11 @@ impl MigrateWizard {
                 let e = entity.clone();
                 Box::new(move |w, cx| e.update(cx, |d, cx| d.focus(w, cx)))
             },
-            // dispatch_command — every phase handles its own keys.
-            Box::new(|_cmd, _w, _cx| false),
+            // dispatch_command
+            {
+                let e = entity.clone();
+                Box::new(move |cmd, w, cx| e.update(cx, |d, cx| d.dispatch_command(cmd, w, cx)))
+            },
             // meta_snapshot
             {
                 let e = entity.clone();
@@ -59,7 +61,10 @@ impl MigrateWizard {
             // connection_id — the wizard spans a source and a target connection
             Box::new(|_cx| None),
             // active_context
-            Box::new(|_cx| ContextId::Global),
+            {
+                let e = entity.clone();
+                Box::new(move |cx| e.read(cx).active_context())
+            },
             // change_summary
             Box::new(|_cx| None),
             // refresh_policy
@@ -91,6 +96,13 @@ impl MigrateWizard {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
+        });
+
+        pane
     }
 }

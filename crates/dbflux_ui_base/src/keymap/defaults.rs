@@ -42,6 +42,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(dashboard_layer());
     stack.add_layer(add_panel_picker_layer());
     stack.add_layer(mcp_approvals_layer());
+    stack.add_layer(migrate_wizard_layer());
 
     stack
 });
@@ -1947,6 +1948,78 @@ fn add_panel_picker_layer() -> KeymapLayer {
 
 /// Window-level keys of the settings window. Sections handle their own
 /// navigation keys below these.
+/// Keys of the migration wizard. Each step handles the list and field keys
+/// itself: J and K (or the arrows) move its cursor, H and L its field or tree,
+/// Enter or I works the item under the cursor, Space toggles it and Shift+J /
+/// Shift+K reorder a load-order row. Alt+L and Alt+H step the wizard forward
+/// and back, Ctrl+Enter continues or starts the run, and M lists the footer
+/// and step buttons. The step keys and Escape also work from a text field.
+fn migrate_wizard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::MigrateWizard);
+
+    for (key, command) in [
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("m", Command::OpenPaneActions),
+    ] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), command);
+    }
+
+    layer.bind(
+        KeyChord::new("k", Modifiers::shift()),
+        Command::MoveSelectedUp,
+    );
+    layer.bind(
+        KeyChord::new("j", Modifiers::shift()),
+        Command::MoveSelectedDown,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+
+    // From a text field too; on macOS Option with a letter types a character,
+    // so there the step keys stay out of the fields.
+    let step_predicate = if cfg!(target_os = "macos") {
+        "MigrateWizard && !Input && !Dropdown && !Modal"
+    } else {
+        "MigrateWizard && !Dropdown && !Modal"
+    };
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::alt()),
+        Command::NextPanelTab,
+        step_predicate,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::PrevPanelTab,
+        step_predicate,
+    );
+
+    let from_field = "MigrateWizard && !Dropdown && !Modal";
+    layer.bind_with_predicate(
+        KeyChord::new("enter", Modifiers::primary()),
+        Command::RunQuery,
+        from_field,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("escape", Modifiers::none()),
+        Command::Cancel,
+        from_field,
+    );
+
+    layer
+}
+
 /// Keys of the MCP approvals document: J and K move over the pending calls,
 /// A approves the selected one and R rejects it with the typed reason, Enter
 /// or I types the reason, and Escape brings the keyboard back from it.

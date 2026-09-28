@@ -691,6 +691,22 @@ diálogo, `Enter` o `Space` presionan el botón enfocado y `Escape` cancela.
 
 Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
 
+## Asistente de migración
+
+| Teclas | Acción |
+|--------|--------|
+| `Alt+l` / `Alt+h` | Continuar / volver, como los botones del pie (también desde un campo de texto, salvo en macOS) |
+| `Ctrl+Enter` / `Cmd+Enter` | Continuar; en el paso Confirmar, iniciar la migración |
+| `j` / `k` (o `Down` / `Up`) | Mover el cursor del paso |
+| `h` / `l` (o `Left` / `Right`) | Origen y destino: contraer o expandir el nodo, o pasar de un árbol al otro. Mapeo de tablas: moverse entre el nombre de destino, el modo y **Columnas…** de una fila |
+| `Enter` / `i` | Marcar una tabla de origen, elegir la base de destino, escribir en un campo, abrir un desplegable o el detalle de columnas |
+| `Space` | Alternar el elemento bajo el cursor; en Confirmar, marcar la confirmación del plan destructivo |
+| `Shift+k` / `Shift+j` | Subir / bajar una tabla en el orden de carga |
+| `Escape` | Salir de un campo de texto o cerrar el detalle de columnas |
+| `m` (o `Shift+F10`) | Acciones del panel: Continuar, Volver, fijar el modo de todas las tablas, aceptar el orden de carga, la confirmación, Iniciar migración, Cancelar migración mientras corre y Cerrar al terminar |
+
+Las teclas aparecen en el contexto Migrate Wizard de Settings > Keybindings.
+
 ## Campos de texto
 
 | Teclas | Acción |

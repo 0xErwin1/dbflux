@@ -1259,6 +1259,9 @@ pub enum ContextId {
 
     /// The MCP approvals document (pending calls list and decision).
     McpApprovals,
+
+    /// The table migration wizard document (its steps and footer).
+    MigrateWizard,
 }
 
 impl ContextId {
@@ -1302,6 +1305,7 @@ impl ContextId {
             ContextId::Dashboard => Some(ContextId::Global),
             ContextId::AddPanelPicker => None,
             ContextId::McpApprovals => Some(ContextId::Global),
+            ContextId::MigrateWizard => Some(ContextId::Global),
         }
     }
 
@@ -1392,6 +1396,7 @@ impl ContextId {
             ContextId::Dashboard => "Dashboard",
             ContextId::AddPanelPicker => "Add Panel Picker",
             ContextId::McpApprovals => "MCP Approvals",
+            ContextId::MigrateWizard => "Migrate Wizard",
         }
     }
 
@@ -1432,6 +1437,7 @@ impl ContextId {
             ContextId::Dashboard => "dashboard",
             ContextId::AddPanelPicker => "add_panel_picker",
             ContextId::McpApprovals => "mcp_approvals",
+            ContextId::MigrateWizard => "migrate_wizard",
         }
     }
 
@@ -1472,6 +1478,7 @@ impl ContextId {
             ContextId::Dashboard,
             ContextId::AddPanelPicker,
             ContextId::McpApprovals,
+            ContextId::MigrateWizard,
         ]
     }
 
@@ -1512,6 +1519,7 @@ impl ContextId {
             ContextId::Dashboard => "Dashboard",
             ContextId::AddPanelPicker => "AddPanelPicker",
             ContextId::McpApprovals => "McpApprovals",
+            ContextId::MigrateWizard => "MigrateWizard",
         }
     }
 
@@ -1544,6 +1552,7 @@ impl ContextId {
             ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
             ContextId::AddPanelPicker => "AddPanelPicker && !Input",
             ContextId::McpApprovals => "McpApprovals && !Input && !Modal",
+            ContextId::MigrateWizard => "MigrateWizard && !Input && !Dropdown && !Modal",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

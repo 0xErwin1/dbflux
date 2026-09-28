@@ -2330,3 +2330,69 @@ fn add_panel_picker_keys_switch_tabs_and_move_the_lists() {
         assert!(runs_command(action.as_ref(), Command::NextPanelTab));
     }
 }
+
+/// The migrate wizard keys run as commands on every step: the lists and
+/// fields move with j / k and h / l, Alt+L / Alt+H step the wizard, Ctrl+Enter
+/// continues or starts the run, and a text field keeps its letters while the
+/// step keys and Escape still reach the wizard from it.
+#[test]
+fn migrate_wizard_keys_step_the_wizard_and_drive_each_step() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::MigrateWizard, &[]);
+    let step = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    let expected = [
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("shift-k", Command::MoveSelectedUp),
+        ("shift-j", Command::MoveSelectedDown),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("escape", Command::Cancel),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+    ];
+
+    for (keys, command) in expected {
+        let action = top_action(&keymap, keys, &step)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the migrate wizard"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the migrate wizard"
+        );
+    }
+
+    let primary_enter = if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    };
+    let action = top_action(&keymap, primary_enter, &step).expect("Ctrl+Enter bound");
+    assert!(runs_command(action.as_ref(), Command::RunQuery));
+
+    for keys in ["j", "k", "h", "l", "i", "m"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` stays text in a wizard field"
+        );
+    }
+
+    let escape = top_action(&keymap, "escape", &field).expect("Escape bound in a field");
+    assert!(
+        runs_command(escape.as_ref(), Command::Cancel),
+        "Escape brings the keyboard back from a wizard field"
+    );
+}

@@ -2314,6 +2314,7 @@ document:
       mode_placeholder: Modo
       unset_option: "(sin asignar)"
       set_all_label: "Establecer todo:"
+      set_all_to: "Poner todas en %{mode}"
       columns_button: "Columnas…"
       unmapped_count:
         one: "%{count} columna sin asignar"
@@ -3731,6 +3732,7 @@ settings:
       dashboard: "Panel de control"
       add_panel_picker: "Selector de panel"
       mcp_approvals: "Aprobaciones MCP"
+      migrate_wizard: "Asistente de migración"
     category:
       global: Global
       focus: Foco

@@ -35,6 +35,7 @@ use dbflux_components::components::tree_nav::{
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{ChromeColors, Heights, Spacing};
+use dbflux_core::keymap_types::Command;
 use dbflux_core::{TableRef, transfer_compatible};
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use dbflux_ui_base::object_tree::{
@@ -947,48 +948,49 @@ impl SourceTargetPhase {
         cx.notify();
     }
 
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let modifiers = event.keystroke.modifiers;
-
-        // Shift+Tab switches the active tree; plain Tab is deliberately left
-        // unhandled so it can move focus onward to the footer's Continue button
-        // (keyboard-first — the wizard must never trap Tab on this phase).
-        if modifiers.shift && event.keystroke.key == "tab" {
-            self.active_side = match self.active_side {
-                TreeSide::Source => TreeSide::Target,
-                TreeSide::Target => TreeSide::Source,
-            };
-            cx.notify();
-            return;
-        }
-
-        if modifiers != Modifiers::none() {
-            return;
-        }
-
+    /// Runs a keymap command on the two trees: J / K move the cursor of the
+    /// active tree, H / Left collapse the node under it or move to the
+    /// source tree, L / Right expand it or move to the target tree, and Enter
+    /// or Space checks a source table, chooses a target database or toggles a
+    /// node. Returns whether the command applied.
+    pub fn handle_command(&mut self, command: Command, cx: &mut Context<Self>) -> bool {
         let side = self.active_side;
-        match event.keystroke.key.as_str() {
-            "down" | "j" => {
+
+        match command {
+            Command::SelectNext => {
                 self.side_mut(side).tree.move_next();
                 cx.notify();
+                true
             }
-            "up" | "k" => {
+            Command::SelectPrev => {
                 self.side_mut(side).tree.move_prev();
                 cx.notify();
+                true
             }
-            "left" => self.collapse_cursor(side, cx),
-            "right" => self.expand_cursor(side, cx),
-            "enter" | "space" => self.activate_current(side, cx),
-            _ => {}
+            Command::ColumnLeft => {
+                if !self.collapse_cursor(side, cx) && side == TreeSide::Target {
+                    self.active_side = TreeSide::Source;
+                    cx.notify();
+                }
+                true
+            }
+            Command::ColumnRight => {
+                if !self.expand_cursor(side, cx) && side == TreeSide::Source {
+                    self.active_side = TreeSide::Target;
+                    cx.notify();
+                }
+                true
+            }
+            Command::Execute | Command::ExpandCollapse => {
+                self.activate_current(side, cx);
+                true
+            }
+            _ => false,
         }
     }
 
-    fn collapse_cursor(&mut self, side: TreeSide, cx: &mut Context<Self>) {
+    /// Collapses the expanded node under the cursor. Returns whether it did.
+    fn collapse_cursor(&mut self, side: TreeSide, cx: &mut Context<Self>) -> bool {
         let should = self
             .side(side)
             .tree
@@ -997,9 +999,11 @@ impl SourceTargetPhase {
         if should {
             self.activate_current(side, cx);
         }
+        should
     }
 
-    fn expand_cursor(&mut self, side: TreeSide, cx: &mut Context<Self>) {
+    /// Expands the collapsed node under the cursor. Returns whether it did.
+    fn expand_cursor(&mut self, side: TreeSide, cx: &mut Context<Self>) -> bool {
         let should = self
             .side(side)
             .tree
@@ -1008,6 +1012,7 @@ impl SourceTargetPhase {
         if should {
             self.activate_current(side, cx);
         }
+        should
     }
 }
 
@@ -1016,9 +1021,6 @@ impl Render for SourceTargetPhase {
         div()
             .track_focus(&self.focus_handle)
             .key_context("MigrateSourceTarget")
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.handle_key_down(event, window, cx);
-            }))
             .flex()
             .flex_col()
             .gap(Spacing::SM)
@@ -3392,5 +3394,224 @@ pub(crate) mod shared_coordinator_tests {
         let rows = phase.read_with(cx, |phase, _| target_flat_row_ids(phase));
         assert!(rows.contains(&database_node_id(target_id, "")));
         assert!(!rows.contains(&implicit_leaf));
+    }
+}
+
+/// Keyboard tests of the whole wizard: its keys arrive as keymap commands in
+/// the `MigrateWizard` context, the way the workspace routes them.
+#[cfg(test)]
+mod keyboard_tests {
+    use super::super::{MigrateWizard, WizardPhase};
+    use super::shared_coordinator_tests::{
+        PickerFakeConnection, connect_profile, db_schema, test_app_state, test_table,
+    };
+    use super::{TreePayload, TreeSide};
+    use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+    use dbflux_core::{DatabaseInfo, SchemaLoadingStrategy, TableRef};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use uuid::Uuid;
+
+    /// A wizard over a source profile with `app.public.users` checked and a
+    /// target profile with database `w`, hosted under the app keymap.
+    fn open_wizard(
+        cx: &mut TestAppContext,
+    ) -> (Entity<MigrateWizard>, Uuid, &mut VisualTestContext) {
+        init_keyboard_runtime(cx);
+        let state = test_app_state(cx);
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+
+        let source = PickerFakeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+        source
+            .databases
+            .lock()
+            .expect("databases")
+            .push(DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            });
+        source.set_schema(
+            "app",
+            db_schema("app", vec![test_table(Some("public"), "users")]),
+        );
+        connect_profile(&state, cx, source_id, source, None);
+
+        let target = PickerFakeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+        target
+            .databases
+            .lock()
+            .expect("databases")
+            .push(DatabaseInfo {
+                name: "w".into(),
+                is_current: true,
+            });
+        target.set_schema("w", db_schema("w", Vec::new()));
+        connect_profile(&state, cx, target_id, target, None);
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let mut wizard = MigrateWizard::new(state, cx);
+                    wizard.open(
+                        source_id,
+                        Some("app".to_string()),
+                        vec![TableRef {
+                            schema: Some("public".to_string()),
+                            name: "users".to_string(),
+                        }],
+                        window,
+                        cx,
+                    );
+                    wizard
+                })
+            },
+            |wizard, _cx| wizard.active_context(),
+            |wizard, command, window, cx| wizard.dispatch_command(command, window, cx),
+        );
+        window.run_until_parked();
+
+        let wizard = window.update(|_, cx| host.read(cx).document.clone());
+        (wizard, target_id, window)
+    }
+
+    fn phase(wizard: &Entity<MigrateWizard>, window: &mut VisualTestContext) -> WizardPhase {
+        window.update(|_, cx| wizard.read(cx).phase)
+    }
+
+    /// Walks the target tree by keys to database `w` of `target_id` and
+    /// chooses it: `l` moves to the target tree, `l` expands a profile, `j`
+    /// moves down, Enter chooses.
+    fn choose_target_by_keys(
+        wizard: &Entity<MigrateWizard>,
+        target_id: Uuid,
+        window: &mut VisualTestContext,
+    ) {
+        let picker = window.update(|_, cx| {
+            wizard
+                .read(cx)
+                .source_target
+                .clone()
+                .expect("the picker is mounted")
+        });
+
+        window.simulate_keystrokes("l");
+        assert!(
+            window.update(|_, cx| picker.read(cx).active_side == TreeSide::Target),
+            "`l` moves to the target tree"
+        );
+
+        for _ in 0..12 {
+            let (payload, expandable) = window.update(|_, cx| {
+                let phase = picker.read(cx);
+                let row = phase.target.tree.cursor_item();
+                let payload = row.and_then(|row| phase.target.model.payload(&row.id).cloned());
+                let expandable =
+                    row.is_some_and(|row| row.has_children && !row.selectable && !row.expanded);
+                (payload, expandable)
+            });
+
+            match payload {
+                Some(TreePayload::Database {
+                    profile_id,
+                    database,
+                }) if profile_id == target_id && database == "w" => {
+                    window.simulate_keystrokes("enter");
+                    return;
+                }
+                _ if expandable => window.simulate_keystrokes("l"),
+                _ => window.simulate_keystrokes("j"),
+            }
+            window.run_until_parked();
+        }
+
+        panic!("the target database was not reached by keys");
+    }
+
+    /// Every step is operable by keys: the target is chosen in its tree,
+    /// Alt+L continues, the mapping grid's mode list and column drill-in open
+    /// from the keyboard, the options field takes and gives back the keyboard,
+    /// and Alt+H steps back.
+    #[gpui::test]
+    fn the_wizard_steps_are_driven_by_keys(cx: &mut TestAppContext) {
+        let (wizard, target_id, window) = open_wizard(cx);
+        assert_eq!(phase(&wizard, window), WizardPhase::SourceTarget);
+
+        window.simulate_keystrokes("alt-l");
+        window.run_until_parked();
+        assert_eq!(
+            phase(&wizard, window),
+            WizardPhase::SourceTarget,
+            "Alt+L waits for a target"
+        );
+
+        choose_target_by_keys(&wizard, target_id, window);
+        window.simulate_keystrokes("alt-l");
+        window.run_until_parked();
+        assert_eq!(phase(&wizard, window), WizardPhase::TablesMapping);
+
+        let mapping = window.update(|_, cx| wizard.read(cx).mapping.clone().expect("mapping"));
+        window.simulate_keystrokes("l enter");
+        window.run_until_parked();
+        let (open, focused) = window.update(|window, cx| {
+            let dropdown = mapping
+                .read(cx)
+                .cursor_mode_dropdown()
+                .expect("a mapping row");
+            let dropdown = dropdown.read(cx);
+            (dropdown.is_open(), dropdown.is_focused(window))
+        });
+        assert!(open && focused, "Enter on the mode opens its list");
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        window.simulate_keystrokes("l enter");
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| mapping.read(cx).drilldown_open()),
+            "Enter on Columns opens the drill-in"
+        );
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| mapping.read(cx).drilldown_open()));
+
+        window.simulate_keystrokes("alt-l");
+        window.run_until_parked();
+        assert_eq!(phase(&wizard, window), WizardPhase::Options);
+
+        let options = window.update(|_, cx| wizard.read(cx).options.clone().expect("options"));
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert!(window.update(|window, cx| options.read(cx).segment_size_focused(window, cx)));
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|window, cx| options.read(cx).segment_size_focused(window, cx)));
+
+        window.simulate_keystrokes("alt-h");
+        window.run_until_parked();
+        assert_eq!(phase(&wizard, window), WizardPhase::TablesMapping);
+    }
+
+    /// The pane actions list Continue on the first step, enabled once the
+    /// step is ready.
+    #[gpui::test]
+    fn the_pane_actions_list_the_footer_buttons(cx: &mut TestAppContext) {
+        let (wizard, target_id, window) = open_wizard(cx);
+
+        let continue_enabled = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                wizard
+                    .read(cx)
+                    .pane_actions(&wizard, cx)
+                    .into_iter()
+                    .find(|action| action.id.as_ref() == "migrate-continue")
+                    .map(|action| action.enabled)
+            })
+        };
+
+        assert_eq!(continue_enabled(window), Some(false));
+        choose_target_by_keys(&wizard, target_id, window);
+        window.run_until_parked();
+        assert_eq!(continue_enabled(window), Some(true));
     }
 }

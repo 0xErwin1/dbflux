@@ -43,7 +43,9 @@ use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
 use crate::handle::DocumentEvent;
+use crate::pane::PaneAction;
 use crate::types::{DocumentId, DocumentState};
+use dbflux_core::keymap_types::{Command, ContextId};
 
 pub use column_mapping::TableMigrationConfig;
 use confirm_run::{ConfirmRunEvent, ConfirmRunInputs, ConfirmRunPhase, decide_order};
@@ -773,6 +775,168 @@ impl MigrateWizard {
         } else {
             format!("{name} / {database}")
         }
+    }
+
+    /// The key context the wizard reports while it is the active document.
+    pub fn active_context(&self) -> ContextId {
+        ContextId::MigrateWizard
+    }
+
+    /// Runs a keymap command: Alt+L / Alt+H (next / previous panel tab) step
+    /// the wizard like Continue and Back, Ctrl+Enter continues or, on the
+    /// Confirm step, starts the run, and every other command goes to the
+    /// active step. Returns whether the command applied.
+    pub fn dispatch_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match command {
+            Command::NextPanelTab => {
+                self.continue_from_keyboard(window, cx);
+                true
+            }
+            Command::PrevPanelTab => {
+                if !self.advancing && self.shows_back(cx) {
+                    self.go_back(cx);
+                }
+                true
+            }
+            Command::RunQuery if !matches!(self.phase, WizardPhase::Confirm | WizardPhase::Run) => {
+                self.continue_from_keyboard(window, cx);
+                true
+            }
+            command => self.dispatch_to_phase(command, window, cx),
+        }
+    }
+
+    /// Continue from the keyboard: the same guard as the footer button.
+    fn continue_from_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if next_phase(self.phase).is_some() && !self.advancing && self.continue_enabled(cx) {
+            self.advance(window, cx);
+        }
+    }
+
+    /// Whether the footer shows Back: a step before this one exists and no
+    /// run is live or finished.
+    fn shows_back(&self, cx: &App) -> bool {
+        let run_state = self
+            .confirm_run
+            .as_ref()
+            .map(|phase| phase.read(cx).run_state());
+
+        prev_phase(self.phase).is_some()
+            && !matches!(run_state, Some(RunState::Running | RunState::Done))
+    }
+
+    fn dispatch_to_phase(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match self.phase {
+            WizardPhase::SourceTarget => self.source_target.clone().is_some_and(|phase| {
+                phase.update(cx, |phase, cx| phase.handle_command(command, cx))
+            }),
+            WizardPhase::TablesMapping => self.mapping.clone().is_some_and(|phase| {
+                phase.update(cx, |phase, cx| phase.handle_command(command, window, cx))
+            }),
+            WizardPhase::Options => self.options.clone().is_some_and(|phase| {
+                phase.update(cx, |phase, cx| phase.handle_command(command, window, cx))
+            }),
+            WizardPhase::Confirm | WizardPhase::Run => {
+                self.confirm_run.clone().is_some_and(|phase| {
+                    phase.update(cx, |phase, cx| phase.handle_command(command, cx))
+                })
+            }
+        }
+    }
+
+    /// The footer and step buttons, for the pane actions menu (`m`): Continue
+    /// and Back, the set-all modes of the mapping grid, the confirmation, load
+    /// order and start of the Confirm step, Cancel migration while the run is
+    /// live and Close once it is done.
+    pub fn pane_actions(&self, entity: &Entity<Self>, cx: &App) -> Vec<PaneAction> {
+        let mut actions = Vec::new();
+        let context = ContextId::MigrateWizard;
+
+        if next_phase(self.phase).is_some() {
+            actions.push(
+                PaneAction::command(
+                    "migrate-continue",
+                    dbflux_i18n::t!("document.migrate_wizard.footer.continue"),
+                    Command::NextPanelTab,
+                    context,
+                )
+                .icon(AppIcon::ChevronRight)
+                .enabled(!self.advancing && self.continue_enabled(cx)),
+            );
+        }
+
+        if self.shows_back(cx) {
+            actions.push(
+                PaneAction::command(
+                    "migrate-back",
+                    dbflux_i18n::t!("document.migrate_wizard.footer.back"),
+                    Command::PrevPanelTab,
+                    context,
+                )
+                .icon(AppIcon::ChevronLeft)
+                .enabled(!self.advancing),
+            );
+        }
+
+        match self.phase {
+            WizardPhase::TablesMapping => {
+                if let Some(mapping) = self.mapping.as_ref() {
+                    actions.extend(mapping.read(cx).set_all_actions(mapping));
+                }
+            }
+            WizardPhase::Confirm | WizardPhase::Run => {
+                if let Some(confirm_run) = self.confirm_run.as_ref() {
+                    actions.extend(confirm_run.read(cx).pane_actions(confirm_run));
+                }
+            }
+            WizardPhase::SourceTarget | WizardPhase::Options => {}
+        }
+
+        let run_state = self
+            .confirm_run
+            .as_ref()
+            .map(|phase| phase.read(cx).run_state());
+
+        if run_state == Some(RunState::Running) {
+            let wizard = entity.downgrade();
+            actions.push(
+                PaneAction::callback(
+                    "migrate-cancel-run",
+                    dbflux_i18n::t!("document.migrate_wizard.footer.cancel_migration"),
+                    move |_window, cx| {
+                        wizard
+                            .update(cx, |wizard, cx| wizard.cancel_run(cx))
+                            .log_err();
+                    },
+                )
+                .icon(AppIcon::CircleX),
+            );
+        }
+
+        if run_state == Some(RunState::Done) {
+            let wizard = entity.downgrade();
+            actions.push(PaneAction::callback(
+                "migrate-close",
+                dbflux_i18n::t!("document.migrate_wizard.footer.close"),
+                move |_window, cx| {
+                    wizard
+                        .update(cx, |wizard, cx| wizard.request_close(cx))
+                        .log_err();
+                },
+            ));
+        }
+
+        actions
     }
 
     /// Footer Back button: steps one phase backwards through the linear flow.

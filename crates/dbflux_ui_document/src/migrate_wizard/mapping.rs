@@ -25,9 +25,12 @@ use dbflux_components::controls::{
     InputState,
 };
 use dbflux_components::icons::AppIcon;
+use dbflux_components::primitives::{FocusShape, focus_ring};
 use dbflux_components::primitives::{Icon, Text};
+use dbflux_components::tokens::ChamferCut;
 use dbflux_components::tokens::{Heights, Spacing};
-use dbflux_core::{TableRef, TransferColumn};
+use dbflux_core::keymap_types::Command;
+use dbflux_core::{LogErr, TableRef, TransferColumn};
 use dbflux_transfer::TableMappingMode;
 use dbflux_ui_base::app_state_entity::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -132,6 +135,26 @@ struct MappingRow {
     target_lookup: NodeLoad,
 }
 
+/// The control of a grid row the keyboard cursor is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MappingField {
+    Target,
+    Mode,
+    Columns,
+}
+
+impl MappingField {
+    /// The control to the right (`forward`) or left, stopping at the ends.
+    fn step(self, forward: bool) -> Self {
+        match (self, forward) {
+            (MappingField::Target, true) => MappingField::Mode,
+            (MappingField::Mode, true) | (MappingField::Columns, true) => MappingField::Columns,
+            (MappingField::Columns, false) => MappingField::Mode,
+            (MappingField::Mode, false) | (MappingField::Target, false) => MappingField::Target,
+        }
+    }
+}
+
 /// The open column drill-in: which row it edits and one source-column
 /// `Dropdown` per target column (index 0 = `(unset)` = NULL).
 struct BindingEditor {
@@ -150,6 +173,11 @@ pub struct MappingPhase {
     supports_truncate: bool,
     rows: Vec<MappingRow>,
     editor: Option<BindingEditor>,
+    /// Keyboard cursor: the grid row and its control, and the binding row of
+    /// an open drill-in.
+    cursor_row: usize,
+    cursor_field: MappingField,
+    binding_cursor: usize,
     _subscriptions: Vec<Subscription>,
     _editor_subscriptions: Vec<Subscription>,
 }
@@ -181,6 +209,9 @@ impl MappingPhase {
             supports_truncate,
             rows: Vec::new(),
             editor: None,
+            cursor_row: 0,
+            cursor_field: MappingField::Target,
+            binding_cursor: 0,
             _subscriptions: Vec::new(),
             _editor_subscriptions: Vec::new(),
         };
@@ -285,10 +316,10 @@ impl MappingPhase {
             let input_sub = cx.subscribe_in(
                 &target_input,
                 window,
-                move |this, _entity, event: &InputEvent, window, cx| {
-                    if let InputEvent::Change = event {
-                        this.on_target_name_changed(row_index, window, cx);
-                    }
+                move |this, _entity, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.on_target_name_changed(row_index, window, cx),
+                    InputEvent::PressEnter { .. } => this.focus_handle.focus(window, cx),
+                    _ => {}
                 },
             );
             let mode_sub = cx.subscribe(
@@ -516,6 +547,172 @@ impl MappingPhase {
         }
     }
 
+    /// Runs a keymap command on the grid or the open drill-in. In the grid,
+    /// J / K move between rows, H / L between a row's target name, mode and
+    /// Columns button, and Enter, I or Space type in the name, open the mode
+    /// list or open the drill-in. In the drill-in J / K move between target
+    /// columns, Enter opens the source column list, and Escape or H close it.
+    /// Escape in a target name field hands the keyboard back to the grid.
+    /// Returns whether the command applied.
+    pub fn handle_command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.target_input_focused(window, cx) {
+            if command == Command::Cancel {
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+                return true;
+            }
+            return false;
+        }
+
+        if let Some(editor) = self.editor.as_ref() {
+            let count = editor.dropdowns.len();
+
+            return match command {
+                Command::SelectNext => {
+                    self.binding_cursor = (self.binding_cursor + 1).min(count.saturating_sub(1));
+                    cx.notify();
+                    true
+                }
+                Command::SelectPrev => {
+                    self.binding_cursor = self.binding_cursor.saturating_sub(1);
+                    cx.notify();
+                    true
+                }
+                Command::Execute | Command::ExpandCollapse => {
+                    if let Some(dropdown) = editor.dropdowns.get(self.binding_cursor).cloned() {
+                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    }
+                    true
+                }
+                Command::Cancel | Command::ColumnLeft => {
+                    self.close_drilldown(cx);
+                    self.focus_handle.focus(window, cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        match command {
+            Command::SelectNext => {
+                self.cursor_row = (self.cursor_row + 1).min(self.rows.len().saturating_sub(1));
+                cx.notify();
+                true
+            }
+            Command::SelectPrev => {
+                self.cursor_row = self.cursor_row.saturating_sub(1);
+                cx.notify();
+                true
+            }
+            Command::ColumnLeft | Command::ColumnRight => {
+                self.cursor_field = self.cursor_field.step(command == Command::ColumnRight);
+                cx.notify();
+                true
+            }
+            Command::Execute | Command::ExpandCollapse => {
+                self.activate_cursor(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the column drill-in is open, for keyboard tests.
+    #[cfg(test)]
+    pub(crate) fn drilldown_open(&self) -> bool {
+        self.editor.is_some()
+    }
+
+    /// The mode dropdown of the row under the cursor, for keyboard tests.
+    #[cfg(test)]
+    pub(crate) fn cursor_mode_dropdown(&self) -> Option<Entity<Dropdown>> {
+        self.rows
+            .get(self.cursor_row)
+            .map(|row| row.mode_dropdown.clone())
+    }
+
+    fn target_input_focused(&self, window: &Window, cx: &App) -> bool {
+        self.rows.iter().any(|row| {
+            row.target_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        })
+    }
+
+    fn activate_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let row_index = self.cursor_row;
+        let Some(row) = self.rows.get(row_index) else {
+            return;
+        };
+
+        match self.cursor_field {
+            MappingField::Target => {
+                let input = row.target_input.clone();
+                input.update(cx, |state, cx| state.focus(window, cx));
+            }
+            MappingField::Mode => {
+                let dropdown = row.mode_dropdown.clone();
+                dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            MappingField::Columns => {
+                if !matches!(row.target_lookup, NodeLoad::Loading) {
+                    self.binding_cursor = 0;
+                    self.open_drilldown(row_index, cx);
+                }
+            }
+        }
+    }
+
+    /// The bulk mode buttons of the grid, for the wizard's pane actions menu.
+    pub fn set_all_actions(&self, entity: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        if self.editor.is_some() {
+            return Vec::new();
+        }
+
+        let mut modes = vec![TableMappingMode::Existing];
+        if self.supports_truncate {
+            modes.push(TableMappingMode::Truncate);
+        }
+        modes.push(TableMappingMode::Skip);
+
+        modes
+            .into_iter()
+            .map(|mode| {
+                let phase = entity.downgrade();
+                let (id, label_key) = match mode {
+                    TableMappingMode::Existing => (
+                        "migrate-set-all-existing",
+                        "document.migrate_wizard.confirm.mode_label.existing",
+                    ),
+                    TableMappingMode::Truncate => (
+                        "migrate-set-all-truncate",
+                        "document.migrate_wizard.confirm.mode_label.truncate",
+                    ),
+                    _ => (
+                        "migrate-set-all-skip",
+                        "document.migrate_wizard.confirm.mode_label.skip",
+                    ),
+                };
+                let label = dbflux_i18n::t!(
+                    "document.migrate_wizard.mapping.set_all_to",
+                    mode = dbflux_i18n::t!(label_key)
+                );
+
+                crate::pane::PaneAction::callback(id, label, move |_window, cx| {
+                    phase
+                        .update(cx, |phase, cx| phase.set_all_modes(mode, cx))
+                        .log_err();
+                })
+            })
+            .collect()
+    }
+
     fn set_all_modes(&mut self, mode: TableMappingMode, cx: &mut Context<Self>) {
         let mode_options = mapping_mode_options(self.supports_truncate);
         let selected = mode_options.iter().position(|(_, m)| *m == mode);
@@ -532,10 +729,13 @@ impl MappingPhase {
 }
 
 impl Render for MappingPhase {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let keyboard = self.focus_handle.is_focused(window);
         let body = match self.editor.as_ref().map(|editor| editor.row_index) {
-            Some(row_index) => self.render_drilldown(row_index, cx).into_any_element(),
-            None => self.render_grid(cx).into_any_element(),
+            Some(row_index) => self
+                .render_drilldown(row_index, keyboard, cx)
+                .into_any_element(),
+            None => self.render_grid(keyboard, cx).into_any_element(),
         };
 
         div()
@@ -551,12 +751,15 @@ impl Render for MappingPhase {
 }
 
 impl MappingPhase {
-    fn render_grid(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_grid(&self, keyboard: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let rows: Vec<AnyElement> = self
             .rows
             .iter()
             .enumerate()
-            .map(|(index, row)| self.render_grid_row(index, row, cx))
+            .map(|(index, row)| {
+                let cursor = (keyboard && index == self.cursor_row).then_some(self.cursor_field);
+                self.render_grid_row(index, row, cursor, cx)
+            })
             .collect();
 
         let blocking_errors = self.blocking_errors();
@@ -638,9 +841,19 @@ impl MappingPhase {
         &self,
         row_index: usize,
         row: &MappingRow,
+        cursor: Option<MappingField>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme().clone();
+        let ring = |field: MappingField, child: AnyElement, cx: &App| {
+            focus_ring(
+                cursor == Some(field),
+                FocusShape::Chamfer(ChamferCut::CONTROL),
+                None,
+                child,
+                cx,
+            )
+        };
         let unmatched = row.config.unmatched_source_names();
 
         let transform_cell = div()
@@ -648,7 +861,8 @@ impl MappingPhase {
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .child(
+            .child(ring(
+                MappingField::Columns,
                 Button::new(
                     SharedString::from(format!("migrate-transform-{row_index}")),
                     dbflux_i18n::t!("document.migrate_wizard.mapping.columns_button"),
@@ -658,8 +872,10 @@ impl MappingPhase {
                 .disabled(matches!(row.target_lookup, NodeLoad::Loading))
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.open_drilldown(row_index, cx);
-                })),
-            )
+                }))
+                .into_any_element(),
+                cx,
+            ))
             .when(!unmatched.is_empty(), |parent| {
                 parent.child(
                     Text::caption(crate::labels::migrate_mapping_unmapped_count_label(
@@ -685,16 +901,34 @@ impl MappingPhase {
                     .child(Text::body(row.config.source_table.qualified_name())),
             )
             .child(
-                div()
-                    .w(TARGET_COL_W)
-                    .child(Input::new(&row.target_input).small().w_full()),
+                ring(
+                    MappingField::Target,
+                    Input::new(&row.target_input)
+                        .small()
+                        .w_full()
+                        .into_any_element(),
+                    cx,
+                )
+                .w(TARGET_COL_W),
             )
-            .child(div().w(MODE_COL_W).child(row.mode_dropdown.clone()))
+            .child(
+                ring(
+                    MappingField::Mode,
+                    row.mode_dropdown.clone().into_any_element(),
+                    cx,
+                )
+                .w(MODE_COL_W),
+            )
             .child(transform_cell)
             .into_any_element()
     }
 
-    fn render_drilldown(&self, row_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_drilldown(
+        &self,
+        row_index: usize,
+        keyboard: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let Some(row) = self.rows.get(row_index) else {
             return div().into_any_element();
@@ -709,8 +943,10 @@ impl MappingPhase {
             .target_columns
             .iter()
             .zip(editor.dropdowns.iter())
-            .map(|(target_column, dropdown)| {
-                render_binding_row(&target_column.name, dropdown, &theme)
+            .enumerate()
+            .map(|(index, (target_column, dropdown))| {
+                let focused = keyboard && index == self.binding_cursor;
+                render_binding_row(&target_column.name, dropdown, focused, &theme, cx)
             })
             .collect();
 
@@ -813,7 +1049,9 @@ fn render_grid_header(cx: &mut Context<MappingPhase>) -> impl IntoElement {
 fn render_binding_row(
     target_name: &str,
     dropdown: &Entity<Dropdown>,
+    focused: bool,
     theme: &gpui_component::Theme,
+    cx: &App,
 ) -> AnyElement {
     div()
         .flex()
@@ -831,7 +1069,16 @@ fn render_binding_row(
                 .small()
                 .color(theme.muted_foreground),
         )
-        .child(div().w(TARGET_COL_W).child(dropdown.clone()))
+        .child(
+            focus_ring(
+                focused,
+                FocusShape::Chamfer(ChamferCut::CONTROL),
+                None,
+                dropdown.clone(),
+                cx,
+            )
+            .w(TARGET_COL_W),
+        )
         .into_any_element()
 }
 

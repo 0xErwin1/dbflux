@@ -4162,6 +4162,51 @@ mod tab_close_request_tests {
         assert!(pending.is_empty(), "`a` approves the selected call");
     }
 
+    /// An open migrate wizard reports its own key context, and every command
+    /// its layer binds reaches it through the workspace's dispatch domains.
+    #[gpui::test]
+    fn the_migrate_wizard_keys_reach_the_wizard(cx: &mut TestAppContext) {
+        use dbflux_core::TableRef;
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_migrate_wizard(
+                    uuid::Uuid::new_v4(),
+                    None,
+                    vec![TableRef::new("users")],
+                    window,
+                    cx,
+                );
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let context = window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)));
+        assert_eq!(context, crate::keymap::ContextId::MigrateWizard);
+
+        for command in [
+            Command::SelectNext,
+            Command::SelectPrev,
+            Command::ColumnLeft,
+            Command::ColumnRight,
+            Command::Execute,
+            Command::ExpandCollapse,
+            Command::MoveSelectedUp,
+            Command::MoveSelectedDown,
+            Command::NextPanelTab,
+            Command::PrevPanelTab,
+            Command::RunQuery,
+            Command::Cancel,
+        ] {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.dispatch(command, window, cx));
+            });
+        }
+    }
+
     /// The Migrate action opens the wizard as a tab; repeating it for the same
     /// selection focuses that tab, and a different selection gets its own.
     #[gpui::test]

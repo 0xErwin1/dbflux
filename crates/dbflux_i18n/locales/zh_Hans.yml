@@ -2314,6 +2314,7 @@ document:
       mode_placeholder: 模式
       unset_option: （未设置）
       set_all_label: 全部设置：
+      set_all_to: "全部设为%{mode}"
       columns_button: 列…
       unmapped_count:
         one: "%{count} 个未映射"
@@ -3731,6 +3732,7 @@ settings:
       dashboard: "仪表板"
       add_panel_picker: "添加面板选择器"
       mcp_approvals: "MCP 审批"
+      migrate_wizard: "迁移向导"
     category:
       global: 全局
       focus: 聚焦

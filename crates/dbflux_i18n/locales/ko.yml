@@ -2314,6 +2314,7 @@ document:
       mode_placeholder: 모드
       unset_option: "(설정 안 함)"
       set_all_label: "모두 설정:"
+      set_all_to: "모두 %{mode}(으)로 설정"
       columns_button: "열…"
       unmapped_count:
         one: "%{count}개 매핑되지 않음"
@@ -3730,6 +3731,7 @@ settings:
       dashboard: "대시보드"
       add_panel_picker: "패널 추가 선택기"
       mcp_approvals: "MCP 승인"
+      migrate_wizard: "마이그레이션 마법사"
     category:
       global: 전역
       focus: 포커스

@@ -2314,6 +2314,7 @@ document:
       mode_placeholder: Mode
       unset_option: "(unset)"
       set_all_label: "Set all:"
+      set_all_to: "Set all to %{mode}"
       columns_button: "Columns…"
       unmapped_count:
         one: "%{count} unmapped"
@@ -3731,6 +3732,7 @@ settings:
       dashboard: "Dashboard"
       add_panel_picker: "Add Panel Picker"
       mcp_approvals: "MCP Approvals"
+      migrate_wizard: "Migrate Wizard"
     category:
       global: Global
       focus: Focus
