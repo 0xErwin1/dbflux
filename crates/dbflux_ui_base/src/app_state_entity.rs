@@ -24,6 +24,20 @@ use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
 use crate::user_error::{ErrorKind, UserFacingError};
 
+/// Publishes the Vim mode setting to `dbflux_components::vim::VimSettingGlobal`
+/// now and after every app-state change, so editors outside the code editor
+/// follow Settings > General live.
+pub fn publish_vim_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let enabled = app_state.read(cx).general_settings().vim_mode;
+    dbflux_components::vim::set_vim_enabled(cx, enabled);
+
+    cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
+        let enabled = app_state.read(cx).general_settings().vim_mode;
+        dbflux_components::vim::set_vim_enabled(cx, enabled);
+    })
+    .detach();
+}
+
 /// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
 ///
 /// The durable row remains protected by the configuration loader; this boundary
@@ -538,5 +552,48 @@ mod tests {
         assert!(diagnostics.is_empty());
 
         assert!(drain_scripts_directory_diagnostics(&mut diagnostics).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod vim_setting_tests {
+    use super::{AppStateChanged, AppStateEntity, publish_vim_setting};
+    use dbflux_components::vim::vim_enabled;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use gpui::{AppContext as _, TestAppContext};
+
+    /// The global starts from the saved setting and follows every later
+    /// save, which is how editors outside the code editor learn about it.
+    #[gpui::test]
+    fn the_vim_setting_is_published_and_followed(cx: &mut TestAppContext) {
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_vim_setting(&app_state, cx));
+        assert!(!cx.update(|cx| vim_enabled(cx)));
+
+        let set = |enabled: bool, cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    let mut settings = state.general_settings().clone();
+                    settings.vim_mode = enabled;
+                    state.update_general_settings(settings);
+                    cx.emit(AppStateChanged);
+                });
+            });
+            cx.run_until_parked();
+        };
+
+        set(true, cx);
+        assert!(cx.update(|cx| vim_enabled(cx)));
+
+        set(false, cx);
+        assert!(!cx.update(|cx| vim_enabled(cx)));
     }
 }

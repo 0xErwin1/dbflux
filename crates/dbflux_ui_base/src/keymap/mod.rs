@@ -298,10 +298,7 @@ pub fn init_keymap(cx: &mut App) {
         },
     )));
 
-    let recorder = cx.intercept_keystrokes(|event, _window, cx| {
-        cx.default_global::<LastKeystroke>().0 = Some(event.keystroke.clone());
-    });
-    cx.default_global::<LastKeystroke>().1 = Some(recorder);
+    dbflux_components::actions::record_last_keystroke(cx);
 }
 
 /// Keys that open the code editor's replace panel on Linux and Windows,
@@ -314,19 +311,7 @@ const CODE_EDITOR_REPLACE_KEYS: &str = "ctrl-shift-h";
 #[cfg(not(target_os = "macos"))]
 const CODE_EDITOR_INPUT_PREDICATE: &str = "CodeEditor > Input";
 
-/// The last key pressed in any window, and the interceptor that records it.
-#[derive(Default)]
-struct LastKeystroke(Option<Keystroke>, Option<gpui::Subscription>);
-
-impl Global for LastKeystroke {}
-
-/// The key whose binding is being dispatched: interceptors run before key
-/// bindings, so while a binding's action runs this is the keystroke that
-/// matched it (the last one of a key sequence).
-pub fn last_keystroke(cx: &App) -> Option<Keystroke> {
-    cx.try_global::<LastKeystroke>()
-        .and_then(|recorded| recorded.0.clone())
-}
+pub use dbflux_components::actions::last_keystroke;
 
 /// Registers `source` as a producer of native GPUI bindings generated from
 /// the effective keymap, and binds what it produces now. Every registered

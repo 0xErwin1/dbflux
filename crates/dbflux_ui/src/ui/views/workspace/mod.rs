@@ -434,6 +434,7 @@ impl Workspace {
         cx.set_global(AppStateGlobal {
             entity: app_state.clone(),
         });
+        dbflux_ui_base::app_state_entity::publish_vim_setting(&app_state, cx);
 
         // Subscribed before the startup diagnostics below are reported, so
         // Open Last Error in Audit also reaches those.
