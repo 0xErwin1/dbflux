@@ -2198,9 +2198,18 @@ mod tests {
 
     /// Opens a keymap-driven PostgreSQL form with the keyboard in the form.
     fn open_postgres_form(cx: &mut TestAppContext) -> WindowHandle<ConnectionManagerWindow> {
+        open_postgres_form_with(cx, |_| {})
+    }
+
+    /// [`open_postgres_form`] after `seed` prepares the app state.
+    fn open_postgres_form_with(
+        cx: &mut TestAppContext,
+        seed: impl FnOnce(&mut AppStateEntity),
+    ) -> WindowHandle<ConnectionManagerWindow> {
         init_form_test_runtime(cx);
         cx.update(dbflux_ui_base::keymap::init_keymap);
         let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        app_state.update(cx, |state, _| seed(state));
         let window = cx
             .update(|cx| {
                 cx.open_window(WindowOptions::default(), |window, cx| {
@@ -2458,6 +2467,143 @@ mod tests {
 
         cx.simulate_keystrokes(window.into(), "h h");
         assert_eq!(form_state(window, &mut cx).0, FormFocus::TestConnection);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The Settings tab ring stops on each phase's hook dropdown before its
+    /// extra hooks input; Enter hands the dropdown the keyboard and Escape
+    /// gives it back to the form.
+    #[::core::prelude::v1::test]
+    fn the_settings_ring_opens_the_hook_dropdowns() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Settings;
+                manager.form_focus = FormFocus::SettingsRequiresPreview;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes(window.into(), "j");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::SettingsPreConnectHook
+        );
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        let (focused, open) = window
+            .update(&mut cx, |manager, window, cx| {
+                let dropdown = manager.settings_tab.conn_pre_hook_dropdown.read(cx);
+                (dropdown.is_focused(window), dropdown.is_open())
+            })
+            .expect("window is open");
+        assert!(focused && open, "Enter opens the pre-connect hook dropdown");
+
+        cx.simulate_keystrokes(window.into(), "escape");
+        let root_focused = window
+            .update(&mut cx, |manager, window, _| {
+                manager.focus_handle.is_focused(window)
+            })
+            .expect("window is open");
+        assert!(root_focused, "Escape gives the keyboard back to the form");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::SettingsPreConnectHook
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// The MCP tab has a ring: the MCP switch, the client filter, each
+    /// client, the selected client's access switch and its role picker.
+    #[cfg(feature = "mcp")]
+    #[::core::prelude::v1::test]
+    fn the_mcp_tab_is_driven_by_the_form_ring() {
+        use super::super::ActiveTab;
+        use dbflux_mcp::TrustedClientDto;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form_with(&mut cx, |state| {
+            state
+                .upsert_mcp_trusted_client(TrustedClientDto {
+                    id: "agent-a".to_string(),
+                    name: "Agent A".to_string(),
+                    issuer: None,
+                    active: true,
+                })
+                .expect("the client is stored");
+        });
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Mcp;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        let enabled = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.mcp_tab.conn_mcp_enabled)
+                .expect("window is open")
+        };
+        let before = enabled(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "j");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpEnabled);
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_ne!(enabled(&mut cx), before, "Enter toggles MCP access");
+
+        cx.simulate_keystrokes(window.into(), "j j");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpClient(0));
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(
+            window
+                .update(&mut cx, |manager, _, _| manager
+                    .mcp_tab
+                    .selected_actor_id
+                    .clone())
+                .expect("window is open")
+                .as_deref(),
+            Some("agent-a"),
+            "Enter selects the client"
+        );
+
+        cx.simulate_keystrokes(window.into(), "j enter");
+        let allowed = window
+            .update(&mut cx, |manager, _, _| {
+                manager
+                    .mcp_tab
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.actor_id == "agent-a")
+            })
+            .expect("window is open");
+        assert!(allowed, "Enter on the access switch allows the client");
+
+        cx.simulate_keystrokes(window.into(), "j enter");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::McpRole);
+        let role_focused = window
+            .update(&mut cx, |manager, window, cx| {
+                manager
+                    .mcp_tab
+                    .conn_mcp_role_dropdown
+                    .read(cx)
+                    .is_focused(window)
+            })
+            .expect("window is open");
+        assert!(role_focused, "Enter hands the role picker the keyboard");
 
         window
             .update(&mut cx, |_, window, _| window.remove_window())

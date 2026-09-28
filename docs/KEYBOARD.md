@@ -738,7 +738,11 @@ password, the form's ring continues through the driver's other fields, such as
 the auth profile picker of an AWS connection, which `Enter` opens, then the SSL
 mode, whose choice `Left` / `Right` or `Enter` change, and the certificate
 pickers, where `Enter` browses. After a failed connection test, the banner's
-**Copy** button sits between **Test connection** and **Save**. In the audit viewer, `Left` / `Right` on the
+**Copy** button sits between **Test connection** and **Save**. On the Settings
+tab, each connection phase's hook dropdown is a stop above its extra hooks
+field, and `Enter` hands it the keyboard. On the MCP tab, `j` / `k` move through
+the MCP switch, the client filter, each listed client (`Enter` selects it), the
+selected client's access switch and its role and policy pickers. In the audit viewer, `Left` / `Right` on the
 time presets change the preset.
 
 ## Dropdowns

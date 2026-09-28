@@ -772,7 +772,12 @@ driver, como el selector de perfil de autenticación de una conexión AWS, que
 `Enter` abre, luego el modo SSL, cuya opción cambian `Left` / `Right` o `Enter`,
 y los selectores de certificados, donde `Enter` abre el explorador. Tras una
 prueba de conexión fallida, el botón **Copiar** del aviso queda entre **Probar
-conexión** y **Guardar**. En el visor de auditoría, `Left` / `Right`
+conexión** y **Guardar**. En la pestaña Settings, el desplegable de hook de cada
+fase de conexión es una parada encima de su campo de hooks adicionales, y
+`Enter` le pasa el teclado. En la pestaña MCP, `j` / `k` recorren el interruptor
+de MCP, el filtro de clientes, cada cliente listado (`Enter` lo selecciona), el
+interruptor de acceso del cliente seleccionado y sus selectores de rol y de
+política. En el visor de auditoría, `Left` / `Right`
 sobre los intervalos de tiempo cambian el intervalo.
 
 ## Desplegables

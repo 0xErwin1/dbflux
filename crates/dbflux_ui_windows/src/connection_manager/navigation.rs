@@ -51,6 +51,19 @@ fn next_active_tab(current: ActiveTab, has_access_tab: bool) -> ActiveTab {
     }
 }
 
+/// Moves keyboard focus to a multi-select and opens its list.
+fn focus_and_open_multi_select(
+    select: &mut dbflux_components::components::multi_select::MultiSelect,
+    window: &mut Window,
+    cx: &mut Context<dbflux_components::components::multi_select::MultiSelect>,
+) {
+    select.focus(window, cx);
+
+    if !select.is_open() {
+        select.toggle_open(cx);
+    }
+}
+
 /// The value next to `current` in `values`, wrapping at either end, or the
 /// first value when `current` is not listed.
 fn step_choice(values: &[String], current: &str, forward: bool) -> Option<String> {
@@ -814,10 +827,14 @@ impl FormFocus {
             SettingsRefreshInterval => SettingsConfirmDangerous,
             SettingsConfirmDangerous => SettingsRequiresWhere,
             SettingsRequiresWhere => SettingsRequiresPreview,
-            SettingsRequiresPreview => SettingsPreConnectHookExtra,
-            SettingsPreConnectHookExtra => SettingsPostConnectHookExtra,
-            SettingsPostConnectHookExtra => SettingsPreDisconnectHookExtra,
-            SettingsPreDisconnectHookExtra => SettingsPostDisconnectHookExtra,
+            SettingsRequiresPreview => SettingsPreConnectHook,
+            SettingsPreConnectHook => SettingsPreConnectHookExtra,
+            SettingsPreConnectHookExtra => SettingsPostConnectHook,
+            SettingsPostConnectHook => SettingsPostConnectHookExtra,
+            SettingsPostConnectHookExtra => SettingsPreDisconnectHook,
+            SettingsPreDisconnectHook => SettingsPreDisconnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPostDisconnectHook,
+            SettingsPostDisconnectHook => SettingsPostDisconnectHookExtra,
             SettingsPostDisconnectHookExtra => {
                 if driver_field_count > 0 {
                     SettingsDriverField(0)
@@ -848,10 +865,14 @@ impl FormFocus {
             SettingsConfirmDangerous => SettingsRefreshInterval,
             SettingsRequiresWhere => SettingsConfirmDangerous,
             SettingsRequiresPreview => SettingsRequiresWhere,
-            SettingsPreConnectHookExtra => SettingsRequiresPreview,
-            SettingsPostConnectHookExtra => SettingsPreConnectHookExtra,
-            SettingsPreDisconnectHookExtra => SettingsPostConnectHookExtra,
-            SettingsPostDisconnectHookExtra => SettingsPreDisconnectHookExtra,
+            SettingsPreConnectHook => SettingsRequiresPreview,
+            SettingsPreConnectHookExtra => SettingsPreConnectHook,
+            SettingsPostConnectHook => SettingsPreConnectHookExtra,
+            SettingsPostConnectHookExtra => SettingsPostConnectHook,
+            SettingsPreDisconnectHook => SettingsPostConnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPreDisconnectHook,
+            SettingsPostDisconnectHook => SettingsPreDisconnectHookExtra,
+            SettingsPostDisconnectHookExtra => SettingsPostDisconnectHook,
             SettingsDriverField(0) => SettingsPostDisconnectHookExtra,
             SettingsDriverField(idx) => SettingsDriverField(idx - 1),
             TestConnection => {
@@ -1820,6 +1841,10 @@ impl ConnectionManagerWindow {
                 SettingsConfirmDangerous
                 | SettingsRequiresWhere
                 | SettingsRequiresPreview
+                | SettingsPreConnectHook
+                | SettingsPostConnectHook
+                | SettingsPreDisconnectHook
+                | SettingsPostDisconnectHook
                 | SettingsPreConnectHookExtra
                 | SettingsPostConnectHookExtra
                 | SettingsPreDisconnectHookExtra
@@ -1834,6 +1859,151 @@ impl ConnectionManagerWindow {
     fn scroll_to_focused(&mut self) {
         let index = self.focus_scroll_index();
         self.form_scroll_handle.scroll_to_item(index);
+    }
+
+    /// The MCP tab's ring from top to bottom: the name, the MCP switch and,
+    /// in builds with MCP, the client filter, every listed client, then the
+    /// selected client's access switch and role and policy pickers.
+    pub(super) fn mcp_stops(&self, cx: &App) -> Vec<FormFocus> {
+        let mut stops = vec![FormFocus::Name, FormFocus::McpEnabled];
+
+        #[cfg(feature = "mcp")]
+        stops.extend(self.mcp_governance_stops(cx));
+        #[cfg(not(feature = "mcp"))]
+        let _no_governance_controls = cx;
+
+        stops.extend([FormFocus::TestConnection, FormFocus::Save]);
+        stops
+    }
+
+    #[cfg(feature = "mcp")]
+    fn mcp_governance_stops(&self, cx: &App) -> Vec<FormFocus> {
+        let mut stops = vec![FormFocus::McpClientFilter];
+
+        let client_count = self.mcp_filtered_client_ids(cx).len().min(u8::MAX as usize);
+        stops.extend((0..client_count).map(|index| FormFocus::McpClient(index as u8)));
+
+        if let Some(actor_id) = self.mcp_tab.selected_actor_id.as_deref() {
+            stops.push(FormFocus::McpClientAllowed);
+
+            if self
+                .mcp_tab
+                .bindings
+                .iter()
+                .any(|binding| binding.actor_id == actor_id)
+            {
+                stops.extend([
+                    FormFocus::McpRole,
+                    FormFocus::McpExtraRoles,
+                    FormFocus::McpPolicy,
+                    FormFocus::McpExtraPolicies,
+                ]);
+            }
+        }
+
+        stops
+    }
+
+    /// Ids of the trusted clients the MCP tab lists for the current filter.
+    #[cfg(feature = "mcp")]
+    pub(super) fn mcp_filtered_client_ids(&self, cx: &App) -> Vec<String> {
+        let clients = self
+            .app_state
+            .read(cx)
+            .list_mcp_trusted_clients()
+            .unwrap_or_default();
+        let query = self
+            .mcp_tab
+            .conn_mcp_client_filter_input
+            .read(cx)
+            .value()
+            .to_string();
+
+        super::mcp_bindings::filter_clients(&clients, &query)
+            .into_iter()
+            .map(|client| client.id.clone())
+            .collect()
+    }
+
+    /// The MCP tab stop after (or before) the cursor, wrapping at either end.
+    fn step_mcp_stop(&self, forward: bool, cx: &App) -> FormFocus {
+        let stops = self.mcp_stops(cx);
+        let count = stops.len();
+
+        let next = match stops.iter().position(|stop| *stop == self.form_focus) {
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+            None => 0,
+        };
+
+        #[cfg(feature = "mcp")]
+        if let Some(FormFocus::McpClient(index)) = stops.get(next) {
+            self.mcp_tab
+                .conn_mcp_client_list_scroll_handle
+                .scroll_to_item(*index as usize);
+        }
+
+        stops[next]
+    }
+
+    /// Enter on an MCP tab stop: the switches toggle, the filter starts
+    /// editing, a client becomes the selected one and the role and policy
+    /// pickers take the keyboard.
+    fn activate_mcp_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.form_focus {
+            FormFocus::McpEnabled => {
+                self.mcp_tab.conn_mcp_enabled = !self.mcp_tab.conn_mcp_enabled;
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClientFilter => {
+                self.edit_state = EditState::Editing;
+                self.mcp_tab
+                    .conn_mcp_client_filter_input
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClient(index) => {
+                if let Some(actor_id) = self.mcp_filtered_client_ids(cx).get(index as usize) {
+                    self.select_mcp_client(actor_id.clone(), window, cx);
+                }
+            }
+            #[cfg(feature = "mcp")]
+            FormFocus::McpClientAllowed => {
+                if let Some(actor_id) = self.mcp_tab.selected_actor_id.clone() {
+                    let allowed = self
+                        .mcp_tab
+                        .bindings
+                        .iter()
+                        .any(|binding| binding.actor_id == actor_id);
+                    self.set_mcp_client_allowed(actor_id, !allowed, window, cx);
+                }
+            }
+            FormFocus::McpRole => {
+                self.mcp_tab
+                    .conn_mcp_role_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            FormFocus::McpPolicy => {
+                self.mcp_tab
+                    .conn_mcp_policy_dropdown
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+            }
+            FormFocus::McpExtraRoles => {
+                self.mcp_tab
+                    .conn_mcp_role_multi_select
+                    .update(cx, |select, cx| {
+                        focus_and_open_multi_select(select, window, cx)
+                    });
+            }
+            FormFocus::McpExtraPolicies => {
+                self.mcp_tab
+                    .conn_mcp_policy_multi_select
+                    .update(cx, |select, cx| {
+                        focus_and_open_multi_select(select, window, cx)
+                    });
+            }
+            _ => {}
+        }
     }
 
     /// Left and Right along Test connection, the Copy button of a failed
@@ -1873,7 +2043,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .down_settings(self.settings_driver_field_count()),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Mcp => self.step_mcp_stop(true, cx),
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1895,7 +2065,7 @@ impl ConnectionManagerWindow {
             ActiveTab::Settings => self
                 .form_focus
                 .up_settings(self.settings_driver_field_count()),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Mcp => self.step_mcp_stop(false, cx),
         };
         self.normalize_focus_for_state(cx);
         self.scroll_to_focused();
@@ -1922,8 +2092,7 @@ impl ConnectionManagerWindow {
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
-            ActiveTab::Settings => self.form_focus.left_settings(),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Settings | ActiveTab::Mcp => self.form_focus.left_settings(),
         };
 
         if self.active_tab == ActiveTab::Access
@@ -1952,8 +2121,7 @@ impl ConnectionManagerWindow {
                 self.ssh_nav_state(cx),
                 self.proxy_nav_state(cx),
             ),
-            ActiveTab::Settings => self.form_focus.right_settings(),
-            ActiveTab::Mcp => self.form_focus,
+            ActiveTab::Settings | ActiveTab::Mcp => self.form_focus.right_settings(),
         };
 
         if self.active_tab == ActiveTab::Access
@@ -2344,6 +2512,15 @@ impl ConnectionManagerWindow {
                 }
             }
 
+            FormFocus::SettingsPreConnectHook
+            | FormFocus::SettingsPostConnectHook
+            | FormFocus::SettingsPreDisconnectHook
+            | FormFocus::SettingsPostDisconnectHook => {
+                if let Some(dropdown) = self.settings_hook_dropdown(self.form_focus).cloned() {
+                    dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                }
+            }
+
             FormFocus::SettingsDriverField(idx) => {
                 if let Some(field) = self.settings_driver_field_def(idx) {
                     match &field.kind {
@@ -2381,6 +2558,17 @@ impl ConnectionManagerWindow {
 
             FormFocus::MainExtra(index) => {
                 self.activate_main_extra(index, window, cx);
+            }
+
+            FormFocus::McpEnabled
+            | FormFocus::McpClientFilter
+            | FormFocus::McpClient(_)
+            | FormFocus::McpClientAllowed
+            | FormFocus::McpRole
+            | FormFocus::McpExtraRoles
+            | FormFocus::McpPolicy
+            | FormFocus::McpExtraPolicies => {
+                self.activate_mcp_stop(window, cx);
             }
 
             FormFocus::TestConnection => {
@@ -3014,11 +3202,15 @@ mod tests {
 
     // --- Settings tab ---
 
-    const SETTINGS_HOOK_EXTRA_ORDER: [FormFocus; 6] = [
+    const SETTINGS_HOOK_EXTRA_ORDER: [FormFocus; 10] = [
         FormFocus::SettingsRequiresPreview,
+        FormFocus::SettingsPreConnectHook,
         FormFocus::SettingsPreConnectHookExtra,
+        FormFocus::SettingsPostConnectHook,
         FormFocus::SettingsPostConnectHookExtra,
+        FormFocus::SettingsPreDisconnectHook,
         FormFocus::SettingsPreDisconnectHookExtra,
+        FormFocus::SettingsPostDisconnectHook,
         FormFocus::SettingsPostDisconnectHookExtra,
         FormFocus::SettingsDriverField(0),
     ];

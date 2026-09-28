@@ -188,11 +188,26 @@ enum FormFocus {
     SettingsConfirmDangerous,
     SettingsRequiresWhere,
     SettingsRequiresPreview,
+    /// The hook dropdown of a connection phase, above its extra hooks input.
+    SettingsPreConnectHook,
     SettingsPreConnectHookExtra,
+    SettingsPostConnectHook,
     SettingsPostConnectHookExtra,
+    SettingsPreDisconnectHook,
     SettingsPreDisconnectHookExtra,
+    SettingsPostDisconnectHook,
     SettingsPostDisconnectHookExtra,
     SettingsDriverField(u8),
+    // MCP tab fields
+    McpEnabled,
+    McpClientFilter,
+    /// A client of the (filtered) trusted client list.
+    McpClient(u8),
+    McpClientAllowed,
+    McpRole,
+    McpExtraRoles,
+    McpPolicy,
+    McpExtraPolicies,
     /// A stop of the Main tab after the fields the ring names above: a
     /// driver field without its own variant, then the transport controls
     /// (see [`MainExtraStop`]), indexed in that order.
@@ -238,7 +253,7 @@ enum AccessTabMode {
 /// variant of its own, the SSL mode, or a certificate picker.
 #[derive(Clone, Debug)]
 pub(super) enum MainExtraStop {
-    DriverField(FormFieldDef),
+    DriverField(Box<FormFieldDef>),
     SslMode,
     SslCert(SslCertSlot),
 }
@@ -1874,8 +1889,7 @@ impl ConnectionManagerWindow {
                             && Self::field_id_to_focus(&field.id, false).is_none()
                             && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
                     })
-                    .cloned()
-                    .map(MainExtraStop::DriverField)
+                    .map(|field| MainExtraStop::DriverField(Box::new(field.clone())))
                     .collect()
             })
             .unwrap_or_default();
@@ -1903,19 +1917,19 @@ impl ConnectionManagerWindow {
 
     /// The ring stop of the Main-tab driver field `field_id` when it has no
     /// variant of its own.
-    pub(super) fn main_extra_focus_for_field(&self, field_id: &str) -> Option<FormFocus> {
+    fn main_extra_focus_for_field(&self, field_id: &str) -> Option<FormFocus> {
         self.main_extra_focus_where(
             |stop| matches!(stop, MainExtraStop::DriverField(field) if field.id == field_id),
         )
     }
 
     /// The ring stop of the SSL mode control.
-    pub(super) fn main_extra_focus_for_ssl_mode(&self) -> Option<FormFocus> {
+    fn main_extra_focus_for_ssl_mode(&self) -> Option<FormFocus> {
         self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::SslMode))
     }
 
     /// The ring stop of the certificate picker of `slot`.
-    pub(super) fn main_extra_focus_for_ssl_cert(&self, slot: SslCertSlot) -> Option<FormFocus> {
+    fn main_extra_focus_for_ssl_cert(&self, slot: SslCertSlot) -> Option<FormFocus> {
         self.main_extra_focus_where(
             |stop| matches!(stop, MainExtraStop::SslCert(candidate) if *candidate == slot),
         )
