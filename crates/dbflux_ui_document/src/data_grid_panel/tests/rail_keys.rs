@@ -9,7 +9,7 @@ use dbflux_core::{Comparator, FilterNode};
 
 /// A two-row table beside its inspector rail, under the app keymap, with
 /// the table focused.
-fn host_table_grid_with_rail(
+pub(super) fn host_table_grid_with_rail(
     cx: &mut TestAppContext,
 ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
     init_keyboard_runtime(cx);

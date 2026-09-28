@@ -5353,6 +5353,7 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 
 #[cfg(test)]
 mod tests {
+    mod coverage;
     pub(crate) mod rail_keys;
 
     use super::{DataGridEvent, DataGridPanel, DataSource, GridState, MutationIntent, MutationRun};

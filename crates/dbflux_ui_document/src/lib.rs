@@ -32,6 +32,8 @@ pub mod import_wizard;
 pub mod instance_inspector;
 mod key_value;
 #[cfg(test)]
+mod keyboard_coverage;
+#[cfg(test)]
 mod keyboard_test_support;
 mod labels;
 pub mod migrate_wizard;

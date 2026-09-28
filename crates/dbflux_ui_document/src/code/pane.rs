@@ -319,6 +319,13 @@ mod tests {
     fn open_sql_document(
         cx: &mut TestAppContext,
     ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
+        open_document(cx, QueryLanguage::Sql)
+    }
+
+    fn open_document(
+        cx: &mut TestAppContext,
+        language: QueryLanguage,
+    ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
         cx.update(gpui_component::init);
         cx.update(theme::init);
         cx.update(|cx| {
@@ -339,13 +346,7 @@ mod tests {
             let slot = slot.clone();
             move |window, cx| {
                 let document = cx.new(|cx| {
-                    CodeDocument::new_with_language(
-                        app_state.clone(),
-                        None,
-                        QueryLanguage::Sql,
-                        window,
-                        cx,
-                    )
+                    CodeDocument::new_with_language(app_state.clone(), None, language, window, cx)
                 });
                 slot.replace(Some(document.clone()));
                 gpui_component::Root::new(document, window, cx)
@@ -366,6 +367,54 @@ mod tests {
         match action.run {
             PaneActionRun::Command(command) => Some(command),
             PaneActionRun::Callback(_) => None,
+        }
+    }
+
+    mod coverage {
+        use super::{actions, open_document, open_sql_document};
+        use crate::keyboard_coverage::CODE_EDITOR_CHROME;
+        use dbflux_core::QueryLanguage;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+        use gpui::TestAppContext;
+
+        #[gpui::test]
+        fn the_sql_editor_chrome_is_covered(cx: &mut TestAppContext) {
+            let (document, window) = open_sql_document(cx);
+            let menu: Vec<String> = actions(&document, window)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect();
+
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+
+            let checked = Coverage::new(CODE_EDITOR_CHROME)
+                .with_menu_entries(menu)
+                .assert_covered(&frame);
+            assert!(
+                checked.iter().any(|id| id == "run-query-btn"),
+                "{checked:?}"
+            );
+        }
+
+        #[gpui::test]
+        fn the_script_editor_chrome_is_covered(cx: &mut TestAppContext) {
+            let (document, window) = open_document(cx, QueryLanguage::Python);
+            let menu: Vec<String> = actions(&document, window)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect();
+
+            let capture = FrameCapture::observe(window);
+            let frame = capture.frame(window);
+
+            let checked = Coverage::new(CODE_EDITOR_CHROME)
+                .with_menu_entries(menu)
+                .assert_covered(&frame);
+            assert!(
+                checked.iter().any(|id| id == "exec-context-pane-actions"),
+                "{checked:?}"
+            );
         }
     }
 

@@ -3508,4 +3508,68 @@ mod result_tab_keyboard_tests {
             "the result tab entries show their Results keys"
         );
     }
+
+    /// The results area of the editor: its result tabs and the header
+    /// buttons. The grid inside is covered by the data grid's own test.
+    #[gpui::test]
+    fn the_results_chrome_is_covered(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::{CODE_EDITOR_CHROME, DATA_GRID};
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        init_keyboard_runtime(cx);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+                });
+                document.update(cx, |document, cx| {
+                    for _ in 0..2 {
+                        document.result_tabs.run_in_new_tab = true;
+                        document.setup_data_grid(
+                            one_row_result(),
+                            "SELECT 1".to_string(),
+                            window,
+                            cx,
+                        );
+                    }
+                    document.layout = SqlQueryLayout::Split;
+                });
+                document
+            },
+            |document, cx| document.active_context(cx),
+            |document, command, window, cx| document.dispatch_command(command, window, cx),
+        );
+        let document = window.update(|_, cx| host.read(cx).document.clone());
+        let menu: Vec<String> = window.update(|_, cx| {
+            document
+                .read(cx)
+                .pane_actions(&document)
+                .iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let frame = capture.frame(window);
+
+        let checked = Coverage::new(CODE_EDITOR_CHROME)
+            .with_menu_entries(menu)
+            .with_surface(DATA_GRID)
+            .assert_covered(&frame);
+        assert!(
+            checked.iter().any(|id| id.starts_with("result-tab-")),
+            "{checked:?}"
+        );
+    }
 }
