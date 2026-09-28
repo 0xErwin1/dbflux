@@ -3187,6 +3187,8 @@ palette:
       name: Desconectar actual
     refresh_schema:
       name: Actualizar schema
+    export_connections:
+      name: "Exportar conexiones"
     focus_sidebar:
       name: Enfocar barra lateral
     focus_editor:
@@ -3203,6 +3205,14 @@ palette:
       name: Mostrar u ocultar panel de resultados
     toggle_tasks:
       name: Mostrar u ocultar panel de tareas
+    toggle_notifications:
+      name: "Mostrar u ocultar notificaciones"
+    show_connections_view:
+      name: "Mostrar la vista de conexiones"
+    show_scripts_view:
+      name: "Mostrar la vista de scripts"
+    show_dashboards_view:
+      name: "Mostrar la vista de dashboards"
     open_settings:
       name: Abrir configuración
     open_login_modal:
@@ -3215,6 +3225,8 @@ palette:
       name: Actualizar gobernanza de MCP
     open_audit_viewer:
       name: Abrir visor de auditoría
+    open_last_error_in_audit:
+      name: "Abrir el último error en auditoría"
     open_saved_chart:
       name: "Abrir gráfico…"
     new_dashboard:
@@ -3509,6 +3521,11 @@ settings:
       open_login_modal: Abrir inicio de sesión de Auth Profile
       open_sso_wizard: Abrir asistente de AWS SSO
       open_audit_viewer: Abrir visor de auditoría
+      open_last_error_in_audit: "Abrir el último error en auditoría"
+      toggle_notifications: "Mostrar u ocultar notificaciones"
+      show_connections_view: "Mostrar la vista de conexiones"
+      show_scripts_view: "Mostrar la vista de scripts"
+      show_dashboards_view: "Mostrar la vista de dashboards"
       open_mcp_approvals: Abrir aprobaciones de MCP
       refresh_mcp_governance: Actualizar gobernanza de MCP
       open_saved_chart: "Abrir gráfico…"

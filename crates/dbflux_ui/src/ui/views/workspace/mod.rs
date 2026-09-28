@@ -21,7 +21,8 @@ use dbflux_ui_base::modals::{
     RenameItemRequest, RenameTarget, RequestMetricsForNamespace,
 };
 use dbflux_ui_base::{
-    AppStateGlobal, OpenAuditRequested, drain_hook_load_diagnostics, report_error,
+    AppStateGlobal, OpenAuditRequested, UserErrorReported, drain_hook_load_diagnostics,
+    report_error,
 };
 
 #[cfg(feature = "mcp")]
@@ -384,6 +385,9 @@ pub struct Workspace {
     command_search_focus: FocusHandle,
     /// The notifications popover under the title-bar bell.
     notifications: notifications::NotificationsPopoverState,
+    /// Correlation id of the most recent user-facing error, the target of
+    /// Open Last Error in Audit.
+    last_user_error: Option<uuid::Uuid>,
 
     /// Background task handle for periodic audit purge.
     /// Kept to ensure the task stays alive for the workspace lifetime.
@@ -427,6 +431,13 @@ impl Workspace {
         cx.set_global(AppStateGlobal {
             entity: app_state.clone(),
         });
+
+        // Subscribed before the startup diagnostics below are reported, so
+        // Open Last Error in Audit also reaches those.
+        cx.subscribe(&app_state, |this, _, event: &UserErrorReported, _| {
+            this.last_user_error = Some(event.correlation_id);
+        })
+        .detach();
 
         let hook_load_errors = app_state.update(cx, |state, _| {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
@@ -1602,6 +1613,7 @@ impl Workspace {
             focus_handle,
             command_search_focus: cx.focus_handle(),
             notifications: notifications::NotificationsPopoverState::new(cx),
+            last_user_error: None,
             _background_purge_task: None,
             pending_login_modal_open: None,
         };
@@ -1824,6 +1836,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.refresh_schema.name"),
                 dbflux_i18n::t!("palette.category.connections"),
             ),
+            PaletteCommand::new(
+                "export_connections",
+                dbflux_i18n::t!("palette.command.export_connections.name"),
+                dbflux_i18n::t!("palette.category.connections"),
+            ),
             // Focus
             PaletteCommand::new(
                 "focus_sidebar",
@@ -1867,6 +1884,26 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "toggle_notifications",
+                dbflux_i18n::t!("palette.command.toggle_notifications.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_connections_view",
+                dbflux_i18n::t!("palette.command.show_connections_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_scripts_view",
+                dbflux_i18n::t!("palette.command.show_scripts_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "show_dashboards_view",
+                dbflux_i18n::t!("palette.command.show_dashboards_view.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "open_settings",
                 dbflux_i18n::t!("palette.command.open_settings.name"),
                 dbflux_i18n::t!("palette.category.view"),
@@ -1896,6 +1933,11 @@ impl Workspace {
             PaletteCommand::new(
                 "open_audit_viewer",
                 dbflux_i18n::t!("palette.command.open_audit_viewer.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_last_error_in_audit",
+                dbflux_i18n::t!("palette.command.open_last_error_in_audit.name"),
                 dbflux_i18n::t!("palette.category.view"),
             ),
             // Charts / Dashboards

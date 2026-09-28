@@ -19,26 +19,41 @@ foco toma `Enter` y `Space` para sí.
 
 ## Global (disponible sin importar el foco)
 
-| Teclas                                    | Acción                                 |
-| ----------------------------------------- | -------------------------------------- |
-| `Ctrl+Shift+P` / `Cmd+Shift+P`            | Alternar command palette               |
-| `Ctrl+Shift+N` / `Cmd+Shift+N`            | Abrir el Connection Manager            |
-| `Ctrl+n` / `Cmd+n`                        | Nueva pestaña de query                 |
-| `Ctrl+w` / `Cmd+w`                        | Cerrar pestaña actual                  |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab`             | Pestaña siguiente / anterior           |
-| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | Cambiar a la pestaña N                 |
-| `Ctrl+o` / `Cmd+o`                        | Abrir archivo de script                |
-| `Ctrl+Enter` / `Cmd+Enter`                | Ejecutar query                         |
-| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`    | Ejecutar query en nueva pestaña        |
-| `Escape`                                  | Cancelar / cerrar modal                |
-| `Tab` / `Shift+Tab`                       | Ciclar el foco adelante / atrás        |
-| `Ctrl+Shift+1`                            | Enfocar sidebar                        |
-| `Ctrl+Shift+2`                            | Enfocar editor                         |
-| `Ctrl+Shift+3`                            | Enfocar resultados                     |
-| `Ctrl+Shift+4`                            | Enfocar tareas en segundo plano        |
-| `Ctrl+Shift+A` / `Cmd+Shift+A`            | Abrir el visor de auditoría            |
-| `Ctrl+b` / `Cmd+b`                        | Alternar sidebar                       |
-| `Ctrl+m`                                  | Abrir el menú contextual de la pestaña |
+| Teclas                                           | Acción                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| `Ctrl+Shift+P` / `Cmd+Shift+P`                   | Alternar command palette                                          |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`                   | Abrir el Connection Manager                                       |
+| `Ctrl+n` / `Cmd+n`                               | Nueva pestaña de query                                            |
+| `Ctrl+w` / `Cmd+w`                               | Cerrar pestaña actual                                             |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`                    | Pestaña siguiente / anterior                                      |
+| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9`        | Cambiar a la pestaña N                                            |
+| `Ctrl+o` / `Cmd+o`                               | Abrir archivo de script                                           |
+| `Ctrl+Enter` / `Cmd+Enter`                       | Ejecutar query                                                    |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`           | Ejecutar query en nueva pestaña                                   |
+| `Escape`                                         | Cancelar / cerrar modal                                           |
+| `Tab` / `Shift+Tab`                              | Ciclar el foco adelante / atrás                                   |
+| `Ctrl+Shift+1`                                   | Enfocar sidebar                                                   |
+| `Ctrl+Shift+2`                                   | Enfocar editor                                                    |
+| `Ctrl+Shift+3`                                   | Enfocar resultados                                                |
+| `Ctrl+Shift+4`                                   | Enfocar tareas en segundo plano                                   |
+| `Ctrl+Shift+A` / `Cmd+Shift+A`                   | Abrir el visor de auditoría                                       |
+| `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
+| `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
+| `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
+| `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Mostrar u ocultar el panel del editor                             |
+| `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Mostrar u ocultar el panel de resultados                          |
+| `Ctrl+Shift+T` / `Cmd+Shift+T`                   | Mostrar u ocultar el panel de tareas en segundo plano             |
+| `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Mostrar la vista Connections / Scripts / Dashboards de la sidebar |
+| `Ctrl+Shift+B` / `Cmd+Shift+B`                   | Abrir o cerrar el centro de notificaciones                        |
+| `Ctrl+Shift+X` / `Cmd+Shift+X`                   | Abrir el error más reciente en el visor de auditoría              |
+| `Ctrl+Shift+L` / `Cmd+Shift+L`                   | Abrir el inicio de sesión de Auth Profile                         |
+| `Ctrl+Shift+O` / `Cmd+Shift+O`                   | Abrir el asistente de AWS SSO                                     |
+| `Ctrl+Shift+C` / `Cmd+Shift+C`                   | Abrir un gráfico guardado                                         |
+| `Ctrl+Shift+D` / `Cmd+Shift+D`                   | Nuevo dashboard                                                   |
+| `Ctrl+Shift+M` / `Cmd+Shift+M`                   | Abrir aprobaciones de MCP                                         |
+| `Ctrl+Shift+G` / `Cmd+Shift+G`                   | Actualizar gobernanza de MCP                                      |
+
+`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
 
 ## Sidebar
 
@@ -318,9 +333,10 @@ tareas en segundo plano. **Marcar todo como leído** lee todo y **Borrar leídas
 quita los elementos leídos. La lista dura lo que dura la sesión. Las
 actualizaciones aparecen aquí en lugar de en la barra de estado.
 
-| Teclas   | Acción                                                 |
-| -------- | ------------------------------------------------------ |
-| `Escape` | Cerrar el popover (un clic fuera de él hace lo mismo) |
+| Teclas                         | Acción                                                         |
+| ------------------------------ | -------------------------------------------------------------- |
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Abrir o cerrar el popover desde cualquier parte del workspace  |
+| `Escape`                       | Cerrar el popover (un clic fuera de él hace lo mismo)          |
 
 ## Command palette
 

@@ -107,6 +107,17 @@ pub enum Command {
     OpenLoginModal,
     OpenSsoWizard,
     OpenAuditViewer,
+    /// Open the audit viewer filtered to the most recent user-facing error,
+    /// the same target as the error toast's "View in Audit".
+    OpenLastErrorInAudit,
+    /// Open or close the title-bar notifications popover.
+    ToggleNotifications,
+    /// Show the Connections view of the sidebar, as its activity rail entry does.
+    ShowConnectionsView,
+    /// Show the Scripts view of the sidebar, as its activity rail entry does.
+    ShowScriptsView,
+    /// Show the Dashboards view of the sidebar, as its activity rail entry does.
+    ShowDashboardsView,
     #[cfg(feature = "mcp")]
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
@@ -200,6 +211,11 @@ impl Command {
             "open_login_modal" => Some(Command::OpenLoginModal),
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
             "open_audit_viewer" => Some(Command::OpenAuditViewer),
+            "open_last_error_in_audit" => Some(Command::OpenLastErrorInAudit),
+            "toggle_notifications" => Some(Command::ToggleNotifications),
+            "show_connections_view" => Some(Command::ShowConnectionsView),
+            "show_scripts_view" => Some(Command::ShowScriptsView),
+            "show_dashboards_view" => Some(Command::ShowDashboardsView),
             #[cfg(feature = "mcp")]
             "open_mcp_approvals" => Some(Command::OpenMcpApprovals),
             #[cfg(feature = "mcp")]
@@ -305,6 +321,11 @@ impl Command {
             Command::OpenLoginModal => "Open auth profile login",
             Command::OpenSsoWizard => "Open AWS SSO wizard",
             Command::OpenAuditViewer => "Open audit viewer",
+            Command::OpenLastErrorInAudit => "Open last error in audit",
+            Command::ToggleNotifications => "Toggle notifications",
+            Command::ShowConnectionsView => "Show connections view",
+            Command::ShowScriptsView => "Show scripts view",
+            Command::ShowDashboardsView => "Show dashboards view",
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "Open MCP approvals",
             #[cfg(feature = "mcp")]
@@ -454,6 +475,11 @@ impl Command {
             Command::OpenLoginModal => "open_login_modal",
             Command::OpenSsoWizard => "open_sso_wizard",
             Command::OpenAuditViewer => "open_audit_viewer",
+            Command::OpenLastErrorInAudit => "open_last_error_in_audit",
+            Command::ToggleNotifications => "toggle_notifications",
+            Command::ShowConnectionsView => "show_connections_view",
+            Command::ShowScriptsView => "show_scripts_view",
+            Command::ShowDashboardsView => "show_dashboards_view",
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "open_mcp_approvals",
             #[cfg(feature = "mcp")]
@@ -618,6 +644,11 @@ impl Command {
             Command::OpenLoginModal,
             Command::OpenSsoWizard,
             Command::OpenAuditViewer,
+            Command::OpenLastErrorInAudit,
+            Command::ToggleNotifications,
+            Command::ShowConnectionsView,
+            Command::ShowScriptsView,
+            Command::ShowDashboardsView,
             Command::OpenSavedChart,
             Command::ImportDashboard,
             Command::NewDashboard,
@@ -763,7 +794,12 @@ impl Command {
             | Command::OpenSettings
             | Command::OpenLoginModal
             | Command::OpenSsoWizard
-            | Command::OpenAuditViewer => "View",
+            | Command::OpenAuditViewer
+            | Command::OpenLastErrorInAudit
+            | Command::ToggleNotifications
+            | Command::ShowConnectionsView
+            | Command::ShowScriptsView
+            | Command::ShowDashboardsView => "View",
 
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
@@ -849,6 +885,11 @@ impl Command {
                 | Command::OpenLoginModal
                 | Command::OpenSsoWizard
                 | Command::OpenAuditViewer
+                | Command::OpenLastErrorInAudit
+                | Command::ToggleNotifications
+                | Command::ShowConnectionsView
+                | Command::ShowScriptsView
+                | Command::ShowDashboardsView
         ) || {
             #[cfg(feature = "mcp")]
             {
@@ -1338,6 +1379,20 @@ mod tests {
         assert!(
             ContextId::global_chords_predicate().starts_with(ContextId::GLOBAL_CHORDS_IDENTIFIER)
         );
+    }
+
+    #[test]
+    fn new_shell_commands_have_palette_ids() {
+        for command in [
+            Command::OpenLastErrorInAudit,
+            Command::ToggleNotifications,
+            Command::ShowConnectionsView,
+            Command::ShowScriptsView,
+            Command::ShowDashboardsView,
+        ] {
+            assert_eq!(Command::from_palette_id(command.id()), Some(command));
+            assert!(command.is_global(), "{command:?} is a workspace command");
+        }
     }
 
     #[test]

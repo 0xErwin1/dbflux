@@ -154,7 +154,86 @@ fn global_layer() -> KeymapLayer {
     // "minimize window" shortcut on macOS.
     layer.bind(KeyChord::new("m", Modifiers::ctrl()), Command::OpenTabMenu);
 
+    bind_workspace_commands(&mut layer);
+
     layer
+}
+
+/// Workspace commands that also have an activity rail entry, a status bar
+/// chip or a title bar button. Every chord holds the primary modifier or
+/// Ctrl, so it also works while a text field has focus, and none uses Alt:
+/// Ctrl+Alt is AltGr on Windows and types characters on many layouts.
+fn bind_workspace_commands(layer: &mut KeymapLayer) {
+    layer.bind(
+        KeyChord::new(",", Modifiers::primary()),
+        Command::OpenSettings,
+    );
+
+    layer.bind(
+        KeyChord::new("e", Modifiers::primary_shift()),
+        Command::ToggleEditor,
+    );
+    layer.bind(
+        KeyChord::new("r", Modifiers::primary_shift()),
+        Command::ToggleResults,
+    );
+    layer.bind(
+        KeyChord::new("t", Modifiers::primary_shift()),
+        Command::ToggleTasks,
+    );
+    layer.bind(
+        KeyChord::new("b", Modifiers::primary_shift()),
+        Command::ToggleNotifications,
+    );
+    layer.bind(
+        KeyChord::new("x", Modifiers::primary_shift()),
+        Command::OpenLastErrorInAudit,
+    );
+
+    layer.bind(
+        KeyChord::new("l", Modifiers::primary_shift()),
+        Command::OpenLoginModal,
+    );
+    layer.bind(
+        KeyChord::new("o", Modifiers::primary_shift()),
+        Command::OpenSsoWizard,
+    );
+
+    layer.bind(
+        KeyChord::new("c", Modifiers::primary_shift()),
+        Command::OpenSavedChart,
+    );
+    layer.bind(
+        KeyChord::new("d", Modifiers::primary_shift()),
+        Command::NewDashboard,
+    );
+
+    // The sidebar views continue the Ctrl+Shift+digit focus group, literal
+    // Ctrl on every platform for the same reason.
+    layer.bind(
+        KeyChord::new("5", Modifiers::ctrl_shift()),
+        Command::ShowConnectionsView,
+    );
+    layer.bind(
+        KeyChord::new("6", Modifiers::ctrl_shift()),
+        Command::ShowScriptsView,
+    );
+    layer.bind(
+        KeyChord::new("7", Modifiers::ctrl_shift()),
+        Command::ShowDashboardsView,
+    );
+
+    #[cfg(feature = "mcp")]
+    {
+        layer.bind(
+            KeyChord::new("m", Modifiers::primary_shift()),
+            Command::OpenMcpApprovals,
+        );
+        layer.bind(
+            KeyChord::new("g", Modifiers::primary_shift()),
+            Command::RefreshMcpGovernance,
+        );
+    }
 }
 
 fn sidebar_layer() -> KeymapLayer {

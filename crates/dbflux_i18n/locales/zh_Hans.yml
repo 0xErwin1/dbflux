@@ -3187,6 +3187,8 @@ palette:
       name: 断开当前连接
     refresh_schema:
       name: 刷新 Schema
+    export_connections:
+      name: "导出连接"
     focus_sidebar:
       name: 聚焦侧边栏
     focus_editor:
@@ -3203,6 +3205,14 @@ palette:
       name: 切换结果面板
     toggle_tasks:
       name: 切换任务面板
+    toggle_notifications:
+      name: "切换通知"
+    show_connections_view:
+      name: "显示连接视图"
+    show_scripts_view:
+      name: "显示脚本视图"
+    show_dashboards_view:
+      name: "显示仪表盘视图"
     open_settings:
       name: 打开设置
     open_login_modal:
@@ -3215,6 +3225,8 @@ palette:
       name: 刷新 MCP 治理
     open_audit_viewer:
       name: 打开审计查看器
+    open_last_error_in_audit:
+      name: "在审计中打开最近的错误"
     open_saved_chart:
       name: 打开图表…
     new_dashboard:
@@ -3509,6 +3521,11 @@ settings:
       open_login_modal: 打开认证配置文件登录
       open_sso_wizard: 打开 AWS SSO 向导
       open_audit_viewer: 打开审计查看器
+      open_last_error_in_audit: "在审计中打开最近的错误"
+      toggle_notifications: "切换通知"
+      show_connections_view: "显示连接视图"
+      show_scripts_view: "显示脚本视图"
+      show_dashboards_view: "显示仪表盘视图"
       open_mcp_approvals: 打开 MCP 审批
       refresh_mcp_governance: 刷新 MCP 治理
       open_saved_chart: 打开图表…

@@ -21,6 +21,22 @@ impl Workspace {
                 self.toggle_sidebar(cx);
                 Some(true)
             }
+            Command::ToggleNotifications => {
+                self.toggle_notifications(window, cx);
+                Some(true)
+            }
+            Command::ShowConnectionsView => {
+                self.show_sidebar_view(SidebarTab::Connections, cx);
+                Some(true)
+            }
+            Command::ShowScriptsView => {
+                self.show_sidebar_view(SidebarTab::Scripts, cx);
+                Some(true)
+            }
+            Command::ShowDashboardsView => {
+                self.show_sidebar_view(SidebarTab::Dashboards, cx);
+                Some(true)
+            }
             Command::FocusSidebar => {
                 self.set_focus(FocusTarget::Sidebar, window, cx);
                 Some(true)

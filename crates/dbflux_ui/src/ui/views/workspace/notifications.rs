@@ -790,9 +790,10 @@ mod tests {
     use crate::ui::document::DocumentIcon;
     use crate::ui::views::workspace::Workspace;
     use dbflux_components::composites::BellUrgency;
-    use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::notifications::NotificationUrgency;
     use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+    use dbflux_ui_base::{AppStateEntity, OpenAuditRequested};
+    use dbflux_ui_sidebar::SidebarTab;
     use gpui::{
         AccessibilityFrame, AppContext as _, Bounds, Entity, FrameObserver, Pixels, TestAppContext,
         VisualTestContext,
@@ -1037,6 +1038,120 @@ mod tests {
         dbflux_ui_base::keymap::gpui_keystrokes(keys)
     }
 
+    fn active_tab_icon(harness: &mut Harness<'_>) -> Option<DocumentIcon> {
+        let workspace = harness.workspace.clone();
+        harness.window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .active_tab()
+                .map(|tab| tab.meta_snapshot(cx).icon)
+        })
+    }
+
+    #[gpui::test]
+    fn toggle_notifications_opens_and_closes_the_popover_from_the_keyboard(
+        cx: &mut TestAppContext,
+    ) {
+        let mut harness = open_workspace(cx);
+        let keys = global_keys(Command::ToggleNotifications);
+
+        harness.window.simulate_keystrokes(&keys);
+        harness.window.run_until_parked();
+        assert!(harness.is_open());
+        assert!(harness.is_rendered("notifications-popover"));
+
+        harness.window.simulate_keystrokes(&keys);
+        harness.window.run_until_parked();
+        assert!(!harness.is_open());
+    }
+
+    /// Run from the command palette, the popover keeps the focus it takes,
+    /// so Escape still closes it.
+    #[gpui::test]
+    fn toggle_notifications_from_the_palette_keeps_the_popover_focused(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+
+        harness.window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.pending_command = Some("toggle_notifications");
+                cx.notify();
+            })
+        });
+        harness.redraw();
+        assert!(harness.is_open());
+
+        harness.window.simulate_keystrokes("escape");
+        harness.window.run_until_parked();
+        assert!(!harness.is_open());
+    }
+
+    #[gpui::test]
+    fn open_last_error_in_audit_follows_the_most_recent_error(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let requested: Rc<RefCell<Vec<Option<uuid::Uuid>>>> = Rc::default();
+        let app_state = harness.app_state.clone();
+
+        harness.window.update(|_, cx| {
+            let sink = requested.clone();
+            cx.subscribe(&app_state, move |_, event: &OpenAuditRequested, _| {
+                sink.borrow_mut().push(event.0);
+            })
+            .detach();
+        });
+
+        let first = UserFacingError::new(ErrorKind::Storage, "Export failed");
+        let latest = UserFacingError::new(ErrorKind::Network, "Connection lost");
+        let latest_id = latest.correlation_id;
+        harness.window.update(|_, cx| {
+            report_error(first, cx);
+            report_error(latest, cx);
+        });
+        harness.window.run_until_parked();
+
+        harness
+            .window
+            .simulate_keystrokes(&global_keys(Command::OpenLastErrorInAudit));
+        harness.window.run_until_parked();
+
+        assert_eq!(requested.borrow().as_slice(), &[Some(latest_id)]);
+        assert_eq!(active_tab_icon(&mut harness), Some(DocumentIcon::Audit));
+    }
+
+    #[gpui::test]
+    fn open_last_error_in_audit_without_errors_opens_the_audit_viewer(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+
+        harness
+            .window
+            .simulate_keystrokes(&global_keys(Command::OpenLastErrorInAudit));
+        harness.window.run_until_parked();
+
+        assert_eq!(active_tab_icon(&mut harness), Some(DocumentIcon::Audit));
+    }
+
+    #[gpui::test]
+    fn sidebar_view_commands_switch_the_sidebar_view(cx: &mut TestAppContext) {
+        let harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+
+        for (command, view) in [
+            (Command::ShowScriptsView, SidebarTab::Scripts),
+            (Command::ShowDashboardsView, SidebarTab::Dashboards),
+            (Command::ShowConnectionsView, SidebarTab::Connections),
+        ] {
+            harness.window.simulate_keystrokes(&global_keys(command));
+            harness.window.run_until_parked();
+
+            let active = harness
+                .window
+                .update(|_, cx| workspace.read(cx).sidebar.read(cx).active_tab());
+            assert_eq!(active, view, "{command:?} must show {view:?}");
+        }
+    }
+
     /// Typing in the sidebar search leaves letters to the field, and the
     /// global chords still run while it has focus.
     #[gpui::test]
@@ -1084,6 +1199,25 @@ mod tests {
             palette_visible,
             "the palette chord runs from the search field"
         );
+    }
+
+    #[test]
+    fn the_palette_lists_the_keyboard_shell_commands() {
+        let ids: Vec<&str> = Workspace::palette_commands_for_test()
+            .iter()
+            .map(|command| command.id)
+            .collect();
+
+        for id in [
+            "export_connections",
+            "toggle_notifications",
+            "open_last_error_in_audit",
+            "show_connections_view",
+            "show_scripts_view",
+            "show_dashboards_view",
+        ] {
+            assert!(ids.contains(&id), "the palette must list {id}");
+        }
     }
 
     #[cfg(feature = "mcp")]

@@ -8,26 +8,41 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 
 ## 全局（无论焦点在哪都可用）
 
-| 按键                                      | 操作                  |
-|-------------------------------------------|-----------------------|
-| `Ctrl+Shift+P` / `Cmd+Shift+P`            | 切换命令面板          |
-| `Ctrl+Shift+N` / `Cmd+Shift+N`            | 打开连接管理器        |
-| `Ctrl+n` / `Cmd+n`                        | 新建查询标签页        |
-| `Ctrl+w` / `Cmd+w`                        | 关闭当前标签页        |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab`             | 下一个 / 上一个标签页 |
-| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9` | 切换到标签页 N        |
-| `Ctrl+o` / `Cmd+o`                        | 打开脚本文件          |
-| `Ctrl+Enter` / `Cmd+Enter`                | 执行查询              |
-| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`    | 在新标签页中执行查询  |
-| `Escape`                                  | 取消 / 关闭模态框     |
-| `Tab` / `Shift+Tab`                       | 向前 / 向后循环聚焦   |
-| `Ctrl+Shift+1`                            | 聚焦侧边栏            |
-| `Ctrl+Shift+2`                            | 聚焦编辑器            |
-| `Ctrl+Shift+3`                            | 聚焦结果              |
-| `Ctrl+Shift+4`                            | 聚焦后台任务          |
-| `Ctrl+Shift+A` / `Cmd+Shift+A`            | 打开审计查看器        |
-| `Ctrl+b` / `Cmd+b`                        | 切换侧边栏            |
-| `Ctrl+m`                                  | 打开标签页菜单        |
+| 按键                                             | 操作                                 |
+|--------------------------------------------------|--------------------------------------|
+| `Ctrl+Shift+P` / `Cmd+Shift+P`                   | 切换命令面板                         |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`                   | 打开连接管理器                       |
+| `Ctrl+n` / `Cmd+n`                               | 新建查询标签页                       |
+| `Ctrl+w` / `Cmd+w`                               | 关闭当前标签页                       |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`                    | 下一个 / 上一个标签页                |
+| `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9`        | 切换到标签页 N                       |
+| `Ctrl+o` / `Cmd+o`                               | 打开脚本文件                         |
+| `Ctrl+Enter` / `Cmd+Enter`                       | 执行查询                             |
+| `Ctrl+Shift+Enter` / `Cmd+Shift+Enter`           | 在新标签页中执行查询                 |
+| `Escape`                                         | 取消 / 关闭模态框                    |
+| `Tab` / `Shift+Tab`                              | 向前 / 向后循环聚焦                  |
+| `Ctrl+Shift+1`                                   | 聚焦侧边栏                           |
+| `Ctrl+Shift+2`                                   | 聚焦编辑器                           |
+| `Ctrl+Shift+3`                                   | 聚焦结果                             |
+| `Ctrl+Shift+4`                                   | 聚焦后台任务                         |
+| `Ctrl+Shift+A` / `Cmd+Shift+A`                   | 打开审计查看器                       |
+| `Ctrl+b` / `Cmd+b`                               | 切换侧边栏                           |
+| `Ctrl+m`                                         | 打开标签页菜单                       |
+| `Ctrl+,` / `Cmd+,`                               | 打开设置                             |
+| `Ctrl+Shift+E` / `Cmd+Shift+E`                   | 显示或隐藏编辑器面板                 |
+| `Ctrl+Shift+R` / `Cmd+Shift+R`                   | 显示或隐藏结果面板                   |
+| `Ctrl+Shift+T` / `Cmd+Shift+T`                   | 显示或隐藏后台任务面板               |
+| `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | 显示侧边栏的连接 / 脚本 / 仪表盘视图 |
+| `Ctrl+Shift+B` / `Cmd+Shift+B`                   | 打开或关闭通知中心                   |
+| `Ctrl+Shift+X` / `Cmd+Shift+X`                   | 在审计查看器中打开最近的错误         |
+| `Ctrl+Shift+L` / `Cmd+Shift+L`                   | 打开认证配置文件登录                 |
+| `Ctrl+Shift+O` / `Cmd+Shift+O`                   | 打开 AWS SSO 向导                    |
+| `Ctrl+Shift+C` / `Cmd+Shift+C`                   | 打开已保存的图表                     |
+| `Ctrl+Shift+D` / `Cmd+Shift+D`                   | 新建仪表盘                           |
+| `Ctrl+Shift+M` / `Cmd+Shift+M`                   | 打开 MCP 审批                        |
+| `Ctrl+Shift+G` / `Cmd+Shift+G`                   | 刷新 MCP 治理                        |
+
+`Ctrl+Shift+X` 会在审计查看器中打开本次会话最近报告的错误，与错误提示中的 **在审计中查看** 相同；尚无错误时显示用户错误。`Ctrl+Shift+5` .. `Ctrl+Shift+7` 的行为与活动栏相同：选择当前已显示的视图会折叠侧边栏。MCP 快捷键仅在支持 MCP 的构建中存在。**导出连接** 和 **从 JSON 导入仪表盘** 通过命令面板执行。
 
 ## 侧边栏
 
@@ -242,9 +257,10 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 
 打开弹出面板不会把任何项标为已读。点击某一行会打开它的目标并将其标为已读：审批会在 MCP 审批标签页中打开该请求，错误会打开按其关联 ID 筛选的审计，更新会打开其发行说明，已完成任务会打开后台任务面板。**全部标为已读**会读完所有项，**清除已读**会移除已读项。列表只在本次会话中保留。更新显示在这里，不再显示在状态栏中。
 
-| 按键     | 操作                                 |
-|----------|--------------------------------------|
-| `Escape` | 关闭弹出面板（点击面板外部效果相同） |
+| 按键                           | 操作                                 |
+|--------------------------------|--------------------------------------|
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | 在工作区任意位置打开或关闭弹出面板   |
+| `Escape`                       | 关闭弹出面板（点击面板外部效果相同） |
 
 ## 命令面板
 

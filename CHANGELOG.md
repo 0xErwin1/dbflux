@@ -9,6 +9,8 @@ All notable changes to DBFlux will be documented in this file.
 * **Visual query builder for document collections** — MongoDB collections gain a **Builder** button that opens a right-rail builder: filter conditions in all-of / any-of groups with operators that follow each field's type, include or exclude projection, sort, limit and skip, and a group stage with `$count`, `$sum` and `$avg` that runs as a read-only aggregation. Fields come from the collection's schema sample, the builder stays in sync with the query bar, and clauses it cannot show (such as `$expr`) are never overwritten without asking. Document drivers without a builder show the button disabled.
 
 * **Saved document queries** — Queries built in the document builder can be named, saved per collection and reopened in the mode they were saved in.
+* **Shortcuts for workspace commands** — Commands that ran only from the command palette now have shortcuts: Ctrl+, opens settings, Ctrl+Shift+E, Ctrl+Shift+R and Ctrl+Shift+T show or hide the editor, results and background tasks panels, and Ctrl+Shift+L, Ctrl+Shift+O, Ctrl+Shift+C, Ctrl+Shift+D, Ctrl+Shift+M and Ctrl+Shift+G open auth profile login, the AWS SSO wizard, a saved chart, a new dashboard, MCP approvals and a governance refresh. macOS uses Cmd instead of Ctrl. Export connections is now in the command palette.
+* **Keyboard access to the notifications, sidebar views and last error** — Ctrl+Shift+B opens or closes the notifications center, Ctrl+Shift+5, Ctrl+Shift+6 and Ctrl+Shift+7 show the Connections, Scripts and Dashboards views of the sidebar, and Ctrl+Shift+X opens the most recent error in the audit viewer, as the error toast's View in Audit does. Each is also a command palette entry.
 
 ### Changed
 

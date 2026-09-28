@@ -3187,6 +3187,8 @@ palette:
       name: Disconnect current
     refresh_schema:
       name: Refresh schema
+    export_connections:
+      name: "Export connections"
     focus_sidebar:
       name: Focus sidebar
     focus_editor:
@@ -3203,6 +3205,14 @@ palette:
       name: Toggle results panel
     toggle_tasks:
       name: Toggle tasks panel
+    toggle_notifications:
+      name: "Toggle notifications"
+    show_connections_view:
+      name: "Show connections view"
+    show_scripts_view:
+      name: "Show scripts view"
+    show_dashboards_view:
+      name: "Show dashboards view"
     open_settings:
       name: Open settings
     open_login_modal:
@@ -3215,6 +3225,8 @@ palette:
       name: Refresh MCP governance
     open_audit_viewer:
       name: Open audit viewer
+    open_last_error_in_audit:
+      name: "Open last error in audit"
     open_saved_chart:
       name: "Open chart…"
     new_dashboard:
@@ -3509,6 +3521,11 @@ settings:
       open_login_modal: Open auth profile login
       open_sso_wizard: Open AWS SSO wizard
       open_audit_viewer: Open audit viewer
+      open_last_error_in_audit: "Open last error in audit"
+      toggle_notifications: "Toggle notifications"
+      show_connections_view: "Show connections view"
+      show_scripts_view: "Show scripts view"
+      show_dashboards_view: "Show dashboards view"
       open_mcp_approvals: Open MCP approvals
       refresh_mcp_governance: Refresh MCP governance
       open_saved_chart: "Open chart…"

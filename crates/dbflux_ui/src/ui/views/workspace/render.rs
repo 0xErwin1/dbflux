@@ -30,6 +30,13 @@ fn palette_command_opens_native_window(command_id: &str) -> bool {
     matches!(command_id, "open_settings" | "open_connection_manager")
 }
 
+/// Palette commands that open a popover and move focus into it. Refocusing
+/// the workspace afterwards would leave the popover open without the keys
+/// that close it.
+fn palette_command_focuses_a_popover(command_id: &str) -> bool {
+    command_id == "toggle_notifications"
+}
+
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
     ///
@@ -115,7 +122,8 @@ impl Render for Workspace {
             // `take` before scheduling keeps dispatch at most once across
             // re-renders; the deferred callback runs after the render pass
             // returns, or not at all if the window closes first.
-            let refocus_parent = !palette_command_opens_native_window(command_id);
+            let refocus_parent = !palette_command_opens_native_window(command_id)
+                && !palette_command_focuses_a_popover(command_id);
             defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
                 this.handle_command(command_id, window, cx);
                 if refocus_parent {
@@ -980,7 +988,10 @@ mod tests {
 
     use gpui::{Context, IntoElement, Render, TestAppContext, VisualTestContext, Window, div};
 
-    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
+    use super::{
+        defer_to_end_of_effect_cycle, palette_command_focuses_a_popover,
+        palette_command_opens_native_window,
+    };
 
     #[test]
     fn workspace_render_draws_no_collapsed_tasks_bar() {
@@ -1032,6 +1043,12 @@ mod tests {
         assert!(palette_command_opens_native_window(
             "open_connection_manager"
         ));
+    }
+
+    #[test]
+    fn popover_palette_commands_skip_the_parent_refocus() {
+        assert!(palette_command_focuses_a_popover("toggle_notifications"));
+        assert!(!palette_command_focuses_a_popover("open_audit_viewer"));
     }
 
     #[test]

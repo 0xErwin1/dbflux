@@ -38,6 +38,21 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+Shift+A` / `Cmd+Shift+A` | Open audit viewer |
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
 | `Ctrl+m` | Open tab context menu |
+| `Ctrl+,` / `Cmd+,` | Open settings |
+| `Ctrl+Shift+E` / `Cmd+Shift+E` | Show or hide the editor panel |
+| `Ctrl+Shift+R` / `Cmd+Shift+R` | Show or hide the results panel |
+| `Ctrl+Shift+T` / `Cmd+Shift+T` | Show or hide the background tasks panel |
+| `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Show the Connections / Scripts / Dashboards view of the sidebar |
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the notifications center |
+| `Ctrl+Shift+X` / `Cmd+Shift+X` | Open the most recent error in the audit viewer |
+| `Ctrl+Shift+L` / `Cmd+Shift+L` | Open auth profile login |
+| `Ctrl+Shift+O` / `Cmd+Shift+O` | Open the AWS SSO wizard |
+| `Ctrl+Shift+C` / `Cmd+Shift+C` | Open a saved chart |
+| `Ctrl+Shift+D` / `Cmd+Shift+D` | New dashboard |
+| `Ctrl+Shift+M` / `Cmd+Shift+M` | Open MCP approvals |
+| `Ctrl+Shift+G` / `Cmd+Shift+G` | Refresh MCP governance |
+
+`Ctrl+Shift+X` opens the audit viewer on the most recent error reported in this session, as the error toast's **View in Audit** does; before any error it shows the user errors. `Ctrl+Shift+5` .. `Ctrl+Shift+7` behave like the activity rail: choosing the view already shown collapses the sidebar. The MCP shortcuts exist in builds with MCP support. **Export connections** and **Import dashboard from JSON** run from the command palette.
 
 ## Sidebar
 
@@ -306,6 +321,7 @@ session. Updates show here instead of in the status bar.
 
 | Keys | Action |
 |------|--------|
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the popover from anywhere in the workspace |
 | `Escape` | Close the popover (a click outside it does the same) |
 
 ## Command palette

@@ -669,6 +669,130 @@ fn global_bindings_stop_at_capturing_contexts_and_modals() {
     );
 }
 
+/// The workspace commands that used to run only from the command palette,
+/// and the keyboard shell commands, with the global keys they have.
+fn workspace_command_chords() -> Vec<(Command, KeyChord)> {
+    #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+    let mut chords = vec![
+        (
+            Command::OpenSettings,
+            KeyChord::new(",", Modifiers::primary()),
+        ),
+        (
+            Command::ToggleEditor,
+            KeyChord::new("e", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleResults,
+            KeyChord::new("r", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleTasks,
+            KeyChord::new("t", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ToggleNotifications,
+            KeyChord::new("b", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenLastErrorInAudit,
+            KeyChord::new("x", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenLoginModal,
+            KeyChord::new("l", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenSsoWizard,
+            KeyChord::new("o", Modifiers::primary_shift()),
+        ),
+        (
+            Command::OpenSavedChart,
+            KeyChord::new("c", Modifiers::primary_shift()),
+        ),
+        (
+            Command::NewDashboard,
+            KeyChord::new("d", Modifiers::primary_shift()),
+        ),
+        (
+            Command::ShowConnectionsView,
+            KeyChord::new("5", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::ShowScriptsView,
+            KeyChord::new("6", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::ShowDashboardsView,
+            KeyChord::new("7", Modifiers::ctrl_shift()),
+        ),
+    ];
+
+    #[cfg(feature = "mcp")]
+    chords.extend([
+        (
+            Command::OpenMcpApprovals,
+            KeyChord::new("m", Modifiers::primary_shift()),
+        ),
+        (
+            Command::RefreshMcpGovernance,
+            KeyChord::new("g", Modifiers::primary_shift()),
+        ),
+    ]);
+
+    chords
+}
+
+#[test]
+fn workspace_commands_have_global_chords() {
+    let keymap = effective_keymap();
+
+    for (command, chord) in workspace_command_chords() {
+        assert_eq!(
+            keymap.keys_for_command(ContextId::Global, command),
+            Some(&KeySequence::from(chord.clone())),
+            "{command:?} must be bound to {chord} in the global layer"
+        );
+
+        for context in [
+            ContextId::Sidebar,
+            ContextId::Editor,
+            ContextId::Results,
+            ContextId::TextInput,
+        ] {
+            assert_eq!(
+                keymap.resolve(context, &chord),
+                Some(command),
+                "{chord} must run {command:?} in {context:?}"
+            );
+        }
+    }
+}
+
+/// The new global chords take no key another layer already binds, so no
+/// panel shadows them and they shadow no panel.
+#[test]
+fn workspace_command_chords_are_bound_nowhere_else() {
+    let keymap = default_keymap();
+
+    for (command, chord) in workspace_command_chords() {
+        let keys = KeySequence::from(chord.clone());
+
+        for context in ContextId::all_variants() {
+            let Some(layer) = keymap.layer(*context) else {
+                continue;
+            };
+
+            if let Some(bound) = layer.get_sequence(&keys) {
+                assert!(
+                    *context == ContextId::Global && bound == command,
+                    "{chord} is also bound to {bound:?} in {context:?}"
+                );
+            }
+        }
+    }
+}
+
 /// While text is typed in a field or the context bar, the global chords
 /// still reach the workspace, inside the field's own `Input` element too.
 #[test]

@@ -3187,6 +3187,8 @@ palette:
       name: 현재 연결 끊기
     refresh_schema:
       name: 스키마 새로고침
+    export_connections:
+      name: "연결 내보내기"
     focus_sidebar:
       name: 사이드바 포커스
     focus_editor:
@@ -3203,6 +3205,14 @@ palette:
       name: 결과 패널 전환
     toggle_tasks:
       name: 작업 패널 전환
+    toggle_notifications:
+      name: "알림 전환"
+    show_connections_view:
+      name: "연결 보기 표시"
+    show_scripts_view:
+      name: "스크립트 보기 표시"
+    show_dashboards_view:
+      name: "대시보드 보기 표시"
     open_settings:
       name: 설정 열기
     open_login_modal:
@@ -3215,6 +3225,8 @@ palette:
       name: MCP 거버넌스 새로고침
     open_audit_viewer:
       name: 감사 뷰어 열기
+    open_last_error_in_audit:
+      name: "감사에서 마지막 오류 열기"
     open_saved_chart:
       name: "차트 열기…"
     new_dashboard:
@@ -3509,6 +3521,11 @@ settings:
       open_login_modal: 인증 프로필 로그인 열기
       open_sso_wizard: AWS SSO 마법사 열기
       open_audit_viewer: 감사 뷰어 열기
+      open_last_error_in_audit: "감사에서 마지막 오류 열기"
+      toggle_notifications: "알림 전환"
+      show_connections_view: "연결 보기 표시"
+      show_scripts_view: "스크립트 보기 표시"
+      show_dashboards_view: "대시보드 보기 표시"
       open_mcp_approvals: MCP 승인 열기
       refresh_mcp_governance: MCP 거버넌스 새로고침
       open_saved_chart: "차트 열기…"
