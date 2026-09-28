@@ -824,9 +824,15 @@ fn connection_manager_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::ConnectionManager);
 
     // Bare printable keys stay out of the window's text fields, so typing
-    // them inserts text instead of navigating. The arrows need no predicate:
-    // a focused text field binds them itself at a deeper context.
+    // them inserts text instead of navigating.
     const OUTSIDE_TEXT_FIELDS: &str = "ConnectionManager && !Input";
+
+    // Up, Down and Ctrl+H also apply inside a text field of the form: a
+    // single-line field answers them itself without using them, so these
+    // bindings match at the field's depth as well (registered after the
+    // field's own, they win there) and let the keys leave the field for the
+    // previous or next field or tab.
+    let form_or_field = "ConnectionManager || (ConnectionManager > Input)";
 
     // Vertical navigation (j/k without Ctrl, plus arrow keys for the picker).
     layer.bind_with_predicate(
@@ -839,8 +845,16 @@ fn connection_manager_layer() -> KeymapLayer {
         Command::SelectPrev,
         OUTSIDE_TEXT_FIELDS,
     );
-    layer.bind(KeyChord::new("down", Modifiers::none()), Command::FocusDown);
-    layer.bind(KeyChord::new("up", Modifiers::none()), Command::FocusUp);
+    layer.bind_with_predicate(
+        KeyChord::new("down", Modifiers::none()),
+        Command::FocusDown,
+        form_or_field,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("up", Modifiers::none()),
+        Command::FocusUp,
+        form_or_field,
+    );
 
     // Horizontal navigation within row (h/l without Ctrl, plus arrows).
     layer.bind_with_predicate(
@@ -860,14 +874,22 @@ fn connection_manager_layer() -> KeymapLayer {
     );
 
     // Tab switching (C-h/C-l)
-    layer.bind(
+    layer.bind_with_predicate(
         KeyChord::new("h", Modifiers::ctrl()),
         Command::CycleFocusBackward,
+        form_or_field,
     );
     layer.bind(
         KeyChord::new("l", Modifiers::ctrl()),
         Command::CycleFocusForward,
     );
+
+    // Page through an open dropdown.
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
 
     // Filter focus shortcut used by the New-Connection picker.
     layer.bind_with_predicate(

@@ -730,7 +730,10 @@ Navigation contexts in **Settings → Keybindings** and can be rebound there.
 
 In the Connection Manager, `Ctrl+s` / `Cmd+s` saves the connection from
 anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
-of the SSH authentication method. In the audit viewer, `Left` / `Right` on the
+of the SSH authentication method. `Down` / `Up` move like `j` / `k`; while a
+field is being edited they leave it for the next or previous field, and
+`Ctrl+l` / `Ctrl+h` leave it for the next or previous tab. `PageDown` /
+`PageUp` move the highlight of an open dropdown a page at a time. In the audit viewer, `Left` / `Right` on the
 time presets change the preset.
 
 ## Dropdowns

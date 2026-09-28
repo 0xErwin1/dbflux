@@ -1000,6 +1000,15 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Up and Down move like k and j, except while a field is edited,
+        // where they leave it (see `handle_editing_command`).
+        let command = match (self.edit_state, command) {
+            (EditState::Editing, command) => command,
+            (_, Command::FocusDown) => Command::SelectNext,
+            (_, Command::FocusUp) => Command::SelectPrev,
+            (_, command) => command,
+        };
+
         if self.access.proxy_dropdown.read(cx).is_open()
             && self.handle_proxy_dropdown_command(command, cx)
         {
@@ -1501,9 +1510,24 @@ impl ConnectionManagerWindow {
                 self.exit_edit_mode(window, cx);
                 true
             }
-            Command::Execute => {
+            Command::Execute | Command::FocusDown => {
                 self.exit_edit_mode(window, cx);
                 self.focus_down(cx);
+                true
+            }
+            Command::FocusUp => {
+                self.exit_edit_mode(window, cx);
+                self.focus_up(cx);
+                true
+            }
+            Command::CycleFocusForward => {
+                self.exit_edit_mode(window, cx);
+                self.next_tab(cx);
+                true
+            }
+            Command::CycleFocusBackward => {
+                self.exit_edit_mode(window, cx);
+                self.prev_tab(cx);
                 true
             }
             _ => false,

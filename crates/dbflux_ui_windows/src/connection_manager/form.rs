@@ -2196,6 +2196,147 @@ mod tests {
             .log_err();
     }
 
+    /// Opens a keymap-driven PostgreSQL form with the keyboard in the form.
+    fn open_postgres_form(cx: &mut TestAppContext) -> WindowHandle<ConnectionManagerWindow> {
+        init_form_test_runtime(cx);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager.edit_state = EditState::Navigating;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("the form focuses");
+        cx.run_until_parked();
+
+        window
+    }
+
+    fn form_state(
+        window: WindowHandle<ConnectionManagerWindow>,
+        cx: &mut TestAppContext,
+    ) -> (FormFocus, EditState, super::super::ActiveTab) {
+        window
+            .update(cx, |manager, _, _| {
+                (manager.form_focus, manager.edit_state, manager.active_tab)
+            })
+            .expect("window is open")
+    }
+
+    /// Down and Up move the form cursor like j and k, and while a field is
+    /// edited they, Ctrl+L and Ctrl+H leave it: Down and Up for the next or
+    /// previous field, Ctrl+L and Ctrl+H for the next or previous tab.
+    #[::core::prelude::v1::test]
+    fn arrows_and_tab_chords_move_on_from_the_form_and_its_fields() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "down");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Environment);
+
+        cx.simulate_keystrokes(window.into(), "up");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Name);
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(form_state(window, &mut cx).1, EditState::Editing);
+
+        cx.simulate_keystrokes(window.into(), "down");
+        assert_eq!(
+            form_state(window, &mut cx),
+            (
+                FormFocus::Environment,
+                EditState::Navigating,
+                ActiveTab::Main
+            ),
+            "Down leaves the name field for the next one"
+        );
+
+        cx.simulate_keystrokes(window.into(), "up enter");
+        assert_eq!(form_state(window, &mut cx).1, EditState::Editing);
+
+        cx.simulate_keystrokes(window.into(), "up");
+        assert_eq!(
+            form_state(window, &mut cx).1,
+            EditState::Navigating,
+            "Up leaves the field"
+        );
+
+        cx.simulate_keystrokes(window.into(), "down up enter ctrl-l");
+        let (_, edit_state, tab) = form_state(window, &mut cx);
+        assert_eq!(
+            (edit_state, tab),
+            (EditState::Navigating, ActiveTab::Access),
+            "Ctrl+L leaves the field for the next tab"
+        );
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Main;
+                manager.form_focus = FormFocus::Name;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter ctrl-h");
+        let (_, edit_state, tab) = form_state(window, &mut cx);
+        assert_eq!(
+            (edit_state, tab),
+            (EditState::Navigating, ActiveTab::Mcp),
+            "Ctrl+H leaves the field for the previous tab"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// Page Down moves an open dropdown's highlight a page at a time.
+    #[::core::prelude::v1::test]
+    fn page_down_moves_an_open_dropdown() {
+        use super::super::ActiveTab;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.active_tab = ActiveTab::Access;
+                manager.form_focus = FormFocus::AccessMethod;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+        cx.run_until_parked();
+
+        let access_mode = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.access.access_tab_mode)
+                .expect("window is open")
+        };
+        let initial = access_mode(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "enter pagedown enter");
+        assert_ne!(
+            access_mode(&mut cx),
+            initial,
+            "Page Down moved the highlight to another access method"
+        );
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     #[::core::prelude::v1::test]
     fn new_profile_password_save_success_persists_and_closes_the_real_window() {
         let mut cx = TestAppContext::single();

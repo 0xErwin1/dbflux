@@ -763,7 +763,10 @@ navegación, aparecen en los contextos Settings Window y Form Navigation de
 
 En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
 parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**
-y del método de autenticación SSH. En el visor de auditoría, `Left` / `Right`
+y del método de autenticación SSH. `Down` / `Up` se mueven como `j` / `k`;
+mientras se edita un campo lo dejan por el campo siguiente o anterior, y
+`Ctrl+l` / `Ctrl+h` lo dejan por la pestaña siguiente o anterior. `PageDown` /
+`PageUp` mueven el resaltado de un desplegable abierto una página. En el visor de auditoría, `Left` / `Right`
 sobre los intervalos de tiempo cambian el intervalo.
 
 ## Desplegables
