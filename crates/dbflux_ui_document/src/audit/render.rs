@@ -27,6 +27,7 @@ use dbflux_components::tokens::{
     ChamferCut, ChromeColors, DocumentMetrics, Feedback, Spacing, SyntaxColors,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use dbflux_core::{EventCategory, EventOutcome};
 use dbflux_storage::repositories::audit::AuditEventDto;
 use gpui::prelude::*;
@@ -1403,12 +1404,29 @@ impl AuditDocument {
             let details_input =
                 self.ensure_external_details_input(row_event_id, &pretty_details, window, cx);
             let details_rows = Self::event_code_rows(&pretty_details, 4);
+            let input_id = details_input.entity_id();
+            let container = VimBinding::capture_run_command(
+                VimBinding::wire(div(), input_id, cx),
+                input_id,
+                cx,
+            );
+            let indicator = self
+                .external_details_vims
+                .get(&input_id)
+                .and_then(|vim| vim.render_indicator(cx));
 
             block(
-                ReadOnlyEditor::new(&details_input)
-                    .appearance(false)
+                container
                     .w_full()
-                    .h(Self::event_text_height(details_rows))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        ReadOnlyEditor::new(&details_input)
+                            .appearance(false)
+                            .w_full()
+                            .h(Self::event_text_height(details_rows)),
+                    )
+                    .children(indicator)
                     .into_any_element(),
             )
         });
@@ -1664,14 +1682,24 @@ impl AuditDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<GpuiEditorState> {
-        Self::ensure_event_editor_input(
+        let input = Self::ensure_event_editor_input(
             &mut self.external_details_inputs,
             event_id,
             details_json,
             Some("json"),
             window,
             cx,
-        )
+        );
+
+        let input_id = input.entity_id();
+        if let std::collections::hash_map::Entry::Vacant(slot) =
+            self.external_details_vims.entry(input_id)
+        {
+            slot.insert(VimBinding::new(input.clone(), window, cx));
+            VimBinding::follow_setting(self, input_id, cx);
+        }
+
+        input
     }
 
     // ── Row sizing helpers ────────────────────────────────────────────────

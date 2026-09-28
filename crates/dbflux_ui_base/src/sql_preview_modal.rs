@@ -5,6 +5,7 @@ use dbflux_components::modals::Modal;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::LogErr;
 use dbflux_core::keymap_types::ContextId;
 // SqlGenerationType and SqlPreviewContext now live in dbflux_components;
@@ -19,7 +20,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 use uuid::Uuid;
 
 actions!(
@@ -64,11 +65,29 @@ pub struct SqlPreviewModal {
     generation_type: SqlGenerationType,
     settings: SqlPreviewSettings,
     sql_display: Entity<EditorState>,
+    /// Vim motions in the query; replaced with `sql_display`.
+    sql_display_vim: VimBinding,
     generated_sql: String,
     focus_handle: FocusHandle,
 
     query_language: Option<QueryLanguage>,
     badge_label: Option<String>,
+}
+
+/// The query is generated text, copied as generated: Vim moves, selects and
+/// yanks in it.
+impl VimHost for SqlPreviewModal {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.sql_display_vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.sql_display_vim.for_input_mut(input)
+    }
+
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        true
+    }
 }
 
 impl SqlPreviewModal {
@@ -83,18 +102,48 @@ impl SqlPreviewModal {
                 .language("sql")
                 .line_number(true)
         });
+        let sql_display_vim = VimBinding::new(sql_display.clone(), window, cx);
+        let input = sql_display_vim.input_id();
 
-        Self {
+        let mut modal = Self {
             app_state,
             visible: false,
             context: None,
             generation_type: SqlGenerationType::SelectWhere,
             settings: SqlPreviewSettings::default(),
             sql_display,
+            sql_display_vim,
             generated_sql: String::new(),
             focus_handle: cx.focus_handle(),
             query_language: None,
             badge_label: None,
+        };
+
+        VimBinding::follow_setting(&mut modal, input, cx);
+        modal
+    }
+
+    /// Shows `display` as the query, with a fresh Vim binding for it.
+    fn install_display(
+        &mut self,
+        display: Entity<EditorState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sql_display_vim = VimBinding::new(display.clone(), window, cx);
+        self.sql_display = display;
+        let input = self.sql_display_vim.input_id();
+        VimBinding::follow_setting(self, input, cx);
+    }
+
+    /// Gives the keyboard to the dialog, or to the query itself while Vim mode
+    /// is on, where j / k and the other Vim keys move through it.
+    fn focus_on_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sql_display_vim.enabled() {
+            let display = self.sql_display.clone();
+            display.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.focus_handle.focus(window, cx);
         }
     }
 
@@ -113,18 +162,19 @@ impl SqlPreviewModal {
         if self.query_language.is_some() {
             self.query_language = None;
             self.badge_label = None;
-            self.sql_display = cx.new(|cx| {
+            let display = cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("sql")
                     .line_number(true)
             });
+            self.install_display(display, window, cx);
         }
 
         self.context = Some(context);
         self.generation_type = generation_type;
         self.visible = true;
         self.regenerate_sql(window, cx);
-        self.focus_handle.focus(window, cx);
+        self.focus_on_open(window, cx);
         cx.notify();
     }
 
@@ -145,15 +195,16 @@ impl SqlPreviewModal {
 
         self.generated_sql = query.clone();
 
-        self.sql_display = cx.new(|cx| {
+        let display = cx.new(|cx| {
             let mut state = EditorState::new(window, cx)
                 .language(editor_mode)
                 .line_number(true);
             state.set_value(&query, window, cx);
             state
         });
+        self.install_display(display, window, cx);
 
-        self.focus_handle.focus(window, cx);
+        self.focus_on_open(window, cx);
         cx.notify();
     }
 
@@ -536,9 +587,25 @@ impl Render for SqlPreviewModal {
             return div().into_any_element();
         }
 
-        let theme = cx.theme();
-        let sql_display = self.sql_display.clone();
         let is_generic = self.query_language.is_some();
+
+        // Vim's listeners on the query. In Insert mode the dialog's Escape
+        // leaves Insert mode instead of closing, and in Normal mode Enter
+        // moves down instead of copying.
+        let vim_input = self.sql_display_vim.input_id();
+        let query_container = VimBinding::wire(div(), vim_input, cx);
+        let query_container = VimBinding::capture_action::<component_actions::Cancel, _>(
+            query_container,
+            vim_input,
+            cx,
+        );
+        let query_container = VimBinding::capture_action::<component_actions::Execute, _>(
+            query_container,
+            vim_input,
+            cx,
+        );
+        let vim_indicator = self.sql_display_vim.render_indicator(cx);
+        let theme = cx.theme();
 
         let entity = cx.entity().downgrade();
         let close = {
@@ -585,14 +652,15 @@ impl Render for SqlPreviewModal {
             .max_height(px(800.0))
             .header_extra(type_badge)
             .child(
-                div()
+                query_container
                     .flex_1()
                     .p(Spacing::MD)
                     .min_h(px(200.0))
                     .max_h(px(300.0))
                     .overflow_hidden()
                     .child(
-                        Editor::new(&sql_display)
+                        self.sql_display_vim
+                            .editor(false)
                             .w_full()
                             .h_full()
                             .font_family(AppFonts::MONO)
@@ -601,6 +669,10 @@ impl Render for SqlPreviewModal {
                     ),
             )
             .top_offset(px(80.0));
+
+        if let Some(indicator) = vim_indicator {
+            frame = frame.child(indicator);
+        }
 
         // -- Options (SQL mode, DML only) --
 
@@ -941,6 +1013,33 @@ mod tests {
             let copied =
                 window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
             assert_eq!(copied, Some(long_query()));
+            assert!(!visible(window, &preview));
+        }
+
+        /// With Vim mode on, the query takes the keyboard: `j` moves the
+        /// cursor a line instead of scrolling the dialog, Enter in Normal
+        /// mode moves too instead of copying, and Escape still closes.
+        #[gpui::test]
+        fn vim_mode_moves_in_the_query_and_enter_does_not_copy(cx: &mut TestAppContext) {
+            cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+            let (preview, window) = open_preview(cx);
+            let cursor = |window: &mut VisualTestContext| {
+                window.update(|_, cx| preview.read(cx).sql_display.read(cx).cursor())
+            };
+
+            window.simulate_keystrokes("j");
+            window.run_until_parked();
+            assert_eq!(cursor(window), "SELECT 0 AS value;\n".len());
+
+            window.simulate_keystrokes("enter");
+            window.run_until_parked();
+            assert_eq!(cursor(window), 2 * "SELECT 0 AS value;\n".len());
+            assert!(visible(window, &preview), "Enter in Normal mode copied");
+            let copied =
+                window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+            assert_eq!(copied, None);
+
+            window.simulate_keystrokes("escape");
             assert!(!visible(window, &preview));
         }
 

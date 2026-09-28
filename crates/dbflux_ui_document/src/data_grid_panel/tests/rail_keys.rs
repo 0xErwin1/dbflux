@@ -326,3 +326,44 @@ fn ctrl_enter_in_delete_mode_requests_the_run_button_mutation(cx: &mut TestAppCo
         "without WHERE, left to the grid's no-WHERE confirmation"
     );
 }
+
+/// With Vim mode on, the SQL preview takes Vim motions and stays unchanged:
+/// `l` and `w` move the cursor, `x` deletes nothing.
+#[gpui::test]
+fn the_sql_preview_takes_vim_motions(cx: &mut TestAppContext) {
+    cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, true));
+    let (panel, window) = host_table_grid_with_rail(cx);
+
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_query_builder(window, cx));
+    });
+    window.run_until_parked();
+    let builder = sql_builder(&panel, window);
+
+    let preview = window.update(|_, cx| {
+        builder
+            .read(cx)
+            .sql_preview_state
+            .clone()
+            .expect("the builder has a preview")
+    });
+    window.update(|window, cx| {
+        preview.update(cx, |state, cx| {
+            state.set_value("SELECT id FROM users", window, cx);
+            state.set_selected_range(0..0, cx);
+            state.focus(window, cx);
+        });
+    });
+    window.run_until_parked();
+    let before = window.update(|_, cx| preview.read(cx).value().to_string());
+
+    keys(window, "l x");
+    let (text, cursor) = window.update(|_, cx| {
+        (
+            preview.read(cx).value().to_string(),
+            preview.read(cx).cursor(),
+        )
+    });
+    assert_eq!(text, before, "the preview is read-only");
+    assert_eq!(cursor, 1, "l moved the cursor");
+}

@@ -4,6 +4,7 @@ use dbflux_components::primitives::{
     Badge, BadgeTone, Chamfer, Icon, SegmentedControl, SegmentedItem, Text,
 };
 use dbflux_components::tokens::{BuilderMetrics, ChamferCut, ChromeColors, Spacing};
+use dbflux_components::vim::VimBinding;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -109,7 +110,7 @@ pub fn render_panel(
             div()
                 .px(BuilderMetrics::RAIL_PADDING_X)
                 .pb(BuilderMetrics::SECTION_GAP)
-                .child(render_preview_pane(panel, &theme)),
+                .child(render_preview_pane(panel, &theme, cx)),
         )
         .child(render_footer(panel, &theme, cx))
         .children(render_rail_menu(&panel.rail, "qb-rail-menu", cx))
@@ -466,7 +467,11 @@ fn predicate_count(node: &dbflux_core::FilterNode) -> usize {
 /// Renders the SQL Preview as a fixed card between the scrollable body and
 /// the action footer, so it stays visible regardless of how many sections
 /// the user has scrolled past.
-fn render_preview_pane(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
+fn render_preview_pane(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
     let line_count = panel.sql_preview.lines().count().max(1);
     let status = div()
         .flex()
@@ -483,7 +488,7 @@ fn render_preview_pane(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl Int
             line_count,
         )));
 
-    let body = render_preview_body(panel).into_any_element();
+    let body = render_preview_body(panel, cx).into_any_element();
 
     section_card_with_trailing(
         dbflux_i18n::t!("document.query_builder.section.sql_preview"),
@@ -623,15 +628,32 @@ fn render_effective_select_preview(
 // SQL Preview
 // ---------------------------------------------------------------------------
 
-fn render_preview_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
-    div().when_some(panel.sql_preview_state.as_ref(), |container, state| {
-        container.child(
-            ReadOnlyEditor::new(state)
-                .appearance(false)
-                .w_full()
-                .h(BuilderMetrics::PREVIEW_HEIGHT),
-        )
-    })
+fn render_preview_body(
+    panel: &mut QueryBuilderPanel,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> impl IntoElement {
+    let container = match panel.sql_preview_vim.as_ref() {
+        Some(vim) => {
+            let input = vim.input_id();
+            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx)
+        }
+        None => div(),
+    };
+    let indicator = panel
+        .sql_preview_vim
+        .as_ref()
+        .and_then(|vim| vim.render_indicator(cx));
+
+    container
+        .when_some(panel.sql_preview_state.as_ref(), |container, state| {
+            container.child(
+                ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .w_full()
+                    .h(BuilderMetrics::PREVIEW_HEIGHT),
+            )
+        })
+        .children(indicator)
 }
 
 // ---------------------------------------------------------------------------
