@@ -1500,6 +1500,11 @@ document:
         maximize: "最大化结果"
         restore: "还原结果"
         hide: "隐藏结果"
+        query_history: "查询历史…"
+        step_to_root: "返回文档"
+        view_documents: "显示文档"
+        view_schema: "显示结构"
+        view_aggregate: "显示聚合"
       error:
         no_results_to_export: 没有可导出的结果
         invalid_json: 无效的 JSON

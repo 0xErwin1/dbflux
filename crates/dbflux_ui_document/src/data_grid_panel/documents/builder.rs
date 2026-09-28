@@ -2618,6 +2618,115 @@ mod tests {
         (panel, builder, window)
     }
 
+    /// A collection with the Documents, Schema and Aggregate views, hosted
+    /// as the workspace hosts it, with the keyboard on the grid.
+    fn keyboard_collection(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        use crate::data_grid_panel::tests::rail_keys::host_in_rail;
+
+        let (app_state, profile_id) = register_stub_connection(
+            cx,
+            Arc::new(StubDocumentConnection::new(
+                DatabaseCategory::Document,
+                aggregate_features(),
+                true,
+            )),
+        );
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        host_in_rail(cx, move |window, cx| {
+            cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("shop", "orders"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+                DataGridPanel::new_internal(source, app_state, vec![], window, cx)
+            })
+        })
+    }
+
+    fn run_toolbar(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+        action: crate::data_grid_panel::context_menu::toolbar::ToolbarAction,
+    ) {
+        window.update(|window, cx| {
+            panel.update(cx, |grid, cx| grid.run_toolbar_action(action, window, cx))
+        });
+        window.run_until_parked();
+    }
+
+    /// The query bar's Find, history and clear filter and the view tabs are
+    /// reachable from the keyboard: the Toolbar entries run Find and open
+    /// the history menu, whose menu keys rerun a query; Shift+F empties the
+    /// filter slot and finds; Alt+L / Alt+H step through the views.
+    #[gpui::test]
+    fn the_query_bar_and_views_are_driven_by_keys(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::context_menu::toolbar::ToolbarAction;
+        use crate::data_grid_panel::tests::rail_keys::{context, keys};
+        use dbflux_app::keymap::ContextId;
+
+        let (panel, window) = keyboard_collection(cx);
+
+        set_slot_texts(&panel, window, "{ status: 1 }", "");
+        run_toolbar(&panel, window, ToolbarAction::Find);
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.history.len()),
+            1,
+            "the Find entry runs the query and records it"
+        );
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        for expected in [
+            ToolbarAction::ClearFilter,
+            ToolbarAction::Find,
+            ToolbarAction::QueryHistory,
+            ToolbarAction::CollectionView(CollectionTab::Schema),
+            ToolbarAction::CollectionView(CollectionTab::Aggregate),
+        ] {
+            assert!(
+                actions.contains(&expected),
+                "the Toolbar lists {expected:?}: {actions:?}"
+            );
+        }
+
+        keys(window, "shift-f");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            "",
+            "Shift+F empties the filter slot"
+        );
+
+        run_toolbar(&panel, window, ToolbarAction::QueryHistory);
+        assert_eq!(context(&panel, window), ContextId::ContextMenu);
+
+        // The cleared query ran last, so it leads the history.
+        keys(window, "j enter");
+        assert_eq!(
+            slot_texts(&panel, window).0,
+            "{ status: 1 }",
+            "J then Enter reruns the older query"
+        );
+        assert!(!window.update(|_, cx| panel.read(cx).collection.history_open));
+
+        keys(window, "alt-l");
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.tab),
+            CollectionTab::Schema,
+            "Alt+L shows the next view"
+        );
+
+        keys(window, "alt-h");
+        assert_eq!(
+            window.update(|_, cx| panel.read(cx).collection.tab),
+            CollectionTab::Documents,
+            "Alt+H shows the previous view"
+        );
+    }
+
     /// Ctrl+L enters the document builder; A adds a condition, whose field
     /// is picked by typing its path, whose operator comes from the operator
     /// list driven by J and Enter, and whose value is typed; Ctrl+Enter

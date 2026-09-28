@@ -1,4 +1,4 @@
-mod context_menu;
+pub(crate) mod context_menu;
 mod documents;
 pub(crate) mod filter_bar;
 pub(crate) mod mutation_confirm;
@@ -645,6 +645,9 @@ struct FocusState {
     /// Holds the keyboard while the export menu is open, so the menu keys
     /// reach the menu rather than the table under it.
     export_menu_focus: FocusHandle,
+    /// Holds the keyboard while a document collection's query history menu
+    /// is open.
+    history_menu_focus: FocusHandle,
     /// The side panel the keyboard moved into with Ctrl+L, if any.
     side_island: Option<side_island::SideIsland>,
     /// Clears `side_island` when focus leaves that panel by another route.
@@ -1528,6 +1531,7 @@ impl DataGridPanel {
                 switching_input: false,
                 context_menu_focus,
                 export_menu_focus: cx.focus_handle(),
+                history_menu_focus: cx.focus_handle(),
                 side_island: None,
                 _side_island_blur: None,
             },

@@ -59,7 +59,7 @@ const HISTORY_LIMIT: usize = 20;
 
 /// Documents, Schema or Aggregate, the views of a collection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum CollectionTab {
+pub(crate) enum CollectionTab {
     #[default]
     Documents,
     Schema,
@@ -206,6 +206,8 @@ pub(super) struct CollectionViewState {
     pub sort_input: Entity<EditorState>,
     pub history: Vec<QueryHistoryEntry>,
     pub history_open: bool,
+    /// Highlighted entry of the open history menu, for the keyboard.
+    pub history_selected: usize,
     pub count: Option<CollectionCountEstimate>,
     /// Filter the count belongs to, so a new filter recounts.
     pub counted_filter: Option<Option<serde_json::Value>>,
@@ -334,6 +336,7 @@ impl CollectionViewState {
             sort_input,
             history: Vec::new(),
             history_open: false,
+            history_selected: 0,
             count: None,
             counted_filter: None,
             applied_skip: 0,
@@ -859,6 +862,88 @@ impl DataGridPanel {
             sort: self.collection.sort_input.read(cx).value().to_string(),
             limit: self.filter_bar.limit_input.read(cx).value().to_string(),
         }
+    }
+
+    /// Opens the query history menu with the keyboard in it, on its newest
+    /// entry. Nothing opens without history, as the button is disabled.
+    pub(super) fn open_query_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.collection.history.is_empty() {
+            return;
+        }
+
+        self.collection.history_open = true;
+        self.collection.history_selected = 0;
+        self.focus.history_menu_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the query history menu and hands the keyboard back to the grid.
+    pub(super) fn close_query_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.collection.history_open = false;
+
+        let is_document_view = self.view_config.mode == DataViewMode::Document;
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
+        cx.notify();
+    }
+
+    /// The context-menu keys while the history menu is open: move (wrapping),
+    /// run the highlighted query, or close.
+    pub(super) fn dispatch_history_menu_command(
+        &mut self,
+        cmd: dbflux_app::keymap::Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use dbflux_app::keymap::Command;
+
+        let count = self.collection.history.len();
+        if count == 0 {
+            self.close_query_history(window, cx);
+            return true;
+        }
+
+        match cmd {
+            Command::MenuDown | Command::SelectNext => {
+                self.collection.history_selected = (self.collection.history_selected + 1) % count;
+                cx.notify();
+            }
+            Command::MenuUp | Command::SelectPrev => {
+                self.collection.history_selected =
+                    (self.collection.history_selected + count - 1) % count;
+                cx.notify();
+            }
+            Command::MenuSelect | Command::Execute => {
+                let index = self.collection.history_selected.min(count - 1);
+                self.run_history_entry(index, window, cx);
+            }
+            Command::MenuBack | Command::Cancel => self.close_query_history(window, cx),
+            _ => return false,
+        }
+
+        true
+    }
+
+    /// Alt+L / Alt+H: the next or previous view of the collection
+    /// (Documents, Schema, Aggregate), wrapping. Returns false when the
+    /// connection offers a single view.
+    pub(super) fn step_collection_tab(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let tabs = self.collection_tabs(cx);
+        if tabs.len() < 2 {
+            return false;
+        }
+
+        let current = tabs
+            .iter()
+            .position(|tab| *tab == self.collection.tab)
+            .unwrap_or(0);
+        let next = if forward {
+            (current + 1) % tabs.len()
+        } else {
+            (current + tabs.len() - 1) % tabs.len()
+        };
+
+        self.set_collection_tab(tabs[next], cx);
+        true
     }
 
     /// Restores a history entry into the slots and runs it, without the

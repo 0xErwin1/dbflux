@@ -8,6 +8,7 @@
 use super::sections::{MenuRowCursor, submenu_flyout, submenu_frame};
 use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
+use crate::data_grid_panel::documents::CollectionTab;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
@@ -57,6 +58,19 @@ pub(crate) enum ToolbarAction {
     CustomRange(CustomRangeControl),
     /// Apply in the custom range row.
     ApplyCustomRange,
+    /// Find in a document collection's query bar.
+    Find,
+    /// The history button of a document collection's query bar: opens its
+    /// menu for the keyboard.
+    QueryHistory,
+    /// The first breadcrumb segment while stepped into a nested value.
+    StepToRoot,
+    /// A view tab of a document collection (Documents, Schema, Aggregate).
+    CollectionView(CollectionTab),
+    /// Reload in the commit conflict panel.
+    ConflictReload,
+    /// Apply anyway in the commit conflict panel.
+    ConflictApply,
     /// Maximize or restore in the embedded panel's header.
     ToggleMaximize,
     /// Hide in the embedded panel's header.
@@ -111,6 +125,14 @@ impl ToolbarAction {
             ToolbarAction::CustomRange(CustomRangeControl::EndHour) => "custom-end-hour",
             ToolbarAction::CustomRange(CustomRangeControl::EndMinute) => "custom-end-minute",
             ToolbarAction::ApplyCustomRange => "custom-apply",
+            ToolbarAction::Find => "find",
+            ToolbarAction::QueryHistory => "query-history",
+            ToolbarAction::StepToRoot => "step-to-root",
+            ToolbarAction::CollectionView(CollectionTab::Documents) => "view-documents",
+            ToolbarAction::CollectionView(CollectionTab::Schema) => "view-schema",
+            ToolbarAction::CollectionView(CollectionTab::Aggregate) => "view-aggregate",
+            ToolbarAction::ConflictReload => "conflict-reload",
+            ToolbarAction::ConflictApply => "conflict-apply",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
         }
@@ -133,6 +155,14 @@ impl ToolbarAction {
             ToolbarAction::AxisPicker(_) => AppIcon::Hash,
             ToolbarAction::TimeRange { .. } | ToolbarAction::CustomRange(_) => AppIcon::Clock,
             ToolbarAction::ApplyCustomRange => AppIcon::Check,
+            ToolbarAction::Find => AppIcon::Play,
+            ToolbarAction::QueryHistory => AppIcon::History,
+            ToolbarAction::StepToRoot => AppIcon::ArrowUp,
+            ToolbarAction::CollectionView(CollectionTab::Documents) => AppIcon::Table,
+            ToolbarAction::CollectionView(CollectionTab::Schema) => AppIcon::Layers,
+            ToolbarAction::CollectionView(CollectionTab::Aggregate) => AppIcon::Braces,
+            ToolbarAction::ConflictReload => AppIcon::RefreshCcw,
+            ToolbarAction::ConflictApply => AppIcon::Check,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
         }
@@ -144,6 +174,7 @@ impl ToolbarAction {
             ToolbarAction::Export => Some(Command::ExportResults),
             ToolbarAction::ClearFilter => Some(Command::ClearFilter),
             ToolbarAction::ToggleView => Some(Command::CycleDocumentView),
+            ToolbarAction::CollectionView(_) => Some(Command::NextResultTab),
             _ => None,
         }
     }
@@ -199,7 +230,11 @@ impl DataGridPanel {
             actions.push(ToolbarAction::AutoRefresh);
         }
 
-        if self.has_pending_edits(cx) {
+        if document_collection {
+            actions.extend(self.document_query_bar_actions(cx));
+        }
+
+        if self.has_pending_edits(cx) || self.has_pending_document_commit(cx) {
             actions.push(ToolbarAction::SaveChanges);
             actions.push(ToolbarAction::RevertChanges);
         }
@@ -251,6 +286,47 @@ impl DataGridPanel {
         }
 
         actions
+    }
+
+    /// The query bar and view row of a document collection: Find and the
+    /// history in the Documents view, the first breadcrumb while stepped in,
+    /// the other views, and the conflict panel's buttons while it shows.
+    fn document_query_bar_actions(&self, cx: &App) -> Vec<ToolbarAction> {
+        let mut actions = Vec::new();
+
+        if self.collection.tab == CollectionTab::Documents {
+            actions.push(ToolbarAction::Find);
+
+            if !self.collection.history.is_empty() {
+                actions.push(ToolbarAction::QueryHistory);
+            }
+
+            if self.is_stepped_into() {
+                actions.push(ToolbarAction::StepToRoot);
+            }
+        }
+
+        actions.extend(
+            self.collection_tabs(cx)
+                .into_iter()
+                .filter(|tab| *tab != self.collection.tab)
+                .map(ToolbarAction::CollectionView),
+        );
+
+        if self.collection.conflict.is_some() {
+            actions.push(ToolbarAction::ConflictReload);
+            actions.push(ToolbarAction::ConflictApply);
+        }
+
+        actions
+    }
+
+    /// Whether a document collection shows Commit and Revert for staged
+    /// field edits (or a changed JSON view).
+    fn has_pending_document_commit(&self, cx: &App) -> bool {
+        self.commits_document_patches(cx)
+            && self.pending_document_edit_count(cx) > 0
+            && !self.collection.committing
     }
 
     fn toolbar_action_label(&self, action: ToolbarAction) -> String {
@@ -328,6 +404,28 @@ impl DataGridPanel {
             ToolbarAction::ApplyCustomRange => {
                 dbflux_i18n::t!("document.data.chart_dock.toolbar.apply")
             }
+            ToolbarAction::Find => dbflux_i18n::t!("document.collection.find"),
+            ToolbarAction::QueryHistory => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.query_history")
+            }
+            ToolbarAction::StepToRoot => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.step_to_root")
+            }
+            ToolbarAction::CollectionView(CollectionTab::Documents) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_documents")
+            }
+            ToolbarAction::CollectionView(CollectionTab::Schema) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_schema")
+            }
+            ToolbarAction::CollectionView(CollectionTab::Aggregate) => {
+                dbflux_i18n::t!("document.data.context_menu.toolbar.view_aggregate")
+            }
+            ToolbarAction::ConflictReload => {
+                dbflux_i18n::t!("document.collection.conflict.reload")
+            }
+            ToolbarAction::ConflictApply => {
+                dbflux_i18n::t!("document.collection.conflict.apply")
+            }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")
             }
@@ -340,20 +438,26 @@ impl DataGridPanel {
         }
     }
 
-    /// Whether the WHERE field shows a value its × would clear.
+    /// Whether the WHERE field shows a value its × would clear, or a
+    /// document collection's filter slot holds a filter.
     fn filter_is_clearable(&self, cx: &App) -> bool {
         let document_collection = self.collection.raw.is_some() || self.is_document_collection(cx);
+        let has_filter = !self.filter_bar.filter_input.read(cx).value().is_empty();
+
+        if document_collection {
+            return self.collection.tab == CollectionTab::Documents && has_filter;
+        }
 
         matches!(
             self.source,
             DataSource::Table { .. } | DataSource::Collection { .. }
-        ) && !document_collection
-            && self.filter_input_visible()
-            && !self.filter_bar.filter_input.read(cx).value().is_empty()
+        ) && self.filter_input_visible()
+            && has_filter
     }
 
     /// Clears the WHERE filter and reloads the rows (`Command::ClearFilter`,
-    /// the × in the field). Returns false when there is no filter to clear.
+    /// the × in the field); in a document collection, empties the filter
+    /// slot and finds. Returns false when there is no filter to clear.
     pub(in crate::data_grid_panel) fn clear_filter(
         &mut self,
         window: &mut Window,
@@ -363,12 +467,24 @@ impl DataGridPanel {
             return false;
         }
 
+        if self.collection.raw.is_some() || self.is_document_collection(cx) {
+            if self.reload_blocked_by_pending_edits(cx) {
+                return true;
+            }
+
+            self.filter_bar
+                .filter_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            self.find_documents(window, cx);
+            return true;
+        }
+
         self.replace_filter_and_reload("", window, cx);
         true
     }
 
     /// Runs what the button behind `action` runs.
-    pub(super) fn run_toolbar_action(
+    pub(in crate::data_grid_panel) fn run_toolbar_action(
         &mut self,
         action: ToolbarAction,
         window: &mut Window,
@@ -384,6 +500,14 @@ impl DataGridPanel {
             ToolbarAction::ResetBuilder => {
                 self.reset_builder_query(window, cx);
                 cx.notify();
+            }
+            // A document collection commits and reverts through its edit
+            // bar's Commit and Revert, which patch fields per document.
+            ToolbarAction::SaveChanges if self.commits_document_patches(cx) => {
+                self.commit_document_edits(cx)
+            }
+            ToolbarAction::RevertChanges if self.commits_document_patches(cx) => {
+                self.revert_document_edits(window, cx)
             }
             ToolbarAction::SaveChanges => {
                 if let Some(table_state) = &self.grid_table.table_state {
@@ -446,6 +570,12 @@ impl DataGridPanel {
                     }
                 }
             }
+            ToolbarAction::Find => self.find_documents(window, cx),
+            ToolbarAction::QueryHistory => self.open_query_history(window, cx),
+            ToolbarAction::StepToRoot => self.step_to_depth(0, cx),
+            ToolbarAction::CollectionView(tab) => self.set_collection_tab(tab, cx),
+            ToolbarAction::ConflictReload => self.reload_conflicting_document(window, cx),
+            ToolbarAction::ConflictApply => self.apply_conflicting_commit(cx),
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
         }
@@ -804,6 +934,11 @@ mod tests {
             "maximize",
             "restore",
             "hide",
+            "query_history",
+            "step_to_root",
+            "view_documents",
+            "view_schema",
+            "view_aggregate",
         ];
 
         for key in keys {

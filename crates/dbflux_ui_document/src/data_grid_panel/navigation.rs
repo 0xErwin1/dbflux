@@ -648,6 +648,18 @@ impl DataGridPanel {
             return self.dispatch_export_menu_command(cmd, window, cx);
         }
 
+        if self.collection.history_open {
+            return self.dispatch_history_menu_command(cmd, window, cx);
+        }
+
+        // Alt+L / Alt+H move between a collection's Documents, Schema and
+        // Aggregate views, from any of them.
+        if matches!(cmd, Command::NextResultTab | Command::PrevResultTab)
+            && self.step_collection_tab(cmd == Command::NextResultTab, cx)
+        {
+            return true;
+        }
+
         if let Some(handled) = self.dispatch_side_island_command(cmd, window, cx) {
             return handled;
         }

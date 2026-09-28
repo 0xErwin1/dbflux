@@ -306,12 +306,12 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
-| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, dando la vuelta en los extremos |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, o vista siguiente / anterior (Documentos, Esquema, Agregación) de una colección de documentos, dando la vuelta en los extremos |
 | `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
-| `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas |
+| `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas; en una colección de documentos, vaciar el campo de filtro y buscar |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
@@ -328,6 +328,15 @@ Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
 menú contextual de la fila elegida con las acciones de fila del driver (por
 ejemplo Kill session), `Enter` o `Escape` responden la confirmación y `F5` pide
 una instantánea nueva.
+
+En una colección de documentos, el submenú Barra de herramientas también lista
+Buscar, Historial de consultas, Volver a los documentos mientras se está dentro de
+un valor anidado, las otras vistas, y Recargar documento / Aplicar mi cambio mientras
+se muestra un conflicto de commit; Guardar todos los cambios y Revertir todos los
+cambios ejecutan el Commit y el Revert de la barra de edición. Historial de
+consultas abre el menú del historial con el teclado dentro: las teclas del menú
+contextual se mueven, `Enter` vuelve a ejecutar la consulta resaltada y `Escape`
+lo cierra.
 
 Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
 menú de acciones del panel, el mismo que muestra **Open pane actions** en la

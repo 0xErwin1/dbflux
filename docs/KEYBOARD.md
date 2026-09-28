@@ -290,12 +290,12 @@ A read-only delete does not change the clipboard.
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
-| `Alt+l` / `Alt+h` | Next / previous result tab of a query, wrapping at either end |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, or next / previous view (Documents, Schema, Aggregate) of a document collection, wrapping at either end |
 | `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
-| `Shift+f` | Clear the WHERE filter and reload the rows |
+| `Shift+f` | Clear the WHERE filter and reload the rows; in a document collection, empty the filter slot and find |
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
@@ -311,6 +311,13 @@ A read-only delete does not change the clipboard.
 An instance inspector tab takes these keys too: `m` opens the context menu of
 the selected row with the driver's row actions (for example Kill session),
 `Enter` or `Escape` answer the confirmation, and `F5` fetches a fresh snapshot.
+
+In a document collection the Toolbar submenu also lists Find, Query history,
+Back to the documents while stepped into a nested value, the other views, and
+Reload document / Apply my change while a commit conflict is shown; Save all changes and
+Revert all changes run the edit bar's Commit and Revert. Query history opens the
+history menu with the keyboard in it: the context menu keys move, `Enter` runs
+the highlighted query again and `Escape` closes it.
 
 When the results offer no context menu of their own, `m` opens the pane actions
 menu instead, the same one the command palette's **Open pane actions** shows.

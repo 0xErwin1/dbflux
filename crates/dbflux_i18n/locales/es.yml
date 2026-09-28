@@ -1500,6 +1500,11 @@ document:
         maximize: "Maximizar resultados"
         restore: "Restaurar resultados"
         hide: "Ocultar resultados"
+        query_history: "Historial de consultas…"
+        step_to_root: "Volver a los documentos"
+        view_documents: "Mostrar Documentos"
+        view_schema: "Mostrar Esquema"
+        view_aggregate: "Mostrar Agregación"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido

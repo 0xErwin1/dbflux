@@ -28,7 +28,7 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
-mod toolbar;
+pub(super) mod toolbar;
 use sections::MenuRowCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -723,7 +723,10 @@ impl DataGridPanel {
             .map(|ts| ts.read(cx).is_editing_text_input())
             .unwrap_or(false);
 
-        if self.context_menu.is_some() || self.chrome.export_menu_open {
+        if self.context_menu.is_some()
+            || self.chrome.export_menu_open
+            || self.collection.history_open
+        {
             ContextId::ContextMenu
         } else if inline_text_input_active || self.focus.edit_state == EditState::Editing {
             ContextId::TextInput

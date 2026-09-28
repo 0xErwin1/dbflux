@@ -229,9 +229,12 @@ impl DataGridPanel {
                         .selected(history_open)
                         .disabled(self.collection.history.is_empty())
                         .tab_stop(false)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.collection.history_open = !this.collection.history_open;
-                            cx.notify();
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.collection.history_open {
+                                this.close_query_history(window, cx);
+                            } else {
+                                this.open_query_history(window, cx);
+                            }
                         })),
                     )
                     .when_some(history_menu, |anchor, menu| anchor.child(menu)),
@@ -250,9 +253,15 @@ impl DataGridPanel {
                 menu_row(
                     SharedString::from(format!("collection-history-{index}")),
                     &item,
-                    false,
+                    index == self.collection.history_selected,
                     cx,
                 )
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    if this.collection.history_selected != index {
+                        this.collection.history_selected = index;
+                        cx.notify();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.run_history_entry(index, window, cx);
                 }))
@@ -268,6 +277,21 @@ impl DataGridPanel {
                 .mt(Spacing::XS)
                 .w(px(480.0)) // guardrail-allow: history menu width, fits a long query
                 .occlude()
+                .track_focus(&self.focus.history_menu_focus)
+                // The grid reports the ContextMenu context while the menu is
+                // open, so the menu keys arrive here first.
+                .on_action(cx.listener(
+                    |this, action: &dbflux_ui_base::keymap::RunCommand, window, cx| {
+                        let handled =
+                            dbflux_ui_base::keymap::run_command(action).is_some_and(|command| {
+                                this.dispatch_history_menu_command(command, window, cx)
+                            });
+
+                        if !handled {
+                            cx.propagate();
+                        }
+                    },
+                ))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.collection.history_open = false;
                     cx.notify();

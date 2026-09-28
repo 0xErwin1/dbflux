@@ -1500,6 +1500,11 @@ document:
         maximize: "결과 최대화"
         restore: "결과 복원"
         hide: "결과 숨기기"
+        query_history: "쿼리 기록…"
+        step_to_root: "문서로 돌아가기"
+        view_documents: "문서 보기"
+        view_schema: "스키마 보기"
+        view_aggregate: "집계 보기"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
