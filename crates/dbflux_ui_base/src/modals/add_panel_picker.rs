@@ -2282,4 +2282,73 @@ mod keyboard_tests {
         window.run_until_parked();
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
+
+    use crate::keyboard_coverage::KeyboardPath;
+    use dbflux_app::keymap::Command;
+
+    /// The Add Panel dialog's registry (see `crate::keyboard_coverage`).
+    const ADD_PANEL_PICKER: crate::keyboard_coverage::SurfaceRegistry =
+        crate::keyboard_coverage::SurfaceRegistry {
+            name: "Add Panel dialog",
+            contexts: &[
+                dbflux_app::keymap::ContextId::AddPanelPicker,
+                dbflux_app::keymap::ContextId::Modal,
+            ],
+            entries: &[
+                ("add-panel-cancel", KeyboardPath::Command(Command::Cancel)),
+                ("add-panel-confirm", KeyboardPath::Command(Command::Execute)),
+                (
+                    "add-panel-tab-*",
+                    KeyboardPath::Command(Command::NextPanelTab),
+                ),
+                // Rows of the chart, namespace and metric lists: Tab moves
+                // into a list, J and K move, Space checks or picks.
+                (
+                    "add-panel-chart-row-*",
+                    KeyboardPath::Command(Command::ExpandCollapse),
+                ),
+                (
+                    "add-panel-namespace-*",
+                    KeyboardPath::Command(Command::ExpandCollapse),
+                ),
+                (
+                    "add-panel-metric-row*",
+                    KeyboardPath::Command(Command::ExpandCollapse),
+                ),
+                // The chart kind of the Query tab and the statistic of the
+                // Metric tab.
+                ("add-panel-kind-*", KeyboardPath::TabStop),
+                ("add-panel-stat-*", KeyboardPath::TabStop),
+            ],
+        };
+
+    /// Every tab of the Add Panel dialog. The keyboard tests above prove
+    /// its keys; the dashboard's A (or its Add Panel button) opens it.
+    #[gpui::test]
+    fn the_add_panel_dialog_is_covered(cx: &mut TestAppContext) {
+        use crate::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+        cx.update(crate::keymap::init_keymap);
+        let (_modal, window, _outcomes) = open_modal_with(
+            cx,
+            vec![named_chart("Latency"), named_chart("Errors")],
+            true,
+        );
+        let capture = FrameCapture::observe(window);
+        let coverage = || Coverage::new(ADD_PANEL_PICKER).with_surface(MODAL_CHROME);
+
+        let mut checked = Vec::new();
+        for _tab in 0..3 {
+            checked.extend(coverage().assert_covered(&capture.frame(window)));
+            window.simulate_keystrokes("alt-l");
+            window.run_until_parked();
+        }
+
+        for expected in ["add-panel-chart-row-", "add-panel-kind-", "add-panel-stat-"] {
+            assert!(
+                checked.iter().any(|id| id.starts_with(expected)),
+                "{expected} in {checked:?}"
+            );
+        }
+    }
 }

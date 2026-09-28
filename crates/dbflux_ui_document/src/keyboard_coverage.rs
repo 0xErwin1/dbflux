@@ -344,3 +344,102 @@ pub(crate) const DOCUMENT_BUILDER: SurfaceRegistry = SurfaceRegistry {
         ),
     ],
 };
+
+/// A chart tab: its toolbar, axis bar and pickers. The pane actions menu
+/// (`m`) lists the toolbar controls the chart keys do not reach.
+pub(crate) const CHART: SurfaceRegistry = SurfaceRegistry {
+    name: "chart",
+    contexts: &[ContextId::Chart, ContextId::ContextMenu, ContextId::Modal],
+    entries: &[
+        // The name prompt of Save chart.
+        ("confirm-save", KeyboardPath::Command(Command::Execute)),
+        ("cancel-save", KeyboardPath::Command(Command::Cancel)),
+        ("axis-pill-x", KeyboardPath::Menu("chart-axis-x")),
+        ("axis-pill-y", KeyboardPath::Menu("chart-axis-y")),
+        ("axis-pill-group", KeyboardPath::Menu("chart-axis-group")),
+        ("axis-pill-agg", KeyboardPath::Menu("chart-axis-agg")),
+        // The rows of an open axis picker: J and K move, Enter picks.
+        ("axis-picker-*.*", KeyboardPath::Command(Command::Execute)),
+        (
+            "chart-toolbar-save",
+            KeyboardPath::Command(Command::SaveQuery),
+        ),
+        ("chart-toolbar-stats", KeyboardPath::Menu("chart-stats")),
+        (
+            "chart-doc-refresh.*",
+            KeyboardPath::Menu("chart-auto-refresh"),
+        ),
+        (
+            "refresh-action",
+            KeyboardPath::Command(Command::RefreshSchema),
+        ),
+        (
+            "seg-ctl-item-chart-kind-*",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        (
+            "seg-ctl-item-time-preset-*",
+            KeyboardPath::Command(Command::NextTimeRange),
+        ),
+    ],
+};
+
+/// A dashboard tab: its header, panel chrome and the Configure popover. The
+/// pane actions menu (`m`) lists the header controls; a panel's own actions
+/// are dashboard keys on the selected panel.
+pub(crate) const DASHBOARD: SurfaceRegistry = SurfaceRegistry {
+    name: "dashboard",
+    contexts: &[
+        ContextId::Dashboard,
+        ContextId::Chart,
+        ContextId::ContextMenu,
+        ContextId::Modal,
+    ],
+    entries: &[
+        (
+            "dash-add-panel-toolbar",
+            KeyboardPath::Command(Command::AddItem),
+        ),
+        (
+            "dashboard-refresh.*",
+            KeyboardPath::Menu("dashboard-auto-refresh"),
+        ),
+        (
+            "seg-ctl-item-dash-mode-*",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        (
+            "dashboard-divider-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        // The panel menu: its entries are the selected panel's pane actions.
+        (
+            "panel-kebab-*",
+            KeyboardPath::Command(Command::OpenPaneActions),
+        ),
+        // The Configure popover (C), a dialog that takes the chart keys.
+        ("configure-apply", KeyboardPath::Command(Command::Execute)),
+        ("configure-cancel", KeyboardPath::Command(Command::Cancel)),
+        (
+            "configure-kind-*",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        // Stats of the opened chart panel (Enter, then M).
+        ("configure-stats", KeyboardPath::Menu("chart-stats")),
+        // A chart panel's axis pills: C opens the Configure popover, where H
+        // and L open the same pickers.
+        (
+            "panel-card-*.axis-pill-*",
+            KeyboardPath::Command(Command::ConfigurePanel),
+        ),
+        // A chart panel draws the chart's toolbar; the dashboard owns its
+        // refresh (F5 on the entered panel) but not the panel's own interval.
+        (
+            "panel-card-*.chart-doc-refresh.*",
+            KeyboardPath::MouseOnly(
+                "gap: a dashboard chart panel's own auto-refresh interval has no key (the \
+                 dashboard's interval is in its pane actions)",
+            ),
+        ),
+    ],
+};

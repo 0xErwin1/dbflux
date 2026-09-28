@@ -310,3 +310,61 @@ fn chart_pane_action_labels_resolve_in_every_locale() {
         }
     }
 }
+
+/// The chart tab's toolbar and axis bar, its save prompt, an axis picker
+/// and the stats rail. The keyboard tests above prove the chart keys, and
+/// `m` opens the pane actions.
+#[gpui::test]
+fn the_chart_tab_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::CHART;
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    let (_host, chart, window) = chart_with_keyboard(cx);
+    let actions = window.update(|_, cx| chart.read(cx).pane_actions(&chart, cx));
+    let menu: Vec<String> = actions.iter().map(|action| action.id.to_string()).collect();
+    let run = |window: &mut VisualTestContext, id: &str| {
+        let action = actions
+            .iter()
+            .find(|action| action.id == id)
+            .unwrap_or_else(|| panic!("no pane action {id}"));
+        match &action.run {
+            PaneActionRun::Callback(callback) => {
+                let callback = callback.clone();
+                window.update(|window, cx| callback(window, cx));
+            }
+            PaneActionRun::Command(command) => {
+                let command = *command;
+                window.update(|window, cx| {
+                    chart.update(cx, |chart, cx| chart.dispatch_command(command, window, cx))
+                });
+            }
+        }
+        window.run_until_parked();
+    };
+
+    let capture = FrameCapture::observe(window);
+    let coverage = || {
+        Coverage::new(CHART)
+            .with_surface(MODAL_CHROME)
+            .with_menu_entries(menu.iter().cloned())
+    };
+
+    let checked = coverage().assert_covered(&capture.frame(window));
+    assert!(checked.iter().any(|id| id == "axis-pill-x"), "{checked:?}");
+
+    let save = if cfg!(target_os = "macos") {
+        "cmd-s"
+    } else {
+        "ctrl-s"
+    };
+    window.simulate_keystrokes(save);
+    coverage().assert_covered(&capture.frame(window));
+    window.simulate_keystrokes("escape");
+
+    run(window, "chart-axis-y");
+    coverage().assert_covered(&capture.frame(window));
+    window.simulate_keystrokes("escape");
+
+    run(window, "chart-stats");
+    coverage().assert_covered(&capture.frame(window));
+}

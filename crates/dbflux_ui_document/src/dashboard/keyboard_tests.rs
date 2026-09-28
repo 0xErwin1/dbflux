@@ -399,3 +399,96 @@ fn dashboard_pane_action_labels_resolve_in_every_locale() {
         }
     }
 }
+
+/// A divider, a chart panel and an orphan panel, in View and Edit mode and
+/// with the Configure popover open. The tests above prove the dashboard
+/// keys reach every panel action, and `m` opens the pane actions (a chart
+/// panel's own actions once Enter opens it).
+#[gpui::test]
+fn the_dashboard_tab_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::{CHART, DASHBOARD};
+    use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture, MODAL_CHROME};
+
+    init_keyboard_runtime(cx);
+    let app_state = app_state(cx);
+    let (_host, dashboard, window) = dashboard_with_keyboard(
+        cx,
+        Uuid::nil(),
+        app_state,
+        Box::new(|app_state, window, cx| {
+            let chart = cx.new(|cx| {
+                ChartDocument::new(None, "Chart".to_string(), app_state.clone(), window, cx)
+            });
+            vec![
+                DashboardPanelSlot::Divider {
+                    markdown: "# Section".to_string(),
+                    grid_pos: pos(0, 0, 12, 1),
+                },
+                DashboardPanelSlot::Loaded {
+                    panel: chart,
+                    grid_pos: pos(1, 0, 6, 2),
+                    title_override: None,
+                },
+                orphan(pos(1, 6, 6, 2)),
+            ]
+        }),
+    );
+
+    let capture = FrameCapture::observe(window);
+    let check = |window: &mut VisualTestContext| {
+        let entries: Vec<String> = window.update(|_, cx| {
+            let embedded: Vec<_> = dashboard
+                .read(cx)
+                .panel_slots()
+                .iter()
+                .filter_map(|slot| match slot {
+                    DashboardPanelSlot::Loaded { panel, .. } => {
+                        Some(panel.read(cx).embedded_pane_actions(cx))
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+
+            dashboard
+                .read(cx)
+                .pane_actions(&dashboard, cx)
+                .into_iter()
+                .chain(embedded)
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+
+        Coverage::new(DASHBOARD)
+            .with_surface(CHART)
+            .with_surface(MODAL_CHROME)
+            .with_menu_entries(entries)
+            .assert_covered(&capture.frame(window))
+    };
+
+    let checked = check(window);
+    assert!(
+        checked.iter().any(|id| id == "dash-add-panel-toolbar"),
+        "{checked:?}"
+    );
+
+    window.update(|_, cx| {
+        dashboard.update(cx, |dashboard, cx| {
+            dashboard.set_mode(DashboardMode::Edit, cx)
+        })
+    });
+    window.run_until_parked();
+    let checked = check(window);
+    assert!(
+        checked.iter().any(|id| id.starts_with("panel-kebab-")),
+        "{checked:?}"
+    );
+
+    window.simulate_keystrokes("j c");
+    window.run_until_parked();
+    let checked = check(window);
+    assert!(
+        checked.iter().any(|id| id == "configure-apply"),
+        "{checked:?}"
+    );
+}
