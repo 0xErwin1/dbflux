@@ -30,7 +30,7 @@ use crate::tokens::{Heights, Spacing};
 use dbflux_core::LogErr;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Action, App, Context, Div, Entity, EntityInputHandler as _, Focusable as _,
+    Action, App, Context, Div, Entity, EntityId, EntityInputHandler as _, Focusable as _,
     InteractiveElement as _, KeyDownEvent, ParentElement as _, SharedString, Stateful, Styled as _,
     Subscription, Window, div,
 };
@@ -41,28 +41,32 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
 
-/// A view that hosts an editor with Vim mode.
+/// A view that hosts one or more editors with Vim mode.
+///
+/// Every method names the editor by its input's entity id, so a host with
+/// several editors answers for each one.
 pub trait VimHost: 'static + Sized {
-    /// The binding of the host's editor, or `None` while the host has no
-    /// editor (a buffer that is still loading).
-    fn vim(&self) -> Option<&VimBinding>;
-    fn vim_mut(&mut self) -> Option<&mut VimBinding>;
+    /// The binding of the host's editor `input`, or `None` while the host has
+    /// no such editor (a buffer that is still loading, an editor replaced by
+    /// a new one).
+    fn vim(&self, input: EntityId) -> Option<&VimBinding>;
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding>;
 
-    /// Whether the host keeps the text unchanged: motions and yanks work,
-    /// edits do nothing.
-    fn vim_read_only(&self, _cx: &App) -> bool {
+    /// Whether the host keeps the text of `input` unchanged: motions and
+    /// yanks work, edits do nothing.
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
         false
     }
 
     /// An extra gate on top of "the editor has focus", such as the host's own
     /// notion of which of its panes owns the keyboard.
-    fn vim_accepts_focus(&self) -> bool {
+    fn vim_accepts_focus(&self, _input: EntityId) -> bool {
         true
     }
 
-    /// The text changed without an `InputEvent::Change`: an IME composition
-    /// left behind by a cancelled `r`.
-    fn vim_text_changed(&mut self, _cx: &mut Context<Self>) {}
+    /// The text of `input` changed without an `InputEvent::Change`: an IME
+    /// composition left behind by a cancelled `r`.
+    fn vim_text_changed(&mut self, _input: EntityId, _cx: &mut Context<Self>) {}
 }
 
 /// Which history action a Normal-mode undo shortcut runs.
@@ -149,16 +153,20 @@ impl VimBinding {
         window: &mut Window,
         cx: &mut Context<H>,
     ) -> Self {
+        let input_id = input.entity_id();
         let focus_handle = input.read(cx).focus_handle(cx);
-        let focus_out = cx.on_focus_out(&focus_handle, window, |host, _, _, cx| {
-            Self::blur(host, cx);
+        let focus_out = cx.on_focus_out(&focus_handle, window, move |host, _, _, cx| {
+            Self::blur(host, input_id, cx);
         });
-        let input_changes =
-            cx.subscribe_in(&input, window, |host, _, event: &InputEvent, window, cx| {
+        let input_changes = cx.subscribe_in(
+            &input,
+            window,
+            move |host, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
-                    Self::input_changed(host, window, cx);
+                    Self::input_changed(host, input_id, window, cx);
                 }
-            });
+            },
+        );
 
         Self {
             input,
@@ -191,18 +199,18 @@ impl VimBinding {
     /// Makes the host follow [`VimSettingGlobal`] from now on, starting with
     /// its current value. Hosts that read the setting from somewhere else call
     /// [`VimBinding::set_enabled`] themselves instead.
-    pub fn follow_setting<H: VimHost>(host: &mut H, cx: &mut Context<H>) {
-        let subscription = cx.observe_global::<VimSettingGlobal>(|host, cx| {
+    pub fn follow_setting<H: VimHost>(host: &mut H, input: EntityId, cx: &mut Context<H>) {
+        let subscription = cx.observe_global::<VimSettingGlobal>(move |host, cx| {
             let enabled = vim_enabled(cx);
-            Self::set_enabled(host, enabled, cx);
+            Self::set_enabled(host, input, enabled, cx);
         });
-        let Some(binding) = host.vim_mut() else {
+        let Some(binding) = host.vim_mut(input) else {
             return;
         };
         binding._setting = Some(subscription);
 
         let enabled = vim_enabled(cx);
-        Self::set_enabled(host, enabled, cx);
+        Self::set_enabled(host, input, enabled, cx);
     }
 
     /// The editor this binding drives.
@@ -210,11 +218,27 @@ impl VimBinding {
         &self.input
     }
 
+    /// The entity id of the editor's input, which names this binding to its
+    /// [`VimHost`].
+    pub fn input_id(&self) -> EntityId {
+        self.input.entity_id()
+    }
+
+    /// This binding when it drives `input`, for hosts with one editor.
+    pub fn for_input(&self, input: EntityId) -> Option<&Self> {
+        (self.input_id() == input).then_some(self)
+    }
+
+    /// This binding when it drives `input`, for hosts with one editor.
+    pub fn for_input_mut(&mut self, input: EntityId) -> Option<&mut Self> {
+        (self.input_id() == input).then_some(self)
+    }
+
     /// Copies the host's gates into the binding before it acts.
-    fn refresh_host<H: VimHost>(host: &mut H, cx: &App) {
-        let read_only = host.vim_read_only(cx);
-        let accepts_focus = host.vim_accepts_focus();
-        let Some(binding) = host.vim_mut() else {
+    fn refresh_host<H: VimHost>(host: &mut H, input: EntityId, cx: &App) {
+        let read_only = host.vim_read_only(input, cx);
+        let accepts_focus = host.vim_accepts_focus(input);
+        let Some(binding) = host.vim_mut(input) else {
             return;
         };
         binding.host_read_only = read_only;
@@ -222,20 +246,25 @@ impl VimBinding {
     }
 
     /// Tells the host about a text change that raised no Change event.
-    fn report_text_change<H: VimHost>(host: &mut H, cx: &mut Context<H>) {
+    fn report_text_change<H: VimHost>(host: &mut H, input: EntityId, cx: &mut Context<H>) {
         let changed = host
-            .vim_mut()
+            .vim_mut(input)
             .is_some_and(|binding| std::mem::take(&mut binding.text_changed));
         if changed {
-            host.vim_text_changed(cx);
+            host.vim_text_changed(input, cx);
         }
     }
 
     /// Turns Vim mode on or off for the host's editor. Enabling always starts
     /// in Normal mode.
-    pub fn set_enabled<H: VimHost>(host: &mut H, enabled: bool, cx: &mut Context<H>) {
-        Self::refresh_host(host, cx);
-        if let Some(binding) = host.vim_mut() {
+    pub fn set_enabled<H: VimHost>(
+        host: &mut H,
+        input: EntityId,
+        enabled: bool,
+        cx: &mut Context<H>,
+    ) {
+        Self::refresh_host(host, input, cx);
+        if let Some(binding) = host.vim_mut(input) {
             binding.set_vim_enabled(enabled, cx);
         }
     }
@@ -322,27 +351,27 @@ impl VimBinding {
     /// Installs Vim's listeners on the element that wraps the editor: the
     /// editor's Escape, Undo and Redo actions in their capture phase, and the
     /// command keys ahead of the editor.
-    pub fn wire<H: VimHost>(element: Div, cx: &mut Context<H>) -> Div {
+    pub fn wire<H: VimHost>(element: Div, input: EntityId, cx: &mut Context<H>) -> Div {
         element
-            .capture_action(
-                cx.listener(|host, _: &gpui_component::input::Escape, window, cx| {
-                    if Self::escape_action(host, window, cx) {
+            .capture_action(cx.listener(
+                move |host, _: &gpui_component::input::Escape, window, cx| {
+                    if Self::escape_action(host, input, window, cx) {
                         cx.stop_propagation();
                     }
-                }),
-            )
-            .capture_action(cx.listener(|host, _: &Undo, window, cx| {
-                if Self::history_action(host, HistoryStep::Undo, window, cx) {
+                },
+            ))
+            .capture_action(cx.listener(move |host, _: &Undo, window, cx| {
+                if Self::history_action(host, input, HistoryStep::Undo, window, cx) {
                     cx.stop_propagation();
                 }
             }))
-            .capture_action(cx.listener(|host, _: &Redo, window, cx| {
-                if Self::history_action(host, HistoryStep::Redo, window, cx) {
+            .capture_action(cx.listener(move |host, _: &Redo, window, cx| {
+                if Self::history_action(host, input, HistoryStep::Redo, window, cx) {
                     cx.stop_propagation();
                 }
             }))
-            .capture_key_down(cx.listener(|host, event: &KeyDownEvent, window, cx| {
-                if Self::key_down(host, event, window, cx) {
+            .capture_key_down(cx.listener(move |host, event: &KeyDownEvent, window, cx| {
+                if Self::key_down(host, input, event, window, cx) {
                     cx.stop_propagation();
                 }
             }))
@@ -351,16 +380,20 @@ impl VimBinding {
     /// Hands the keymap's `RunCommand` to Vim first, for hosts without a
     /// `RunCommand` capture of their own. A binding the user made wins over
     /// Vim, as in [`VimBinding::route_binding`].
-    pub fn capture_run_command<H: VimHost>(element: Div, cx: &mut Context<H>) -> Div {
-        element.capture_action(cx.listener(|host, action: &RunCommand, window, cx| {
+    pub fn capture_run_command<H: VimHost>(
+        element: Div,
+        input: EntityId,
+        cx: &mut Context<H>,
+    ) -> Div {
+        element.capture_action(cx.listener(move |host, action: &RunCommand, window, cx| {
             if action.from_user_binding {
-                if let Some(binding) = host.vim_mut() {
+                if let Some(binding) = host.vim_mut(input) {
                     binding.clear_vim_count_and_notify(cx);
                 }
                 return;
             }
 
-            if Self::route_bound_key(host, action, window, cx) {
+            if Self::route_bound_key(host, input, action, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -368,9 +401,13 @@ impl VimBinding {
 
     /// Hands a host action bound to a key (a modal's Cancel or Execute, a
     /// scroll binding) to Vim first, so Vim sees keys the host binds too.
-    pub fn capture_action<A: Action, H: VimHost>(element: Div, cx: &mut Context<H>) -> Div {
-        element.capture_action(cx.listener(|host, action: &A, window, cx| {
-            if Self::route_bound_key(host, action, window, cx) {
+    pub fn capture_action<A: Action, H: VimHost>(
+        element: Div,
+        input: EntityId,
+        cx: &mut Context<H>,
+    ) -> Div {
+        element.capture_action(cx.listener(move |host, action: &A, window, cx| {
+            if Self::route_bound_key(host, input, action, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -381,6 +418,7 @@ impl VimBinding {
     /// Returns true when Vim consumed the key.
     fn route_bound_key<H: VimHost>(
         host: &mut H,
+        input: EntityId,
         action: &dyn Action,
         window: &mut Window,
         cx: &mut Context<H>,
@@ -409,6 +447,7 @@ impl VimBinding {
 
         let consumed = Self::key_down(
             host,
+            input,
             &KeyDownEvent {
                 keystroke,
                 is_held: false,
@@ -418,7 +457,7 @@ impl VimBinding {
             cx,
         );
 
-        if !consumed && let Some(binding) = host.vim_mut() {
+        if !consumed && let Some(binding) = host.vim_mut(input) {
             binding.clear_vim_count_and_notify(cx);
         }
 
@@ -432,6 +471,7 @@ impl VimBinding {
     /// consumed the key.
     pub fn route_binding<H: VimHost>(
         host: &mut H,
+        input: EntityId,
         from_user_binding: bool,
         window: &mut Window,
         cx: &mut Context<H>,
@@ -440,6 +480,7 @@ impl VimBinding {
             && let Some(keystroke) = last_keystroke(cx)
             && Self::key_down(
                 host,
+                input,
                 &KeyDownEvent {
                     keystroke,
                     is_held: false,
@@ -452,7 +493,7 @@ impl VimBinding {
             return true;
         }
 
-        if let Some(binding) = host.vim_mut() {
+        if let Some(binding) = host.vim_mut(input) {
             binding.clear_vim_count_and_notify(cx);
         }
         false
@@ -462,62 +503,70 @@ impl VimBinding {
     /// true when the key was consumed and must not propagate.
     pub fn key_down<H: VimHost>(
         host: &mut H,
+        input: EntityId,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<H>,
     ) -> bool {
-        Self::refresh_host(host, cx);
+        Self::refresh_host(host, input, cx);
         let consumed = host
-            .vim_mut()
+            .vim_mut(input)
             .is_some_and(|binding| binding.handle_vim_key_down(event, window, cx));
-        Self::report_text_change(host, cx);
+        Self::report_text_change(host, input, cx);
         consumed
     }
 
     /// See `handle_vim_escape_action`.
     pub fn escape_action<H: VimHost>(
         host: &mut H,
+        input: EntityId,
         window: &mut Window,
         cx: &mut Context<H>,
     ) -> bool {
-        Self::refresh_host(host, cx);
+        Self::refresh_host(host, input, cx);
         let consumed = host
-            .vim_mut()
+            .vim_mut(input)
             .is_some_and(|binding| binding.handle_vim_escape_action(window, cx));
-        Self::report_text_change(host, cx);
+        Self::report_text_change(host, input, cx);
         consumed
     }
 
     fn history_action<H: VimHost>(
         host: &mut H,
+        input: EntityId,
         step: HistoryStep,
         window: &mut Window,
         cx: &mut Context<H>,
     ) -> bool {
-        Self::refresh_host(host, cx);
-        host.vim_mut()
+        Self::refresh_host(host, input, cx);
+        host.vim_mut(input)
             .is_some_and(|binding| binding.handle_vim_history_action(step, window, cx))
     }
 
     /// Completes an `r` whose character arrived as typed or composed text.
     /// The binding calls it on the input's `InputEvent::Change`; a host may
     /// call it earlier in its own Change handler, the second call is a no-op.
-    pub fn input_changed<H: VimHost>(host: &mut H, window: &mut Window, cx: &mut Context<H>) {
-        Self::refresh_host(host, cx);
-        if let Some(binding) = host.vim_mut() {
+    pub fn input_changed<H: VimHost>(
+        host: &mut H,
+        input: EntityId,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) {
+        Self::refresh_host(host, input, cx);
+        if let Some(binding) = host.vim_mut(input) {
             binding.finish_replace_once(window, cx);
         }
-        Self::report_text_change(host, cx);
+        Self::report_text_change(host, input, cx);
     }
 
     /// Ends the open change group when the editor loses focus, and cancels a
     /// pending `r`.
-    pub fn blur<H: VimHost>(host: &mut H, cx: &mut Context<H>) {
-        Self::refresh_host(host, cx);
-        if let Some(binding) = host.vim_mut() {
+    pub fn blur<H: VimHost>(host: &mut H, input: EntityId, cx: &mut Context<H>) {
+        Self::refresh_host(host, input, cx);
+        if let Some(binding) = host.vim_mut(input) {
             binding.close_change_group_on_blur(cx);
         }
-        Self::report_text_change(host, cx);
+        Self::report_text_change(host, input, cx);
     }
 
     /// Drops a half-typed count or operator.
@@ -560,11 +609,12 @@ impl VimBinding {
         }
 
         let host = cx.entity().downgrade();
+        let input = self.input_id();
         self.keystroke_interceptor = Some(cx.intercept_keystrokes(move |event, window, cx| {
             let Some(host) = host.upgrade() else {
                 return;
             };
-            let waiting = host.read(cx).vim().is_some_and(|vim| {
+            let waiting = host.read(cx).vim(input).is_some_and(|vim| {
                 vim.replace_once.is_some() || (vim.enabled && vim.mode == VimMode::Replace)
             });
             if !waiting {
@@ -572,11 +622,11 @@ impl VimBinding {
             }
 
             let consumed = host.update(cx, |host, cx| {
-                Self::refresh_host(host, cx);
-                let consumed = host.vim_mut().is_some_and(|binding| {
+                Self::refresh_host(host, input, cx);
+                let consumed = host.vim_mut(input).is_some_and(|binding| {
                     binding.intercept_vim_keystroke(&event.keystroke, window, cx)
                 });
-                Self::report_text_change(host, cx);
+                Self::report_text_change(host, input, cx);
                 consumed
             });
             if consumed {
@@ -2080,6 +2130,7 @@ impl VimBinding {
         self.sync_editor_lock(cx);
 
         let input = self.input.clone();
+        let input_id = self.input_id();
         let host = cx.entity().downgrade();
 
         window.defer(cx, move |window, cx| {
@@ -2095,8 +2146,8 @@ impl VimBinding {
             }
 
             host.update(cx, |host, cx| {
-                Self::refresh_host(host, cx);
-                if let Some(binding) = host.vim_mut() {
+                Self::refresh_host(host, input_id, cx);
+                if let Some(binding) = host.vim_mut(input_id) {
                     binding.history_unlocked = false;
                     binding.sync_editor_lock(cx);
                     binding.clamp_cursor_for_normal(cx);

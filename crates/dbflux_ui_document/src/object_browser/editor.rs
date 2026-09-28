@@ -61,24 +61,28 @@ pub(super) struct PendingTextBody {
 }
 
 impl VimHost for ObjectBrowserDocument {
-    fn vim(&self) -> Option<&VimBinding> {
-        self.editor.as_ref().map(|editor| &editor.vim)
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.vim.for_input(input))
     }
 
-    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
-        self.editor.as_mut().map(|editor| &mut editor.vim)
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.editor
+            .as_mut()
+            .and_then(|editor| editor.vim.for_input_mut(input))
     }
 
     /// A decoded view renders through `ReadOnlyEditor`, so typing never
     /// changes it; Vim's own edits (`x`, `dd`, `c`) must not either. An
     /// object's own text takes every Vim edit.
-    fn vim_read_only(&self, _cx: &App) -> bool {
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
         self.editor
             .as_ref()
             .is_none_or(|editor| !editor.is_editable())
     }
 
-    fn vim_accepts_focus(&self) -> bool {
+    fn vim_accepts_focus(&self, _input: EntityId) -> bool {
         self.focus_mode == ObjectBrowserFocusMode::Editor
     }
 }
@@ -300,7 +304,8 @@ impl ObjectBrowserDocument {
             state.set_value(&pending.body.text, window, cx);
         });
 
-        VimBinding::follow_setting(self, cx);
+        let input_id = input.entity_id();
+        VimBinding::follow_setting(self, input_id, cx);
 
         self.preview_content = PreviewContentState::Text;
         cx.notify();
@@ -691,7 +696,9 @@ impl ObjectBrowserDocument {
         let indicator = editor.vim.render_indicator(cx);
         let wrapper = div().flex_1().flex().flex_col().min_h_0();
 
-        VimBinding::capture_run_command(VimBinding::wire(wrapper, cx), cx)
+        let input = editor.vim.input_id();
+
+        VimBinding::capture_run_command(VimBinding::wire(wrapper, input, cx), input, cx)
             .child(buffer)
             .children(indicator)
             .child(self.render_editor_footer(is_dirty, is_saving, is_editable, position, cx))

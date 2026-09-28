@@ -567,14 +567,16 @@ impl CodeDocument {
                 }),
             );
 
-        VimBinding::wire(editor, cx)
+        let input = self.vim.input_id();
+
+        VimBinding::wire(editor, input, cx)
             // A keymap binding runs before the key listeners Vim installs. Vim
             // takes its own keys ahead of a default binding, as it did when the
             // workspace resolved keys after them; a binding the user made wins
             // over Vim. Any other command drops a half-typed count or operator,
             // and Cancel keeps the editor focused, as the Escape key listener
             // does when no binding takes the key.
-            .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
+            .capture_action(cx.listener(move |this, action: &RunCommand, window, cx| {
                 if let Some(command) = Command::from_action_id(&action.command)
                     && this.handle_editor_overlay_pane_move(command, window, cx)
                 {
@@ -582,7 +584,7 @@ impl CodeDocument {
                     return;
                 }
 
-                if VimBinding::route_binding(this, action.from_user_binding, window, cx) {
+                if VimBinding::route_binding(this, input, action.from_user_binding, window, cx) {
                     cx.stop_propagation();
                     return;
                 }

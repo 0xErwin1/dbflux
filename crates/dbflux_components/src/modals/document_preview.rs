@@ -56,7 +56,8 @@ impl DocumentPreviewModal {
             _input_observation: input_observation,
         };
 
-        VimBinding::follow_setting(&mut modal, cx);
+        let input = modal.vim.input_id();
+        VimBinding::follow_setting(&mut modal, input, cx);
         modal
     }
 
@@ -136,12 +137,12 @@ impl DocumentPreviewModal {
 }
 
 impl VimHost for DocumentPreviewModal {
-    fn vim(&self) -> Option<&VimBinding> {
-        Some(&self.vim)
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
     }
 
-    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
-        Some(&mut self.vim)
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
     }
 }
 
@@ -151,10 +152,10 @@ impl EventEmitter<DocumentPreviewClosedEvent> for DocumentPreviewModal {}
 /// Vim's listeners on the editor's container. In Insert mode the modal's
 /// Escape (`Cancel`) leaves Insert mode instead of closing, and in Normal
 /// mode Enter (`Execute`) moves down instead of reaching the modal.
-fn vim_wrapper(element: Div, cx: &mut Context<DocumentPreviewModal>) -> Div {
-    let element = VimBinding::wire(element, cx);
-    let element = VimBinding::capture_action::<crate::actions::Cancel, _>(element, cx);
-    VimBinding::capture_action::<crate::actions::Execute, _>(element, cx)
+fn vim_wrapper(element: Div, input: EntityId, cx: &mut Context<DocumentPreviewModal>) -> Div {
+    let element = VimBinding::wire(element, input, cx);
+    let element = VimBinding::capture_action::<crate::actions::Cancel, _>(element, input, cx);
+    VimBinding::capture_action::<crate::actions::Execute, _>(element, input, cx)
 }
 
 impl Render for DocumentPreviewModal {
@@ -204,6 +205,7 @@ impl Render for DocumentPreviewModal {
                         .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
                             this.save(window, cx);
                         })),
+                    self.vim.input_id(),
                     cx,
                 )
                 .child(editor.render(cx)),

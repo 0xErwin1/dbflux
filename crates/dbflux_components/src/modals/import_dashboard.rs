@@ -47,12 +47,12 @@ pub struct ModalImportDashboard {
 }
 
 impl VimHost for ModalImportDashboard {
-    fn vim(&self) -> Option<&VimBinding> {
-        Some(&self.vim)
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
     }
 
-    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
-        Some(&mut self.vim)
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
     }
 }
 
@@ -83,7 +83,8 @@ impl ModalImportDashboard {
             vim,
         };
 
-        VimBinding::follow_setting(&mut modal, cx);
+        let input = modal.vim.input_id();
+        VimBinding::follow_setting(&mut modal, input, cx);
         modal
     }
 
@@ -227,11 +228,18 @@ impl Render for ModalImportDashboard {
         // Vim's listeners on the JSON editor's container. In Insert mode
         // Escape leaves Insert mode instead of cancelling, and in Normal mode
         // Enter moves down instead of confirming.
-        let vim_editor_container = VimBinding::wire(div(), cx);
-        let vim_editor_container =
-            VimBinding::capture_action::<crate::actions::Cancel, _>(vim_editor_container, cx);
-        let vim_editor_container =
-            VimBinding::capture_action::<crate::actions::Execute, _>(vim_editor_container, cx);
+        let input = self.vim.input_id();
+        let vim_editor_container = VimBinding::wire(div(), input, cx);
+        let vim_editor_container = VimBinding::capture_action::<crate::actions::Cancel, _>(
+            vim_editor_container,
+            input,
+            cx,
+        );
+        let vim_editor_container = VimBinding::capture_action::<crate::actions::Execute, _>(
+            vim_editor_container,
+            input,
+            cx,
+        );
 
         let theme = cx.theme();
         let entity = cx.entity().downgrade();

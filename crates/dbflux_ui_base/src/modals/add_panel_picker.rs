@@ -14,7 +14,7 @@ use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    AnyElement, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, FontWeight,
     IntoElement, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
@@ -24,12 +24,12 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 impl VimHost for ModalAddPanelPicker {
-    fn vim(&self) -> Option<&VimBinding> {
-        Some(&self.query_vim)
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.query_vim.for_input(input)
     }
 
-    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
-        Some(&mut self.query_vim)
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.query_vim.for_input_mut(input)
     }
 }
 
@@ -291,7 +291,8 @@ impl ModalAddPanelPicker {
             _subscriptions: Vec::new(),
         };
 
-        VimBinding::follow_setting(&mut picker, cx);
+        let input = picker.query_vim.input_id();
+        VimBinding::follow_setting(&mut picker, input, cx);
         picker
     }
 
@@ -1054,13 +1055,16 @@ impl ModalAddPanelPicker {
         // Vim's listeners on the query editor's container. In Insert mode the
         // dialog's Escape leaves Insert mode instead of cancelling, and in
         // Normal mode Enter moves down instead of submitting.
-        let query_container = VimBinding::wire(div(), cx);
+        let input = self.query_vim.input_id();
+        let query_container = VimBinding::wire(div(), input, cx);
         let query_container = VimBinding::capture_action::<dbflux_components::actions::Cancel, _>(
             query_container,
+            input,
             cx,
         );
         let query_container = VimBinding::capture_action::<dbflux_components::actions::Execute, _>(
             query_container,
+            input,
             cx,
         );
 

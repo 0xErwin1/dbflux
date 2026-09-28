@@ -135,16 +135,20 @@ pub struct ObjectEditorDocument {
 impl EventEmitter<DocumentEvent> for ObjectEditorDocument {}
 
 impl VimHost for ObjectEditorDocument {
-    fn vim(&self) -> Option<&VimBinding> {
-        self.buffer.as_ref().map(|buffer| &buffer.vim)
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.buffer
+            .as_ref()
+            .and_then(|buffer| buffer.vim.for_input(input))
     }
 
-    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
-        self.buffer.as_mut().map(|buffer| &mut buffer.vim)
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.buffer
+            .as_mut()
+            .and_then(|buffer| buffer.vim.for_input_mut(input))
     }
 
     /// A decoded view is shown read-only: motions and yanks, no edits.
-    fn vim_read_only(&self, _cx: &App) -> bool {
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
         !self.is_editable()
     }
 }
@@ -474,7 +478,8 @@ impl ObjectEditorDocument {
             state.set_value(&pending.body.text, window, cx);
         });
 
-        VimBinding::follow_setting(self, cx);
+        let input_id = input.entity_id();
+        VimBinding::follow_setting(self, input_id, cx);
 
         cx.notify();
     }

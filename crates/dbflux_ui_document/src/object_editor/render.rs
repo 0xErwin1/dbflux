@@ -199,7 +199,9 @@ impl ObjectEditorDocument {
                 let indicator = buffer.vim.render_indicator(cx);
                 let wrapper = div().flex_1().min_h_0().flex().flex_col();
 
-                VimBinding::capture_run_command(VimBinding::wire(wrapper, cx), cx)
+                let input = buffer.vim.input_id();
+
+                VimBinding::capture_run_command(VimBinding::wire(wrapper, input, cx), input, cx)
                     .child(editor)
                     .children(indicator)
                     .into_any_element()
