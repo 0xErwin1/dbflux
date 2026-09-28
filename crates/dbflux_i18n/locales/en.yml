@@ -1448,6 +1448,18 @@ document:
         remove: Remove ordering
       generate_sql:
         title: Generate SQL
+      toolbar:
+        title: "Toolbar"
+        export: "Export…"
+        clear_filter: "Clear filter"
+        open_builder: "Open query builder"
+        reset_builder: "Reset builder query"
+        save_changes: "Save all changes"
+        revert_changes: "Revert all changes"
+        auto_refresh: "Auto-refresh interval…"
+        maximize: "Maximize results"
+        restore: "Restore results"
+        hide: "Hide results"
       error:
         no_results_to_export: No results to export
         invalid_json: Invalid JSON
@@ -3492,6 +3504,7 @@ settings:
       open_script_file: Open script file…
       toggle_comment: Toggle line comment
       export_results: Export results
+      clear_filter: Clear filter
       results_next_page: Results next page
       results_prev_page: Results previous page
       focus_toolbar: Focus toolbar

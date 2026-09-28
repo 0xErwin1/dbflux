@@ -301,6 +301,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
+| `Shift+f`                                     | Limpiar el filtro WHERE y recargar las filas |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
@@ -311,7 +312,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
-| `m` (o `Shift+F10`)                           | Abrir menú contextual                      |
+| `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, maximizar, ocultar) con sus atajos |
 
 ## Diagrama de esquema
 

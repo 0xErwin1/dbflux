@@ -28,6 +28,7 @@ use std::io::BufWriter;
 
 mod items;
 mod sections;
+mod toolbar;
 use sections::MenuRowCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,6 +244,7 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
@@ -275,6 +277,7 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -333,6 +336,7 @@ impl DataGridPanel {
             copy_query_submenu_open: false,
             filter_submenu_open: false,
             order_submenu_open: false,
+            toolbar_submenu_open: false,
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
@@ -759,6 +763,7 @@ impl DataGridPanel {
         //   [sep] [Filter]? [Order]? [GenSQL]? [CopyQuery]?  (one group; the
         //                                                    separator opens it)
         //   [sep + row_action...]?    (if row_actions non-empty)
+        //   [sep + Toolbar]?          (if the grid shows any toolbar button)
         let inspect_row_enabled = !self.is_grouped_result();
 
         let base_items = if is_column_header {
@@ -806,7 +811,16 @@ impl DataGridPanel {
             0
         };
         let row_actions_start = after_copy_query; // index of the separator
-        let total_count = after_copy_query + row_actions_slots;
+        let after_row_actions = after_copy_query + row_actions_slots;
+
+        // Toolbar: sep(1) + trigger(1), when the grid shows any button.
+        let toolbar_actions = if is_column_header {
+            Vec::new()
+        } else {
+            self.toolbar_actions(cx)
+        };
+        let toolbar_trigger_idx = (!toolbar_actions.is_empty()).then_some(after_row_actions + 1);
+        let total_count = after_row_actions + if toolbar_actions.is_empty() { 0 } else { 2 };
 
         let filter_trigger_idx = has_filter.then_some(base_count + usize::from(separators.filter));
         let order_trigger_idx = has_order.then_some(after_filter + usize::from(separators.order));
@@ -818,13 +832,7 @@ impl DataGridPanel {
         let any_submenu_open = self
             .context_menu
             .as_ref()
-            .map(|m| {
-                m.sql_submenu_open
-                    || m.copy_query_submenu_open
-                    || m.filter_submenu_open
-                    || m.order_submenu_open
-            })
-            .unwrap_or(false);
+            .is_some_and(|m| m.any_submenu_open());
 
         let filter_submenu_actions: Vec<ContextMenuAction> = self
             .context_menu
@@ -846,6 +854,8 @@ impl DataGridPanel {
                 4 // SELECT WHERE, INSERT, UPDATE, DELETE
             } else if menu.copy_query_submenu_open {
                 3 // INSERT, UPDATE, DELETE
+            } else if menu.toolbar_submenu_open {
+                toolbar_actions.len()
             } else {
                 0
             }
@@ -869,6 +879,11 @@ impl DataGridPanel {
 
             // Row actions separator
             if row_action_count > 0 && idx == row_actions_start {
+                return true;
+            }
+
+            // Toolbar separator
+            if toolbar_trigger_idx.is_some() && idx == after_row_actions {
                 return true;
             }
 
@@ -937,7 +952,15 @@ impl DataGridPanel {
                     }
                 });
 
-                if let Some((row, position, action)) = pending_row_action {
+                let pending_toolbar_action = self
+                    .context_menu
+                    .as_ref()
+                    .filter(|menu| menu.toolbar_submenu_open)
+                    .and_then(|menu| toolbar_actions.get(menu.submenu_selected_index).copied());
+
+                if let Some(action) = pending_toolbar_action {
+                    self.run_toolbar_action_from_menu(action, window, cx);
+                } else if let Some((row, position, action)) = pending_row_action {
                     let row_values = self.collect_row_values(row, cx);
                     self.context_menu = None;
                     self.restore_focus_after_context_menu(false, window, cx);
@@ -981,31 +1004,28 @@ impl DataGridPanel {
                         };
                         self.handle_context_menu_action(action, window, cx);
                     } else if filter_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.filter_submenu_open = true;
-                        menu.order_submenu_open = false;
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if order_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.order_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if gen_sql_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.sql_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if copy_query_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
                         menu.copy_query_submenu_open = true;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
-                        menu.sql_submenu_open = false;
+                        menu.submenu_selected_index = 0;
+                        cx.notify();
+                    } else if toolbar_trigger_idx == Some(menu.selected_index) {
+                        menu.close_submenus();
+                        menu.toolbar_submenu_open = true;
                         menu.submenu_selected_index = 0;
                         cx.notify();
                     } else if menu.selected_index < base_count
@@ -1019,15 +1039,8 @@ impl DataGridPanel {
             }
             Command::MenuBack | Command::Cancel => {
                 if let Some(ref mut menu) = self.context_menu {
-                    if menu.sql_submenu_open
-                        || menu.copy_query_submenu_open
-                        || menu.filter_submenu_open
-                        || menu.order_submenu_open
-                    {
-                        menu.sql_submenu_open = false;
-                        menu.copy_query_submenu_open = false;
-                        menu.filter_submenu_open = false;
-                        menu.order_submenu_open = false;
+                    if menu.any_submenu_open() {
+                        menu.close_submenus();
                         cx.notify();
                     } else {
                         let is_document_view = menu.is_document_view;
@@ -1688,6 +1701,19 @@ impl DataGridPanel {
                 selected_index,
                 &mut menu_items,
                 &mut visual_index,
+                cx,
+            );
+
+            let toolbar_actions = self.toolbar_actions(cx);
+            self.render_toolbar_submenu_section(
+                menu,
+                &toolbar_actions,
+                submenus_open_left,
+                MenuRowCursor {
+                    rows: &mut menu_items,
+                    visual_index: &mut visual_index,
+                    selected_index,
+                },
                 cx,
             );
             menu_items

@@ -767,6 +767,7 @@ impl DataGridPanel {
                 self.export_results(window, cx);
                 true
             }
+            Command::ClearFilter => self.clear_filter(window, cx),
             Command::OpenContextMenu => {
                 use crate::DataViewMode;
                 if self.view_config.mode == DataViewMode::Document {

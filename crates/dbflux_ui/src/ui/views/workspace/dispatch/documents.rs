@@ -134,7 +134,9 @@ impl Workspace {
             | Command::Redo
             | Command::ToggleColumnGroup
             | Command::StepOut
-            | Command::TriggerCompletion => Some(
+            | Command::TriggerCompletion
+            // The filter a table shows belongs to its document.
+            | Command::ClearFilter => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

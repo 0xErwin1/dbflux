@@ -370,6 +370,8 @@ struct TableContextMenu {
     filter_submenu_open: bool,
     /// Whether the "Order" submenu is open.
     order_submenu_open: bool,
+    /// Whether the "Toolbar" submenu (the results toolbar buttons) is open.
+    toolbar_submenu_open: bool,
     /// Currently selected menu item index (for keyboard navigation).
     selected_index: usize,
     /// Selected index within the active submenu.
@@ -393,6 +395,7 @@ impl TableContextMenu {
             || self.copy_query_submenu_open
             || self.filter_submenu_open
             || self.order_submenu_open
+            || self.toolbar_submenu_open
     }
 
     /// Hovering a plain item closes whatever submenu was open, as native
@@ -402,6 +405,7 @@ impl TableContextMenu {
         self.copy_query_submenu_open = false;
         self.filter_submenu_open = false;
         self.order_submenu_open = false;
+        self.toolbar_submenu_open = false;
     }
 }
 
@@ -3043,6 +3047,7 @@ impl DataGridPanel {
                             copy_query_submenu_open: false,
                             filter_submenu_open: false,
                             order_submenu_open: false,
+                            toolbar_submenu_open: false,
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
@@ -3202,6 +3207,7 @@ impl DataGridPanel {
                         copy_query_submenu_open: false,
                         filter_submenu_open: false,
                         order_submenu_open: false,
+                        toolbar_submenu_open: false,
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,

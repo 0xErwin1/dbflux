@@ -1448,6 +1448,18 @@ document:
         remove: Quitar orden
       generate_sql:
         title: Generar SQL
+      toolbar:
+        title: "Barra de herramientas"
+        export: "Exportar…"
+        clear_filter: "Limpiar filtro"
+        open_builder: "Abrir el constructor de consultas"
+        reset_builder: "Restablecer la consulta del constructor"
+        save_changes: "Guardar todos los cambios"
+        revert_changes: "Revertir todos los cambios"
+        auto_refresh: "Intervalo de actualización automática…"
+        maximize: "Maximizar resultados"
+        restore: "Restaurar resultados"
+        hide: "Ocultar resultados"
       error:
         no_results_to_export: No hay resultados para exportar
         invalid_json: JSON no válido
@@ -3492,6 +3504,7 @@ settings:
       open_script_file: Abrir archivo de script…
       toggle_comment: Alternar comentario
       export_results: Exportar resultados
+      clear_filter: Limpiar filtro
       results_next_page: "Resultados: página siguiente"
       results_prev_page: "Resultados: página anterior"
       focus_toolbar: Enfocar barra de herramientas

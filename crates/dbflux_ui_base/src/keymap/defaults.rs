@@ -528,6 +528,7 @@ fn results_layer() -> KeymapLayer {
 
     // Toolbar / filter focus
     layer.bind(KeyChord::new("f", Modifiers::none()), Command::FocusToolbar);
+    layer.bind(KeyChord::new("f", Modifiers::shift()), Command::ClearFilter);
     layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     // CRUD operations

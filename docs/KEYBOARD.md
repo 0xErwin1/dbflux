@@ -286,6 +286,7 @@ A read-only delete does not change the clipboard.
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
+| `Shift+f` | Clear the WHERE filter and reload the rows |
 | `/` | Focus search/filter |
 | `x` | Delete row |
 | `r` | Rename / edit |
@@ -296,7 +297,7 @@ A read-only delete does not change the clipboard.
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
-| `m` (or `Shift+F10`) | Open context menu |
+| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, maximize, hide) with their shortcuts |
 
 ## Schema diagram
 

@@ -67,6 +67,8 @@ pub enum Command {
 
     // === Results ===
     ExportResults,
+    /// Clears the WHERE filter of a table and reloads its rows.
+    ClearFilter,
     ResultsNextPage,
     ResultsPrevPage,
     FocusToolbar,
@@ -290,6 +292,7 @@ impl Command {
             Command::ToggleComment => "Toggle line comment",
 
             Command::ExportResults => "Export results",
+            Command::ClearFilter => "Clear filter",
             Command::ResultsNextPage => "Results next page",
             Command::ResultsPrevPage => "Results previous page",
             Command::FocusToolbar => "Focus toolbar",
@@ -446,6 +449,7 @@ impl Command {
             Command::ToggleComment => "toggle_comment",
 
             Command::ExportResults => "export_results",
+            Command::ClearFilter => "clear_filter",
             Command::ResultsNextPage => "results_next_page",
             Command::ResultsPrevPage => "results_prev_page",
             Command::FocusToolbar => "focus_toolbar",
@@ -619,6 +623,7 @@ impl Command {
             Command::OpenScriptFile,
             Command::ToggleComment,
             Command::ExportResults,
+            Command::ClearFilter,
             Command::ResultsNextPage,
             Command::ResultsPrevPage,
             Command::FocusToolbar,
@@ -770,6 +775,7 @@ impl Command {
             | Command::ToggleComment => "Editor",
 
             Command::ExportResults
+            | Command::ClearFilter
             | Command::ResultsNextPage
             | Command::ResultsPrevPage
             | Command::FocusToolbar

@@ -1448,6 +1448,18 @@ document:
         remove: 정렬 제거
       generate_sql:
         title: SQL 생성
+      toolbar:
+        title: "도구 모음"
+        export: "내보내기…"
+        clear_filter: "필터 지우기"
+        open_builder: "쿼리 빌더 열기"
+        reset_builder: "빌더 쿼리 초기화"
+        save_changes: "모든 변경 사항 저장"
+        revert_changes: "모든 변경 사항 되돌리기"
+        auto_refresh: "자동 새로 고침 간격…"
+        maximize: "결과 최대화"
+        restore: "결과 복원"
+        hide: "결과 숨기기"
       error:
         no_results_to_export: 내보낼 결과가 없습니다
         invalid_json: JSON이 올바르지 않습니다
@@ -3492,6 +3504,7 @@ settings:
       open_script_file: 스크립트 파일 열기…
       toggle_comment: 주석 전환
       export_results: 결과 내보내기
+      clear_filter: 필터 지우기
       results_next_page: 결과 다음 페이지
       results_prev_page: 결과 이전 페이지
       focus_toolbar: 도구 모음 포커스
