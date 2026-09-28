@@ -12,7 +12,8 @@ use dbflux_components::tokens::{
     ChamferCut, ChromeColors, EditorMetrics, Fields, ModalMetrics, TableViewMetrics,
 };
 use dbflux_components::typography::AppFonts;
-use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand, last_keystroke};
+use dbflux_components::vim::VimBinding;
+use dbflux_ui_base::keymap::{CODE_EDITOR_KEY_CONTEXT, RunCommand};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::KeyContext;
 use gpui_component::scroll::ScrollableElement;
@@ -548,7 +549,7 @@ impl CodeDocument {
             key_context.set(key, value);
         }
 
-        div()
+        let editor = div()
             .size_full()
             .flex()
             .flex_col()
@@ -564,37 +565,15 @@ impl CodeDocument {
                         .update(cx, |state, cx| state.focus(window, cx));
                     cx.emit(DocumentEvent::RequestFocus);
                 }),
-            )
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Escape, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_escape_action(window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            .capture_action(
-                cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
-                    this.clear_vim_count_and_notify(cx);
-                    if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
-                        cx.stop_propagation();
-                    }
-                }),
-            )
-            // A keymap binding runs before the key listeners below. Vim takes
-            // its own keys ahead of a default binding, as it did when the
-            // workspace resolved keys after them; a binding the user made
-            // wins over Vim. Any other command drops a half-typed count or
-            // operator, and Cancel keeps the editor focused, as the Escape
-            // key listener does when no binding takes the key.
+            );
+
+        VimBinding::wire(editor, cx)
+            // A keymap binding runs before the key listeners Vim installs. Vim
+            // takes its own keys ahead of a default binding, as it did when the
+            // workspace resolved keys after them; a binding the user made wins
+            // over Vim. Any other command drops a half-typed count or operator,
+            // and Cancel keeps the editor focused, as the Escape key listener
+            // does when no binding takes the key.
             .capture_action(cx.listener(|this, action: &RunCommand, window, cx| {
                 if let Some(command) = Command::from_action_id(&action.command)
                     && this.handle_editor_overlay_pane_move(command, window, cx)
@@ -603,30 +582,13 @@ impl CodeDocument {
                     return;
                 }
 
-                if !action.from_user_binding
-                    && let Some(keystroke) = last_keystroke(cx)
-                    && this.handle_vim_key_down(
-                        &gpui::KeyDownEvent {
-                            keystroke,
-                            is_held: false,
-                            prefer_character_input: false,
-                        },
-                        window,
-                        cx,
-                    )
-                {
+                if VimBinding::route_binding(this, action.from_user_binding, window, cx) {
                     cx.stop_propagation();
                     return;
                 }
 
-                this.clear_vim_count_and_notify(cx);
                 if Command::from_action_id(&action.command) == Some(Command::Cancel) {
                     this.schedule_editor_refocus(window, cx);
-                }
-            }))
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if this.handle_vim_key_down(event, window, cx) {
-                    cx.stop_propagation();
                 }
             }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
@@ -643,42 +605,16 @@ impl CodeDocument {
             }))
             .child(
                 div().flex_1().min_h_0().overflow_hidden().child(
-                    gpui_component::input::Editor::new(&self.editor.input_state)
+                    self.vim
+                        .editor(self.read_only)
                         .appearance(false)
-                        .readonly(self.editor_input_locked())
                         .text_size(EditorMetrics::CODE_FONT)
                         .line_height(EditorMetrics::CODE_LINE_HEIGHT)
                         .w_full()
                         .h_full(),
                 ),
             )
-            .when_some(self.vim_mode(), |el, mode| {
-                el.child(self.render_vim_mode_indicator(mode, cx))
-            })
-    }
-
-    fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-
-        div()
-            .id("vim-mode-indicator")
-            .flex()
-            .flex_none()
-            .items_center()
-            .h(Heights::ROW_COMPACT)
-            .px(Spacing::SM)
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(Text::caption(crate::labels::vim_mode_label(mode)))
-            .when(!self.vim.pending_keys.is_empty(), |el| {
-                el.child(
-                    div()
-                        .id("vim-pending-command")
-                        .ml(Spacing::SM)
-                        .child(self.vim.pending_keys.clone()),
-                )
-            })
+            .children(self.vim.render_indicator(cx))
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

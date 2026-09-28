@@ -3,8 +3,10 @@
 //! `machine` decides what a key means and where the cursor goes, without a
 //! window or an input.
 
+mod binding;
 pub mod machine;
 
+pub use binding::{VimBinding, VimHost};
 pub use machine::VimMode;
 
 use gpui::{App, Global};

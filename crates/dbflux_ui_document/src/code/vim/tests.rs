@@ -192,7 +192,7 @@ impl Fixture<'_> {
             let document = document.read(cx);
             document
                 .vim
-                .visual_cursor
+                .visual_cursor()
                 .unwrap_or_else(|| document.editor.input_state.read(cx).cursor())
         })
     }
@@ -904,7 +904,7 @@ fn disabling_vim_removes_registered_mark_anchors(cx: &mut TestAppContext) {
     editor.keys("m a");
     let document = editor.document.clone();
     editor.window.update(|_, cx| {
-        let handle = document.read(cx).vim.marks[0].expect("mark a was created");
+        let handle = document.read(cx).vim.mark(0).expect("mark a was created");
         document.update(cx, |document, cx| document.set_vim_enabled(false, cx));
         let input = document.read(cx).editor.input_state.clone();
         assert_eq!(input.read(cx).resolve_edit_anchor(handle), None);
@@ -3025,7 +3025,7 @@ fn pending_display_clears_on_focus_and_tab_action(cx: &mut TestAppContext) {
         let document = editor.document.clone();
         editor
             .window
-            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+            .update(|_, cx| document.read(cx).vim.pending_keys().to_string())
     };
 
     editor.keys("3");
@@ -4068,7 +4068,7 @@ fn pending_command_tracks_raw_keys_and_clears_on_completion(cx: &mut TestAppCont
         let document = editor.document.clone();
         editor
             .window
-            .update(|_, cx| document.read(cx).vim.pending_keys.clone())
+            .update(|_, cx| document.read(cx).vim.pending_keys().to_string())
     };
     editor.keys("2 d 3");
     assert_eq!(pending(&mut editor), "2d3");

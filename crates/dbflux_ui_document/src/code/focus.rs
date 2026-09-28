@@ -1,5 +1,5 @@
 use super::*;
-use dbflux_ui_base::keymap::{LANGUAGE_KEY, VIM_MODE_KEY};
+use dbflux_ui_base::keymap::LANGUAGE_KEY;
 
 impl CodeDocument {
     pub(super) fn enter_editor_mode(&mut self, cx: &mut Context<Self>) {
@@ -82,11 +82,7 @@ impl CodeDocument {
             self.effective_language().context_id().into(),
         )];
 
-        if let Some(mode) = self.vim_mode()
-            && !self.editor.input_state.read(cx).search_session().open
-        {
-            entries.push((VIM_MODE_KEY.into(), mode.context_id().into()));
-        }
+        entries.extend(self.vim.key_context_entry(cx));
 
         entries
     }

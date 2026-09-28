@@ -489,9 +489,7 @@ pub struct CodeDocument {
     close_after_save: bool,
 
     /// Opt-in modal editing state for the editor.
-    vim: vim::VimState,
-    _vim_editor_focus_subscription: Option<Subscription>,
-    _vim_keystroke_interceptor: Option<Subscription>,
+    vim: dbflux_components::vim::VimBinding,
 }
 
 struct PendingQueryResult {
@@ -997,6 +995,8 @@ impl CodeDocument {
 
         let refresh_policy = default_refresh;
 
+        let vim = dbflux_components::vim::VimBinding::new(input_state.clone(), window, cx);
+
         let mut document = Self {
             id: doc_id,
             title: "Query 1".to_string(),
@@ -1108,18 +1108,9 @@ impl CodeDocument {
             },
             pending: PendingActions::default(),
             close_after_save: false,
-            vim: vim::VimState::default(),
-            _vim_editor_focus_subscription: None,
-            _vim_keystroke_interceptor: None,
+            vim,
         };
 
-        let editor_focus = document.editor.input_state.read(cx).focus_handle(cx);
-        document._vim_editor_focus_subscription = Some(cx.on_focus_out(
-            &editor_focus,
-            window,
-            |document, _, _, cx| document.close_change_group_on_blur(cx),
-        ));
-        document._vim_keystroke_interceptor = Some(vim::intercept_vim_keystrokes(cx));
         document.sync_context_dropdowns(cx);
         document.sync_vim_setting(cx);
         document
