@@ -6,7 +6,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use std::sync::Arc;
 
-type ClickHandler = Arc<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + Send + Sync + 'static>;
+type ClickHandler = Arc<dyn Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync + 'static>;
 
 /// Compact file-picker control: a button row that shows the basename of the
 /// currently selected file (or a "Browse…" placeholder) plus an optional
@@ -55,7 +55,7 @@ impl FilePicker {
     /// file dialog. Without it, the picker renders disabled.
     pub fn on_browse<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&MouseDownEvent, &mut Window, &mut App) + Send + Sync + 'static,
+        F: Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync + 'static,
     {
         self.on_browse = Some(Arc::new(handler));
         self
@@ -65,7 +65,7 @@ impl FilePicker {
     /// is currently selected.
     pub fn on_clear<F>(mut self, handler: F) -> Self
     where
-        F: Fn(&MouseDownEvent, &mut Window, &mut App) + Send + Sync + 'static,
+        F: Fn(&ClickEvent, &mut Window, &mut App) + Send + Sync + 'static,
     {
         self.on_clear = Some(Arc::new(handler));
         self
@@ -109,7 +109,7 @@ impl RenderOnce for FilePicker {
                     .child(SharedString::from(display_label)),
             )
             .when_some(on_browse, |d, handler| {
-                d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                d.on_click(move |event, window, cx| {
                     handler(event, window, cx);
                 })
             });
@@ -137,7 +137,7 @@ impl RenderOnce for FilePicker {
                             .color(theme.muted_foreground),
                     )
                     .when_some(clear_handler, |d, handler| {
-                        d.on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                        d.on_click(move |event, window, cx| {
                             handler(event, window, cx);
                         })
                     }),

@@ -16,8 +16,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    Anchor, AnyElement, App, ElementId, MouseButton, Pixels, SharedString, Window, anchored,
-    deferred, div, point, px,
+    Anchor, AnyElement, App, ElementId, Pixels, SharedString, Window, anchored, deferred, div,
+    point, px,
 };
 
 use crate::chart::spec::{AggKind, BindingSpec};
@@ -384,7 +384,7 @@ fn pill_element(
                 .h(Fields::HEIGHT)
                 .px(Fields::PADDING_X)
                 .cursor_pointer()
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     on_click(window, cx);
                 })
                 .child(shape)
@@ -467,7 +467,7 @@ where
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     handler(col_idx, window, cx);
                 })
                 .child(
@@ -513,7 +513,7 @@ where
                 .px(Fields::PADDING_X)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     handler(col_idx, !checked, window, cx);
                 })
                 .child(
@@ -580,7 +580,7 @@ where
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     handler(col_idx_opt, window, cx);
                 })
                 .child(
@@ -627,7 +627,7 @@ where
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
                 .when(is_selected, |d| d.font_weight(gpui::FontWeight::MEDIUM))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_click(move |_, window, cx| {
                     handler(kind, window, cx);
                 })
                 .child(

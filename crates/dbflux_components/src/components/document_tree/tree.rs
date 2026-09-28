@@ -659,8 +659,11 @@ fn render_chevron(
     muted_color: Hsla,
     state: Entity<DocumentTreeState>,
     node_id: NodeId,
-) -> Div {
+) -> Stateful<Div> {
     let chevron = div()
+        .id(ElementId::Name(
+            format!("tree-chevron-{:?}", node_id.path).into(),
+        ))
         .w(Heights::ICON_SM)
         .h(Heights::ICON_SM)
         .flex()
@@ -677,7 +680,8 @@ fn render_chevron(
         chevron
             .child(Icon::new(icon).size(px(12.0)).color(muted_color)) // guardrail-allow: 12px icon size, no ICON_XS token
             .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 state.update(cx, |s, cx| s.toggle_expand(&node_id, cx));
             })

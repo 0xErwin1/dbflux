@@ -7,9 +7,9 @@ use crate::typography::AppFonts;
 use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
-    Anchor, ElementId, EventEmitter, FocusHandle, IntoElement, MouseButton, ParentElement, Render,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored,
-    deferred, div, point, px,
+    Anchor, ElementId, EventEmitter, FocusHandle, IntoElement, ParentElement, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred,
+    div, point, px,
 };
 use gpui_component::ActiveTheme;
 
@@ -368,12 +368,9 @@ impl MultiSelect {
                         theme.foreground
                     })
                     .child(row_shape)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.toggle_index(index, cx);
-                        }),
-                    )
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.toggle_index(index, cx);
+                    }))
                     .child(
                         Checkbox::new(SharedString::from(format!("ms-item-{}", index)))
                             .checked(checked),
@@ -399,12 +396,9 @@ impl MultiSelect {
                         .fill_hover(theme.list_hover)
                         .interactive("ms-clear-shape"),
                 )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _event, _window, cx| {
-                        this.clear_selection(cx);
-                    }),
-                )
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.clear_selection(cx);
+                }))
                 .child(dbflux_i18n::t!("controls.multi_select.clear_all"))
         });
 

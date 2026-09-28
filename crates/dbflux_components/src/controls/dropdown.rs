@@ -12,9 +12,8 @@ use dbflux_core::keymap_types::{Command, ContextId};
 use gpui::prelude::*;
 use gpui::{
     Anchor, ClickEvent, Context, ElementId, EventEmitter, FocusHandle, Hsla, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred,
-    div, point, px,
+    IntoElement, ParentElement, Pixels, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme;
 
@@ -699,13 +698,12 @@ impl Dropdown {
                 if is_disabled {
                     row = row.cursor_not_allowed();
                 } else {
-                    row = row.cursor_pointer().on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, window, cx| {
+                    row = row.cursor_pointer().on_click(cx.listener(
+                        move |this, _event, window, cx| {
                             this.select_item(index, cx);
                             this.give_focus_back(window, cx);
-                        }),
-                    );
+                        },
+                    ));
                 }
 
                 row.into_any_element()

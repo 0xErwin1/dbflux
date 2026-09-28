@@ -88,7 +88,7 @@ where
             chip.id(("chart-legend-series", i))
                 .cursor_pointer()
                 .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
-                .on_mouse_down(gpui::MouseButton::Left, move |_ev, window, cx| {
+                .on_click(move |_ev, window, cx| {
                     handler(i, window, cx);
                 })
                 .into_any_element()
