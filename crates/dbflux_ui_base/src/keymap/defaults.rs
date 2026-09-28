@@ -439,7 +439,12 @@ fn history_modal_layer() -> KeymapLayer {
         Command::ToggleFavorite,
     );
     layer.bind(KeyChord::new("r", Modifiers::ctrl()), Command::Rename);
-    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+    // A typed character in the history's own search, rename and save fields.
+    layer.bind_with_predicate(
+        KeyChord::new("/", Modifiers::none()),
+        Command::FocusSearch,
+        "HistoryModal && !Input",
+    );
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
 
     layer

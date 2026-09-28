@@ -1792,3 +1792,20 @@ fn alt_keys_switch_and_close_result_tabs_from_the_results() {
         }
     }
 }
+
+/// `/` focuses the query history's search from its list, but stays a typed
+/// character in the history's own fields (search, rename, save name), which
+/// sit inside the history element.
+#[test]
+fn slash_in_the_query_history_fields_is_typed_text() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::HistoryModal, &[]);
+    let list = element_stack(root, &["HistoryModal"]);
+
+    let action = top_action(&keymap, "/", &list).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::FocusSearch));
+
+    let mut field = list.clone();
+    field.push(KeyContext::parse("Input").expect("valid key context"));
+    assert!(top_action(&keymap, "/", &field).is_none());
+}

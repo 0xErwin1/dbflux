@@ -551,5 +551,5 @@ foco vuelve a la barra.
 | `Ctrl+f`                              | Alternar favorito                |
 | `Ctrl+r`                              | Renombrar                        |
 | `Ctrl+d`                              | Eliminar                         |
-| `/`                                   | Enfocar búsqueda                 |
+| `/`                                   | Enfocar búsqueda; en los campos de búsqueda, renombrar y guardar escribe una `/` |
 | `Ctrl+s` / `Cmd+s`                    | Guardar query                    |

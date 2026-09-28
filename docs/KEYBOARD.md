@@ -529,5 +529,5 @@ returns focus to the bar.
 | `Ctrl+f` | Toggle favorite |
 | `Ctrl+r` | Rename |
 | `Ctrl+d` | Delete |
-| `/` | Focus search |
+| `/` | Focus search; inside the search, rename and save fields it types a `/` |
 | `Ctrl+s` / `Cmd+s` | Save query |
