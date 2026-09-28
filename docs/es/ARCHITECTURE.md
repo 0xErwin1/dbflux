@@ -1688,6 +1688,17 @@ IA con una capa completa de gobernanza:
   `CodeEditor`, `ResultPanel`, …) solo para predicados del usuario. El GPUI
   vendorizado trae los cambios de dispatch que necesita el motor
   (`vendor/gpui-pre/VENDOR.md`, keyboard dispatch).
+- Modo Vim: `crates/dbflux_components/src/vim/` contiene la máquina de teclas
+  (`machine.rs`) y `VimBinding`, el estado y los listeners que la aplican a un
+  `EditorState`. Una vista que aloja editores implementa `VimHost`, nombrando
+  cada editor por el entity id de su input, y construye el elemento del editor
+  con `VimBinding::editor`, para que el bloqueo del modo Normal sobreviva a que
+  el elemento vuelva a aplicar su flag de solo lectura en cada frame. Una action
+  del host atada a una tecla que Vim también usa (el Cancel o Execute de un
+  diálogo, un `RunCommand`) se captura con `VimBinding::capture_action` /
+  `capture_run_command`, que le pasan antes la última tecla a Vim. El setting
+  llega a los crates sin app state a través de `VimSettingGlobal`, que cada
+  workspace publica desde los settings generales.
 - Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`;
   `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según
   `focus_target` (Document, Sidebar, BackgroundTasks). Un document dueño de

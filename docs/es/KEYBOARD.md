@@ -137,12 +137,35 @@ Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
 
 ## Modo Vim (opcional)
 
-Los editores de código pueden usar edición modal con un conjunto reducido de
-comandos de Vim. Viene desactivado. Actívalo en **Settings → General → Editor →
-Modo Vim en los editores de código** y guarda: los editores abiertos cambian al
-instante. Se aplica a todos los editores de código (SQL y los demás lenguajes de
-query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
-formularios y la paleta de comandos siguen escribiendo como siempre.
+Los editores de varias líneas pueden usar edición modal con un conjunto
+reducido de comandos de Vim. Viene desactivado. Actívalo en **Settings → General
+→ Editor → Modo Vim en los editores de código** y guarda: los editores abiertos
+cambian al instante. Se aplica a todos los editores de varias líneas:
+
+- el editor de código (SQL y los demás lenguajes de query, Lua, Python, Bash);
+- la pestaña del editor de objetos de S3 y el editor de vista previa del
+  explorador de objetos;
+- los diálogos del editor de celdas y de vista previa de documentos;
+- el editor JSON del diálogo de importar dashboard y el editor de query del
+  diálogo de agregar panel;
+- el panel de valor, la vista JSON de una colección de documentos y su editor
+  de pipeline de agregación.
+
+Los visores de solo lectura aceptan movimientos, selección Visual y copias, sin
+ediciones: un objeto de S3 decodificado en la pestaña del editor de objetos o en
+la vista previa del explorador de objetos, la vista Raw JSON del árbol de
+documentos, la vista previa SQL del constructor de queries, los diálogos de
+vista previa de SQL y de query, y los detalles de un evento de auditoría
+externo. Los campos de una línea, los cuadros de búsqueda, los formularios y la
+paleta de comandos siguen escribiendo como siempre.
+
+Fuera del editor de código, `Escape` funciona en dos pasos. En el modo Insertar
+el primer `Escape` vuelve al modo Normal, y en el modo Normal `Escape` hace lo
+mismo que sin Vim: cierra el diálogo, sale del editor o devuelve el teclado a la
+lista o al árbol que lo rodea. `Enter` en el modo Normal baja una línea y nunca
+confirma un diálogo. Con el modo Vim activo, los diálogos de vista previa de SQL
+y de query se abren con el teclado en la query, así que `j` y `k` mueven el
+cursor en lugar de desplazar el diálogo.
 
 Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
 debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `REEMPLAZAR`, `VISUAL`, `VISUAL LÍNEA` o `VISUAL BLOQUE`. Cada tab conserva su
@@ -378,8 +401,10 @@ Aplicar sigue pidiendo la misma confirmación que el botón.
 
 Estas teclas valen en una pestaña de gráfico y en la vista de gráfico de un
 resultado (Gráfico, no Tabla + Gráfico, donde las teclas siguen en la tabla).
-Un punto resaltado hace de puntero: la cruz, la lectura y el inspector de
-puntos lo muestran. Mover el puntero sobre el gráfico lo reemplaza.
+Un punto resaltado hace de puntero: la cruz y la lectura lo muestran. En el
+gráfico de una pestaña de tabla o de colección el inspector de puntos también lo
+sigue; los gráficos de resultados de queries y las pestañas de gráfico no tienen
+inspector de puntos. Mover el puntero sobre el gráfico lo reemplaza.
 
 | Teclas | Acción |
 |--------|--------|

@@ -265,6 +265,23 @@ flowchart TD
     SC --&gt;|Open chart...| CD
 ```
 
+## Inspector de puntos
+
+En el gráfico de una pestaña de tabla o de colección (las vistas Gráfico y
+Ambos), el inspector de puntos se acopla a la derecha del gráfico mientras el
+puntero está sobre un punto, o mientras un punto está resaltado desde el teclado
+(ver [Gráficos](KEYBOARD.md#gráficos) en la referencia de teclado). Muestra la
+serie, los valores X e Y del punto, los campos de la fila de la que sale el
+punto y un botón **Mostrar en árbol**.
+
+**Mostrar en árbol** selecciona esa fila en la tabla y le pasa el teclado. Desde
+la vista Gráfico cambia a la tabla; Ambos mantiene el gráfico sobre la tabla. El
+menú de la tabla del resultado ofrece la misma acción en **Barra de
+herramientas** mientras hay un punto resaltado.
+
+Los gráficos de resultados del editor de queries y las pestañas de gráfico no
+guardan la fila de cada punto, así que no muestran el inspector de puntos.
+
 ## Limitaciones
 
 Estas limitaciones están fundamentadas en el código actual, no son suposiciones:

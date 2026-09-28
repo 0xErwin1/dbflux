@@ -130,11 +130,32 @@ results. The menu is also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 
-Code editors can use modal editing with a small set of Vim commands. It is off
-by default. Turn it on in **Settings → General → Editor → Vim mode in code
-editors** and save: open editors switch over at once. It applies to every code
-editor (SQL and the other query languages, Lua, Python, Bash) and to nothing
-else, so search boxes, forms, and the command palette keep typing as usual.
+Multi-line editors can use modal editing with a small set of Vim commands. It
+is off by default. Turn it on in **Settings → General → Editor → Vim mode in
+code editors** and save: open editors switch over at once. It applies to every
+multi-line editor:
+
+- the code editor (SQL and the other query languages, Lua, Python, Bash);
+- the S3 object editor tab and the object browser's preview editor;
+- the cell editor and document preview dialogs;
+- the JSON editor of the import dashboard dialog and the query editor of the
+  add panel dialog;
+- the value panel, the JSON view of a document collection and its aggregation
+  pipeline editor.
+
+Read-only viewers take motions, Visual selection and yanks, and no edits: a
+decoded S3 object in the object editor tab or the object browser's preview, the
+document tree's Raw JSON view, the query builder's SQL preview, the SQL and
+query preview dialogs, and the details of an external audit event. Single-line
+fields, search boxes, forms, and the command palette keep typing as usual.
+
+Outside the code editor, `Escape` works in two steps. In Insert mode the first
+`Escape` returns to Normal mode, and in Normal mode `Escape` does what it does
+without Vim: it closes the dialog, leaves the editor, or hands the keyboard back
+to the list or tree around it. `Enter` in Normal mode moves down a line and
+never confirms a dialog. With Vim mode on, the SQL and query preview dialogs
+open with the keyboard in the query, so `j` and `k` move the cursor instead of
+scrolling the dialog.
 
 An editor starts in Normal mode when it opens and when you turn Vim mode on. A
 strip under the editor shows the mode: `NORMAL`, `INSERT`, `REPLACE`, `VISUAL`, `VISUAL LINE`, or `VISUAL BLOCK`. Each tab keeps its
@@ -358,8 +379,10 @@ Apply still asks for the same confirmation as the button.
 
 These keys apply in a chart tab and in the chart view of a result (Chart, not
 Table + Chart, where the keys stay with the table). A highlighted point stands
-in for the pointer: the crosshair, the readout and the point inspector show
-it. Moving the pointer over the chart replaces it.
+in for the pointer: the crosshair and the readout show it. In the chart of a
+table or collection tab the point inspector follows it too; charts of query
+results and chart tabs have no point inspector. Moving the pointer over the
+chart replaces it.
 
 | Keys | Action |
 |------|--------|
