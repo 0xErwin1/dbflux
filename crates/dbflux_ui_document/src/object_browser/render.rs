@@ -517,13 +517,10 @@ impl ObjectBrowserDocument {
             .border_b_1()
             .border_color(theme.table_row_border)
             .when(archived, |d| d.opacity(ARCHIVED_ROW_OPACITY))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.select_node(select_id.clone(), cx);
-                    cx.emit(DocumentEvent::RequestFocus);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_node(select_id.clone(), cx);
+                cx.emit(DocumentEvent::RequestFocus);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {

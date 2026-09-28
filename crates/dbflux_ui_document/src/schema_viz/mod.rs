@@ -88,7 +88,7 @@ fn toggle_group<const N: usize>(
             })
             .child(thumb)
             .child(label)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            .on_click(move |_, window, cx| {
                 on_toggle(&clicked, window, cx);
             })
     });

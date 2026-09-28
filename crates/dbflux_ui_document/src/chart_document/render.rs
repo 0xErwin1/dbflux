@@ -943,7 +943,7 @@ impl ChartDocument {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
+                    .on_click(move |_, _window, cx| {
                         shell_for_close.update(cx, |s, cx| {
                             s.chart_rail_open = false;
                             cx.notify();

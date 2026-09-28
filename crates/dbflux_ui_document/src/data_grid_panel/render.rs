@@ -2406,12 +2406,9 @@ impl DataGridPanel {
                             .border_color(chart_colors.pill_border)
                             .text_color(chart_colors.label_fg)
                             .hover(|d| d.bg(chart_colors.hover_bg))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.set_result_view_mode(ResultViewMode::Table, cx);
-                                }),
-                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_result_view_mode(ResultViewMode::Table, cx);
+                            }))
                             .child(dbflux_i18n::t!(
                                 "document.data.chart_dock.degraded.open_table_tab"
                             )),
@@ -2436,18 +2433,15 @@ impl DataGridPanel {
                                 .bg(primary.opacity(0.9))
                                 .text_color(primary_foreground)
                                 .hover(move |d| d.bg(primary))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, _, cx| {
-                                        if let Some(shell) = &this.chart.chart_shell {
-                                            shell.update(cx, |s, _| {
-                                                s.chart_picker_overlay_open =
-                                                    !s.chart_picker_overlay_open;
-                                            });
-                                        }
-                                        cx.notify();
-                                    }),
-                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(shell) = &this.chart.chart_shell {
+                                        shell.update(cx, |s, _| {
+                                            s.chart_picker_overlay_open =
+                                                !s.chart_picker_overlay_open;
+                                        });
+                                    }
+                                    cx.notify();
+                                }))
                                 .child(label),
                         )
                     }),
@@ -2566,17 +2560,14 @@ impl DataGridPanel {
                                     .when(!is_selected, |d| {
                                         d.hover(|d| d.bg(chart_colors.hover_bg))
                                     })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, _, cx| {
-                                            if let Some(shell) = &this.chart.chart_shell {
-                                                shell.update(cx, |s, _| {
-                                                    s.chart_picker_x_col = col_idx;
-                                                });
-                                            }
-                                            cx.notify();
-                                        }),
-                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Some(shell) = &this.chart.chart_shell {
+                                            shell.update(cx, |s, _| {
+                                                s.chart_picker_x_col = col_idx;
+                                            });
+                                        }
+                                        cx.notify();
+                                    }))
                                     .child(label)
                             },
                         ),
@@ -2657,25 +2648,22 @@ impl DataGridPanel {
                     .bg(primary.opacity(0.9))
                     .text_color(primary_foreground)
                     .hover(move |d| d.bg(primary))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            if let Some(shell) = &this.chart.chart_shell {
-                                let selection = ManualChartSelection {
-                                    x_col: x_col_snapshot,
-                                    y_cols: y_col_indices.clone(),
-                                    group_by: None,
-                                };
-                                shell.update(cx, |s, _| {
-                                    s.chart_manual_selection = Some(selection);
-                                    s.chart_view = None;
-                                    s.chart_view_observer = None;
-                                    s.chart_picker_overlay_open = false;
-                                });
-                            }
-                            cx.notify();
-                        }),
-                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(shell) = &this.chart.chart_shell {
+                            let selection = ManualChartSelection {
+                                x_col: x_col_snapshot,
+                                y_cols: y_col_indices.clone(),
+                                group_by: None,
+                            };
+                            shell.update(cx, |s, _| {
+                                s.chart_manual_selection = Some(selection);
+                                s.chart_view = None;
+                                s.chart_view_observer = None;
+                                s.chart_picker_overlay_open = false;
+                            });
+                        }
+                        cx.notify();
+                    }))
             })
             .when(!any_y_checked, |d| {
                 d.bg(gpui::Hsla {
@@ -2945,8 +2933,7 @@ impl DataGridPanel {
                                     d.text_color(theme.muted_foreground)
                                         .hover(|d| d.bg(theme.secondary))
                                 })
-                                .on_mouse_down(
-                                    gpui::MouseButton::Left,
+                                .on_click(
                                     cx.listener(move |this, _, _, cx| {
                                         if let Some(shell) = &this.chart.chart_shell {
                                             shell.update(cx, |s, _| {
@@ -3089,8 +3076,7 @@ impl DataGridPanel {
                                 d.cursor_pointer()
                                     .text_color(theme.foreground)
                                     .hover(|d| d.bg(theme.secondary))
-                                    .on_mouse_down(
-                                        gpui::MouseButton::Left,
+                                    .on_click(
                                         cx.listener(|this, _, _, cx| {
                                             this.reset_chart_rail_to_auto(cx);
                                         }),
@@ -3115,8 +3101,7 @@ impl DataGridPanel {
                                     .bg(primary)
                                     .text_color(gpui::white())
                                     .hover(move |d| d.bg(primary))
-                                    .on_mouse_down(
-                                        gpui::MouseButton::Left,
+                                    .on_click(
                                         cx.listener(|this, _, _, cx| {
                                             this.apply_chart_rail_selection(cx);
                                         }),

@@ -1196,14 +1196,11 @@ impl SourceTargetPhase {
             .when(is_cursor, |parent| parent.bg(theme.accent))
             .child(gutter)
             .child(content)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event, _window, cx| {
-                    this.active_side = side;
-                    this.side_mut(side).tree.select_by_id(&row_id);
-                    this.activate_current(side, cx);
-                }),
-            )
+            .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.active_side = side;
+                this.side_mut(side).tree.select_by_id(&row_id);
+                this.activate_current(side, cx);
+            }))
             .into_any_element()
     }
 }

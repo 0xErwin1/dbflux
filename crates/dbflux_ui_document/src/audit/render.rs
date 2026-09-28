@@ -943,17 +943,14 @@ impl AuditDocument {
             .border_b_1()
             .border_color(theme.table_row_border)
             .text_size(DocumentMetrics::TABLE_CELL_FONT)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
-                    // Signal the workspace to update focus_target → Document so that
-                    // Ctrl+H and other panel-navigation bindings work correctly.
-                    cx.emit(DocumentEvent::RequestFocus);
-                    this.select_row(row_index, cx);
-                    this.toggle_event_expanded(event_id, cx);
-                    this.focus_handle.focus(window, cx);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                // Signal the workspace to update focus_target → Document so that
+                // Ctrl+H and other panel-navigation bindings work correctly.
+                cx.emit(DocumentEvent::RequestFocus);
+                this.select_row(row_index, cx);
+                this.toggle_event_expanded(event_id, cx);
+                this.focus_handle.focus(window, cx);
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {

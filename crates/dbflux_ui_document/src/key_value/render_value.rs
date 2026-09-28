@@ -798,16 +798,14 @@ impl KeyValueDocument {
             .when(is_selected, |row| {
                 row.bg(tint.opacity(KeyValueMetrics::SELECTED_MEMBER_ALPHA))
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.focus_mode = KeyValueFocusMode::ValuePanel;
-                    this.selected_member_index = Some(member_index);
-                    cx.emit(DocumentEvent::RequestFocus);
-                    cx.notify();
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.focus_mode = KeyValueFocusMode::ValuePanel;
+                this.selected_member_index = Some(member_index);
+                cx.emit(DocumentEvent::RequestFocus);
+                cx.notify();
+            }))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() == 2 {
                     this.start_member_edit(member_index, window, cx);
@@ -880,13 +878,11 @@ impl KeyValueDocument {
                     .color(muted),
             )
             .hover(move |cell| cell.text_color(danger))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.request_delete_member(member_index, cx);
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.request_delete_member(member_index, cx);
+            }))
     }
 
     fn render_inline_json(&self, text: &str, cx: &App) -> impl IntoElement + use<> {
@@ -1351,16 +1347,14 @@ impl KeyValueDocument {
             .when(is_selected, |row| {
                 row.bg(tint.opacity(KeyValueMetrics::SELECTED_MEMBER_ALPHA))
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.focus_mode = KeyValueFocusMode::ValuePanel;
-                    this.selected_member_index = Some(member_index);
-                    cx.emit(DocumentEvent::RequestFocus);
-                    cx.notify();
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.focus_mode = KeyValueFocusMode::ValuePanel;
+                this.selected_member_index = Some(member_index);
+                cx.emit(DocumentEvent::RequestFocus);
+                cx.notify();
+            }))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() == 2 {
                     this.start_member_edit(member_index, window, cx);
@@ -1646,16 +1640,14 @@ impl KeyValueDocument {
             .when(is_selected, |row| {
                 row.bg(tint.opacity(KeyValueMetrics::SELECTED_MEMBER_ALPHA))
             })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.focus_mode = KeyValueFocusMode::ValuePanel;
-                    this.selected_member_index = Some(entry_index);
-                    cx.emit(DocumentEvent::RequestFocus);
-                    cx.notify();
-                }),
-            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.focus_mode = KeyValueFocusMode::ValuePanel;
+                this.selected_member_index = Some(entry_index);
+                cx.emit(DocumentEvent::RequestFocus);
+                cx.notify();
+            }))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
