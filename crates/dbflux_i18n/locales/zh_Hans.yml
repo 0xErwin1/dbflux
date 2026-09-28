@@ -3678,6 +3678,11 @@ settings:
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
       copy_preview: 复制预览
+      import_items: "导入…"
+      reset_binding: "重置快捷键"
+      reset_all_bindings: "重置所有快捷键"
+      edit_binding_context: "编辑快捷键上下文"
+      filter_by_context: "按上下文筛选"
       next_time_range: "下一个时间范围"
       prev_time_range: "上一个时间范围"
       configure_panel: "配置面板"

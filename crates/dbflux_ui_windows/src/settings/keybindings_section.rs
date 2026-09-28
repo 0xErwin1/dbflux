@@ -535,7 +535,9 @@ impl SettingsSection for KeybindingsSection {
                     }
                 }
             }
-            ("delete", modifiers) | ("backspace", modifiers) if modifiers == Modifiers::none() => {
+            ("delete", modifiers) | ("backspace", modifiers) | ("d", modifiers)
+                if modifiers == Modifiers::none() =>
+            {
                 if let Some(entry) = self.selected_entry(cx)
                     && entry.keys.is_some()
                 {
@@ -546,6 +548,13 @@ impl SettingsSection for KeybindingsSection {
                 if let Some(entry) = self.selected_entry(cx) {
                     self.reset_binding(&entry.slot, cx);
                 }
+            }
+            ("r", modifiers) if modifiers == Modifiers::shift() => {
+                self.reset_all(cx);
+            }
+            ("c", modifiers) if modifiers == Modifiers::none() => {
+                self.context_filter
+                    .update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
             }
             ("p", modifiers) if modifiers == Modifiers::none() => {
                 if let Some(entry) = self.selected_entry(cx) {

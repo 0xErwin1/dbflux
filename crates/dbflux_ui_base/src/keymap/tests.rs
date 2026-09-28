@@ -628,6 +628,29 @@ fn runs_command(action: &dyn Action, command: Command) -> bool {
         .is_some_and(|run| run.command.as_ref() == command.action_id())
 }
 
+/// The key contexts a window root reports for `context`. The settings
+/// window adds the active section and whether the section or its navigation
+/// has the keyboard, which the section keys of the Settings layer match on.
+fn roots_reported_for(context: ContextId) -> Vec<KeyContext> {
+    if context != ContextId::Settings {
+        return vec![root_key_context(WORKSPACE_KEY_CONTEXT, context, &[])];
+    }
+
+    ["proxies", "keybindings"]
+        .into_iter()
+        .map(|section| {
+            root_key_context(
+                WORKSPACE_KEY_CONTEXT,
+                context,
+                &[
+                    ("section".into(), section.into()),
+                    ("focus".into(), "section".into()),
+                ],
+            )
+        })
+        .collect()
+}
+
 /// Every default binding of a context a window root reports resolves, in
 /// that root's key context, to the command the keymap stack resolves for it
 /// (the context's own binding first, then the inherited one), so moving key
@@ -641,17 +664,28 @@ fn every_root_default_resolves_to_the_same_command_natively() {
             continue;
         }
 
-        let root = root_key_context(WORKSPACE_KEY_CONTEXT, *context, &[]);
+        let roots = roots_reported_for(*context);
 
         for (keys, command, _) in default_keymap().bindings_for_context(*context) {
             let typed = gpui_keystrokes(&keys);
-            let action = top_action(&keymap, &typed, std::slice::from_ref(&root))
-                .unwrap_or_else(|| panic!("`{typed}` must be bound in {context:?}"));
+            let actions: Vec<Box<dyn Action>> = roots
+                .iter()
+                .filter_map(|root| top_action(&keymap, &typed, std::slice::from_ref(root)))
+                .collect();
 
             assert!(
-                runs_command(action.as_ref(), command),
-                "`{typed}` in {context:?} must run {command:?}, got {}",
-                action.name()
+                !actions.is_empty(),
+                "`{typed}` must be bound in {context:?}"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|action| runs_command(action.as_ref(), command)),
+                "`{typed}` in {context:?} must run {command:?}, got {:?}",
+                actions
+                    .iter()
+                    .map(|action| action.name())
+                    .collect::<Vec<_>>()
             );
         }
     }

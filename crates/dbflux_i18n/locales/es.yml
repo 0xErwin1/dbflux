@@ -3678,6 +3678,11 @@ settings:
       load_more: Cargar más
       edit_expiry: Editar expiración…
       copy_preview: Copiar vista previa
+      import_items: "Importar…"
+      reset_binding: "Restablecer atajo"
+      reset_all_bindings: "Restablecer todos los atajos"
+      edit_binding_context: "Editar contexto del atajo"
+      filter_by_context: "Filtrar por contexto"
       next_time_range: "Siguiente rango de tiempo"
       prev_time_range: "Rango de tiempo anterior"
       configure_panel: "Configurar panel"

@@ -3678,6 +3678,11 @@ settings:
       load_more: Load more
       edit_expiry: Edit expiry…
       copy_preview: Copy preview
+      import_items: "Import…"
+      reset_binding: "Reset binding"
+      reset_all_bindings: "Reset all bindings"
+      edit_binding_context: "Edit binding context"
+      filter_by_context: "Filter by context"
       next_time_range: "Next time range"
       prev_time_range: "Previous time range"
       configure_panel: "Configure panel"

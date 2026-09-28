@@ -2005,6 +2005,65 @@ fn settings_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
 
+    // Keys of a section while it has the keyboard and no field is being
+    // edited: the profile lists (proxies, SSH tunnels, auth profiles, hooks,
+    // services, MCP) and the key bindings editor. The settings window hands
+    // each command to the section as the key its handler takes.
+    let section = "Settings && focus == section && !Input";
+    let list_section = "Settings && focus == section && section != keybindings && !Input";
+    let keybindings = "Settings && focus == section && section == keybindings && !Input";
+
+    layer.bind_with_predicate(
+        KeyChord::new("n", Modifiers::none()),
+        Command::AddItem,
+        section,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("d", Modifiers::none()),
+        Command::Delete,
+        list_section,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("i", Modifiers::none()),
+        Command::ImportItems,
+        section,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("delete", Modifiers::none()),
+        Command::Delete,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("backspace", Modifiers::none()),
+        Command::Delete,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("r", Modifiers::none()),
+        Command::ResetBinding,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("r", Modifiers::shift()),
+        Command::ResetAllBindings,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("p", Modifiers::none()),
+        Command::EditBindingContext,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("c", Modifiers::none()),
+        Command::FilterByContext,
+        keybindings,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("f", Modifiers::none()),
+        Command::FocusSearch,
+        keybindings,
+    );
+
     layer
 }
 

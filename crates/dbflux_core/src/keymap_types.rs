@@ -247,6 +247,17 @@ pub enum Command {
     LoadMore,
     EditExpiry,
     CopyPreview,
+    /// Imports entries from a file into the list that has the keyboard (the
+    /// profile lists of the settings window).
+    ImportItems,
+    /// Puts the selected key binding back to its default keys.
+    ResetBinding,
+    /// Drops every key binding override.
+    ResetAllBindings,
+    /// Edits the context predicate of the selected key binding.
+    EditBindingContext,
+    /// Opens the context filter of the key bindings list.
+    FilterByContext,
 }
 
 impl Command {
@@ -482,6 +493,11 @@ impl Command {
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
             Command::CopyPreview => "Copy preview",
+            Command::ImportItems => "Import…",
+            Command::ResetBinding => "Reset binding",
+            Command::ResetAllBindings => "Reset all bindings",
+            Command::EditBindingContext => "Edit binding context",
+            Command::FilterByContext => "Filter by context",
         }
     }
 
@@ -671,6 +687,11 @@ impl Command {
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
             Command::CopyPreview => "copy_preview",
+            Command::ImportItems => "import_items",
+            Command::ResetBinding => "reset_binding",
+            Command::ResetAllBindings => "reset_all_bindings",
+            Command::EditBindingContext => "edit_binding_context",
+            Command::FilterByContext => "filter_by_context",
         }
     }
 
@@ -864,6 +885,11 @@ impl Command {
             Command::LoadMore,
             Command::EditExpiry,
             Command::CopyPreview,
+            Command::ImportItems,
+            Command::ResetBinding,
+            Command::ResetAllBindings,
+            Command::EditBindingContext,
+            Command::FilterByContext,
         ];
 
         #[cfg(feature = "mcp")]
@@ -1058,6 +1084,11 @@ impl Command {
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
             Command::CopyPreview => "Actions",
+            Command::ImportItems
+            | Command::ResetBinding
+            | Command::ResetAllBindings
+            | Command::EditBindingContext
+            | Command::FilterByContext => "Actions",
             Command::OpenPaneActions => "Actions",
         }
     }

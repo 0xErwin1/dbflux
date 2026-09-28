@@ -715,6 +715,18 @@ when no text field is being edited.
 | `Ctrl+w` / `Ctrl+q` | Close the settings window |
 | `Ctrl+s` | Save the section |
 | `Ctrl+h` / `Ctrl+l` | Move between the navigation and the section |
+| `n` / `d` / `i` | In a profile list (proxies, SSH tunnels, auth profiles, hooks, services, MCP): new, delete, import |
+
+In **Settings → Keybindings**, `Enter` or `Space` records new keys for the
+selected binding, `r` resets it, `p` edits its context, `Delete` or `Backspace`
+removes its shortcut, `Shift+r` resets every binding, `c` opens the context
+filter and `/` or `f` focuses the text filter. `Enter` on a dropdown field, such
+as the provider of an auth profile, opens its list with keyboard focus (see
+[Dropdowns](#dropdowns)). While a login waits for the browser, the Open browser,
+Copy URL and Cancel buttons are the row under the login button. On the About
+page, `j` / `k` move between its two links and `Enter` opens one. These keys,
+like the navigation keys, are listed under the Settings Window and Form
+Navigation contexts in **Settings → Keybindings** and can be rebound there.
 
 In the Connection Manager, `Ctrl+s` / `Cmd+s` saves the connection from
 anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and

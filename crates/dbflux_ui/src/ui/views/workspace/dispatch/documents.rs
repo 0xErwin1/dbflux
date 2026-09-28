@@ -190,8 +190,14 @@ impl Workspace {
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),
 
-            // Closing a window belongs to the settings window.
-            Command::CloseWindow => Some(false),
+            // Closing a window and the list and key binding actions of its
+            // sections belong to the settings window.
+            Command::CloseWindow
+            | Command::ImportItems
+            | Command::ResetBinding
+            | Command::ResetAllBindings
+            | Command::EditBindingContext
+            | Command::FilterByContext => Some(false),
 
             _ => None,
         }

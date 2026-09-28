@@ -747,6 +747,19 @@ cuando no se está editando ningún campo de texto.
 | `Ctrl+w` / `Ctrl+q` | Cerrar la ventana de Settings |
 | `Ctrl+s` | Guardar la sección |
 | `Ctrl+h` / `Ctrl+l` | Moverse entre la navegación y la sección |
+| `n` / `d` / `i` | En una lista de perfiles (proxies, túneles SSH, perfiles de autenticación, hooks, servicios, MCP): nuevo, eliminar, importar |
+
+En **Settings → Keybindings**, `Enter` o `Space` graban teclas nuevas para el
+binding seleccionado, `r` lo restablece, `p` edita su contexto, `Delete` o
+`Backspace` quitan su atajo, `Shift+r` restablece todos los bindings, `c` abre
+el filtro de contexto y `/` o `f` enfocan el filtro de texto. `Enter` sobre un
+campo desplegable, como el proveedor de un perfil de autenticación, abre su
+lista con el foco del teclado (ver [Desplegables](#desplegables)). Mientras un
+login espera al navegador, los botones Abrir navegador, Copiar URL y Cancelar
+forman la fila debajo del botón de login. En la página Acerca de, `j` / `k` se
+mueven entre sus dos enlaces y `Enter` abre uno. Estas teclas, como las de
+navegación, aparecen en los contextos Settings Window y Form Navigation de
+**Settings → Keybindings** y se pueden reasignar ahí.
 
 En el Connection Manager, `Ctrl+s` / `Cmd+s` guarda la conexión desde cualquier
 parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como**

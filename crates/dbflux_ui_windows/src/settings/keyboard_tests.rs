@@ -276,3 +276,141 @@ fn the_keybindings_editor_records_sequences_and_edits_predicates(cx: &mut TestAp
     window.update(|_, cx| keybindings.update(cx, |section, cx| section.reset_all(cx)));
     assert!(keymap_overrides().is_empty(), "the defaults are back");
 }
+
+fn proxies_focus(
+    settings: &Entity<SettingsCoordinator>,
+    window: &mut VisualTestContext,
+) -> super::proxies_section::ProxyFocus {
+    window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Proxies(section) => section.read(cx).proxy_focus,
+        _ => unreachable!("the proxies section is open"),
+    })
+}
+
+/// The section keys (`n` new, `d` delete, `i` import) are keymap commands of
+/// the Settings context: `n` opens a new profile form, the same key arriving
+/// without its binding does nothing, and a rebound key takes over.
+#[gpui::test]
+fn section_keys_run_through_the_keymap_and_follow_a_rebind(cx: &mut TestAppContext) {
+    use super::proxies_section::ProxyFocus;
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Proxies);
+    focus_content(&settings, window);
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::ProfileList);
+
+    window.update(|window, cx| {
+        settings.update(cx, |settings, cx| {
+            let event = KeyDownEvent {
+                keystroke: Keystroke::parse("n").expect("valid keystroke"),
+                is_held: false,
+                prefer_character_input: false,
+            };
+            settings.handle_key_event(&event, window, cx);
+        })
+    });
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::ProfileList,
+        "an `n` that no binding turned into a command does nothing"
+    );
+
+    window.simulate_keystrokes("n");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::Form,
+        "`n` opens the form of a new proxy"
+    );
+
+    window.simulate_keystrokes("escape");
+    assert_eq!(proxies_focus(&settings, window), ProxyFocus::ProfileList);
+
+    // The section keys carry their own predicate, and so does their slot.
+    let slot = BindingSlot::new(
+        ContextId::Settings,
+        Command::AddItem,
+        KeyChord::new("n", Modifiers::none()),
+    )
+    .with_predicate("Settings && focus == section && !Input");
+    let mut overrides = keymap_overrides();
+    overrides.set(slot, Some(KeySequence::parse("a").expect("valid sequence")));
+    window.update(|_, cx| apply_keymap_overrides(overrides, cx));
+    window.run_until_parked();
+
+    window.simulate_keystrokes("n");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::ProfileList,
+        "the old key no longer adds a proxy"
+    );
+
+    window.simulate_keystrokes("a");
+    assert_eq!(
+        proxies_focus(&settings, window),
+        ProxyFocus::Form,
+        "the new key adds one"
+    );
+}
+
+/// In the key bindings editor `c` opens the context filter with keyboard
+/// focus and Shift+R drops every override, as the Reset to defaults button.
+#[gpui::test]
+fn keybindings_keys_open_the_context_filter_and_reset_everything(cx: &mut TestAppContext) {
+    use dbflux_app::keymap::{BindingSlot, ContextId, KeyChord, KeySequence, Modifiers};
+    use dbflux_ui_base::keymap::{apply_keymap_overrides, keymap_overrides};
+
+    let (settings, window) = open_settings(cx, SettingsSectionId::Keybindings);
+    focus_content(&settings, window);
+
+    let keybindings = window.update(|_, cx| match &settings.read(cx).active_section_entity {
+        ActiveSettingsSection::Keybindings(section) => section.clone(),
+        _ => unreachable!("the keybindings section is open"),
+    });
+
+    window.simulate_keystrokes("c");
+    let (open, focused) = window.update(|window, cx| {
+        let filter = keybindings.read(cx).context_filter.read(cx);
+        (filter.is_open(), filter.is_focused(window))
+    });
+    assert!(open && focused, "`c` opens the context filter with focus");
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+
+    let slot = BindingSlot::new(
+        ContextId::Global,
+        Command::OpenAuditViewer,
+        KeyChord::new("a", Modifiers::primary_shift()),
+    );
+    let mut overrides = keymap_overrides();
+    overrides.set(
+        slot,
+        Some(KeySequence::parse("ctrl+k a").expect("valid sequence")),
+    );
+    window.update(|_, cx| {
+        apply_keymap_overrides(overrides.clone(), cx);
+        keybindings.update(cx, |section, _| section.overrides = overrides);
+    });
+
+    window.simulate_keystrokes("shift-r");
+    assert!(
+        keymap_overrides().is_empty(),
+        "Shift+R restores the defaults"
+    );
+}
+
+/// The About page's links take the keyboard: Down moves to View source and
+/// Enter opens it.
+#[gpui::test]
+fn the_about_links_open_from_the_keyboard(cx: &mut TestAppContext) {
+    let (settings, window) = open_settings(cx, SettingsSectionId::About);
+    focus_content(&settings, window);
+
+    window.simulate_keystrokes("j enter");
+
+    assert_eq!(
+        window.opened_url().as_deref(),
+        Some(env!("CARGO_PKG_REPOSITORY"))
+    );
+}

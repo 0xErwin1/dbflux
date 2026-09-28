@@ -200,7 +200,8 @@ el editor de código fuera de los modos Normal y Visual de Vim.
 **Restablecer.** Un binding modificado muestra una flecha que restablece sus
 teclas y su contexto por defecto (`r` sobre un binding seleccionado hace lo
 mismo, y `Delete` quita su atajo). **Restablecer predeterminados** en el pie
-descarta todas las modificaciones. El pie también muestra cuántos bindings están
+descarta todas las modificaciones, como `Shift+R` desde la lista. `c` abre el
+filtro de contexto. El pie también muestra cuántos bindings están
 modificados.
 
 Los cambios se aplican al instante en todas las ventanas, sin reiniciar. Solo se

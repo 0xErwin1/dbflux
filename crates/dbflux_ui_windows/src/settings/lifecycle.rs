@@ -462,9 +462,9 @@ impl SettingsCoordinator {
     }
 
     /// Runs a keymap command in the settings window: a window command, or a
-    /// FormNavigation command, which reaches the navigation or the active
-    /// section as the key their handlers take for it (see
-    /// [`form_navigation_key`]). Returns whether the command applied.
+    /// FormNavigation or section command, which reaches the navigation or the
+    /// active section as the key their handlers take for it (see
+    /// [`section_key`]). Returns whether the command applied.
     pub(super) fn handle_command(
         &mut self,
         command: Command,
@@ -475,7 +475,7 @@ impl SettingsCoordinator {
             return true;
         }
 
-        let Some(keystroke) = form_navigation_key(command) else {
+        let Some(keystroke) = section_key(command) else {
             return false;
         };
 
@@ -493,8 +493,8 @@ impl SettingsCoordinator {
     }
 
     /// A key typed while the settings window root itself holds focus (no
-    /// field is being edited). The keys the keymap's FormNavigation context
-    /// binds by default arrive as commands instead (see
+    /// field is being edited). The keys the keymap's FormNavigation and
+    /// Settings contexts bind by default arrive as commands instead (see
     /// [`Self::handle_command`]); one the user unbound is ignored here, so
     /// removing it in the keybindings editor really removes it.
     pub(super) fn handle_key_event(
@@ -505,7 +505,7 @@ impl SettingsCoordinator {
     ) {
         let root_focused = self.focus_handle.is_focused(window);
 
-        if root_focused && is_form_navigation_default(&key_chord_from_gpui(&event.keystroke)) {
+        if root_focused && is_section_key_default(&key_chord_from_gpui(&event.keystroke)) {
             return;
         }
 
@@ -674,9 +674,9 @@ impl SettingsCoordinator {
 }
 
 /// The key the settings navigation and sections handle for a FormNavigation
-/// command. Their handlers were written against keys; this is the one place
-/// that maps the keymap's commands onto them.
-fn form_navigation_key(command: Command) -> Option<gpui::Keystroke> {
+/// or section command. Their handlers were written against keys; this is the
+/// one place that maps the keymap's commands onto them.
+fn section_key(command: Command) -> Option<gpui::Keystroke> {
     let key = match command {
         Command::SelectNext => "down",
         Command::SelectPrev => "up",
@@ -692,20 +692,31 @@ fn form_navigation_key(command: Command) -> Option<gpui::Keystroke> {
         Command::Execute => "enter",
         Command::Cancel => "escape",
         Command::FocusSearch => "/",
+        Command::AddItem => "n",
+        Command::Delete => "d",
+        Command::ImportItems => "i",
+        Command::ResetBinding => "r",
+        Command::ResetAllBindings => "shift-r",
+        Command::EditBindingContext => "p",
+        Command::FilterByContext => "c",
         _ => return None,
     };
 
     gpui::Keystroke::parse(key).ok()
 }
 
-/// Whether `chord` is one of the keys the FormNavigation context binds by
-/// default, which the settings window only takes as commands.
-fn is_form_navigation_default(chord: &dbflux_app::keymap::KeyChord) -> bool {
-    dbflux_ui_base::keymap::default_keymap()
-        .layer(ContextId::FormNavigation)
-        .is_some_and(|layer| {
+/// Whether `chord` is one of the keys the FormNavigation or Settings context
+/// binds by default to a section command, which the settings window only
+/// takes as commands.
+fn is_section_key_default(chord: &dbflux_app::keymap::KeyChord) -> bool {
+    let keymap = dbflux_ui_base::keymap::default_keymap();
+
+    [ContextId::FormNavigation, ContextId::Settings]
+        .into_iter()
+        .filter_map(|context| keymap.layer(context))
+        .any(|layer| {
             layer.ordered_bindings().any(|(keys, command)| {
-                keys.is_single() && keys.first() == chord && form_navigation_key(command).is_some()
+                keys.is_single() && keys.first() == chord && section_key(command).is_some()
             })
         })
 }

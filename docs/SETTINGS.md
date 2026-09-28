@@ -191,7 +191,8 @@ outside Vim's Normal and Visual modes.
 
 **Resetting.** An overridden binding shows a reset arrow that restores its
 default keys and context (`r` on a selected binding does the same, and `Delete`
-removes its shortcut). **Reset to defaults** in the footer drops every override.
+removes its shortcut). **Reset to defaults** in the footer drops every override,
+as `Shift+R` does from the list. `c` opens the context filter.
 The footer also shows how many bindings are overridden.
 
 Changes apply at once in every window, without a restart. Only your overrides
