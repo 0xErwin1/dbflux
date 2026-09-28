@@ -3,11 +3,12 @@ use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{ChromeColors, FontSizes, Heights, Radii, Spacing};
 use crate::typography::AppFonts;
+use crate::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
-use gpui_component::input::{Editor, EditorState};
+use gpui_component::input::EditorState;
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -55,6 +56,8 @@ pub struct DocumentTree {
     id: ElementId,
     state: Entity<DocumentTreeState>,
     raw_json_input: Option<Entity<EditorState>>,
+    /// Vim mode for the raw JSON editor, created with it.
+    raw_json_vim: Option<VimBinding>,
     search_input: Option<Entity<InputState>>,
     _search_subscription: Option<Subscription>,
 }
@@ -69,6 +72,7 @@ impl DocumentTree {
             id: id.into(),
             state,
             raw_json_input: None,
+            raw_json_vim: None,
             search_input: None,
             _search_subscription: None,
         }
@@ -91,6 +95,8 @@ impl DocumentTree {
         });
 
         self.raw_json_input = Some(input.clone());
+        self.raw_json_vim = Some(VimBinding::new(input.clone(), window, cx));
+        VimBinding::follow_setting(self, input.entity_id(), cx);
         input
     }
 
@@ -170,6 +176,32 @@ impl Render for DocumentTree {
         } else {
             self.search_input.clone()
         };
+
+        // Vim's listeners on the raw JSON editor. In Insert mode the tree's
+        // Escape (`CloseSearch`) leaves Insert mode instead of handing the
+        // keyboard back to the tree.
+        let raw_json_editor = self.raw_json_vim.as_ref().map(|vim| {
+            let input = vim.input_id();
+            let container = VimBinding::wire(div(), input, cx);
+            let container = VimBinding::capture_action::<CloseSearch, _>(container, input, cx);
+
+            container
+                .size_full()
+                .flex()
+                .flex_col()
+                .p(Spacing::SM)
+                .child(
+                    div().flex_1().min_h_0().child(
+                        vim.editor(false)
+                            .w_full()
+                            .h_full()
+                            .font_family(AppFonts::MONO)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::BASE),
+                    ),
+                )
+                .children(vim.render_indicator(cx))
+        });
 
         let node_count = self.state.update(cx, |s, _| s.visible_node_count());
         let focus_handle = self.state.read(cx).focus_handle(cx);
@@ -403,23 +435,34 @@ impl Render for DocumentTree {
                             .with_sizing_behavior(ListSizingBehavior::Infer),
                         )
                     })
-                    .when_some(raw_json_input.filter(|_| !is_tree_mode), |d, input| {
-                        d.child(
-                            div().size_full().p(Spacing::SM).child(
-                                Editor::new(&input)
-                                    .w_full()
-                                    .h_full()
-                                    .font_family(AppFonts::MONO)
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_size(FontSizes::BASE),
-                            ),
-                        )
-                    }),
+                    .when_some(
+                        raw_json_editor.filter(|_| raw_json_input.is_some() && !is_tree_mode),
+                        |d, editor| d.child(editor),
+                    ),
             )
     }
 }
 
 impl EventEmitter<DocumentTreeEvent> for DocumentTree {}
+
+impl VimHost for DocumentTree {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.raw_json_vim
+            .as_ref()
+            .and_then(|vim| vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.raw_json_vim
+            .as_mut()
+            .and_then(|vim| vim.for_input_mut(input))
+    }
+    /// Render reloads the raw view from the documents whenever its text
+    /// differs, so an edit never sticks; Vim treats it as a viewer.
+    fn vim_read_only(&self, _input: EntityId, _cx: &App) -> bool {
+        true
+    }
+}
 
 fn render_toolbar(
     view_mode: DocumentViewMode,
@@ -832,5 +875,100 @@ mod tests {
         let en = dbflux_i18n::t!("document_tree.view.raw_json", locale = "en");
         let es = dbflux_i18n::t!("document_tree.view.raw_json", locale = "es");
         assert_ne!(en, es);
+    }
+}
+
+#[cfg(test)]
+mod vim_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{CloseSearch, DocumentTree};
+    use crate::components::document_tree::state::DocumentTreeState;
+    use dbflux_core::Value;
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::collections::BTreeMap;
+
+    /// A tree in its Raw JSON view with the keyboard in the editor, the
+    /// app's Escape binding for the tree, and Vim mode on.
+    fn raw_tree(cx: &mut TestAppContext) -> (Entity<DocumentTree>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, true);
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                CloseSearch,
+                Some(super::CONTEXT),
+            )]);
+        });
+
+        let (tree, window) = cx.add_window_view(|_window, cx| {
+            let state = cx.new(|cx| {
+                let mut state = DocumentTreeState::new(cx);
+                state.load_from_values(
+                    vec![(
+                        "doc".to_string(),
+                        Value::Document(BTreeMap::from([(
+                            "name".to_string(),
+                            Value::Text("alice".to_string()),
+                        )])),
+                    )],
+                    cx,
+                );
+                state.toggle_view_mode(cx);
+                state
+            });
+            DocumentTree::new("tree", state, cx)
+        });
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            let input = tree.read(cx).raw_json_input.clone().expect("raw editor");
+            input.update(cx, |state, cx| {
+                state.set_selected_range(0..0, cx);
+                state.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        (tree, window)
+    }
+
+    fn cursor_and_focus(
+        tree: &Entity<DocumentTree>,
+        window: &mut VisualTestContext,
+    ) -> (usize, bool) {
+        window.update(|window, cx| {
+            let input = tree.read(cx).raw_json_input.clone().expect("raw editor");
+            let state = input.read(cx);
+            (
+                state.cursor(),
+                gpui::Focusable::focus_handle(state, cx).is_focused(window),
+            )
+        })
+    }
+
+    /// `j` moves down the raw JSON, the first Escape leaves Insert mode in
+    /// the editor, and Escape in Normal mode hands the keyboard to the tree.
+    #[gpui::test]
+    fn the_raw_json_view_takes_vim_keys(cx: &mut TestAppContext) {
+        let (tree, window) = raw_tree(cx);
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        let (cursor, focused) = cursor_and_focus(&tree, window);
+        assert!(cursor > 0 && focused, "j moved down: {cursor}");
+
+        window.simulate_keystrokes("i escape");
+        window.run_until_parked();
+        assert!(
+            cursor_and_focus(&tree, window).1,
+            "the first Escape only leaves Insert mode"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!cursor_and_focus(&tree, window).1);
     }
 }
