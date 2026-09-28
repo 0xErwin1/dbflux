@@ -426,11 +426,13 @@ The query builders have keys of their own, listed under
 
 ## Query builders
 
-After `Ctrl+l` moves focus from a table's grid into its query builder, a
-cursor marks one row of the builder: the column list, a condition or group of
-the WHERE tree, a join, a grouping or sort row, an assignment or an execution
-option. The keys are listed under the Query Builder context in Settings >
-Keybindings.
+After `Ctrl+l` moves focus from a table's grid into its query builder, or from
+a collection's documents into the document builder, a cursor marks one row of
+the builder: the column list, a condition or group of the filter, a join, a
+grouping or sort row, an assignment or an execution option, and in the
+document builder the query name, a saved query, a projected field or a group
+stage row. The keys are listed under the Query Builder and Document Builder
+contexts in Settings > Keybindings.
 
 | Keys | Action |
 |------|--------|
@@ -443,10 +445,11 @@ Keybindings.
 | `a` | Add an entry to the row's list (a condition, a join, a sort key, an assignment) |
 | `Shift+a` | Add a group inside the row's filter group |
 | `x` / `d` | Remove the row |
-| `Alt+l` / `Alt+h` | Next / previous mode (SELECT, UPDATE, DELETE) |
+| `Shift+j` / `Shift+k` | Move a document sort key down / up |
+| `Alt+l` / `Alt+h` | Next / previous mode (SELECT, UPDATE, DELETE; Find, Aggregate) |
 | `Ctrl+Enter` | Run |
 | `Ctrl+s` | Save |
-| `m` / `Shift+F10` | Menu of the row's actions and the builder's own (Run, Open in Editor, Save, Reset, the modes, Close) |
+| `m` / `Shift+F10` | Menu of the row's actions and the builder's own (Run or Find, Open in Editor, Save, Reset or the saved queries, the modes, Close) |
 | `Escape` | Leave a field back to the rows, or go back to the grid |
 | `Ctrl+h` | Go back to the grid |
 
@@ -454,7 +457,10 @@ In a text field the letters are typed text and Escape returns to the rows. A
 dropdown opened with Enter takes the dropdown keys and gives the keyboard back
 to the builder when it closes. A run from the keyboard goes through the same
 confirmation and mutation policy as the Run button, so an UPDATE or DELETE
-without WHERE still asks first. macOS uses Cmd instead of Ctrl for
+without WHERE still asks first. In the document builder, Enter on a field
+opens the field picker with its search focused: type the path and press Enter.
+Enter on an operator opens the operator list, where `j`, `k` and Enter pick.
+A Find from the keyboard keeps the keyboard in the builder. macOS uses Cmd instead of Ctrl for
 `Ctrl+Enter` and `Ctrl+s`, and there `Alt+l` / `Alt+h` work only outside the
 text fields.
 

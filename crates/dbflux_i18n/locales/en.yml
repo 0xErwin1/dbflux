@@ -180,6 +180,8 @@ composites:
     add_group: "Add group"
     remove: "Remove"
     toggle: "Toggle"
+    move_up: "Move up"
+    move_down: "Move down"
   refresh_split_button:
     label: Refresh
 controls:

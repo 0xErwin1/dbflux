@@ -1883,6 +1883,8 @@ fn builder_rail_keys_drive_the_rail_and_leave_its_fields_their_letters() {
             ("shift-a", Command::AddGroup),
             ("x", Command::Delete),
             ("d", Command::Delete),
+            ("shift-k", Command::MoveSelectedUp),
+            ("shift-j", Command::MoveSelectedDown),
             ("m", Command::OpenPaneActions),
             ("shift-f10", Command::OpenPaneActions),
             ("alt-l", Command::NextPanelTab),

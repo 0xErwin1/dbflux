@@ -180,6 +180,8 @@ composites:
     add_group: "그룹 추가"
     remove: "제거"
     toggle: "전환"
+    move_up: "위로 이동"
+    move_down: "아래로 이동"
   refresh_split_button:
     label: 새로고침
 controls:

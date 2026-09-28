@@ -180,6 +180,8 @@ composites:
     add_group: "添加组"
     remove: "移除"
     toggle: "切换"
+    move_up: "上移"
+    move_down: "下移"
   refresh_split_button:
     label: 刷新
 controls:

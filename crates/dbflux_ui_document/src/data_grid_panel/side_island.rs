@@ -59,6 +59,7 @@ pub(crate) enum SideIsland {
     RowInspector,
     DocumentInspector,
     QueryBuilder,
+    DocumentBuilder,
 }
 
 impl DataGridPanel {
@@ -66,6 +67,10 @@ impl DataGridPanel {
     fn open_side_island(&self, cx: &App) -> Option<SideIsland> {
         if self.builder.builder_open && self.builder.builder_panel.is_some() {
             return Some(SideIsland::QueryBuilder);
+        }
+
+        if self.collection.builder.open && self.collection.builder.panel.is_some() {
+            return Some(SideIsland::DocumentBuilder);
         }
 
         if self.inspector.value_panel_open && self.inspector.value_panel.is_some() {
@@ -112,6 +117,12 @@ impl DataGridPanel {
                 .builder_panel
                 .as_ref()
                 .and_then(|panel| panel.read(cx).focus_handle.clone()),
+            SideIsland::DocumentBuilder => self
+                .collection
+                .builder
+                .panel
+                .as_ref()
+                .map(|panel| panel.read(cx).focus_handle(cx)),
         }
     }
 
@@ -134,8 +145,21 @@ impl DataGridPanel {
                     ContextId::QueryBuilder
                 })
             }
+            SideIsland::DocumentBuilder => {
+                let panel = self.collection.builder.panel.as_ref()?.read(cx);
+                Some(if panel.keyboard_menu_is_open() {
+                    ContextId::ContextMenu
+                } else {
+                    ContextId::DocumentBuilder
+                })
+            }
             _ => None,
         }
+    }
+
+    /// Whether the keyboard is in the document builder rail.
+    pub(super) fn keyboard_in_document_builder(&self, cx: &App) -> bool {
+        self.focused_side_island(cx) == Some(SideIsland::DocumentBuilder)
     }
 
     /// Hands a key to the builder rail holding the keyboard. `None` when
@@ -156,6 +180,12 @@ impl DataGridPanel {
             SideIsland::QueryBuilder => self
                 .builder
                 .builder_panel
+                .clone()?
+                .update(cx, |panel, cx| panel.keyboard_command(cmd, window, cx)),
+            SideIsland::DocumentBuilder => self
+                .collection
+                .builder
+                .panel
                 .clone()?
                 .update(cx, |panel, cx| panel.keyboard_command(cmd, window, cx)),
             _ => return None,
@@ -232,7 +262,10 @@ impl DataGridPanel {
             return None;
         };
 
-        if island == SideIsland::QueryBuilder {
+        if matches!(
+            island,
+            SideIsland::QueryBuilder | SideIsland::DocumentBuilder
+        ) {
             return self.dispatch_builder_rail_command(island, cmd, window, cx);
         }
 
@@ -303,7 +336,7 @@ impl DataGridPanel {
                 }
             }
             // The builder rails move a cursor instead.
-            SideIsland::QueryBuilder => {}
+            SideIsland::QueryBuilder | SideIsland::DocumentBuilder => {}
         }
     }
 }

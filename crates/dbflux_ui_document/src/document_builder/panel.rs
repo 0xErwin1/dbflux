@@ -140,6 +140,10 @@ pub struct DocumentBuilderPanel {
     pub(super) saved_menu_open: bool,
     /// Window bounds of the rail as last painted, so a picker opens inside it.
     pub(super) rail_bounds: Option<Bounds<Pixels>>,
+    /// Keyboard cursor over the rail's rows and its action menu.
+    pub(super) rail: dbflux_components::composites::RailNav<DocumentBuilderPanel>,
+    /// Where the cursor is drawn, taken at the start of each render.
+    pub(super) rail_mark: dbflux_components::composites::RailMark,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -223,6 +227,8 @@ impl DocumentBuilderPanel {
             saved_queries: Vec::new(),
             saved_menu_open: false,
             rail_bounds: None,
+            rail: Default::default(),
+            rail_mark: Default::default(),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -1163,11 +1169,17 @@ impl DocumentBuilderPanel {
         let subscription = cx.subscribe_in(
             &search,
             window,
-            |this, input, event: &InputEvent, _window, cx| match event {
+            |this, input, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => cx.notify(),
                 InputEvent::PressEnter { .. } => {
                     let query = input.read(cx).value().to_string();
                     this.pick_typed_path(&query, cx);
+
+                    // The search field goes away with the picker; the
+                    // keyboard goes back to the rail rather than nowhere.
+                    if this.picker.is_none() {
+                        this.focus_handle.focus(window, cx);
+                    }
                 }
                 InputEvent::Focus | InputEvent::Blur => {}
             },

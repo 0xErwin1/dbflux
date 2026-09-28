@@ -3,7 +3,7 @@
 //!
 //! The owner lists its rows ([`RailRow`]) from its state whenever a key
 //! arrives: a stable id, the fields of the row in reading order and what the
-//! row-wide keys do (toggle, add, add group, remove). [`rail_command`] moves a
+//! row-wide keys do (toggle, add, add group, remove, move). [`rail_command`] moves a
 //! cursor over those rows and works the field it points at: a text field
 //! takes keyboard focus, a dropdown opens with the keyboard, a button runs.
 //! The same function drives the rail's action menu, listing the cursor row's
@@ -33,6 +33,9 @@ const PAGE_ROWS: isize = 8;
 
 /// Something a key does to the rail's owner.
 pub type RailHandler<T> = Rc<dyn Fn(&mut T, &mut Window, &mut Context<T>)>;
+
+/// Moves a row by a number of places (negative is up).
+pub type RailMoveHandler<T> = Rc<dyn Fn(&mut T, isize, &mut Window, &mut Context<T>)>;
 
 /// What working a field (Enter) or a row action does.
 pub enum RailTarget<T: 'static> {
@@ -83,6 +86,8 @@ pub struct RailRow<T: 'static> {
     pub add_group: Option<RailTarget<T>>,
     /// X or D: removes the row.
     pub remove: Option<RailHandler<T>>,
+    /// Shift+J / Shift+K: moves the row down or up in its list.
+    pub moves: Option<RailMoveHandler<T>>,
 }
 
 impl<T: 'static> RailRow<T> {
@@ -94,6 +99,7 @@ impl<T: 'static> RailRow<T> {
             add: None,
             add_group: None,
             remove: None,
+            moves: None,
         }
     }
 
@@ -125,6 +131,14 @@ impl<T: 'static> RailRow<T> {
         handler: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
     ) -> Self {
         self.remove = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_move(
+        mut self,
+        handler: impl Fn(&mut T, isize, &mut Window, &mut Context<T>) + 'static,
+    ) -> Self {
+        self.moves = Some(Rc::new(handler));
         self
     }
 }
@@ -525,6 +539,15 @@ pub fn rail_command<T: RailOwner>(
             }
             RailOutcome::Handled
         }
+        Command::MoveSelectedUp | Command::MoveSelectedDown => {
+            let delta = if command == Command::MoveSelectedUp {
+                -1
+            } else {
+                1
+            };
+            move_row(this, &rows, delta, window, cx);
+            RailOutcome::Handled
+        }
         Command::OpenPaneActions => {
             open_menu(this, &rows, cx);
             RailOutcome::Handled
@@ -573,6 +596,31 @@ fn step_field<T: RailOwner>(this: &mut T, rows: &[RailRow<T>], delta: isize) -> 
     nav.place(rows, index);
 
     RailOutcome::Handled
+}
+
+/// Moves the cursor row by `delta` places and keeps the cursor on it.
+fn move_row<T: RailOwner>(
+    this: &mut T,
+    rows: &[RailRow<T>],
+    delta: isize,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) {
+    let Some(index) = this.rail_nav().resolve(rows) else {
+        return;
+    };
+    let Some(moves) = rows[index].moves.clone() else {
+        return;
+    };
+
+    moves(this, delta, window, cx);
+
+    let rows = this.rail_rows(cx);
+    if rows.is_empty() {
+        return;
+    }
+    let target = (index as isize + delta).clamp(0, rows.len() as isize - 1) as usize;
+    this.rail_nav().place(&rows, target);
 }
 
 /// After an add, puts the cursor on the last row that was not there
@@ -637,6 +685,34 @@ fn open_menu<T: RailOwner>(this: &mut T, rows: &[RailRow<T>], cx: &mut Context<T
                 )
                 .shortcut(this.rail_shortcut(Command::ExpandCollapse)),
             );
+        }
+        if let Some(moves) = row.moves.clone() {
+            for (id, label, delta, command) in [
+                (
+                    "rail-move-up",
+                    dbflux_i18n::t!("composites.rail.move_up"),
+                    -1,
+                    Command::MoveSelectedUp,
+                ),
+                (
+                    "rail-move-down",
+                    dbflux_i18n::t!("composites.rail.move_down"),
+                    1,
+                    Command::MoveSelectedDown,
+                ),
+            ] {
+                let moves = moves.clone();
+                entries.push(
+                    RailMenuEntry::new(
+                        id,
+                        label,
+                        RailTarget::run(move |this: &mut T, window, cx| {
+                            moves(this, delta, window, cx)
+                        }),
+                    )
+                    .shortcut(this.rail_shortcut(command)),
+                );
+            }
         }
         if let Some(remove) = row.remove.clone() {
             entries.push(

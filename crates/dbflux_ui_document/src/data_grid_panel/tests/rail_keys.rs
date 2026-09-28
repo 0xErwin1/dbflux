@@ -14,30 +14,37 @@ fn host_table_grid_with_rail(
 ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
     init_keyboard_runtime(cx);
     let app_state = isolated_test_app_state(cx);
+
+    host_in_rail(cx, move |window, cx| {
+        let source = DataSource::Table {
+            profile_id: Uuid::nil(),
+            database: Some("app".to_string()),
+            table: TableRef::with_schema("public", "users"),
+            pagination: Pagination::default(),
+            order_by: Vec::new(),
+            total_rows: Some(2),
+        };
+        cx.new(|cx| {
+            let mut panel =
+                DataGridPanel::new_internal(source, app_state, vec!["id".to_string()], window, cx);
+            panel.set_result(keyed_result(&["1", "2"]), cx);
+            panel
+        })
+    })
+}
+
+/// Hosts the grid `build` makes beside its inspector rail, as the workspace
+/// hosts it, with keyboard focus on the grid (its table when it has one).
+pub(crate) fn host_in_rail(
+    cx: &mut TestAppContext,
+    build: impl FnOnce(&mut gpui::Window, &mut gpui::App) -> gpui::Entity<DataGridPanel> + 'static,
+) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
     let slot: Rc<RefCell<Option<gpui::Entity<DataGridPanel>>>> = Rc::default();
 
     let (_, window) = cx.add_window_view({
         let slot = slot.clone();
         move |window, cx| {
-            let source = DataSource::Table {
-                profile_id: Uuid::nil(),
-                database: Some("app".to_string()),
-                table: TableRef::with_schema("public", "users"),
-                pagination: Pagination::default(),
-                order_by: Vec::new(),
-                total_rows: Some(2),
-            };
-            let panel = cx.new(|cx| {
-                let mut panel = DataGridPanel::new_internal(
-                    source,
-                    app_state,
-                    vec!["id".to_string()],
-                    window,
-                    cx,
-                );
-                panel.set_result(keyed_result(&["1", "2"]), cx);
-                panel
-            });
+            let panel = build(window, cx);
             slot.replace(Some(panel.clone()));
 
             let host = cx.new(|cx| {
@@ -73,15 +80,13 @@ fn host_table_grid_with_rail(
         .clone()
         .expect("the window builder stores the grid");
     window.update(|window, cx| {
-        let focus_handle = panel
-            .read(cx)
+        let grid = panel.read(cx);
+        let focus_handle = grid
             .grid_table
             .table_state
-            .clone()
-            .expect("the result builds a table")
-            .read(cx)
-            .focus_handle()
-            .clone();
+            .as_ref()
+            .map(|state| state.read(cx).focus_handle().clone())
+            .unwrap_or_else(|| grid.focus_handle.clone());
         focus_handle.focus(window, cx);
     });
     window.run_until_parked();
@@ -89,14 +94,17 @@ fn host_table_grid_with_rail(
     (panel, window)
 }
 
-fn keys(window: &mut VisualTestContext, keys: &str) {
+pub(crate) fn keys(window: &mut VisualTestContext, keys: &str) {
     for key in keys.split(' ') {
         window.simulate_keystrokes(key);
         window.run_until_parked();
     }
 }
 
-fn context(panel: &gpui::Entity<DataGridPanel>, window: &mut VisualTestContext) -> ContextId {
+pub(crate) fn context(
+    panel: &gpui::Entity<DataGridPanel>,
+    window: &mut VisualTestContext,
+) -> ContextId {
     window.update(|_, cx| panel.read(cx).active_context(cx))
 }
 

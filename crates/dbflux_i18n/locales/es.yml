@@ -180,6 +180,8 @@ composites:
     add_group: "Agregar grupo"
     remove: "Quitar"
     toggle: "Alternar"
+    move_up: "Subir"
+    move_down: "Bajar"
   refresh_split_button:
     label: Actualizar
 controls:

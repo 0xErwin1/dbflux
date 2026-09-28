@@ -8,6 +8,7 @@
 //! them. Nothing here depends on a particular driver.
 
 mod catalog;
+mod keyboard;
 mod model;
 mod panel;
 mod sync;

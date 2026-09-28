@@ -30,12 +30,14 @@ use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::Theme;
 
+use super::keyboard::row_id;
 use super::model::{
     AccumulatorDraft, AccumulatorOp, ConditionDraft, GroupDraft, GroupStageDraft, NodeDraft,
     NodeId, Operand, ProblemKind,
 };
 use super::panel::{DocumentBuilderPanel, PickTarget, is_valid_typed_path};
 use super::values::{ScalarKind, ValueEditor, ValueProblem, format_value, operator_ranges};
+use dbflux_components::composites::{RailOwner, rail_scroll_area, render_rail_menu};
 
 /// Keycap on the Find button: the rail runs on Cmd/Ctrl+Enter.
 #[cfg(target_os = "macos")]
@@ -82,8 +84,14 @@ pub(super) fn render_panel(
     let focus_handle = panel.focus_handle(cx);
     let entity = cx.entity();
 
+    let rows = panel.rail_rows(cx);
+    panel.rail_mark = panel
+        .rail
+        .mark(&rows, focus_handle.contains_focused(window, cx), cx);
+
     div()
         .id("doc-builder")
+        .relative()
         .flex()
         .flex_col()
         .size_full()
@@ -115,6 +123,7 @@ pub(super) fn render_panel(
             .left_0()
             .size_full(),
         )
+        .children(render_rail_menu(&panel.rail, "doc-builder-rail-menu", cx))
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +146,9 @@ fn render_header(
         dbflux_i18n::t!("document.collection.builder.saved.save_invalid")
     };
 
-    div()
+    panel
+        .rail_mark
+        .fixed_row(&row_id::name(), div())
         .flex()
         .flex_shrink_0()
         .items_center()
@@ -447,19 +458,20 @@ fn render_body(
         .relative()
         .flex_1()
         .min_h(px(0.))
-        .child(
+        .flex()
+        .flex_col()
+        .child(rail_scroll_area(
+            &panel.rail,
+            "doc-builder-sections",
             div()
-                .id("doc-builder-sections")
-                .size_full()
                 .flex()
                 .flex_col()
                 .gap(BuilderMetrics::SECTION_GAP)
                 .px(BuilderMetrics::RAIL_PADDING_X)
                 .py(BuilderMetrics::SECTION_GAP)
-                .overflow_y_scrollbar()
                 .children(conflict)
                 .children(cards),
-        )
+        ))
         .child(
             div()
                 .absolute()
@@ -612,29 +624,39 @@ fn render_conflict(
             theme.muted_foreground,
         ))
         .child(
-            div()
+            panel
+                .rail_mark
+                .row(&row_id::conflict(), div())
                 .flex()
                 .gap(Spacing::SM)
                 .child(
-                    Button::new(
-                        "doc-builder-keep-text",
-                        dbflux_i18n::t!("document.collection.builder.conflict.keep"),
-                    )
-                    .secondary()
-                    .disabled(!can_keep)
-                    .tab_stop(false)
-                    .on_click(cx.listener(|this, _, _, cx| this.keep_text(cx))),
+                    panel.rail_mark.ring_element(
+                        &row_id::conflict(),
+                        "keep",
+                        Button::new(
+                            "doc-builder-keep-text",
+                            dbflux_i18n::t!("document.collection.builder.conflict.keep"),
+                        )
+                        .secondary()
+                        .disabled(!can_keep)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| this.keep_text(cx))),
+                    ),
                 )
                 .child(
-                    Button::new(
-                        "doc-builder-rewrite",
-                        dbflux_i18n::t!("document.collection.builder.conflict.rewrite"),
-                    )
-                    .secondary()
-                    .icon(AppIcon::RotateCcw)
-                    .disabled(!can_rewrite)
-                    .tab_stop(false)
-                    .on_click(cx.listener(|this, _, _, cx| this.rewrite_from_builder(cx))),
+                    panel.rail_mark.ring_element(
+                        &row_id::conflict(),
+                        "rewrite",
+                        Button::new(
+                            "doc-builder-rewrite",
+                            dbflux_i18n::t!("document.collection.builder.conflict.rewrite"),
+                        )
+                        .secondary()
+                        .icon(AppIcon::RotateCcw)
+                        .disabled(!can_rewrite)
+                        .tab_stop(false)
+                        .on_click(cx.listener(|this, _, _, cx| this.rewrite_from_builder(cx))),
+                    ),
                 ),
         )
 }
@@ -706,11 +728,15 @@ fn render_group(
             .iter()
             .any(|problem| problem.node == group_id && problem.kind == ProblemKind::EmptyGroup);
 
-    let head = div()
+    let mark = &panel.rail_mark;
+    let group_row = row_id::group(group_id);
+
+    let head = mark
+        .row(&group_row, div())
         .flex()
         .items_center()
         .gap(BuilderMetrics::ROW_GAP)
-        .child(switch)
+        .child(mark.ring_element(&group_row, "combinator", switch))
         .child(caption(quantifier, theme.muted_foreground))
         .child(div().flex_1())
         .when(!is_root, |head| {
@@ -731,17 +757,25 @@ fn render_group(
     let actions = div()
         .flex()
         .gap(Spacing::SM)
-        .child(link_button(
-            format!("doc-builder-add-condition-{group_id}"),
-            dbflux_i18n::t!("document.collection.builder.filter.add_condition"),
-            AppIcon::Plus,
-            cx.listener(move |this, _, _, cx| this.add_condition(group_id, cx)),
+        .child(mark.ring_element(
+            &group_row,
+            "add-condition",
+            link_button(
+                format!("doc-builder-add-condition-{group_id}"),
+                dbflux_i18n::t!("document.collection.builder.filter.add_condition"),
+                AppIcon::Plus,
+                cx.listener(move |this, _, _, cx| this.add_condition(group_id, cx)),
+            ),
         ))
-        .child(link_button(
-            format!("doc-builder-add-group-{group_id}"),
-            dbflux_i18n::t!("document.collection.builder.filter.add_group"),
-            AppIcon::Plus,
-            cx.listener(move |this, _, _, cx| this.add_group(group_id, cx)),
+        .child(mark.ring_element(
+            &group_row,
+            "add-group",
+            link_button(
+                format!("doc-builder-add-group-{group_id}"),
+                dbflux_i18n::t!("document.collection.builder.filter.add_group"),
+                AppIcon::Plus,
+                cx.listener(move |this, _, _, cx| this.add_group(group_id, cx)),
+            ),
         ));
 
     div()
@@ -811,13 +845,22 @@ fn render_condition(
         _ => None,
     };
 
-    let row = div()
+    let mark = &panel.rail_mark;
+    let condition_row = row_id::condition(id);
+
+    let row = mark
+        .row(&condition_row, div())
         .flex()
         .items_center()
         .gap(BuilderMetrics::ROW_GAP)
         .child(field)
         .children(operator)
-        .child(div().flex_1().min_w_0().child(value))
+        .child(
+            mark.ring(&condition_row, "value", div())
+                .flex_1()
+                .min_w_0()
+                .child(value),
+        )
         .child(
             Button::new(
                 SharedString::from(format!("doc-builder-remove-{id}")),
@@ -845,13 +888,17 @@ fn render_condition(
                     .gap(Spacing::SM)
                     .child(caption(text, theme.danger))
                     .when(looks_like_object_id, |line| {
-                        line.child(link_button(
-                            format!("doc-builder-use-oid-{id}"),
-                            dbflux_i18n::t!("document.collection.builder.filter.use_object_id"),
-                            AppIcon::Hash,
-                            cx.listener(move |this, _, _, cx| {
-                                this.set_kind(id, ScalarKind::ObjectId, cx)
-                            }),
+                        line.child(mark.ring_element(
+                            &condition_row,
+                            "use-object-id",
+                            link_button(
+                                format!("doc-builder-use-oid-{id}"),
+                                dbflux_i18n::t!("document.collection.builder.filter.use_object_id"),
+                                AppIcon::Hash,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_kind(id, ScalarKind::ObjectId, cx)
+                                }),
+                            ),
                         ))
                     }),
             )
@@ -931,8 +978,9 @@ fn render_field_button(
         .children(tag.map(|tag| type_tag(tag, theme)))
         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(target, window, cx)));
 
-    div()
-        .relative()
+    panel
+        .rail_mark
+        .ring(&row_id::condition(id), "field", div())
         .w(FIELD_WIDTH)
         .flex_shrink_0()
         .child(trigger)
@@ -1065,7 +1113,9 @@ fn render_operator_select(
         deferred(popover).with_priority(2).into_any_element()
     });
 
-    div()
+    panel
+        .rail_mark
+        .ring(&row_id::condition(id), "operator", div())
         .id(SharedString::from(format!("doc-builder-operator-{id}")))
         .relative()
         .w(OPERATOR_WIDTH)
@@ -1100,7 +1150,9 @@ fn render_value(
         (ValueEditor::Nested, _) => div().into_any_element(),
         (ValueEditor::Chips(kind), Operand::Chips(items)) => {
             let chips = items.iter().enumerate().map(|(index, item)| {
-                div()
+                panel
+                    .rail_mark
+                    .row(&row_id::chip(id, index), div())
                     .id(SharedString::from(format!("doc-builder-chip-{id}-{index}")))
                     .flex()
                     .items_center()
@@ -1261,7 +1313,9 @@ fn render_projection(
         .iter()
         .enumerate()
         .map(|(index, field)| {
-            div()
+            panel
+                .rail_mark
+                .row(&row_id::projection_field(index), div())
                 .id(SharedString::from(format!(
                     "doc-builder-projection-{index}"
                 )))
@@ -1290,7 +1344,9 @@ fn render_projection(
         })
         .collect::<Vec<_>>();
 
-    let add = div()
+    let add = panel
+        .rail_mark
+        .row(&row_id::projection_add(), div())
         .relative()
         .child(link_button(
             "doc-builder-projection-add",
@@ -1309,7 +1365,13 @@ fn render_projection(
         .flex()
         .flex_col()
         .gap(BuilderMetrics::ROW_GAP)
-        .child(div().flex().child(switch))
+        .child(
+            panel
+                .rail_mark
+                .row(&row_id::projection_mode(), div())
+                .flex()
+                .child(switch),
+        )
         .child(
             div()
                 .flex()
@@ -1387,7 +1449,9 @@ fn render_sort(
                 label: SharedString::from(key.path.clone()),
             };
 
-            let row = div()
+            let row = panel
+                .rail_mark
+                .row(&row_id::sort(index), div())
                 .id(SharedString::from(format!("doc-builder-sort-{index}")))
                 .flex()
                 .items_center()
@@ -1448,7 +1512,10 @@ fn render_sort(
         })
         .collect::<Vec<_>>();
 
-    let add = div()
+    let paging_row = row_id::paging();
+    let add = panel
+        .rail_mark
+        .ring(&paging_row, "add", div())
         .relative()
         .child(link_button(
             "doc-builder-sort-add",
@@ -1458,20 +1525,24 @@ fn render_sort(
         ))
         .children(render_picker_if_open(panel, PickTarget::Sort, theme, cx));
 
-    let paging_field = |id: &'static str, label: String, state| {
+    let paging_field = |id: &'static str, field: &str, label: String, state| {
         div()
             .flex()
             .items_center()
             .gap(Spacing::XS)
             .child(caption(label.clone(), theme.muted_foreground))
             .child(
-                div()
+                panel
+                    .rail_mark
+                    .ring(&paging_row, field, div())
                     .w(PAGING_WIDTH)
                     .child(Input::new(state).id(id).small().aria_label(label).w_full()),
             )
     };
 
-    let paging = div()
+    let paging = panel
+        .rail_mark
+        .row(&paging_row, div())
         .flex()
         .items_center()
         .gap(Spacing::MD)
@@ -1479,11 +1550,13 @@ fn render_sort(
         .child(div().flex_1())
         .child(paging_field(
             "doc-builder-limit",
+            "limit",
             dbflux_i18n::t!("document.collection.builder.sort.limit"),
             &panel.limit_input,
         ))
         .child(paging_field(
             "doc-builder-skip",
+            "skip",
             dbflux_i18n::t!("document.collection.builder.sort.skip"),
             &panel.skip_input,
         ));
@@ -1582,7 +1655,9 @@ fn render_match_card(
     )
     .into_any_element();
 
-    let trailing = div()
+    let trailing = panel
+        .rail_mark
+        .row(&row_id::match_summary(), div())
         .flex()
         .items_center()
         .gap(Spacing::SM)
@@ -1730,7 +1805,13 @@ fn render_add_group_stage(
         .flex()
         .flex_col()
         .gap(Spacing::XS)
-        .child(div().flex().child(add))
+        .child(
+            panel
+                .rail_mark
+                .row(&row_id::group_stage_add(), div())
+                .flex()
+                .child(add),
+        )
         .child(caption(
             dbflux_i18n::t!("document.collection.builder.group.add_hint"),
             theme.muted_foreground,
@@ -1755,7 +1836,9 @@ fn render_group_stage(
                 .first()
                 .map(|first| crate::labels::document_field_type_tag(*first));
 
-            div()
+            panel
+                .rail_mark
+                .row(&row_id::group_key(index), div())
                 .id(SharedString::from(format!("doc-builder-group-key-{index}")))
                 .flex()
                 .items_center()
@@ -1782,7 +1865,9 @@ fn render_group_stage(
         })
         .collect::<Vec<_>>();
 
-    let add_key = div()
+    let add_key = panel
+        .rail_mark
+        .row(&row_id::group_key_add(), div())
         .debug_selector(|| "doc-builder-group-key-add".to_string())
         .relative()
         .child(link_button(
@@ -1834,6 +1919,8 @@ fn render_group_stage(
         })
         .map(|problem| crate::labels::document_builder_problem(&problem.kind));
 
+    let actions_row = row_id::group_stage_actions();
+
     div()
         .id("doc-builder-group-stage")
         .debug_selector(|| "doc-builder-group-stage".to_string())
@@ -1850,21 +1937,31 @@ fn render_group_stage(
             column.child(caption(text, theme.danger))
         })
         .child(
-            div()
+            panel
+                .rail_mark
+                .row(&actions_row, div())
                 .flex()
                 .gap(Spacing::SM)
-                .child(link_button(
-                    "doc-builder-acc-add",
-                    dbflux_i18n::t!("document.collection.builder.group.add_accumulator"),
-                    AppIcon::Plus,
-                    cx.listener(|this, _, _, cx| this.add_accumulator(cx)),
+                .child(panel.rail_mark.ring_element(
+                    &actions_row,
+                    "add-accumulator",
+                    link_button(
+                        "doc-builder-acc-add",
+                        dbflux_i18n::t!("document.collection.builder.group.add_accumulator"),
+                        AppIcon::Plus,
+                        cx.listener(|this, _, _, cx| this.add_accumulator(cx)),
+                    ),
                 ))
                 .child(div().flex_1())
-                .child(link_button(
-                    "doc-builder-group-remove",
-                    dbflux_i18n::t!("document.collection.builder.group.remove"),
-                    AppIcon::CircleX,
-                    cx.listener(|this, _, _, cx| this.remove_group_stage(cx)),
+                .child(panel.rail_mark.ring_element(
+                    &actions_row,
+                    "remove-stage",
+                    link_button(
+                        "doc-builder-group-remove",
+                        dbflux_i18n::t!("document.collection.builder.group.remove"),
+                        AppIcon::CircleX,
+                        cx.listener(|this, _, _, cx| this.remove_group_stage(cx)),
+                    ),
                 )),
         )
         .into_any_element()
@@ -1910,7 +2007,9 @@ fn render_accumulator(
         .get(&id)
         .map(|input| input.state.clone())
         .map(|state| {
-            div()
+            panel
+                .rail_mark
+                .ring(&row_id::accumulator(id), "name", div())
                 .w(ACCUMULATOR_NAME_WIDTH)
                 .flex_shrink_0()
                 .child(
@@ -1955,12 +2054,18 @@ fn render_accumulator(
         .flex_col()
         .gap(Spacing::XS)
         .child(
-            div()
+            panel
+                .rail_mark
+                .row(&row_id::accumulator(id), div())
                 .flex()
                 .items_center()
                 .gap(BuilderMetrics::ROW_GAP)
                 .children(name)
-                .child(op_switch)
+                .child(
+                    panel
+                        .rail_mark
+                        .ring_element(&row_id::accumulator(id), "op", op_switch),
+                )
                 .child(field)
                 .child(
                     Button::new(
@@ -2032,7 +2137,9 @@ fn render_accumulator_field(
         .children(tag.map(|tag| type_tag(tag, theme)))
         .on_click(cx.listener(move |this, _, window, cx| this.open_picker(target, window, cx)));
 
-    div()
+    panel
+        .rail_mark
+        .ring(&row_id::accumulator(id), "field", div())
         .relative()
         .flex_1()
         .min_w_0()
@@ -2156,6 +2263,8 @@ fn render_saved_menu_if_open(
 
             let row_selector = format!("doc-builder-saved-{}", entry.id);
 
+            let saved_row = row_id::saved(&entry.id);
+
             div()
                 .id(SharedString::from(row_selector.clone()))
                 .debug_selector(move || row_selector)
@@ -2167,6 +2276,7 @@ fn render_saved_menu_if_open(
                 .cursor_pointer()
                 .hover(|row| row.bg(theme.accent.opacity(0.15)))
                 .when(loaded, |row| row.bg(theme.accent.opacity(0.1)))
+                .map(|row| panel.rail_mark.fixed_row(&saved_row, row))
                 .on_click(cx.listener(move |this, _, _, cx| this.request_open_saved(&open_id, cx)))
                 .child(
                     div()
@@ -2178,17 +2288,21 @@ fn render_saved_menu_if_open(
                 )
                 .child(type_tag(mode_label.to_string(), theme))
                 .child(
-                    Button::new(
-                        SharedString::from(format!("doc-builder-saved-remove-{}", entry.id)),
-                        dbflux_i18n::t!("document.collection.builder.saved.remove"),
-                    )
-                    .icon(AppIcon::Delete)
-                    .icon_only()
-                    .tab_stop(false)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.request_delete_saved(&remove_id, cx);
-                    })),
+                    panel.rail_mark.ring_element(
+                        &saved_row,
+                        "delete",
+                        Button::new(
+                            SharedString::from(format!("doc-builder-saved-remove-{}", entry.id)),
+                            dbflux_i18n::t!("document.collection.builder.saved.remove"),
+                        )
+                        .icon(AppIcon::Delete)
+                        .icon_only()
+                        .tab_stop(false)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.request_delete_saved(&remove_id, cx);
+                        })),
+                    ),
                 )
                 .into_any_element()
         })

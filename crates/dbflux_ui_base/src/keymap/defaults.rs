@@ -1622,10 +1622,10 @@ fn inspector_layer() -> KeymapLayer {
 /// into it: J and K move between its rows, H and L between the fields of a
 /// row, Enter or I work the field (type in it, open its list, press it),
 /// Space toggles the row's switch, A and Shift+A add an entry or a group, X
-/// or D remove the row, M lists every action of the rail, Alt+H / Alt+L
-/// switch its mode. The default predicate keeps these letters out of a text
-/// field or a dropdown inside the rail; Escape, Ctrl+H and the chords work
-/// from those too.
+/// or D remove the row, Shift+J / Shift+K move it (document sort keys), M
+/// lists every action of the rail, Alt+H / Alt+L switch its mode. The
+/// default predicate keeps these letters out of a text field or a dropdown
+/// inside the rail; Escape, Ctrl+H and the chords work from those too.
 fn builder_rail_layer(context: ContextId) -> KeymapLayer {
     let mut layer = KeymapLayer::new(context);
 
@@ -1714,6 +1714,14 @@ fn builder_rail_layer(context: ContextId) -> KeymapLayer {
     layer.bind(KeyChord::new("a", Modifiers::shift()), Command::AddGroup);
     layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
     layer.bind(KeyChord::new("d", Modifiers::none()), Command::Delete);
+    layer.bind(
+        KeyChord::new("k", Modifiers::shift()),
+        Command::MoveSelectedUp,
+    );
+    layer.bind(
+        KeyChord::new("j", Modifiers::shift()),
+        Command::MoveSelectedDown,
+    );
 
     layer.bind(
         KeyChord::new("m", Modifiers::none()),

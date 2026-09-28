@@ -49,8 +49,8 @@ pub use notification_center::{
     NotificationRow,
 };
 pub use rail_nav::{
-    RailHandler, RailMark, RailMenuEntry, RailNav, RailOutcome, RailOwner, RailRow, RailTarget,
-    rail_command, rail_scroll_area, render_rail_menu,
+    RailHandler, RailMark, RailMenuEntry, RailMoveHandler, RailNav, RailOutcome, RailOwner,
+    RailRow, RailTarget, rail_command, rail_scroll_area, render_rail_menu,
 };
 pub use refresh_split_button::{refresh_policy_label, refresh_split_button};
 pub use shell_bar::{BellUrgency, CommandSearch, NotificationBell};

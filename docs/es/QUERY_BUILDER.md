@@ -242,6 +242,17 @@ reemplaza esa consulta. **Consultas guardadas** las lista; al abrir una se
 carga en el modo en que se guardó. Abrir un find guardado reemplaza los cuatro
 campos, incluidas las cláusulas que el constructor no puede mostrar.
 
+### Teclado
+
+`Ctrl+l` desde los documentos de la colección lleva el teclado al constructor,
+con las teclas del constructor SQL (ver [Teclado](#teclado)). Enter sobre un
+campo abre el selector de campos con su búsqueda enfocada: escribe la ruta y
+pulsa Enter. Enter sobre un operador abre la lista de operadores, donde `j`,
+`k` y Enter eligen. `Shift+j` y `Shift+k` mueven una clave de orden, `Alt+l` y
+`Alt+h` cambian entre Find y Aggregate, y `m` lista Find o Run pipeline, Open
+in editor, Save, las consultas guardadas y los modos. La lista completa está en
+[Constructores de consultas](KEYBOARD.md#constructores-de-consultas).
+
 ### Limitaciones
 
 - Un valor de texto de 24 dígitos hexadecimales se ejecuta como ObjectId,

@@ -5295,7 +5295,7 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 
 #[cfg(test)]
 mod tests {
-    mod rail_keys;
+    pub(crate) mod rail_keys;
 
     use super::{DataGridEvent, DataGridPanel, DataSource, GridState, MutationIntent, MutationRun};
     use dbflux_app::keymap::Command;

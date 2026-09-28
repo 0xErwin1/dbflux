@@ -392,25 +392,29 @@ impl Workspace {
                 }
             }
 
-            Command::MoveSelectedUp => {
-                if self.focus_target == FocusTarget::Sidebar {
+            Command::MoveSelectedUp => Some(match self.focus_target {
+                FocusTarget::Sidebar => {
                     self.sidebar
                         .update(cx, |s, cx| s.move_selected_items(-1, cx));
-                    Some(true)
-                } else {
-                    Some(false)
+                    true
                 }
-            }
+                FocusTarget::Document => self
+                    .tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+                FocusTarget::BackgroundTasks => false,
+            }),
 
-            Command::MoveSelectedDown => {
-                if self.focus_target == FocusTarget::Sidebar {
+            Command::MoveSelectedDown => Some(match self.focus_target {
+                FocusTarget::Sidebar => {
                     self.sidebar
                         .update(cx, |s, cx| s.move_selected_items(1, cx));
-                    Some(true)
-                } else {
-                    Some(false)
+                    true
                 }
-            }
+                FocusTarget::Document => self
+                    .tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+                FocusTarget::BackgroundTasks => false,
+            }),
 
             // Paging belongs to the focused document (a side panel it
             // draws, a builder rail); the other panes have no pages.
@@ -716,6 +720,8 @@ mod side_island_tests {
             Command::AddGroup,
             Command::PageDown,
             Command::PageUp,
+            Command::MoveSelectedUp,
+            Command::MoveSelectedDown,
         ] {
             window.update(|window, cx| {
                 workspace.update(cx, |workspace, cx| workspace.dispatch(command, window, cx));

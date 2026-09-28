@@ -447,10 +447,13 @@ Los constructores de consultas tienen teclas propias, descritas en
 ## Constructores de consultas
 
 Después de que `Ctrl+l` mueve el foco desde la grilla de una tabla a su
-constructor de consultas, un cursor marca una fila del constructor: la lista de
-columnas, una condición o grupo del árbol WHERE, un join, una fila de
-agrupación u orden, una asignación o una opción de ejecución. Las teclas
-aparecen en el contexto Query Builder de Settings > Keybindings.
+constructor de consultas, o desde los documentos de una colección al
+constructor de documentos, un cursor marca una fila del constructor: la lista
+de columnas, una condición o grupo del filtro, un join, una fila de agrupación
+u orden, una asignación o una opción de ejecución, y en el constructor de
+documentos el nombre de la consulta, una consulta guardada, un campo
+proyectado o una fila de la etapa de grupo. Las teclas aparecen en los
+contextos Query Builder y Document Builder de Settings > Keybindings.
 
 | Teclas | Acción |
 |--------|--------|
@@ -463,10 +466,11 @@ aparecen en el contexto Query Builder de Settings > Keybindings.
 | `a` | Agregar una entrada a la lista de la fila (una condición, un join, una clave de orden, una asignación) |
 | `Shift+a` | Agregar un grupo dentro del grupo de filtros de la fila |
 | `x` / `d` | Quitar la fila |
-| `Alt+l` / `Alt+h` | Modo siguiente / anterior (SELECT, UPDATE, DELETE) |
+| `Shift+j` / `Shift+k` | Bajar / subir una clave de orden de documentos |
+| `Alt+l` / `Alt+h` | Modo siguiente / anterior (SELECT, UPDATE, DELETE; Find, Aggregate) |
 | `Ctrl+Enter` | Ejecutar |
 | `Ctrl+s` | Guardar |
-| `m` / `Shift+F10` | Menú con las acciones de la fila y las del constructor (Run, Open in Editor, Save, Reset, los modos, Close) |
+| `m` / `Shift+F10` | Menú con las acciones de la fila y las del constructor (Run o Find, Open in Editor, Save, Reset o las consultas guardadas, los modos, Close) |
 | `Escape` | Salir de un campo a las filas, o volver a la grilla |
 | `Ctrl+h` | Volver a la grilla |
 
@@ -474,7 +478,11 @@ En un campo de texto las letras se escriben y Escape vuelve a las filas. Un
 desplegable abierto con Enter responde a las teclas de los desplegables y
 devuelve el teclado al constructor al cerrarse. Una ejecución desde el teclado
 pasa por la misma confirmación y política de mutaciones que el botón Run, así
-que un UPDATE o DELETE sin WHERE sigue pidiendo confirmación. macOS usa Cmd en
+que un UPDATE o DELETE sin WHERE sigue pidiendo confirmación. En el
+constructor de documentos, Enter sobre un campo abre el selector de campos con
+su búsqueda enfocada: escribe la ruta y pulsa Enter. Enter sobre un operador
+abre la lista de operadores, donde `j`, `k` y Enter eligen. Un Find desde el
+teclado deja el teclado en el constructor. macOS usa Cmd en
 lugar de Ctrl para `Ctrl+Enter` y `Ctrl+s`, y allí `Alt+l` / `Alt+h` funcionan
 solo fuera de los campos de texto.
 
