@@ -1807,23 +1807,24 @@ impl CodeDocument {
             }
             Command::FocusDown => false,
 
-            // Layout toggles
+            // Layout toggles: the header's hide and maximize buttons.
             Command::ToggleEditor => {
-                self.layout = match self.layout {
-                    SqlQueryLayout::EditorOnly => SqlQueryLayout::Split,
-                    _ => SqlQueryLayout::EditorOnly,
-                };
-                cx.notify();
+                if self.layout == SqlQueryLayout::EditorOnly {
+                    self.layout = SqlQueryLayout::Split;
+                    cx.notify();
+                } else {
+                    self.hide_results_from_keyboard(window, cx);
+                }
                 true
             }
             Command::ToggleResults | Command::TogglePanel => {
-                self.layout = match self.layout {
-                    SqlQueryLayout::ResultsOnly => SqlQueryLayout::Split,
-                    _ => SqlQueryLayout::ResultsOnly,
-                };
-                cx.notify();
+                self.toggle_maximize_results(cx);
                 true
             }
+
+            Command::NextResultTab => self.step_result_tab(true, window, cx),
+            Command::PrevResultTab => self.step_result_tab(false, window, cx),
+            Command::CloseResultTab => self.close_active_result_tab(window, cx),
 
             // History panel commands
             Command::ToggleHistoryDropdown => {

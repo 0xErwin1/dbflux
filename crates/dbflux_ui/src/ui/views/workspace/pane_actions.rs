@@ -214,7 +214,7 @@ mod tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::PaneActionsMenu;
-    use crate::keymap::{Command, FocusTarget};
+    use crate::keymap::{Command, CommandDispatcher as _, FocusTarget};
     use crate::ui::document::{CodeDocument, Tab};
     use crate::ui::views::workspace::Workspace;
     use dbflux_ui_base::AppStateEntity;
@@ -401,6 +401,30 @@ mod tests {
             Some("run"),
             "Enter presses the focused pane-actions button"
         );
+    }
+
+    /// The result tab entries run their commands through the workspace, like
+    /// their keys: the commands reach the active document, which reports
+    /// that a query without results has no tab to switch or close.
+    #[gpui::test]
+    fn result_tab_commands_reach_the_active_document(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        let handled = window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                workspace.new_query_tab(window, cx);
+
+                [
+                    Command::NextResultTab,
+                    Command::PrevResultTab,
+                    Command::CloseResultTab,
+                ]
+                .map(|command| workspace.dispatch(command, window, cx))
+            })
+        });
+
+        assert_eq!(handled, [false, false, false]);
     }
 
     fn action(id: &'static str, enabled: bool) -> PaneAction {

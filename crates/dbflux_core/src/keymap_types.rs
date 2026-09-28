@@ -69,6 +69,12 @@ pub enum Command {
     ExportResults,
     /// Clears the WHERE filter of a table and reloads its rows.
     ClearFilter,
+    /// Shows the next result tab of a query document, wrapping at the end.
+    NextResultTab,
+    /// Shows the previous result tab of a query document, wrapping at the start.
+    PrevResultTab,
+    /// Closes the result tab a query document shows.
+    CloseResultTab,
     ResultsNextPage,
     ResultsPrevPage,
     FocusToolbar,
@@ -293,6 +299,9 @@ impl Command {
 
             Command::ExportResults => "Export results",
             Command::ClearFilter => "Clear filter",
+            Command::NextResultTab => "Next result tab",
+            Command::PrevResultTab => "Previous result tab",
+            Command::CloseResultTab => "Close result tab",
             Command::ResultsNextPage => "Results next page",
             Command::ResultsPrevPage => "Results previous page",
             Command::FocusToolbar => "Focus toolbar",
@@ -450,6 +459,9 @@ impl Command {
 
             Command::ExportResults => "export_results",
             Command::ClearFilter => "clear_filter",
+            Command::NextResultTab => "next_result_tab",
+            Command::PrevResultTab => "prev_result_tab",
+            Command::CloseResultTab => "close_result_tab",
             Command::ResultsNextPage => "results_next_page",
             Command::ResultsPrevPage => "results_prev_page",
             Command::FocusToolbar => "focus_toolbar",
@@ -624,6 +636,9 @@ impl Command {
             Command::ToggleComment,
             Command::ExportResults,
             Command::ClearFilter,
+            Command::NextResultTab,
+            Command::PrevResultTab,
+            Command::CloseResultTab,
             Command::ResultsNextPage,
             Command::ResultsPrevPage,
             Command::FocusToolbar,
@@ -776,6 +791,9 @@ impl Command {
 
             Command::ExportResults
             | Command::ClearFilter
+            | Command::NextResultTab
+            | Command::PrevResultTab
+            | Command::CloseResultTab
             | Command::ResultsNextPage
             | Command::ResultsPrevPage
             | Command::FocusToolbar

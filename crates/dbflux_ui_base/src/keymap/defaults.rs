@@ -505,6 +505,15 @@ fn results_layer() -> KeymapLayer {
         Command::ResultsPrevPage,
     );
 
+    // Result tabs of a query document: Alt with the in-pane h / l moves
+    // between them, Alt+W closes the one shown (Ctrl+W closes the document).
+    layer.bind(KeyChord::new("l", Modifiers::alt()), Command::NextResultTab);
+    layer.bind(KeyChord::new("h", Modifiers::alt()), Command::PrevResultTab);
+    layer.bind(
+        KeyChord::new("w", Modifiers::alt()),
+        Command::CloseResultTab,
+    );
+
     // Refresh the focused document. `r` stays Rename in this layer.
     layer.bind(
         KeyChord::new("f5", Modifiers::none()),

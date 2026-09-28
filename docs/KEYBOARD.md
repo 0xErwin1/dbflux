@@ -39,8 +39,8 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+b` / `Cmd+b` | Toggle sidebar |
 | `Ctrl+m` | Open tab context menu |
 | `Ctrl+,` / `Cmd+,` | Open settings |
-| `Ctrl+Shift+E` / `Cmd+Shift+E` | Show or hide the editor panel |
-| `Ctrl+Shift+R` / `Cmd+Shift+R` | Show or hide the results panel |
+| `Ctrl+Shift+E` / `Cmd+Shift+E` | Hide or show the results of a query document, leaving the editor alone |
+| `Ctrl+Shift+R` / `Cmd+Shift+R` | Maximize the results of a query document over the editor, or restore the split |
 | `Ctrl+Shift+T` / `Cmd+Shift+T` | Show or hide the background tasks panel |
 | `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Show the Connections / Scripts / Dashboards view of the sidebar |
 | `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the notifications center |
@@ -119,8 +119,10 @@ presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, F
 history, Explain, Chart, Refresh and the auto-refresh interval, each with its
 shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
 [context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
-the interval list with keyboard focus (see [Dropdowns](#dropdowns)). The menu is
-also in the command palette as **Open pane actions**.
+the interval list with keyboard focus (see [Dropdowns](#dropdowns)). While the
+query has results, the menu goes on with the results header: Next and Previous
+result tab, Close result tab, Maximize (Restore) results and Hide (Show)
+results. The menu is also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 
@@ -284,6 +286,8 @@ A read-only delete does not change the clipboard.
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
+| `Alt+l` / `Alt+h` | Next / previous result tab of a query, wrapping at either end |
+| `Alt+w` | Close the result tab shown; the editor gets focus when it was the last |
 | `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Open the export menu: the context menu keys move through its save and copy formats, `Enter` runs one, `Escape` closes it |
 | `f` | Focus toolbar |
@@ -297,7 +301,7 @@ A read-only delete does not change the clipboard.
 | `v` | Toggle the value panel for the selected cell |
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
-| `z` | Toggle panel collapse |
+| `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer in the table, maximize, hide) with their shortcuts |
 
 ## Schema diagram

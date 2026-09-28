@@ -1129,6 +1129,13 @@ document:
       open_in_chart: Open current query in a chart document
       run_in_new_tab: Run in new tab
       auto_refresh_interval: "Auto-refresh interval…"
+      next_result_tab: "Next result tab"
+      previous_result_tab: "Previous result tab"
+      close_result_tab: "Close result tab"
+      maximize_results: "Maximize results"
+      restore_results: "Restore results"
+      hide_results: "Hide results"
+      show_results: "Show results"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -3505,6 +3512,9 @@ settings:
       toggle_comment: Toggle line comment
       export_results: Export results
       clear_filter: Clear filter
+      next_result_tab: Next result tab
+      prev_result_tab: Previous result tab
+      close_result_tab: Close result tab
       results_next_page: Results next page
       results_prev_page: Results previous page
       focus_toolbar: Focus toolbar

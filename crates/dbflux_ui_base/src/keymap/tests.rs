@@ -1768,3 +1768,27 @@ fn shift_f10_opens_the_pane_actions_from_the_code_editor_text() {
         );
     }
 }
+
+/// A query's result tabs are switched and closed from the results area, on
+/// the grid itself too: `Alt+l` / `Alt+h` move to the next / previous tab and
+/// `Alt+w` closes the one shown.
+#[test]
+fn alt_keys_switch_and_close_result_tabs_from_the_results() {
+    let keymap = native_keymap();
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let grid = element_stack(results.clone(), &[data_table::CONTEXT]);
+
+    for stack in [vec![results], grid] {
+        for (keys, command) in [
+            ("alt-l", Command::NextResultTab),
+            ("alt-h", Command::PrevResultTab),
+            ("alt-w", Command::CloseResultTab),
+        ] {
+            let action = top_action(&keymap, keys, &stack).expect("bound");
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {stack:?}"
+            );
+        }
+    }
+}

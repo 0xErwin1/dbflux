@@ -1129,6 +1129,13 @@ document:
       open_in_chart: 현재 쿼리를 차트 문서에서 열기
       run_in_new_tab: 새 탭에서 실행
       auto_refresh_interval: "자동 새로고침 간격…"
+      next_result_tab: "다음 결과 탭"
+      previous_result_tab: "이전 결과 탭"
+      close_result_tab: "결과 탭 닫기"
+      maximize_results: "결과 최대화"
+      restore_results: "결과 복원"
+      hide_results: "결과 숨기기"
+      show_results: "결과 표시"
     vim:
       normal: "노멀"
       insert: "삽입"
@@ -3505,6 +3512,9 @@ settings:
       toggle_comment: 주석 전환
       export_results: 결과 내보내기
       clear_filter: 필터 지우기
+      next_result_tab: 다음 결과 탭
+      prev_result_tab: 이전 결과 탭
+      close_result_tab: 결과 탭 닫기
       results_next_page: 결과 다음 페이지
       results_prev_page: 결과 이전 페이지
       focus_toolbar: 도구 모음 포커스

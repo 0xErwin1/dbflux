@@ -1129,6 +1129,13 @@ document:
       open_in_chart: Abrir la consulta actual en un documento de gráfico
       run_in_new_tab: Ejecutar en una pestaña nueva
       auto_refresh_interval: "Intervalo de actualización automática…"
+      next_result_tab: "Siguiente pestaña de resultados"
+      previous_result_tab: "Pestaña de resultados anterior"
+      close_result_tab: "Cerrar pestaña de resultados"
+      maximize_results: "Maximizar resultados"
+      restore_results: "Restaurar resultados"
+      hide_results: "Ocultar resultados"
+      show_results: "Mostrar resultados"
     vim:
       normal: "NORMAL"
       insert: "INSERTAR"
@@ -3505,6 +3512,9 @@ settings:
       toggle_comment: Alternar comentario
       export_results: Exportar resultados
       clear_filter: Limpiar filtro
+      next_result_tab: Siguiente pestaña de resultados
+      prev_result_tab: Pestaña de resultados anterior
+      close_result_tab: Cerrar pestaña de resultados
       results_next_page: "Resultados: página siguiente"
       results_prev_page: "Resultados: página anterior"
       focus_toolbar: Enfocar barra de herramientas

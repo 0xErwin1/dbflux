@@ -136,7 +136,11 @@ impl Workspace {
             | Command::StepOut
             | Command::TriggerCompletion
             // The filter a table shows belongs to its document.
-            | Command::ClearFilter => Some(
+            | Command::ClearFilter
+            // So do the result tabs of a query.
+            | Command::NextResultTab
+            | Command::PrevResultTab
+            | Command::CloseResultTab => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

@@ -1129,6 +1129,13 @@ document:
       open_in_chart: 在图表文档中打开当前查询
       run_in_new_tab: 在新标签页中运行
       auto_refresh_interval: 自动刷新间隔…
+      next_result_tab: "下一个结果标签页"
+      previous_result_tab: "上一个结果标签页"
+      close_result_tab: "关闭结果标签页"
+      maximize_results: "最大化结果"
+      restore_results: "还原结果"
+      hide_results: "隐藏结果"
+      show_results: "显示结果"
     vim:
       normal: "普通"
       insert: "插入"
@@ -3505,6 +3512,9 @@ settings:
       toggle_comment: 切换注释
       export_results: 导出结果
       clear_filter: 清除筛选
+      next_result_tab: 下一个结果标签页
+      prev_result_tab: 上一个结果标签页
+      close_result_tab: 关闭结果标签页
       results_next_page: 结果下一页
       results_prev_page: 结果上一页
       focus_toolbar: 聚焦工具栏

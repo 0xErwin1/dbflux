@@ -164,6 +164,100 @@ impl CodeDocument {
             );
         }
 
+        actions.extend(self.results_pane_actions());
+
+        actions
+    }
+
+    /// The results header as pane actions: the result tabs (switch, close)
+    /// and the maximize and hide buttons, while there are results to show.
+    fn results_pane_actions(&self) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        let mut actions = Vec::new();
+        let tab_count = self.result_tabs.result_tabs.len();
+
+        if tab_count > 0 {
+            actions.push(
+                PaneAction::command(
+                    "next-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.next_result_tab"),
+                    Command::NextResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::ChevronRight)
+                .enabled(tab_count > 1),
+            );
+            actions.push(
+                PaneAction::command(
+                    "previous-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.previous_result_tab"),
+                    Command::PrevResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::ChevronLeft)
+                .enabled(tab_count > 1),
+            );
+            actions.push(
+                PaneAction::command(
+                    "close-result-tab",
+                    dbflux_i18n::t!("document.code.toolbar.close_result_tab"),
+                    Command::CloseResultTab,
+                    ContextId::Results,
+                )
+                .icon(AppIcon::CircleX),
+            );
+        }
+
+        if tab_count == 0 && self.execution.live_output.is_none() {
+            return actions;
+        }
+
+        let (maximize_label, maximize_icon) = if self.results_maximized {
+            (
+                dbflux_i18n::t!("document.code.toolbar.restore_results"),
+                AppIcon::Minimize2,
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.code.toolbar.maximize_results"),
+                AppIcon::Maximize2,
+            )
+        };
+        actions.push(
+            PaneAction::command(
+                "maximize-results",
+                maximize_label,
+                Command::ToggleResults,
+                ContextId::Editor,
+            )
+            .icon(maximize_icon),
+        );
+
+        let hidden = self.layout == SqlQueryLayout::EditorOnly;
+        let (hide_id, hide_label, hide_icon) = if hidden {
+            (
+                "show-results",
+                dbflux_i18n::t!("document.code.toolbar.show_results"),
+                AppIcon::PanelBottomOpen,
+            )
+        } else {
+            (
+                "hide-results",
+                dbflux_i18n::t!("document.code.toolbar.hide_results"),
+                AppIcon::PanelBottomClose,
+            )
+        };
+        actions.push(
+            PaneAction::command(
+                hide_id,
+                hide_label,
+                Command::ToggleEditor,
+                ContextId::Editor,
+            )
+            .icon(hide_icon),
+        );
+
         actions
     }
 

@@ -40,8 +40,8 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+b` / `Cmd+b`                               | Alternar sidebar                                                  |
 | `Ctrl+m`                                         | Abrir el menú contextual de la pestaña                            |
 | `Ctrl+,` / `Cmd+,`                               | Abrir la configuración                                            |
-| `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Mostrar u ocultar el panel del editor                             |
-| `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Mostrar u ocultar el panel de resultados                          |
+| `Ctrl+Shift+E` / `Cmd+Shift+E`                   | Ocultar o mostrar los resultados de un documento de consulta, dejando solo el editor |
+| `Ctrl+Shift+R` / `Cmd+Shift+R`                   | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `Ctrl+Shift+T` / `Cmd+Shift+T`                   | Mostrar u ocultar el panel de tareas en segundo plano             |
 | `Ctrl+Shift+5` / `Ctrl+Shift+6` / `Ctrl+Shift+7` | Mostrar la vista Connections / Scripts / Dashboards de la sidebar |
 | `Ctrl+Shift+B` / `Cmd+Shift+B`                   | Abrir o cerrar el centro de notificaciones                        |
@@ -125,7 +125,10 @@ Actualizar y el intervalo de actualización automática, cada una con su atajo
 cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
 [menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
 actualización automática abre la lista de intervalos con el foco del teclado (ver
-[Desplegables](#desplegables)). El menú también está en la command palette como
+[Desplegables](#desplegables)). Mientras la consulta tiene resultados, el menú
+sigue con la cabecera de resultados: Pestaña de resultados siguiente y anterior,
+Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
+(Mostrar) resultados. El menú también está en la command palette como
 **Abrir acciones del panel**.
 
 ## Modo Vim (opcional)
@@ -299,6 +302,8 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
+| `Alt+l` / `Alt+h`                             | Pestaña de resultados siguiente / anterior de una consulta, dando la vuelta en los extremos |
+| `Alt+w`                                       | Cerrar la pestaña de resultados visible; si era la última, el editor recibe el foco |
 | `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Abrir el menú de exportación: las teclas del menú contextual recorren los formatos de guardar y copiar, `Enter` ejecuta uno, `Escape` lo cierra |
 | `f`                                           | Enfocar la toolbar                         |
@@ -312,7 +317,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
-| `z`                                           | Alternar colapso del panel                 |
+| `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero, maximizar, ocultar) con sus atajos |
 
 ## Diagrama de esquema
