@@ -1127,6 +1127,8 @@ document:
       query_history: Query history
       explain_query: Explain query
       open_in_chart: Open current query in a chart document
+      run_in_new_tab: Run in new tab
+      auto_refresh_interval: "Auto-refresh interval…"
     vim:
       normal: "NORMAL"
       insert: "INSERT"
@@ -3231,6 +3233,8 @@ palette:
       name: "Open chart…"
     new_dashboard:
       name: "New dashboard…"
+    open_pane_actions:
+      name: "Open pane actions…"
     analyze_dump_file:
       name: "Analyze database dump…"
   category:
@@ -3502,6 +3506,7 @@ settings:
       toggle_row_inspector: Toggle row inspector
       results_set_null: Set cell to NULL
       open_context_menu: Open context menu
+      open_pane_actions: Open pane actions
       menu_up: Menu up
       menu_down: Menu down
       menu_select: Menu select

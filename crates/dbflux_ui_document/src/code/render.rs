@@ -27,7 +27,147 @@ fn toolbar_divider(theme: &gpui_component::theme::Theme) -> impl IntoElement {
 }
 
 impl CodeDocument {
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The toolbar as pane actions (see [`crate::pane::PaneAction`]): the
+    /// same buttons, under the same conditions, so the whole toolbar is
+    /// reachable from the pane-actions menu. `entity` is this document, for
+    /// the entries that call back into it.
+    pub(crate) fn pane_actions(&self, entity: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+
+        if self.read_only {
+            return Vec::new();
+        }
+
+        let is_executing = self.state == DocumentState::Executing;
+        let is_db_language = self.supports_connection_context();
+        let context = ContextId::Editor;
+        let mut actions = Vec::new();
+
+        if is_executing {
+            actions.push(
+                PaneAction::command(
+                    "run",
+                    dbflux_i18n::t!("document.code.toolbar.cancel"),
+                    Command::CancelQuery,
+                    context,
+                )
+                .icon(AppIcon::X),
+            );
+        } else {
+            actions.push(
+                PaneAction::command(
+                    "run",
+                    dbflux_i18n::t!("document.code.toolbar.run"),
+                    Command::RunQuery,
+                    context,
+                )
+                .icon(AppIcon::Play)
+                .enabled(!self.drift.preflight_running),
+            );
+        }
+
+        if is_db_language && !is_executing {
+            actions.push(
+                PaneAction::command(
+                    "run-in-new-tab",
+                    dbflux_i18n::t!("document.code.toolbar.run_in_new_tab"),
+                    Command::RunQueryInNewTab,
+                    context,
+                )
+                .icon(AppIcon::SquarePlay),
+            );
+        }
+
+        actions.push(
+            PaneAction::command(
+                "save",
+                dbflux_i18n::t!("document.code.toolbar.save"),
+                Command::SaveQuery,
+                context,
+            )
+            .icon(AppIcon::Save),
+        );
+
+        actions.push(
+            PaneAction::callback(
+                "format",
+                dbflux_i18n::t!("document.code.toolbar.formatter_unavailable"),
+                |_window, _cx| {},
+            )
+            .icon(AppIcon::Zap)
+            .enabled(false),
+        );
+
+        actions.push(
+            PaneAction::command(
+                "history",
+                dbflux_i18n::t!("document.code.toolbar.query_history"),
+                Command::ToggleHistoryDropdown,
+                context,
+            )
+            .icon(AppIcon::History),
+        );
+
+        if is_db_language {
+            let document = entity.clone();
+            actions.push(
+                PaneAction::callback(
+                    "explain",
+                    dbflux_i18n::t!("document.code.toolbar.explain_query"),
+                    move |window, cx| {
+                        document.update(cx, |document, cx| document.run_explain(window, cx));
+                    },
+                )
+                .icon(AppIcon::Info),
+            );
+        }
+
+        let document = entity.clone();
+        actions.push(
+            PaneAction::callback(
+                "chart",
+                dbflux_i18n::t!("document.code.toolbar.open_in_chart"),
+                move |_window, cx| {
+                    document.update(cx, |document, cx| document.emit_chart_this_query(cx));
+                },
+            )
+            .icon(AppIcon::ChartColumnBig),
+        );
+
+        if is_db_language {
+            let refresh_command = if self.runner.is_primary_active() {
+                Command::CancelQuery
+            } else {
+                Command::RunQuery
+            };
+
+            actions.push(
+                PaneAction::command(
+                    "refresh",
+                    dbflux_i18n::t!("document.code.toolbar.refresh"),
+                    refresh_command,
+                    context,
+                )
+                .icon(AppIcon::RefreshCcw),
+            );
+
+            let dropdown = self.refresh.refresh_dropdown.clone();
+            actions.push(
+                PaneAction::callback(
+                    "auto-refresh",
+                    dbflux_i18n::t!("document.code.toolbar.auto_refresh_interval"),
+                    move |window, cx| {
+                        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                    },
+                )
+                .icon(AppIcon::Clock),
+            );
+        }
+
+        actions
+    }
+
+    fn render_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_executing = self.state == DocumentState::Executing;
         let is_preflight = self.drift.preflight_running;
@@ -85,6 +225,7 @@ impl CodeDocument {
         let run_shortcut = "Ctrl \u{21B5}";
 
         let show_run_group = !is_read_only && is_db_language && !is_executing;
+        let refresh_menu_focused = self.refresh.refresh_dropdown.read(cx).is_focused(window);
 
         let run_summary = super::statements::run_summary_label(
             self.statement_count().filter(|_| is_db_language),
@@ -145,19 +286,22 @@ impl CodeDocument {
                     .child(self.render_secondary_actions(is_read_only, cx))
             })
             .when(!is_read_only && is_db_language, |el| {
-                el.child(toolbar_divider(&theme)).child(SplitButton::new(
-                    "sql-refresh-split",
-                    Button::new("sql-refresh-action", refresh_label)
-                        .icon(refresh_icon)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if this.runner.is_primary_active() {
-                                this.cancel_query(cx);
-                            } else {
-                                this.run_query(window, cx);
-                            }
-                        })),
-                    self.refresh.refresh_dropdown.clone(),
-                ))
+                el.child(toolbar_divider(&theme)).child(
+                    SplitButton::new(
+                        "sql-refresh-split",
+                        Button::new("sql-refresh-action", refresh_label)
+                            .icon(refresh_icon)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.runner.is_primary_active() {
+                                    this.cancel_query(cx);
+                                } else {
+                                    this.run_query(window, cx);
+                                }
+                            })),
+                        self.refresh.refresh_dropdown.clone(),
+                    )
+                    .menu_focused(refresh_menu_focused),
+                )
             })
             .child(div().flex_1())
             .when_some(run_summary, |el, summary| {
@@ -1001,7 +1145,7 @@ impl Render for CodeDocument {
 
         let context_bar = self.render_context_bar(cx).into_any_element();
         let production_banner = self.render_production_banner(cx);
-        let toolbar = self.render_toolbar(cx).into_any_element();
+        let toolbar = self.render_toolbar(window, cx).into_any_element();
 
         let editor_view = if self.routine_definition_pending {
             self.render_awaiting_connection(cx).into_any_element()

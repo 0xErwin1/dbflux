@@ -584,6 +584,10 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — universal chrome host. `ResultPanel` owns a chrome row and delegates body rendering to a `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). The slot system (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) lets views contribute arbitrary chrome: `ResultPanel` merges built-in segments (mode bar at Left/0 when `available_modes.len() >= 2`) and view-provided segments, sorts by `(position, index)`, and renders them in a `flex_wrap` row.
 
+**Pane actions**
+
+A document lists the actions it otherwise offers only to the pointer (its toolbar buttons and similar controls) by filling the optional `PaneHandle::pane_actions` closure with `PaneAction` entries: a label, an optional icon, the shortcut the effective keymap gives the same command, an enabled flag, and what running it does (`PaneActionRun::Command`, run through the workspace exactly as its key binding, or `PaneActionRun::Callback` for an action without a command). `Command::OpenPaneActions` goes to the active document first, so a pane with a menu of its own can answer it; otherwise the workspace (`views/workspace/pane_actions.rs`) snapshots the entries into a menu drawn over the document area. While it is open the workspace reports `ContextId::ContextMenu`, so the context-menu keys drive it. The workspace never knows the document type, and a document opts in from its own `pane.rs` without changes to `workspace/mod.rs`, `tab_manager.rs` or `tab_bar.rs`. `CodeDocument` lists its whole toolbar; the data table keeps `m` for its own context menu, which serves as its actions menu.
+
 **The document types**
 
 - `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — thin shell around `DataGridPanel` + `ResultPanel`. DataGridPanel mounts as a `ViewHandle`; a filter bar is injected as a Center/0 segment.

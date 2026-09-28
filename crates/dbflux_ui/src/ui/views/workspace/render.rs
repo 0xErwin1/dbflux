@@ -228,6 +228,16 @@ impl Render for Workspace {
 
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
+        let pane_actions_menu = self.render_pane_actions_menu(cx).map(|menu| {
+            deferred(
+                div()
+                    .absolute()
+                    .top(Spacing::SM)
+                    .left(Spacing::SM)
+                    .child(menu),
+            )
+            .with_priority(1)
+        });
         let document_side_panels = self
             .tab_manager
             .update(cx, |mgr, cx| mgr.active_side_panels(window, cx));
@@ -263,6 +273,7 @@ impl Render for Workspace {
                             .child(doc),
                     )
                 })
+                .children(pane_actions_menu)
                 .children(toast_layer)
                 .into_any_element()
         } else {
@@ -839,6 +850,19 @@ impl Render for Workspace {
                         )
                         .with_priority(1)
                     })
+            })
+            // A click outside the pane-actions menu closes it; the menu itself
+            // is drawn in the document area.
+            .when(self.has_pane_actions_menu(), |this| {
+                use crate::ui::components::context_menu as ctx;
+
+                let workspace = cx.entity();
+                this.child(ctx::render_menu_overlay(
+                    "pane-actions-menu-overlay",
+                    move |_, cx| {
+                        workspace.update(cx, |workspace, cx| workspace.close_pane_actions(cx));
+                    },
+                ))
             })
             // Tab context menu rendered at workspace level for proper positioning
             .when_some(tab_context_menu, |this, menu| {

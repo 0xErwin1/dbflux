@@ -878,6 +878,17 @@ fn context_bar_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
     layer.bind(KeyChord::new("l", Modifiers::ctrl()), Command::FocusRight);
 
+    // The editor's toolbar, as a menu: the context bar is the editor's
+    // chrome, where letters are free (the text area keeps them for typing).
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenPaneActions,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+
     layer
 }
 

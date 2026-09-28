@@ -1127,6 +1127,8 @@ document:
       query_history: Historial de consultas
       explain_query: Explicar consulta
       open_in_chart: Abrir la consulta actual en un documento de gráfico
+      run_in_new_tab: Ejecutar en una pestaña nueva
+      auto_refresh_interval: "Intervalo de actualización automática…"
     vim:
       normal: "NORMAL"
       insert: "INSERTAR"
@@ -3231,6 +3233,8 @@ palette:
       name: "Abrir gráfico…"
     new_dashboard:
       name: "Nuevo dashboard…"
+    open_pane_actions:
+      name: "Abrir acciones del panel…"
     analyze_dump_file:
       name: "Analizar volcado de base de datos…"
   category:
@@ -3502,6 +3506,7 @@ settings:
       toggle_row_inspector: Alternar inspector de fila
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
+      open_pane_actions: Abrir acciones del panel
       menu_up: "Menú: arriba"
       menu_down: "Menú: abajo"
       menu_select: "Menú: seleccionar"

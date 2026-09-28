@@ -1127,6 +1127,8 @@ document:
       query_history: 查询历史
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
+      run_in_new_tab: 在新标签页中运行
+      auto_refresh_interval: 自动刷新间隔…
     vim:
       normal: "普通"
       insert: "插入"
@@ -3231,6 +3233,8 @@ palette:
       name: 打开图表…
     new_dashboard:
       name: 新建仪表盘…
+    open_pane_actions:
+      name: 打开面板操作…
     analyze_dump_file:
       name: 分析数据库转储…
   category:
@@ -3502,6 +3506,7 @@ settings:
       toggle_row_inspector: 切换行检查器
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
+      open_pane_actions: 打开面板操作
       menu_up: 菜单上移
       menu_down: 菜单下移
       menu_select: 菜单选择

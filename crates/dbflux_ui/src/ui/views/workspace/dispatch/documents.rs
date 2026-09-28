@@ -53,14 +53,32 @@ impl Workspace {
                 Some(true)
             }
 
-            // Context menu commands — route to tab bar if its menu is open,
-            // otherwise to the active document (DataGridPanel).
+            // The active document may answer this itself (with a menu of its
+            // own); otherwise the workspace lists the actions it offers.
+            Command::OpenPaneActions => {
+                if self.has_pane_actions_menu() {
+                    self.close_pane_actions(cx);
+                    return Some(true);
+                }
+
+                let handled_by_document = self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::OpenPaneActions, window, cx)
+                });
+
+                Some(handled_by_document || self.open_pane_actions(cx))
+            }
+
+            // Context menu commands — route to the pane-actions menu or the
+            // tab bar when one is open, otherwise to the active document
+            // (DataGridPanel).
             Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
             | Command::MenuSelect
             | Command::MenuBack => {
-                if self.tab_bar.read(cx).has_context_menu_open() {
+                if self.has_pane_actions_menu() {
+                    self.dispatch_pane_actions_menu(cmd, window, cx);
+                } else if self.tab_bar.read(cx).has_context_menu_open() {
                     self.tab_bar.update(cx, |tb, cx| match cmd {
                         Command::MenuDown => tb.context_menu_select_next(cx),
                         Command::MenuUp => tb.context_menu_select_prev(cx),

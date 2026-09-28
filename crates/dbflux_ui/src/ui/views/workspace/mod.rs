@@ -2,6 +2,7 @@ mod actions;
 mod dispatch;
 pub mod inspector;
 mod notifications;
+mod pane_actions;
 pub mod pipeline;
 mod render;
 mod shell;
@@ -385,6 +386,8 @@ pub struct Workspace {
     command_search_focus: FocusHandle,
     /// The notifications popover under the title-bar bell.
     notifications: notifications::NotificationsPopoverState,
+    /// The active document's actions menu, open after `OpenPaneActions`.
+    pane_actions_menu: Option<pane_actions::PaneActionsMenu>,
     /// Correlation id of the most recent user-facing error, the target of
     /// Open Last Error in Audit.
     last_user_error: Option<uuid::Uuid>,
@@ -1613,6 +1616,7 @@ impl Workspace {
             focus_handle,
             command_search_focus: cx.focus_handle(),
             notifications: notifications::NotificationsPopoverState::new(cx),
+            pane_actions_menu: None,
             last_user_error: None,
             _background_purge_task: None,
             pending_login_modal_open: None,
@@ -1889,6 +1893,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "open_pane_actions",
+                dbflux_i18n::t!("palette.command.open_pane_actions.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "show_connections_view",
                 dbflux_i18n::t!("palette.command.show_connections_view.name"),
                 dbflux_i18n::t!("palette.category.view"),
@@ -2076,7 +2085,7 @@ impl Workspace {
             return Some(ContextId::ConfirmModal);
         }
 
-        if self.tab_bar.read(cx).has_context_menu_open() {
+        if self.tab_bar.read(cx).has_context_menu_open() || self.has_pane_actions_menu() {
             return Some(ContextId::ContextMenu);
         }
 

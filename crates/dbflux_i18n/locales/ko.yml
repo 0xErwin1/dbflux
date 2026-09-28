@@ -1127,6 +1127,8 @@ document:
       query_history: 쿼리 기록
       explain_query: 쿼리 실행 계획
       open_in_chart: 현재 쿼리를 차트 문서에서 열기
+      run_in_new_tab: 새 탭에서 실행
+      auto_refresh_interval: "자동 새로고침 간격…"
     vim:
       normal: "노멀"
       insert: "삽입"
@@ -3231,6 +3233,8 @@ palette:
       name: "차트 열기…"
     new_dashboard:
       name: "새 대시보드…"
+    open_pane_actions:
+      name: "패널 작업 열기…"
     analyze_dump_file:
       name: "데이터베이스 덤프 분석…"
   category:
@@ -3502,6 +3506,7 @@ settings:
       toggle_row_inspector: 행 검사기 전환
       results_set_null: 셀을 NULL로 설정
       open_context_menu: 상황에 맞는 메뉴 열기
+      open_pane_actions: 패널 작업 열기
       menu_up: 메뉴 위로
       menu_down: 메뉴 아래로
       menu_select: 메뉴 선택

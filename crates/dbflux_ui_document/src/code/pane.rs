@@ -292,6 +292,169 @@ impl CodeDocument {
             Box::new(move |_window, cx| e.update(cx, |d, cx| d.side_panels(cx)))
         });
 
+        handle.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e))
+        });
+
         handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::code::CodeDocument;
+    use crate::pane::{PaneAction, PaneActionRun};
+    use dbflux_app::keymap::Command;
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::keymap::init_keymap;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn open_sql_document(
+        cx: &mut TestAppContext,
+    ) -> (Entity<CodeDocument>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+            init_keymap(cx);
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let slot: Rc<RefCell<Option<Entity<CodeDocument>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(
+                        app_state.clone(),
+                        None,
+                        QueryLanguage::Sql,
+                        window,
+                        cx,
+                    )
+                });
+                slot.replace(Some(document.clone()));
+                gpui_component::Root::new(document, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let document = slot.borrow().clone().expect("document created");
+        (document, window)
+    }
+
+    fn actions(document: &Entity<CodeDocument>, window: &mut VisualTestContext) -> Vec<PaneAction> {
+        let document = document.clone();
+        window.update(|_, cx| document.read(cx).pane_actions(&document))
+    }
+
+    fn command_of(action: &PaneAction) -> Option<Command> {
+        match action.run {
+            PaneActionRun::Command(command) => Some(command),
+            PaneActionRun::Callback(_) => None,
+        }
+    }
+
+    #[gpui::test]
+    fn the_pane_actions_list_every_sql_toolbar_button(cx: &mut TestAppContext) {
+        let (document, window) = open_sql_document(cx);
+        let actions = actions(&document, window);
+
+        let ids: Vec<&str> = actions.iter().map(|action| action.id.as_ref()).collect();
+        assert_eq!(
+            ids,
+            [
+                "run",
+                "run-in-new-tab",
+                "save",
+                "format",
+                "history",
+                "explain",
+                "chart",
+                "refresh",
+                "auto-refresh",
+            ]
+        );
+
+        let command = |id: &str| {
+            actions
+                .iter()
+                .find(|action| action.id == id)
+                .and_then(command_of)
+        };
+        assert_eq!(command("run"), Some(Command::RunQuery));
+        assert_eq!(command("run-in-new-tab"), Some(Command::RunQueryInNewTab));
+        assert_eq!(command("save"), Some(Command::SaveQuery));
+        assert_eq!(command("history"), Some(Command::ToggleHistoryDropdown));
+        assert_eq!(command("refresh"), Some(Command::RunQuery));
+
+        let format = actions.iter().find(|action| action.id == "format");
+        assert!(
+            format.is_some_and(|action| !action.enabled),
+            "the formatter is unavailable, as on the toolbar"
+        );
+
+        let run = actions.iter().find(|action| action.id == "run");
+        assert!(
+            run.is_some_and(|action| action.shortcut.is_some()),
+            "an entry with a key binding shows its keys"
+        );
+    }
+
+    #[gpui::test]
+    fn the_auto_refresh_entry_hands_the_keyboard_to_its_dropdown(cx: &mut TestAppContext) {
+        let (document, window) = open_sql_document(cx);
+
+        let document_focus = document.clone();
+        window.update(|window, cx| {
+            document_focus.update(cx, |document, cx| {
+                document.focus_handle.focus(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let auto_refresh = actions(&document, window)
+            .into_iter()
+            .find(|action| action.id == "auto-refresh")
+            .expect("an auto-refresh entry");
+        let PaneActionRun::Callback(open_interval) = auto_refresh.run else {
+            panic!("the auto-refresh entry runs a callback");
+        };
+
+        window.update(|window, cx| open_interval(window, cx));
+        window.run_until_parked();
+
+        let dropdown = window.update(|_, cx| document.read(cx).refresh.refresh_dropdown.clone());
+        let (open, focused) = window.update(|window, cx| {
+            let dropdown = dropdown.read(cx);
+            (dropdown.is_open(), dropdown.is_focused(window))
+        });
+        assert!(open && focused, "the interval dropdown opens with focus");
+
+        window.simulate_keystrokes("j escape");
+        window.run_until_parked();
+
+        let (open, document_focused) = window.update(|window, cx| {
+            (
+                dropdown.read(cx).is_open(),
+                document.read(cx).focus_handle.is_focused(window),
+            )
+        });
+        assert!(!open, "Escape closes the interval list");
+        assert!(document_focused, "focus returns to the editor pane");
     }
 }

@@ -584,6 +584,10 @@ crates/
 
 5. **`ResultPanel` + `ViewHandle`**（`crates/dbflux_components/src/result_panel/mod.rs`）—— 通用框架宿主。`ResultPanel` 持有一行框架，并把主体渲染委托给 `ViewHandle`（7 个闭包：render、focus、focus_handle、toolbar_segments、available_modes、current_mode、set_mode）。槽位系统（`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`）让各视图可以贡献任意框架内容：`ResultPanel` 合并内置段（当 `available_modes.len() >= 2` 时，把模式栏放在 Left/0）与视图提供的段，按 `(position, index)` 排序，并在一个 `flex_wrap` 行中渲染。
 
+**面板操作**
+
+文档通过填写可选的 `PaneHandle::pane_actions` 闭包，列出原本只能用指针操作的动作（工具栏按钮及类似控件）。每个 `PaneAction` 条目包含标签、可选图标、有效键位映射为同一命令分配的快捷键、是否启用，以及执行时的行为（`PaneActionRun::Command` 与其键绑定一样经由工作区执行；没有对应命令的动作使用 `PaneActionRun::Callback`）。`Command::OpenPaneActions` 首先交给活动文档，因此拥有自己菜单的面板可以自行响应；否则工作区（`views/workspace/pane_actions.rs`）把这些条目快照为一个绘制在文档区域上方的菜单。菜单打开期间，工作区报告 `ContextId::ContextMenu`，由上下文菜单按键驱动。工作区从不知道文档类型，文档在自己的 `pane.rs` 中接入，无需改动 `workspace/mod.rs`、`tab_manager.rs` 或 `tab_bar.rs`。`CodeDocument` 列出整个工具栏；数据表格保留 `m` 打开自己的上下文菜单，该菜单即其操作菜单。
+
 **文档类型**
 
 - `DataDocument`（`crates/dbflux_ui_document/src/data_document/`）—— 包裹 `DataGridPanel` + `ResultPanel` 的薄壳。DataGridPanel 以 `ViewHandle` 形式挂载；筛选栏作为 Center/0 段注入。

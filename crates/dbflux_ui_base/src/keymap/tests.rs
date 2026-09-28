@@ -1704,3 +1704,30 @@ fn a_focused_dropdown_takes_its_keys_before_the_pane() {
         );
     }
 }
+
+/// `m` opens the pane-actions menu in the code editor's chrome (its context
+/// bar), while the data table keeps `m` for its own context menu, which is
+/// that pane's actions menu. The text area keeps `m` for typing.
+#[test]
+fn m_opens_the_pane_actions_in_the_editor_chrome_and_the_grid_menu_in_results() {
+    let keymap = native_keymap();
+
+    let context_bar = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::ContextBar, &[]);
+    for keys in ["m", "shift-f10"] {
+        let action = top_action(&keymap, keys, std::slice::from_ref(&context_bar)).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), Command::OpenPaneActions),
+            "{keys}"
+        );
+    }
+
+    let results = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Results, &[]);
+    let action = top_action(&keymap, "m", std::slice::from_ref(&results)).expect("bound");
+    assert!(runs_command(action.as_ref(), Command::OpenContextMenu));
+
+    let typing = element_stack(
+        root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Editor, &[]),
+        &[CODE_EDITOR_KEY_CONTEXT, "Input"],
+    );
+    assert!(top_action(&keymap, "m", &typing).is_none());
+}

@@ -681,6 +681,25 @@ en tabs con cinco capas:
    cuando `available_modes.len() >= 2`) con los segmentos provistos por la view,
    los ordena por `(position, index)` y los renderiza en una fila `flex_wrap`.
 
+**Acciones del panel**
+
+Un document lista las acciones que de otro modo solo ofrece al puntero (los
+botones de su toolbar y controles similares) llenando el closure opcional
+`PaneHandle::pane_actions` con entradas `PaneAction`: una etiqueta, un icono
+opcional, el atajo que el keymap efectivo le da al mismo comando, un indicador
+de habilitado y lo que hace al ejecutarse (`PaneActionRun::Command`, que se
+ejecuta a través del workspace igual que su key binding, o
+`PaneActionRun::Callback` para una acción sin comando). `Command::OpenPaneActions`
+va primero al document activo, así que un panel con un menú propio puede
+responderlo; si no, el workspace (`views/workspace/pane_actions.rs`) copia las
+entradas en un menú dibujado sobre el área de documents. Mientras está abierto,
+el workspace reporta `ContextId::ContextMenu`, así que las teclas del menú
+contextual lo manejan. El workspace nunca conoce el tipo de document, y un
+document se suma desde su propio `pane.rs` sin cambios en `workspace/mod.rs`,
+`tab_manager.rs` ni `tab_bar.rs`. `CodeDocument` lista toda su toolbar; la tabla
+de datos conserva `m` para su propio menú contextual, que funciona como su menú
+de acciones.
+
 **Los tipos de document**
 
 - `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — shell

@@ -109,6 +109,16 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
+The editor's toolbar is also a menu. From the editor, `Ctrl+k` moves focus to the
+execution context bar, where `m` (or `Shift+F10`) opens the **pane actions**
+menu: Run (Cancel while a query runs), Run in new tab, Save, Format, Query
+history, Explain, Chart, Refresh and the auto-refresh interval, each with its
+shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
+[context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
+the interval list with keyboard focus (see [Dropdowns](#dropdowns)). The menu is
+also in the command palette as **Open pane actions**, which is the way to reach
+it in a script editor, whose context bar has no controls.
+
 ## Vim mode (opt-in)
 
 Code editors can use modal editing with a small set of Vim commands. It is off

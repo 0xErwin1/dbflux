@@ -84,6 +84,9 @@ pub enum Command {
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
+    /// Opens the menu of the focused pane's actions (its toolbar buttons and
+    /// other pointer-only controls).
+    OpenPaneActions,
     MenuUp,
     MenuDown,
     MenuSelect,
@@ -224,6 +227,7 @@ impl Command {
             "open_saved_chart" => Some(Command::OpenSavedChart),
             "import_dashboard" => Some(Command::ImportDashboard),
             "new_dashboard" => Some(Command::NewDashboard),
+            "open_pane_actions" => Some(Command::OpenPaneActions),
             _ => None,
         }
     }
@@ -301,6 +305,7 @@ impl Command {
             Command::ToggleRowInspector => "Toggle row inspector",
             Command::ResultsSetNull => "Set cell to NULL",
             Command::OpenContextMenu => "Open context menu",
+            Command::OpenPaneActions => "Open pane actions",
             Command::MenuUp => "Menu up",
             Command::MenuDown => "Menu down",
             Command::MenuSelect => "Menu select",
@@ -456,6 +461,7 @@ impl Command {
             Command::ToggleRowInspector => "toggle_row_inspector",
             Command::ResultsSetNull => "results_set_null",
             Command::OpenContextMenu => "open_context_menu",
+            Command::OpenPaneActions => "open_pane_actions",
             Command::MenuUp => "menu_up",
             Command::MenuDown => "menu_down",
             Command::MenuSelect => "menu_select",
@@ -628,6 +634,7 @@ impl Command {
             Command::ToggleRowInspector,
             Command::ResultsSetNull,
             Command::OpenContextMenu,
+            Command::OpenPaneActions,
             Command::MenuUp,
             Command::MenuDown,
             Command::MenuSelect,
@@ -856,6 +863,7 @@ impl Command {
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
             Command::CopyPreview => "Actions",
+            Command::OpenPaneActions => "Actions",
         }
     }
 
