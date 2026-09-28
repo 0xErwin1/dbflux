@@ -364,18 +364,27 @@ export interface Dictionary {
         data_compare: string;
         command_palette: string;
         ai_approval: string;
+        document_builder: string;
+        dashboards: string;
+        hooks: string;
+        aws_sso: string;
       };
       row_note: {
         limits: string;
         dynamodb: string;
         builder: string;
         s3: string;
+        influxdb: string;
+        cloudwatch_logs: string;
+        document_builder: string;
+        dashboards: string;
       };
       group: {
         licence: string;
         engines: string;
         query: string;
         cloud: string;
+        workflow: string;
       };
       cell: {
         included: string;
@@ -408,6 +417,24 @@ export interface Dictionary {
         per_policy: string;
         mcp_dbgate_team: string;
         db_chat: string;
+        enterprise_up: string;
+        small_business: string;
+        eight_clients: string;
+        jetbrains_ides: string;
+        query_history: string;
+        writes_confirmed: string;
+        agent_consent: string;
+        aws_toolkit: string;
+        monitoring_only: string;
+        metrics_board: string;
+        server_summary: string;
+        hooks_lua: string;
+        shell_commands: string;
+        sql_startup: string;
+        sso_and_profiles: string;
+        sso_aws_toolkit: string;
+        iam_only: string;
+        iam_premium: string;
       };
       gain: {
         dbeaver: string;

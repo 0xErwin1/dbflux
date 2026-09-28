@@ -14,7 +14,7 @@ import type { Dictionary } from '../i18n';
  * The home page teaser, the comparison page and the per-client pages all read
  * from this module, so a correction lands everywhere at once.
  */
-export const COMPARE_REVIEWED = '2026-09-26';
+export const COMPARE_REVIEWED = '2026-09-28';
 
 /** The month the DBeaver edition split was read from dbeaver.com/edition. */
 export const DBEAVER_EDITIONS_AS_OF = '2026-09';
@@ -72,7 +72,13 @@ export type CompareRowId =
   | 'query_log'
   | 'data_compare'
   | 'command_palette'
-  | 'ai_approval';
+  | 'ai_approval'
+  | 'influxdb'
+  | 'cloudwatch_logs'
+  | 'document_builder'
+  | 'dashboards'
+  | 'hooks'
+  | 'aws_sso';
 
 export interface CompareRow {
   readonly id: CompareRowId;
@@ -99,6 +105,9 @@ const TABLEPLUS_CHANGELOG = 'https://tableplus.com/blog/2017/02/changelogs.html'
 const DATAGRIP_LICENSING =
   'https://blog.jetbrains.com/datagrip/2025/10/01/datagrip-is-now-free-for-non-commercial-use/';
 const DBGATE_TEAM_PREMIUM = 'https://www.dbgate.io/editions/team-premium/';
+const DBGATE_COMPARE = 'https://www.dbgate.io/compare/';
+const BEEKEEPER_PRICING = 'https://www.beekeeperstudio.io/pricing';
+const AWS_TOOLKIT_PLUGIN = 'https://plugins.jetbrains.com/plugin/11349-aws-toolkit';
 
 const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
   open_source: {
@@ -244,7 +253,7 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     clients: {
       dbeaver: ['paid', { key: 'lite_up' }],
       datagrip: included,
-      tableplus: notReviewed,
+      tableplus: included,
       beekeeper: notReviewed,
       dbgate: ['paid', { text: 'Premium' }],
     },
@@ -254,6 +263,7 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
         client: 'datagrip',
         href: 'https://blog.jetbrains.com/datagrip/2023/12/06/datagrip-2023-3-data-visualization-with-the-lets-plot-library-new-import-functionality-numerous-improvements-in-introspection-dynamodb-support-and-more/',
       },
+      { client: 'tableplus', href: 'https://tableplus.com/osx/changelog' },
       { client: 'dbgate', href: 'https://dbgate.io/pricing/' },
     ],
   },
@@ -264,14 +274,23 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     dbflux: notYet,
     clients: {
       dbeaver: included,
-      datagrip: notReviewed,
-      tableplus: notReviewed,
+      datagrip: included,
+      tableplus: included,
       beekeeper: included,
-      dbgate: notReviewed,
+      dbgate: included,
     },
     sources: [
       { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Database-Object-Editor/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/create-and-modify-dialogs.html',
+      },
+      {
+        client: 'tableplus',
+        href: 'https://docs.tableplus.com/gui-tools/working-with-table/column.md',
+      },
       { client: 'beekeeper', href: 'https://www.beekeeperstudio.io/community/' },
+      { client: 'dbgate', href: DBGATE_COMPARE },
     ],
   },
   query_plan: {
@@ -280,13 +299,23 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'layers',
     dbflux: notYet,
     clients: {
-      dbeaver: notReviewed,
-      datagrip: notReviewed,
+      dbeaver: included,
+      datagrip: included,
       tableplus: notReviewed,
-      beekeeper: notReviewed,
+      beekeeper: notAvailable,
       dbgate: notReviewed,
     },
-    sources: [],
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Query-Execution-Plan/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/query-execution-plan.html',
+      },
+      {
+        client: 'beekeeper',
+        href: 'https://github.com/beekeeper-studio/beekeeper-studio/issues/1384',
+      },
+    ],
   },
   s3: {
     id: 's3',
@@ -298,7 +327,7 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
       dbeaver: ['paid', { text: 'Ultimate' }],
       datagrip: ['included', { key: 'big_data_tools' }],
       tableplus: notReviewed,
-      beekeeper: notReviewed,
+      beekeeper: notAvailable,
       dbgate: notReviewed,
     },
     sources: [
@@ -312,6 +341,7 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
         href: 'https://www.jetbrains.com/help/datagrip/big-data-tools-minio.html',
         detail: 'MinIO',
       },
+      { client: 'beekeeper', href: BEEKEEPER_PRICING },
     ],
   },
   mcp: {
@@ -343,13 +373,22 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'arrow-left-right',
     dbflux: ['included', { text: 'DBeaver, Beekeeper' }],
     clients: {
-      dbeaver: notReviewed,
-      datagrip: notReviewed,
+      dbeaver: ['included', { key: 'eight_clients' }],
+      datagrip: ['limited', { key: 'jetbrains_ides' }],
       tableplus: notReviewed,
       beekeeper: notReviewed,
       dbgate: notReviewed,
     },
-    sources: [],
+    sources: [
+      {
+        client: 'dbeaver',
+        href: 'https://dbeaver.com/docs/dbeaver/How-to-import-Connections-from-External-Tools/',
+      },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/managing-data-sources.html',
+      },
+    ],
   },
   commercial_use: {
     id: 'commercial_use',
@@ -357,19 +396,22 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'file-text',
     dbflux: included,
     clients: {
-      dbeaver: notReviewed,
+      dbeaver: included,
       datagrip: ['paid', { key: 'paid_licence' }],
       tableplus: notReviewed,
-      beekeeper: notReviewed,
-      dbgate: notReviewed,
+      beekeeper: ['limited', { key: 'small_business' }],
+      dbgate: included,
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.io/about/' },
       { client: 'datagrip', href: DATAGRIP_LICENSING },
       {
         client: 'datagrip',
         href: 'https://sales.jetbrains.com/hc/en-gb/articles/18950890312210-The-free-non-commercial-licensing-FAQ',
         detail: 'FAQ',
       },
+      { client: 'beekeeper', href: BEEKEEPER_PRICING },
+      { client: 'dbgate', href: 'https://github.com/dbgate/dbgate/blob/master/README.md' },
     ],
   },
   diagram: {
@@ -378,18 +420,24 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'chart-network',
     dbflux: included,
     clients: {
-      dbeaver: notReviewed,
-      datagrip: notReviewed,
+      dbeaver: included,
+      datagrip: included,
       tableplus: ['limited', { key: 'community_plugin' }],
       beekeeper: ['paid', { key: 'paid_editions' }],
-      dbgate: notReviewed,
+      dbgate: included,
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/ER-Diagrams/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/creating-diagrams.html',
+      },
       { client: 'tableplus', href: 'https://github.com/TablePlus/diagram-plugin' },
       {
         client: 'beekeeper',
         href: 'https://docs.beekeeperstudio.io/user_guide/entity-relationship-diagrams-erd/',
       },
+      { client: 'dbgate', href: DBGATE_COMPARE },
     ],
   },
   schema_diff: {
@@ -398,14 +446,23 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'copy',
     dbflux: included,
     clients: {
-      dbeaver: notReviewed,
-      datagrip: notReviewed,
+      dbeaver: ['paid', { key: 'enterprise_up' }],
+      datagrip: included,
       tableplus: notAvailable,
-      beekeeper: notReviewed,
+      beekeeper: notAvailable,
       dbgate: ['paid', { text: 'Premium' }],
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Schema-compare/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/differences-viewer-for-database-objects.html',
+      },
       { client: 'tableplus', href: 'https://github.com/TablePlus/TablePlus/issues/3232' },
+      {
+        client: 'beekeeper',
+        href: 'https://github.com/beekeeper-studio/beekeeper-studio/issues/4798',
+      },
       { client: 'dbgate', href: 'https://docs.dbgate.io/dbgate/database-operations/index.html' },
     ],
   },
@@ -415,13 +472,14 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'scroll-text',
     dbflux: ['included', { key: 'audit_log' }],
     clients: {
-      dbeaver: notReviewed,
+      dbeaver: ['included', { text: 'Query Manager' }],
       datagrip: ['included', { key: 'sql_log' }],
       tableplus: ['included', { key: 'console_log' }],
-      beekeeper: notReviewed,
+      beekeeper: ['included', { key: 'query_history' }],
       dbgate: ['paid', { text: 'Team Premium' }],
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Query-Manager/' },
       {
         client: 'datagrip',
         href: 'https://www.jetbrains.com/help/datagrip/find-recent-queries-and-files.html',
@@ -429,6 +487,10 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
       {
         client: 'tableplus',
         href: 'https://docs.tableplus.com/gui-tools/the-interface/console-log.md',
+      },
+      {
+        client: 'beekeeper',
+        href: 'https://docs.beekeeperstudio.io/user_guide/sql_editor/editor/',
       },
       { client: 'dbgate', href: DBGATE_TEAM_PREMIUM },
     ],
@@ -439,14 +501,16 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'arrow-left-right',
     dbflux: notYet,
     clients: {
-      dbeaver: notReviewed,
+      dbeaver: ['paid', { key: 'enterprise_up' }],
       datagrip: included,
       tableplus: notReviewed,
       beekeeper: notReviewed,
-      dbgate: notReviewed,
+      dbgate: ['paid', { text: 'Premium' }],
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Data-compare/' },
       { client: 'datagrip', href: 'https://www.jetbrains.com/help/datagrip/compare-data.html' },
+      { client: 'dbgate', href: 'https://dbgate.io/pricing/' },
     ],
   },
   command_palette: {
@@ -455,14 +519,20 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'search',
     dbflux: included,
     clients: {
-      dbeaver: notReviewed,
-      datagrip: notReviewed,
+      dbeaver: included,
+      datagrip: included,
       tableplus: ['limited', { key: 'objects_only' }],
-      beekeeper: notReviewed,
+      beekeeper: ['limited', { key: 'objects_only' }],
       dbgate: included,
     },
     sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Shortcuts/' },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/searching-everywhere.html',
+      },
       { client: 'tableplus', href: 'https://docs.tableplus.com/gui-tools/open-anything.md' },
+      { client: 'beekeeper', href: 'https://www.beekeeperstudio.io/features/easy-to-use' },
       { client: 'dbgate', href: 'https://www.dbgate.io/features/interface/' },
     ],
   },
@@ -472,6 +542,68 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
     icon: 'clock-check',
     dbflux: ['included', { key: 'per_policy' }],
     clients: {
+      dbeaver: ['included', { key: 'writes_confirmed' }],
+      datagrip: ['included', { key: 'agent_consent' }],
+      tableplus: notReviewed,
+      beekeeper: ['paid', { key: 'paid_editions' }],
+      dbgate: ['paid', { text: 'Premium' }],
+    },
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/AI-command/' },
+      {
+        client: 'datagrip',
+        href: 'https://blog.jetbrains.com/datagrip/2026/07/16/datagrip-2026-2-ai-agent-skills-mcp-tools-and-cli-commands-for-data-source-management-bundled-jdbc-drivers-and-improved-session-control/',
+      },
+      { client: 'beekeeper', href: 'https://docs.beekeeperstudio.io/user_guide/sql-ai-shell/' },
+      { client: 'dbgate', href: DBGATE_TEAM_PREMIUM },
+    ],
+  },
+  influxdb: {
+    id: 'influxdb',
+    label: { text: 'InfluxDB' },
+    note: 'influxdb',
+    icon: 'brand/influxdb',
+    dbflux: included,
+    clients: {
+      dbeaver: ['paid', { key: 'lite_up' }],
+      datagrip: notAvailable,
+      tableplus: notReviewed,
+      beekeeper: notAvailable,
+      dbgate: notAvailable,
+    },
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/InfluxDB/' },
+      { client: 'datagrip', href: 'https://www.jetbrains.com/help/datagrip/other-databases.html' },
+      { client: 'beekeeper', href: BEEKEEPER_PRICING },
+      { client: 'dbgate', href: DBGATE_COMPARE },
+    ],
+  },
+  cloudwatch_logs: {
+    id: 'cloudwatch_logs',
+    label: { text: 'CloudWatch Logs' },
+    note: 'cloudwatch_logs',
+    icon: 'logs',
+    dbflux: included,
+    clients: {
+      dbeaver: notReviewed,
+      datagrip: ['limited', { key: 'aws_toolkit' }],
+      tableplus: notReviewed,
+      beekeeper: notAvailable,
+      dbgate: notAvailable,
+    },
+    sources: [
+      { client: 'datagrip', href: AWS_TOOLKIT_PLUGIN },
+      { client: 'beekeeper', href: BEEKEEPER_PRICING },
+      { client: 'dbgate', href: DBGATE_COMPARE },
+    ],
+  },
+  document_builder: {
+    id: 'document_builder',
+    label: { key: 'document_builder' },
+    note: 'document_builder',
+    icon: 'rows-3',
+    dbflux: included,
+    clients: {
       dbeaver: notReviewed,
       datagrip: notReviewed,
       tableplus: notReviewed,
@@ -479,8 +611,78 @@ const ROWS: Readonly<Record<CompareRowId, CompareRow>> = {
       dbgate: ['paid', { text: 'Premium' }],
     },
     sources: [
-      { client: 'beekeeper', href: 'https://docs.beekeeperstudio.io/user_guide/sql-ai-shell/' },
-      { client: 'dbgate', href: DBGATE_TEAM_PREMIUM },
+      { client: 'beekeeper', href: 'https://www.beekeeperstudio.io/db/mongodb-client/' },
+      { client: 'dbgate', href: DBGATE_COMPARE },
+    ],
+  },
+  dashboards: {
+    id: 'dashboards',
+    label: { key: 'dashboards' },
+    note: 'dashboards',
+    icon: 'server',
+    dbflux: included,
+    clients: {
+      dbeaver: ['limited', { key: 'monitoring_only' }],
+      datagrip: notReviewed,
+      tableplus: ['included', { key: 'metrics_board' }],
+      beekeeper: notReviewed,
+      dbgate: ['limited', { key: 'server_summary' }],
+    },
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/Dashboards/' },
+      { client: 'tableplus', href: 'https://docs.tableplus.com/gui-tools/metrics-board.md' },
+      {
+        client: 'dbgate',
+        href: 'https://www.dbgate.io/news/2025-08-29-6-6-2-team-premium-permissions/',
+      },
+      { client: 'dbgate', href: DBGATE_COMPARE, detail: 'charts' },
+    ],
+  },
+  hooks: {
+    id: 'hooks',
+    label: { key: 'hooks' },
+    icon: 'square-terminal',
+    dbflux: ['included', { key: 'hooks_lua' }],
+    clients: {
+      dbeaver: ['included', { key: 'shell_commands' }],
+      datagrip: ['limited', { key: 'sql_startup' }],
+      tableplus: notReviewed,
+      beekeeper: notReviewed,
+      dbgate: notReviewed,
+    },
+    sources: [
+      {
+        client: 'dbeaver',
+        href: 'https://dbeaver.com/docs/dbeaver/Working-with-Shell-Commands-in-DBeaver/',
+      },
+      {
+        client: 'datagrip',
+        href: 'https://www.jetbrains.com/help/datagrip/data-sources-and-drivers-dialog.html',
+      },
+    ],
+  },
+  aws_sso: {
+    id: 'aws_sso',
+    label: { key: 'aws_sso' },
+    icon: 'key-round',
+    dbflux: ['included', { key: 'sso_and_profiles' }],
+    clients: {
+      dbeaver: ['paid', { key: 'lite_up' }],
+      datagrip: ['limited', { key: 'sso_aws_toolkit' }],
+      tableplus: ['limited', { key: 'iam_only' }],
+      beekeeper: ['paid', { key: 'paid_editions' }],
+      dbgate: ['paid', { key: 'iam_premium' }],
+    },
+    sources: [
+      { client: 'dbeaver', href: 'https://dbeaver.com/docs/dbeaver/AWS-SSO/' },
+      { client: 'datagrip', href: 'https://www.jetbrains.com/help/datagrip/clouds-aws.html' },
+      { client: 'datagrip', href: AWS_TOOLKIT_PLUGIN, detail: 'AWS Toolkit' },
+      { client: 'tableplus', href: 'https://tableplus.com/osx/changelog' },
+      {
+        client: 'beekeeper',
+        href: 'https://docs.beekeeperstudio.io/includes/feature_comparison/',
+      },
+      { client: 'dbgate', href: DBGATE_COMPARE },
     ],
   },
 };
@@ -508,14 +710,33 @@ export interface CompareGroup {
 
 /** The full comparison page, every client side by side. */
 export const COMPARE_GROUPS: readonly CompareGroup[] = [
-  { id: 'licence', icon: 'scale', rows: rows(['open_source', 'limits']) },
-  { id: 'engines', icon: 'database', rows: rows(['mongodb', 'redis', 'dynamodb']) },
+  { id: 'licence', icon: 'scale', rows: rows(['open_source', 'limits', 'commercial_use']) },
+  {
+    id: 'engines',
+    icon: 'database',
+    rows: rows(['mongodb', 'redis', 'dynamodb', 'influxdb', 'cloudwatch_logs']),
+  },
   {
     id: 'query',
     icon: 'table',
-    rows: rows(['builder', 'charts', 'table_editor', 'query_plan']),
+    rows: rows([
+      'builder',
+      'document_builder',
+      'charts',
+      'dashboards',
+      'table_editor',
+      'query_plan',
+      'diagram',
+      'schema_diff',
+      'data_compare',
+    ]),
   },
-  { id: 'cloud', icon: 'boxes', rows: rows(['s3', 'mcp', 'import_connections']) },
+  {
+    id: 'workflow',
+    icon: 'keyboard',
+    rows: rows(['command_palette', 'query_log', 'hooks', 'import_connections']),
+  },
+  { id: 'cloud', icon: 'boxes', rows: rows(['s3', 'aws_sso', 'mcp', 'ai_approval']) },
 ];
 
 /** The five rows the phone layout keeps, against DBeaver Community only. */
