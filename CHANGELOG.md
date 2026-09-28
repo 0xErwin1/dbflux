@@ -11,6 +11,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Saved document queries** — Queries built in the document builder can be named, saved per collection and reopened in the mode they were saved in.
 * **Shortcuts for workspace commands** — Commands that ran only from the command palette now have shortcuts: Ctrl+, opens settings, Ctrl+Shift+E, Ctrl+Shift+R and Ctrl+Shift+T show or hide the editor, results and background tasks panels, and Ctrl+Shift+L, Ctrl+Shift+O, Ctrl+Shift+C, Ctrl+Shift+D, Ctrl+Shift+M and Ctrl+Shift+G open auth profile login, the AWS SSO wizard, a saved chart, a new dashboard, MCP approvals and a governance refresh. macOS uses Cmd instead of Ctrl. Export connections is now in the command palette.
 * **Keyboard access to the notifications, sidebar views and last error** — Ctrl+Shift+B opens or closes the notifications center, Ctrl+Shift+5, Ctrl+Shift+6 and Ctrl+Shift+7 show the Connections, Scripts and Dashboards views of the sidebar, and Ctrl+Shift+X opens the most recent error in the audit viewer, as the error toast's View in Audit does. Each is also a command palette entry.
+* **Keyboard keys for the SQL and query previews** — In the SQL Preview and Query Preview dialogs, Enter or Ctrl+C copies the query and closes the dialog, as the Copy button does, J and K or the arrows scroll the query a line, and Page Up and Page Down scroll it a page. macOS uses Cmd+C. The keys are listed under the SQL Preview context in Settings > Keybindings.
 
 ### Changed
 
@@ -22,6 +23,7 @@ All notable changes to DBFlux will be documented in this file.
 
 * **Tab in the find panel** — Tab and Shift+Tab no longer get stuck in the editor's find panel when the replace field is hidden: they move focus between panes. With the replace field shown they still switch between the two fields.
 * **Escape in the sidebar search** — Escape in the sidebar search field now returns focus to the tree and keeps the typed filter.
+* **Tab inside dialogs** — Tab and Shift+Tab now cycle through the controls of an open dialog and wrap around, instead of moving focus to the panels behind it.
 
 ## [0.8.3] - 2026-09-29
 

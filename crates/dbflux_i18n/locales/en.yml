@@ -3571,6 +3571,7 @@ settings:
       toggle_console: Toggle console
       load_more: Load more
       edit_expiry: Edit expiry…
+      copy_preview: Copy preview
     context:
       global: Global
       sidebar: Sidebar

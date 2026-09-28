@@ -3571,6 +3571,7 @@ settings:
       toggle_console: Mostrar u ocultar consola
       load_more: Cargar más
       edit_expiry: Editar expiración…
+      copy_preview: Copiar vista previa
     context:
       global: Global
       sidebar: Barra lateral

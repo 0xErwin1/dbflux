@@ -436,6 +436,15 @@ menú, un desplegable o un selector, los atajos globales esperan a que se cierre
 | `Enter` | Confirmar, cuando el botón principal está habilitado |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Desplazar el contenido de un diálogo largo |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Cerrar / guardar el editor de celda y la vista previa de documento |
+| `Tab` / `Shift+Tab` | Pasar al control siguiente / anterior dentro del diálogo |
+
+`Tab` y `Shift+Tab` dan la vuelta dentro de un diálogo abierto: desde el último
+control vuelven al primero, y nunca llevan el foco a los paneles de detrás.
+
+En los diálogos **Vista previa de SQL** y **Vista previa de consulta**, `Enter`
+o `Ctrl+c` / `Cmd+c` copian la query y cierran la vista previa, `j` / `k` y `Up` / `Down` la
+desplazan una línea, y `PageUp` / `PageDown` una página. Estas teclas aparecen en
+el contexto **Vista previa de SQL** de **Settings → Keybindings**.
 
 ## Formularios y la ventana de Settings
 

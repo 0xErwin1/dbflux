@@ -3571,6 +3571,7 @@ settings:
       toggle_console: 콘솔 표시/숨기기
       load_more: 더 불러오기
       edit_expiry: 만료 편집…
+      copy_preview: 미리보기 복사
     context:
       global: 전역
       sidebar: 사이드바

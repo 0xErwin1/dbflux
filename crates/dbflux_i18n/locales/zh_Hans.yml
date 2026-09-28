@@ -3571,6 +3571,7 @@ settings:
       toggle_console: 显示或隐藏控制台
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
+      copy_preview: 复制预览
     context:
       global: 全局
       sidebar: 侧边栏

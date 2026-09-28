@@ -178,6 +178,7 @@ pub enum Command {
     ToggleConsole,
     LoadMore,
     EditExpiry,
+    CopyPreview,
 }
 
 impl Command {
@@ -374,6 +375,7 @@ impl Command {
             Command::ToggleConsole => "Toggle console",
             Command::LoadMore => "Load more",
             Command::EditExpiry => "Edit expiry…",
+            Command::CopyPreview => "Copy preview",
         }
     }
 
@@ -529,6 +531,7 @@ impl Command {
             Command::ToggleConsole => "toggle_console",
             Command::LoadMore => "load_more",
             Command::EditExpiry => "edit_expiry",
+            Command::CopyPreview => "copy_preview",
         }
     }
 
@@ -692,6 +695,7 @@ impl Command {
             Command::ToggleConsole,
             Command::LoadMore,
             Command::EditExpiry,
+            Command::CopyPreview,
         ];
 
         #[cfg(feature = "mcp")]
@@ -851,6 +855,7 @@ impl Command {
             Command::ToggleConsole => "View",
             Command::LoadMore => "Navigation",
             Command::EditExpiry => "Actions",
+            Command::CopyPreview => "Actions",
         }
     }
 
@@ -1231,6 +1236,7 @@ impl ContextId {
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",
+            ContextId::SqlPreviewModal => "SqlPreviewModal && !Input",
             context => context.as_gpui_context(),
         }
     }
@@ -1245,6 +1251,7 @@ impl ContextId {
                 | ContextId::Input
                 | ContextId::Modal
                 | ContextId::KeyValue
+                | ContextId::SqlPreviewModal
                 | ContextId::CellEditorModal
                 | ContextId::DocumentPreviewModal
         )

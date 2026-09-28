@@ -29,6 +29,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(data_table_layer());
     stack.add_layer(input_layer());
     stack.add_layer(modal_layer());
+    stack.add_layer(sql_preview_modal_layer());
     stack.add_layer(cell_editor_modal_layer());
     stack.add_layer(document_preview_modal_layer());
     stack.add_layer(key_value_layer());
@@ -1367,6 +1368,37 @@ fn modal_layer() -> KeymapLayer {
         Command::SelectFirst,
     );
     layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer
+}
+
+/// The SQL preview and the dialogs that share its context: Escape closes,
+/// Enter runs the primary action, j / k and the arrows scroll the content a
+/// line, Page Up / Page Down a page, and the primary modifier + C copies the
+/// preview. The letters stay with a focused text field inside the dialog.
+fn sql_preview_modal_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::SqlPreviewModal);
+
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
+
+    layer.bind(
+        KeyChord::new("c", Modifiers::primary()),
+        Command::CopyPreview,
+    );
 
     layer
 }

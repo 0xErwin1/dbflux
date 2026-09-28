@@ -420,6 +420,15 @@ shortcuts wait until it closes.
 | `Enter` | Confirm, when the primary button is enabled |
 | `Up` / `Down`, `PageUp` / `PageDown`, `Home` / `End` | Scroll a long dialog body |
 | `Escape` / `Ctrl+s` / `Cmd+s` | Close / save the cell editor and the document preview |
+| `Tab` / `Shift+Tab` | Move to the next / previous control inside the dialog |
+
+`Tab` and `Shift+Tab` wrap around inside an open dialog: from the last control
+they return to the first, and they never move focus to the panels behind it.
+
+In the **SQL Preview** and **Query Preview** dialogs, `Enter` or
+`Ctrl+c` / `Cmd+c` copies the query and closes the preview, `j` / `k` and `Up` /
+`Down` scroll it a line, and `PageUp` / `PageDown` a page. These keys are listed
+under the **SQL Preview** context in **Settings → Keybindings**.
 
 ## Forms and the settings window
 

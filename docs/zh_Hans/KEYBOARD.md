@@ -347,6 +347,11 @@ DBFlux 使用分层、随上下文变化的键位映射。当前生效的层取�
 | `Enter` | 主按钮可用时确认 |
 | `Up` / `Down`，`PageUp` / `PageDown`，`Home` / `End` | 滚动较长的对话框内容 |
 | `Escape` / `Ctrl+s` / `Cmd+s` | 关闭 / 保存单元格编辑器和文档预览 |
+| `Tab` / `Shift+Tab` | 移到对话框内的下一个 / 上一个控件 |
+
+在打开的对话框中，`Tab` 和 `Shift+Tab` 会循环：从最后一个控件回到第一个，焦点不会移到对话框后面的面板。
+
+在 **SQL 预览** 和 **查询预览** 对话框中，`Enter` 或 `Ctrl+c` / `Cmd+c` 复制查询并关闭预览，`j` / `k` 和 `Up` / `Down` 滚动一行，`PageUp` / `PageDown` 滚动一页。这些按键列在 **Settings → Keybindings** 的 **SQL 预览** 上下文中。
 
 ## 表单与设置窗口
 

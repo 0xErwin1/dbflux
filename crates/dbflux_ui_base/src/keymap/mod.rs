@@ -469,6 +469,7 @@ fn element_action(context: ContextId, command: Command) -> Option<Box<dyn Action
         ContextId::DataTable => data_table_action(command),
         ContextId::Input => input_action(command),
         ContextId::Modal => modal_action(command),
+        ContextId::SqlPreviewModal => sql_preview_modal_action(command),
         ContextId::CellEditorModal | ContextId::DocumentPreviewModal => {
             modal_editor_action(command)
         }
@@ -573,6 +574,24 @@ fn modal_action(command: Command) -> Option<Box<dyn Action>> {
     };
 
     Some(action)
+}
+
+/// The modal actions, which every dialog built on the `Modal` primitive
+/// answers, plus the SQL preview's own copy action.
+fn sql_preview_modal_action(command: Command) -> Option<Box<dyn Action>> {
+    if command == Command::CopyPreview {
+        return Some(Box::new(crate::sql_preview_modal::CopyPreview));
+    }
+
+    match command {
+        Command::Cancel
+        | Command::Execute
+        | Command::SelectPrev
+        | Command::SelectNext
+        | Command::PageUp
+        | Command::PageDown => modal_action(command),
+        _ => None,
+    }
 }
 
 fn modal_editor_action(command: Command) -> Option<Box<dyn Action>> {

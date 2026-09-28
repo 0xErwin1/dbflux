@@ -1274,6 +1274,45 @@ fn modal_editors_cancel_and_save() {
     }
 }
 
+/// The SQL preview and the dialogs that share its context: Escape, Enter,
+/// j / k and the paging keys run the modal actions, and the primary modifier
+/// + C copies the preview. The letter keys stay with a focused text field.
+#[test]
+fn sql_preview_modal_keys_run_the_modal_actions() {
+    #[cfg(target_os = "macos")]
+    let copy = "cmd-c";
+    #[cfg(not(target_os = "macos"))]
+    let copy = "ctrl-c";
+
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::SqlPreviewModal, &[]);
+    let stack = element_stack(root.clone(), &["Modal SqlPreviewModal"]);
+
+    assert_element_bindings(
+        &stack,
+        vec![
+            ("escape", Box::new(component_actions::Cancel)),
+            ("enter", Box::new(component_actions::Execute)),
+            ("j", Box::new(component_actions::ScrollDown)),
+            ("down", Box::new(component_actions::ScrollDown)),
+            ("k", Box::new(component_actions::ScrollUp)),
+            ("up", Box::new(component_actions::ScrollUp)),
+            ("pagedown", Box::new(component_actions::ScrollPageDown)),
+            ("pageup", Box::new(component_actions::ScrollPageUp)),
+            (copy, Box::new(crate::sql_preview_modal::CopyPreview)),
+        ],
+        "SQL preview",
+    );
+
+    let keymap = native_keymap();
+    let text_field = element_stack(root, &["Modal SqlPreviewModal", "Input"]);
+    for keys in ["j", "k"] {
+        assert!(
+            top_action(&keymap, keys, &text_field).is_none(),
+            "`{keys}` must stay with a text field inside the SQL preview"
+        );
+    }
+}
+
 #[test]
 fn command_palette_navigates_with_arrows_and_ctrl_j_k() {
     let keymap = native_keymap();
