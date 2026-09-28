@@ -4,7 +4,9 @@ use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, di
 use gpui_component::ActiveTheme;
 
 use crate::labels::{bool_op_label, comparator_label};
+use crate::query_builder::keyboard::row_id;
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, FilterTarget, QueryBuilderPanel};
+use dbflux_components::composites::RailMark;
 use dbflux_components::controls::{Dropdown, InputState};
 use gpui_component::input::EditorState;
 
@@ -63,6 +65,9 @@ pub fn render_filters_for_target(
         ),
     };
 
+    let mark = panel.rail_mark.clone();
+    let empty_row = row_id::filters_empty(target);
+
     let (input_states, column_input_states, comparator_dropdowns) = match target {
         FilterTarget::Where => (
             panel.predicate_input_states.clone(),
@@ -91,51 +96,62 @@ pub fn render_filters_for_target(
     match tree {
         None => {
             container = container.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_sm()
-                            .child(SharedString::from(dbflux_i18n::t!(
-                                "document.query_builder.filters.no_filters"
-                            ))),
-                    )
-                    .child(
-                        Button::new(
-                            add_pred_id,
-                            dbflux_i18n::t!("document.query_builder.filters.add_filter"),
+                mark.row(
+                    &empty_row,
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .child(SharedString::from(dbflux_i18n::t!(
+                                    "document.query_builder.filters.no_filters"
+                                ))),
                         )
-                        .ghost()
-                        .inline()
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.add_predicate_for(
-                                    target,
-                                    vec![],
-                                    &source_alias.clone(),
-                                    "",
-                                    cx,
-                                );
-                            },
-                        )),
-                    )
-                    .child(
-                        Button::new(
-                            add_group_id,
-                            dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
+                        .child(
+                            mark.ring_element(
+                                &empty_row,
+                                "add-filter",
+                                Button::new(
+                                    add_pred_id,
+                                    dbflux_i18n::t!("document.query_builder.filters.add_filter"),
+                                )
+                                .ghost()
+                                .inline()
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.add_predicate_for(
+                                            target,
+                                            vec![],
+                                            &source_alias.clone(),
+                                            "",
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            ),
                         )
-                        .ghost()
-                        .inline()
-                        .on_click(cx.listener(
-                            move |this, _event, _window, cx| {
-                                this.add_group_for(target, vec![], cx);
-                            },
-                        )),
-                    ),
+                        .child(
+                            mark.ring_element(
+                                &empty_row,
+                                "add-group",
+                                Button::new(
+                                    add_group_id,
+                                    dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
+                                )
+                                .ghost()
+                                .inline()
+                                .on_click(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.add_group_for(target, vec![], cx);
+                                    },
+                                )),
+                            ),
+                        ),
+                ),
             );
         }
 
@@ -148,6 +164,7 @@ pub fn render_filters_for_target(
                 &input_states,
                 &column_input_states,
                 &comparator_dropdowns,
+                &mark,
                 cx,
             );
             container = container.child(root_element);
@@ -166,6 +183,7 @@ fn render_filter_node(
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<EditorState>>,
     comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
+    mark: &RailMark,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
     use dbflux_core::FilterNode;
@@ -181,6 +199,7 @@ fn render_filter_node(
             input_states,
             column_input_states,
             comparator_dropdowns,
+            mark,
             cx,
         )
         .into_any_element(),
@@ -196,6 +215,7 @@ fn render_filter_node(
                 input_state,
                 column_input,
                 comparator_dropdown,
+                mark,
                 cx,
             )
             .into_any_element()
@@ -213,11 +233,14 @@ fn render_filter_group(
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
     column_input_states: &std::collections::HashMap<u64, Entity<EditorState>>,
     comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
+    mark: &RailMark,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::Button;
     use gpui::SharedString;
     use gpui::prelude::*;
+
+    let group_row = row_id::filter_group(target, &path);
 
     let prefix = match target {
         FilterTarget::Where => "qb-grp",
@@ -275,35 +298,43 @@ fn render_filter_group(
         .items_center()
         .gap(BuilderMetrics::CHIP_GAP)
         .child(
-            link(
-                path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
-                dbflux_i18n::t!("document.query_builder.filters.add_filter_link"),
-                !at_depth_cap,
-            )
-            .when(!at_depth_cap, |link| {
-                link.on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.add_predicate_for(
-                        target,
-                        path_for_add_pred.clone(),
-                        &source_alias_for_pred.clone(),
-                        "",
-                        cx,
-                    );
-                }))
-            }),
+            mark.ring(
+                &group_row,
+                "add-filter",
+                link(
+                    path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
+                    dbflux_i18n::t!("document.query_builder.filters.add_filter_link"),
+                    !at_depth_cap,
+                )
+                .when(!at_depth_cap, |link| {
+                    link.on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_predicate_for(
+                            target,
+                            path_for_add_pred.clone(),
+                            &source_alias_for_pred.clone(),
+                            "",
+                            cx,
+                        );
+                    }))
+                }),
+            ),
         )
         .child(div().text_color(theme.muted_foreground).child("·"))
         .child(
-            link(
-                path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
-                dbflux_i18n::t!("document.query_builder.filters.add_group_link"),
-                !at_depth_cap,
-            )
-            .when(!at_depth_cap, |link| {
-                link.on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.add_group_for(target, path_for_add_group.clone(), cx);
-                }))
-            }),
+            mark.ring(
+                &group_row,
+                "add-group",
+                link(
+                    path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
+                    dbflux_i18n::t!("document.query_builder.filters.add_group_link"),
+                    !at_depth_cap,
+                )
+                .when(!at_depth_cap, |link| {
+                    link.on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.add_group_for(target, path_for_add_group.clone(), cx);
+                    }))
+                }),
+            ),
         );
 
     let mut group_div = div()
@@ -314,21 +345,24 @@ fn render_filter_group(
             group.pl(BuilderMetrics::CARD_PADDING)
         })
         .child(
-            div()
-                .flex()
-                .flex_row()
-                .gap(BuilderMetrics::ROW_GAP)
-                .items_center()
-                .child(op_switch)
-                .child(div().flex_1())
-                .when(!path.is_empty(), |this| {
-                    this.child(remove_button(
-                        path_id(&format!("{}-rm", prefix), &path_for_remove),
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.remove_filter_node_for(target, path_for_remove.clone(), cx);
-                        }),
-                    ))
-                }),
+            mark.row(
+                &group_row,
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(BuilderMetrics::ROW_GAP)
+                    .items_center()
+                    .child(mark.ring_element(&group_row, "op", op_switch))
+                    .child(div().flex_1())
+                    .when(!path.is_empty(), |this| {
+                        this.child(remove_button(
+                            path_id(&format!("{}-rm", prefix), &path_for_remove),
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.remove_filter_node_for(target, path_for_remove.clone(), cx);
+                            }),
+                        ))
+                    }),
+            ),
         );
 
     for (i, child) in children.into_iter().enumerate() {
@@ -342,6 +376,7 @@ fn render_filter_group(
             input_states,
             column_input_states,
             comparator_dropdowns,
+            mark,
             cx,
         );
         group_div = group_div.child(child_element);
@@ -350,6 +385,7 @@ fn render_filter_group(
     group_div.child(add_links)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_filter_predicate(
     pred: dbflux_core::Predicate,
     path: Vec<usize>,
@@ -357,9 +393,12 @@ fn render_filter_predicate(
     input_state: Option<Entity<InputState>>,
     column_input_state: Option<Entity<EditorState>>,
     comparator_dropdown: Option<Entity<Dropdown>>,
+    mark: &RailMark,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
     use dbflux_components::controls::{Button, Input};
+
+    let predicate_row = row_id::filter_predicate(target, pred.node_id);
     use gpui::SharedString;
     use gpui::prelude::*;
 
@@ -383,12 +422,12 @@ fn render_filter_predicate(
 
     if let Some(col_state) = column_input_state {
         row = row.child(
-            div()
-                .w(BuilderMetrics::FILTER_COLUMN_WIDTH)
-                .flex_shrink_0()
-                .child(
-                    crate::completion_support::single_line_completion_editor(&col_state).w_full(),
-                ),
+            mark.ring(
+                &predicate_row,
+                "column",
+                div().w(BuilderMetrics::FILTER_COLUMN_WIDTH).flex_shrink_0(),
+            )
+            .child(crate::completion_support::single_line_completion_editor(&col_state).w_full()),
         );
     } else {
         let fallback = format!("{}.{}", pred.source_alias, pred.column);
@@ -401,7 +440,7 @@ fn render_filter_predicate(
     }
 
     if let Some(dropdown) = comparator_dropdown {
-        row = row.child(comparator_chip(dropdown, cx));
+        row = row.child(mark.ring(&predicate_row, "op", comparator_chip(dropdown, cx)));
     } else {
         row = row.child(
             div()
@@ -412,18 +451,24 @@ fn render_filter_predicate(
 
     if needs_value {
         if let Some(state) = input_state {
-            row = row.child(div().flex_1().child(Input::new(&state).small().w_full()));
+            row = row.child(
+                mark.ring(&predicate_row, "value", div().flex_1())
+                    .child(Input::new(&state).small().w_full()),
+            );
         } else {
             row = row.child(div().text_sm().child(SharedString::from("<value>")));
         }
     }
 
-    row.child(remove_button(
-        path_id(rm_prefix, &path_for_rm),
-        cx.listener(move |this, _event, _window, cx| {
-            this.remove_filter_node_for(target, path_for_rm.clone(), cx);
-        }),
-    ))
+    mark.row(
+        &predicate_row,
+        row.child(remove_button(
+            path_id(rm_prefix, &path_for_rm),
+            cx.listener(move |this, _event, _window, cx| {
+                this.remove_filter_node_for(target, path_for_rm.clone(), cx);
+            }),
+        )),
+    )
 }
 
 /// The remove control of a filter row or group: a muted circled X.
@@ -445,10 +490,7 @@ fn remove_button(
 
 /// Wraps a dropdown trigger in a bordered, themed chip so the selected
 /// label and the chevron read as a single discrete control.
-fn comparator_chip(
-    dropdown: Entity<Dropdown>,
-    _cx: &mut Context<QueryBuilderPanel>,
-) -> impl IntoElement {
+fn comparator_chip(dropdown: Entity<Dropdown>, _cx: &mut Context<QueryBuilderPanel>) -> gpui::Div {
     use gpui::prelude::*;
 
     div()

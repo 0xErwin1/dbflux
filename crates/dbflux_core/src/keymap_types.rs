@@ -91,6 +91,11 @@ pub enum Command {
     // Row operations (vim-style)
     ResultsDeleteRow,
     ResultsAddRow,
+    /// Adds an entry to the list the cursor is in (a filter condition, a
+    /// sort key, an assignment) in a side rail such as the query builders.
+    AddItem,
+    /// Adds a nested group to the filter group the cursor is in.
+    AddGroup,
     ResultsDuplicateRow,
     ResultsCopyRow,
     ResultsCopyCell,
@@ -339,6 +344,8 @@ impl Command {
             Command::TogglePanel => "Toggle panel",
             Command::ResultsDeleteRow => "Delete row",
             Command::ResultsAddRow => "Add row",
+            Command::AddItem => "Add item",
+            Command::AddGroup => "Add group",
             Command::ResultsDuplicateRow => "Duplicate row",
             Command::ResultsCopyRow => "Copy row",
             Command::ResultsCopyCell => "Copy cell",
@@ -510,6 +517,8 @@ impl Command {
             Command::TogglePanel => "toggle_panel",
             Command::ResultsDeleteRow => "results_delete_row",
             Command::ResultsAddRow => "results_add_row",
+            Command::AddItem => "add_item",
+            Command::AddGroup => "add_group",
             Command::ResultsDuplicateRow => "results_duplicate_row",
             Command::ResultsCopyRow => "results_copy_row",
             Command::ResultsCopyCell => "results_copy_cell",
@@ -698,6 +707,8 @@ impl Command {
             Command::TogglePanel,
             Command::ResultsDeleteRow,
             Command::ResultsAddRow,
+            Command::AddItem,
+            Command::AddGroup,
             Command::ResultsDuplicateRow,
             Command::ResultsCopyRow,
             Command::ResultsCopyCell,
@@ -841,6 +852,8 @@ impl Command {
             | Command::Delete
             | Command::Rename
             | Command::FocusSearch
+            | Command::AddItem
+            | Command::AddGroup
             | Command::ToggleFavorite => "Actions",
 
             Command::RunQuery
@@ -1110,6 +1123,12 @@ pub enum ContextId {
 
     /// The notifications center popover under the title-bar bell.
     Notifications,
+
+    /// The SQL query builder rail, once the keyboard moved into it.
+    QueryBuilder,
+
+    /// The document query builder rail, once the keyboard moved into it.
+    DocumentBuilder,
 }
 
 impl ContextId {
@@ -1147,6 +1166,8 @@ impl ContextId {
             ContextId::Settings => None,
             ContextId::Inspector => Some(ContextId::Global),
             ContextId::Notifications => None,
+            ContextId::QueryBuilder => Some(ContextId::Global),
+            ContextId::DocumentBuilder => Some(ContextId::Global),
         }
     }
 
@@ -1231,6 +1252,8 @@ impl ContextId {
             ContextId::Settings => "Settings Window",
             ContextId::Inspector => "Inspector",
             ContextId::Notifications => "Notifications",
+            ContextId::QueryBuilder => "Query Builder",
+            ContextId::DocumentBuilder => "Document Builder",
         }
     }
 
@@ -1265,6 +1288,8 @@ impl ContextId {
             ContextId::Settings => "settings",
             ContextId::Inspector => "inspector",
             ContextId::Notifications => "notifications",
+            ContextId::QueryBuilder => "query_builder",
+            ContextId::DocumentBuilder => "document_builder",
         }
     }
 
@@ -1299,6 +1324,8 @@ impl ContextId {
             ContextId::Settings,
             ContextId::Inspector,
             ContextId::Notifications,
+            ContextId::QueryBuilder,
+            ContextId::DocumentBuilder,
         ]
     }
 
@@ -1333,6 +1360,8 @@ impl ContextId {
             ContextId::Settings => "Settings",
             ContextId::Inspector => "Inspector",
             ContextId::Notifications => "Notifications",
+            ContextId::QueryBuilder => "QueryBuilder",
+            ContextId::DocumentBuilder => "DocumentBuilder",
         }
     }
 
@@ -1357,6 +1386,8 @@ impl ContextId {
             ContextId::Audit => "Audit && !Modal",
             ContextId::SchemaViz => "SchemaViz && !Modal",
             ContextId::Inspector => "Inspector && !Modal",
+            ContextId::QueryBuilder => "QueryBuilder && !Input && !Dropdown && !Modal",
+            ContextId::DocumentBuilder => "DocumentBuilder && !Input && !Dropdown && !Modal",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

@@ -421,7 +421,42 @@ panel, row inspector, document panel or query builder beside it.
 | `Escape` | Stop editing the value, or go back to the grid |
 | `Ctrl+h` | Go back to the grid |
 
-The query builder takes focus but scrolls only with the pointer.
+The query builders have keys of their own, listed under
+[Query builders](#query-builders).
+
+## Query builders
+
+After `Ctrl+l` moves focus from a table's grid into its query builder, a
+cursor marks one row of the builder: the column list, a condition or group of
+the WHERE tree, a join, a grouping or sort row, an assignment or an execution
+option. The keys are listed under the Query Builder context in Settings >
+Keybindings.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last row |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Eight rows down / up |
+| `h` / `l` (or `Left` / `Right`) | Previous / next field of the row |
+| `Enter` / `i` | Work the field: type in a text field, open a dropdown, press a button |
+| `Space` | Flip the row's switch (AND / OR, ASC / DESC, a column checkbox, an assignment's value kind) |
+| `a` | Add an entry to the row's list (a condition, a join, a sort key, an assignment) |
+| `Shift+a` | Add a group inside the row's filter group |
+| `x` / `d` | Remove the row |
+| `Alt+l` / `Alt+h` | Next / previous mode (SELECT, UPDATE, DELETE) |
+| `Ctrl+Enter` | Run |
+| `Ctrl+s` | Save |
+| `m` / `Shift+F10` | Menu of the row's actions and the builder's own (Run, Open in Editor, Save, Reset, the modes, Close) |
+| `Escape` | Leave a field back to the rows, or go back to the grid |
+| `Ctrl+h` | Go back to the grid |
+
+In a text field the letters are typed text and Escape returns to the rows. A
+dropdown opened with Enter takes the dropdown keys and gives the keyboard back
+to the builder when it closes. A run from the keyboard goes through the same
+confirmation and mutation policy as the Run button, so an UPDATE or DELETE
+without WHERE still asks first. macOS uses Cmd instead of Ctrl for
+`Ctrl+Enter` and `Ctrl+s`, and there `Alt+l` / `Alt+h` work only outside the
+text fields.
 
 ## Document tree
 

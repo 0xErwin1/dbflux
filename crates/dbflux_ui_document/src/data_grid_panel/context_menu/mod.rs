@@ -708,6 +708,10 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        if let Some(context) = self.builder_rail_context(cx) {
+            return context;
+        }
+
         if self.focused_side_island(cx).is_some() {
             return ContextId::Inspector;
         }

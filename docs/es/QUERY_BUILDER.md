@@ -119,6 +119,17 @@ Anular la sugerencia muestra un modal de tradeoffs.
 confirmación de queries peligrosas (ver [Confirmación de queries
 peligrosas](EDITOR.md#confirmación-de-queries-peligrosas)) antes de ejecutarse.
 
+## Teclado
+
+`Ctrl+l` desde la grilla de la tabla lleva el teclado al constructor. `j` y
+`k` mueven un cursor por sus filas, `h` y `l` entre los campos de una fila, y
+`Enter` usa el campo: escribe en un campo de texto, abre un desplegable o pulsa
+un botón. `a` agrega una entrada, `Shift+a` un grupo de filtros, `x` quita la
+fila y `Space` cambia su interruptor. `Alt+l` y `Alt+h` cambian el modo, `m`
+abre un menú con Run, Save, Reset y el resto, y `Escape` o `Ctrl+h` vuelven a
+la grilla. La lista completa está en
+[Constructores de consultas](KEYBOARD.md#constructores-de-consultas).
+
 ## Colecciones de documentos
 
 Las colecciones de los drivers que lo ofrecen (MongoDB) tienen un constructor

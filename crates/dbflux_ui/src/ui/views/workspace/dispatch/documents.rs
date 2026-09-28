@@ -156,7 +156,11 @@ impl Workspace {
             // So do the tabs of a panel a document draws (the query
             // history's Recent and Saved).
             | Command::NextPanelTab
-            | Command::PrevPanelTab => Some(
+            | Command::PrevPanelTab
+            // So do the rows of a side rail the document draws (the query
+            // builders).
+            | Command::AddItem
+            | Command::AddGroup => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

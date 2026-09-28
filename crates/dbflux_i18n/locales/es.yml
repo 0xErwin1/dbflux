@@ -175,6 +175,11 @@ components:
   file_picker:
     browse: "Explorar…"
 composites:
+  rail:
+    add: "Agregar"
+    add_group: "Agregar grupo"
+    remove: "Quitar"
+    toggle: "Alternar"
   refresh_split_button:
     label: Actualizar
 controls:
@@ -3533,6 +3538,8 @@ settings:
       toggle_panel: Alternar panel
       results_delete_row: Eliminar fila
       results_add_row: Agregar fila
+      add_item: "Agregar elemento"
+      add_group: "Agregar grupo"
       results_duplicate_row: Duplicar fila
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
@@ -3649,6 +3656,8 @@ settings:
       settings: Ventana de configuración
       inspector: Inspector
       notifications: Notificaciones
+      query_builder: "Constructor de consultas"
+      document_builder: "Constructor de documentos"
     category:
       global: Global
       focus: Foco

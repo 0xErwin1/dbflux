@@ -7,10 +7,10 @@ use dbflux_components::tokens::{BuilderMetrics, ChamferCut, ChromeColors, Spacin
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, SharedString, Window, div, px};
 use gpui_component::ActiveTheme;
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::theme::Theme;
 
 use crate::query_builder::mutation_state::BuilderMode;
+use dbflux_components::composites::{RailOwner, rail_scroll_area, render_rail_menu};
 
 /// Keycap on the Run button: the builder runs on Cmd/Ctrl+Enter.
 #[cfg(target_os = "macos")]
@@ -76,11 +76,23 @@ pub fn render_panel(
 
     panel.maybe_refresh_mutation_count(cx);
 
+    let rail_active = panel
+        .focus_handle
+        .as_ref()
+        .is_some_and(|handle| handle.contains_focused(window, cx));
+    let rows = panel.rail_rows(cx);
+    panel.rail_mark = panel.rail.mark(&rows, rail_active, cx);
+
     let theme = cx.theme().clone();
 
     let show_mode_selector = panel.shows_mutation_selector(cx);
 
-    let container = div().flex().flex_col().size_full().bg(theme.popover);
+    let container = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .size_full()
+        .bg(theme.popover);
 
     let container = match &panel.focus_handle {
         Some(handle) => container.track_focus(handle),
@@ -100,6 +112,7 @@ pub fn render_panel(
                 .child(render_preview_pane(panel, &theme)),
         )
         .child(render_footer(panel, &theme, cx))
+        .children(render_rail_menu(&panel.rail, "qb-rail-menu", cx))
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +163,7 @@ fn render_header(
                 .icon_only()
                 .tooltip(dbflux_i18n::t!("document.query_builder.chrome.save"))
                 .tab_stop(false)
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    let name = this.loaded_id.clone().unwrap_or_else(|| {
-                        dbflux_i18n::t!("document.query_builder.chrome.untitled_query")
-                    });
-                    cx.emit(BuilderEvent::SaveRequested { name });
-                })),
+                .on_click(cx.listener(|this, _event, _window, cx| this.request_save(cx))),
         )
         .child(
             Button::new("qb-hdr-reset", "")
@@ -261,6 +268,20 @@ fn render_body(
     theme: &Theme,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
+    let sections = render_sections(panel, theme, cx);
+
+    rail_scroll_area(
+        &panel.rail,
+        "qb-sections",
+        div().flex().flex_col().child(sections),
+    )
+}
+
+fn render_sections(
+    panel: &mut QueryBuilderPanel,
+    theme: &Theme,
+    cx: &mut Context<QueryBuilderPanel>,
+) -> gpui::AnyElement {
     use super::sections::{assignments, columns, execution, filters, group_by, joins, sort};
 
     let current_mode = panel
@@ -396,19 +417,15 @@ fn render_body(
     }
 }
 
-/// The scrolling column of section cards: 14 px side padding, 10 px
-/// between cards.
-fn sections_container() -> gpui_component::scroll::Scrollable<gpui::Stateful<gpui::Div>> {
+/// The column of section cards inside the scrolling area: 14 px side
+/// padding, 10 px between cards.
+fn sections_container() -> gpui::Div {
     div()
-        .id("qb-sections")
-        .flex_1()
-        .min_h(px(0.0))
         .flex()
         .flex_col()
         .gap(BuilderMetrics::SECTION_GAP)
         .px(BuilderMetrics::RAIL_PADDING_X)
         .pb(BuilderMetrics::SECTION_GAP)
-        .overflow_y_scrollbar()
 }
 
 /// "N of M" over the Columns card while columns are picked one by one.
@@ -739,27 +756,7 @@ fn render_footer(
                         .primary()
                         .kbd(RUN_SHORTCUT_HINT)
                         .disabled(!is_runnable)
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            use crate::query_builder::events::BuilderEvent;
-                            if is_mutation_mode {
-                                if let Some(result) = this.build_mutation_spec_and_opts() {
-                                    use crate::data_grid_panel::mutation_executor::CountState;
-                                    let est_rows = this.mutation_state.as_ref().and_then(|s| {
-                                        match &s.count_state {
-                                            CountState::Done(n) => Some(*n),
-                                            _ => None,
-                                        }
-                                    });
-                                    cx.emit(BuilderEvent::MutationRunRequested {
-                                        spec: Box::new(result.0),
-                                        opts: Box::new(result.1),
-                                        est_rows,
-                                    });
-                                }
-                            } else {
-                                cx.emit(BuilderEvent::RunRequested);
-                            }
-                        })),
+                        .on_click(cx.listener(|this, _event, _window, cx| this.request_run(cx))),
                 ),
         )
 }

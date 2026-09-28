@@ -441,7 +441,42 @@ constructor de consultas que está a su lado.
 | `Escape` | Dejar de editar el valor, o volver a la grilla |
 | `Ctrl+h` | Volver a la grilla |
 
-El constructor de consultas recibe el foco pero solo se desplaza con el puntero.
+Los constructores de consultas tienen teclas propias, descritas en
+[Constructores de consultas](#constructores-de-consultas).
+
+## Constructores de consultas
+
+Después de que `Ctrl+l` mueve el foco desde la grilla de una tabla a su
+constructor de consultas, un cursor marca una fila del constructor: la lista de
+columnas, una condición o grupo del árbol WHERE, un join, una fila de
+agrupación u orden, una asignación o una opción de ejecución. Las teclas
+aparecen en el contexto Query Builder de Settings > Keybindings.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Fila siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última fila |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Ocho filas abajo / arriba |
+| `h` / `l` (o `Left` / `Right`) | Campo anterior / siguiente de la fila |
+| `Enter` / `i` | Usar el campo: escribir en un campo de texto, abrir un desplegable, pulsar un botón |
+| `Space` | Cambiar el interruptor de la fila (AND / OR, ASC / DESC, la casilla de una columna, el tipo de valor de una asignación) |
+| `a` | Agregar una entrada a la lista de la fila (una condición, un join, una clave de orden, una asignación) |
+| `Shift+a` | Agregar un grupo dentro del grupo de filtros de la fila |
+| `x` / `d` | Quitar la fila |
+| `Alt+l` / `Alt+h` | Modo siguiente / anterior (SELECT, UPDATE, DELETE) |
+| `Ctrl+Enter` | Ejecutar |
+| `Ctrl+s` | Guardar |
+| `m` / `Shift+F10` | Menú con las acciones de la fila y las del constructor (Run, Open in Editor, Save, Reset, los modos, Close) |
+| `Escape` | Salir de un campo a las filas, o volver a la grilla |
+| `Ctrl+h` | Volver a la grilla |
+
+En un campo de texto las letras se escriben y Escape vuelve a las filas. Un
+desplegable abierto con Enter responde a las teclas de los desplegables y
+devuelve el teclado al constructor al cerrarse. Una ejecución desde el teclado
+pasa por la misma confirmación y política de mutaciones que el botón Run, así
+que un UPDATE o DELETE sin WHERE sigue pidiendo confirmación. macOS usa Cmd en
+lugar de Ctrl para `Ctrl+Enter` y `Ctrl+s`, y allí `Alt+l` / `Alt+h` funcionan
+solo fuera de los campos de texto.
 
 ## Árbol de documentos
 

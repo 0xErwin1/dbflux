@@ -177,6 +177,8 @@ fn make_panel(spec: VisualQuerySpec) -> QueryBuilderPanel {
         pre_group_projection: None,
         sort_validation_error: None,
         incomplete_aggregate_row_count: 0,
+        rail: Default::default(),
+        rail_mark: Default::default(),
     }
 }
 

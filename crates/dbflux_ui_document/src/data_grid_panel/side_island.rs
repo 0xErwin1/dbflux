@@ -7,10 +7,16 @@
 //! scroll the panel, Enter edits the value panel's text, and Ctrl+H or Escape
 //! go back to the grid. The panels are the grid's own entities, so the grid
 //! routes these keys itself and the workspace stays unaware of their kinds.
+//!
+//! The two query builders have keys of their own: the grid reports
+//! `ContextId::QueryBuilder` or `ContextId::DocumentBuilder` (or the context
+//! menu while the builder's action menu is open) and hands every key to the
+//! builder, which moves its cursor over its rows and works their fields.
 
 use super::DataGridPanel;
 use crate::DataViewMode;
-use dbflux_app::keymap::Command;
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::composites::RailOutcome;
 use dbflux_components::tokens::Heights;
 use gpui::*;
 
@@ -116,6 +122,56 @@ impl DataGridPanel {
             .filter(|island| self.open_side_island(cx) == Some(*island))
     }
 
+    /// The context a builder rail holding the keyboard reports, or `None`
+    /// when the keyboard is in another side panel or none.
+    pub(super) fn builder_rail_context(&self, cx: &App) -> Option<ContextId> {
+        match self.focused_side_island(cx)? {
+            SideIsland::QueryBuilder => {
+                let panel = self.builder.builder_panel.as_ref()?.read(cx);
+                Some(if panel.keyboard_menu_is_open() {
+                    ContextId::ContextMenu
+                } else {
+                    ContextId::QueryBuilder
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Hands a key to the builder rail holding the keyboard. `None` when
+    /// the keyboard is in another side panel.
+    fn dispatch_builder_rail_command(
+        &mut self,
+        island: SideIsland,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        if cmd == Command::FocusLeft {
+            self.leave_side_island(window, cx);
+            return Some(true);
+        }
+
+        let outcome = match island {
+            SideIsland::QueryBuilder => self
+                .builder
+                .builder_panel
+                .clone()?
+                .update(cx, |panel, cx| panel.keyboard_command(cmd, window, cx)),
+            _ => return None,
+        };
+
+        match outcome {
+            RailOutcome::Handled => Some(true),
+            RailOutcome::Leave => {
+                self.leave_side_island(window, cx);
+                Some(true)
+            }
+            RailOutcome::Unhandled if cmd == Command::FocusRight => Some(true),
+            RailOutcome::Unhandled => None,
+        }
+    }
+
     /// Moves the keyboard into the open side panel (`Command::FocusRight`).
     /// Returns false, leaving focus where it is, when no panel is open.
     pub(super) fn enter_side_island(
@@ -175,6 +231,10 @@ impl DataGridPanel {
             self.focus._side_island_blur = None;
             return None;
         };
+
+        if island == SideIsland::QueryBuilder {
+            return self.dispatch_builder_rail_command(island, cmd, window, cx);
+        }
 
         let scroll = match cmd {
             Command::SelectNext => Some(IslandScroll::LineDown),
@@ -242,7 +302,7 @@ impl DataGridPanel {
                     content.update(cx, |content, cx| content.scroll(step, cx));
                 }
             }
-            // The builder rail scrolls with the pointer only.
+            // The builder rails move a cursor instead.
             SideIsland::QueryBuilder => {}
         }
     }

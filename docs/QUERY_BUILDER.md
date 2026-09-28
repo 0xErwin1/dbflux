@@ -111,6 +111,16 @@ primary-key availability. Overriding the suggestion shows a tradeoff modal.
 dangerous-query confirmation (see
 [Dangerous-query confirmation](EDITOR.md#dangerous-query-confirmation)) before it runs.
 
+## Keyboard
+
+`Ctrl+l` from the table's grid moves the keyboard into the builder. `j` and
+`k` move a cursor over its rows, `h` and `l` between the fields of a row, and
+`Enter` works the field: it types in a text field, opens a dropdown or presses
+a button. `a` adds an entry, `Shift+a` a filter group, `x` removes the row and
+`Space` flips its switch. `Alt+l` and `Alt+h` switch the mode, `m` opens a menu
+with Run, Save, Reset and the rest, and `Escape` or `Ctrl+h` go back to the
+grid. The full list is in [Query builders](KEYBOARD.md#query-builders).
+
 ## Document collections
 
 Collections on drivers that offer it (MongoDB) have a visual builder for find

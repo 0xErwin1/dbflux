@@ -175,6 +175,11 @@ components:
   file_picker:
     browse: "찾아보기…"
 composites:
+  rail:
+    add: "추가"
+    add_group: "그룹 추가"
+    remove: "제거"
+    toggle: "전환"
   refresh_split_button:
     label: 새로고침
 controls:
@@ -3533,6 +3538,8 @@ settings:
       toggle_panel: 패널 전환
       results_delete_row: 행 삭제
       results_add_row: 행 추가
+      add_item: "항목 추가"
+      add_group: "그룹 추가"
       results_duplicate_row: 행 복제
       results_copy_row: 행 복사
       results_copy_cell: 셀 복사
@@ -3648,6 +3655,8 @@ settings:
       settings: 설정 창
       inspector: 인스펙터
       notifications: 알림
+      query_builder: "쿼리 빌더"
+      document_builder: "문서 빌더"
     category:
       global: 전역
       focus: 포커스

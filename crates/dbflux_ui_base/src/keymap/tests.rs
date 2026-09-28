@@ -1854,3 +1854,68 @@ fn alt_keys_switch_the_query_history_tabs() {
         }
     }
 }
+
+/// Inside either query builder rail the in-pane keys move the cursor and act
+/// on its row, while a text field or a dropdown inside the rail keeps its
+/// letters; Escape, Ctrl+H, the run and save chords and the mode keys still
+/// reach the rail from a text field.
+#[test]
+fn builder_rail_keys_drive_the_rail_and_leave_its_fields_their_letters() {
+    let keymap = native_keymap();
+
+    for context in [ContextId::QueryBuilder, ContextId::DocumentBuilder] {
+        let root = root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]);
+        let rail = element_stack(root.clone(), &[]);
+        let field = element_stack(root.clone(), &["Input"]);
+        let dropdown = element_stack(root, &["Dropdown"]);
+
+        for (keys, command) in [
+            ("j", Command::SelectNext),
+            ("k", Command::SelectPrev),
+            ("g", Command::SelectFirst),
+            ("shift-g", Command::SelectLast),
+            ("h", Command::ColumnLeft),
+            ("l", Command::ColumnRight),
+            ("enter", Command::Execute),
+            ("i", Command::Execute),
+            ("space", Command::ExpandCollapse),
+            ("a", Command::AddItem),
+            ("shift-a", Command::AddGroup),
+            ("x", Command::Delete),
+            ("d", Command::Delete),
+            ("m", Command::OpenPaneActions),
+            ("shift-f10", Command::OpenPaneActions),
+            ("alt-l", Command::NextPanelTab),
+            ("alt-h", Command::PrevPanelTab),
+            ("escape", Command::Cancel),
+            ("ctrl-h", Command::FocusLeft),
+        ] {
+            let action = top_action(&keymap, keys, &rail)
+                .unwrap_or_else(|| panic!("`{keys}` bound in {context:?}"));
+            assert!(
+                runs_command(action.as_ref(), command),
+                "`{keys}` must run {command:?} in {context:?}"
+            );
+        }
+
+        for keys in ["j", "a", "x", "l", "i", "m", "space"] {
+            let in_field = top_action(&keymap, keys, &field);
+            assert!(
+                in_field
+                    .as_ref()
+                    .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+                "`{keys}` is typed text in a {context:?} field"
+            );
+            let in_dropdown = top_action(&keymap, keys, &dropdown);
+            assert!(
+                in_dropdown.as_ref().is_none_or(|action| {
+                    !runs_command(action.as_ref(), Command::AddItem)
+                        && !runs_command(action.as_ref(), Command::Delete)
+                        && !runs_command(action.as_ref(), Command::ColumnRight)
+                        && !runs_command(action.as_ref(), Command::OpenPaneActions)
+                }),
+                "`{keys}` does not act on the rail row from a focused dropdown"
+            );
+        }
+    }
+}

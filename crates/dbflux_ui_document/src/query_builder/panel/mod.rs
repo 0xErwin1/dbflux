@@ -523,6 +523,12 @@ pub struct QueryBuilderPanel {
     /// `spec.aggregates` because they are incomplete (empty column for
     /// non-CountStar functions). Surfaced as a footer warning.
     pub(crate) incomplete_aggregate_row_count: usize,
+
+    /// Keyboard cursor over the rail's rows and its action menu.
+    pub(crate) rail: dbflux_components::composites::RailNav<QueryBuilderPanel>,
+
+    /// Where the cursor is drawn, taken at the start of each render.
+    pub(crate) rail_mark: dbflux_components::composites::RailMark,
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +820,8 @@ impl QueryBuilderPanel {
             pre_group_projection: None,
             sort_validation_error: None,
             incomplete_aggregate_row_count: 0,
+            rail: Default::default(),
+            rail_mark: Default::default(),
         }
     }
 

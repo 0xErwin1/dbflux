@@ -175,6 +175,11 @@ components:
   file_picker:
     browse: "Browse…"
 composites:
+  rail:
+    add: "Add"
+    add_group: "Add group"
+    remove: "Remove"
+    toggle: "Toggle"
   refresh_split_button:
     label: Refresh
 controls:
@@ -3533,6 +3538,8 @@ settings:
       toggle_panel: Toggle panel
       results_delete_row: Delete row
       results_add_row: Add row
+      add_item: "Add item"
+      add_group: "Add group"
       results_duplicate_row: Duplicate row
       results_copy_row: Copy row
       results_copy_cell: Copy cell
@@ -3649,6 +3656,8 @@ settings:
       settings: Settings Window
       inspector: Inspector
       notifications: Notifications
+      query_builder: "Query Builder"
+      document_builder: "Document Builder"
     category:
       global: Global
       focus: Focus

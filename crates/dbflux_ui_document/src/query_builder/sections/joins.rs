@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use gpui::{AnyElement, Context, Entity, IntoElement, SharedString, div};
 
 use crate::labels::bool_op_label;
+use crate::query_builder::keyboard::row_id;
 use crate::query_builder::panel::{FkLoadState, QueryBuilderPanel};
+use dbflux_components::composites::RailMark;
 use dbflux_components::controls::{Dropdown, InputState};
 use gpui_component::input::EditorState;
 
@@ -37,12 +39,13 @@ pub fn render_joins(
     let cond_lefts = panel.join_cond_left_inputs.clone();
     let cond_rights = panel.join_cond_right_inputs.clone();
     let cond_ops = panel.join_cond_op_dropdowns.clone();
+    let mark = panel.rail_mark.clone();
 
     let mut container = div().flex().flex_col().gap_1();
 
     if show_banner {
         container = container.child(
-            div()
+            mark.row(&row_id::fk_banner(), div())
                 .flex()
                 .flex_row()
                 .gap_1()
@@ -77,14 +80,20 @@ pub fn render_joins(
         let mut join_block = div().flex().flex_col().gap_1();
 
         // Header row: kind dropdown + to_table input + × remove.
-        let mut header = div().flex().flex_row().gap_1().items_center();
+        let join_row = row_id::join(i);
+        let mut header = mark
+            .row(&join_row, div())
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center();
 
         if let Some(dropdown) = kind_dropdowns.get(i).cloned() {
             use dbflux_components::tokens::{Heights, Radii};
             use gpui_component::ActiveTheme;
             let theme = cx.theme();
             header = header.child(
-                div()
+                mark.ring(&join_row, "kind", div())
                     .w(gpui::px(80.0))
                     .h(Heights::BUTTON)
                     .flex_shrink_0()
@@ -98,10 +107,11 @@ pub fn render_joins(
 
         if let Some((to_table_state, _on_expr_state)) = join_states.get(i) {
             header = header.child(
-                crate::completion_support::single_line_completion_editor(to_table_state)
-                    .flex_1()
-                    .min_w(gpui::px(0.0))
-                    .w_full(),
+                mark.ring(&join_row, "table", div().flex_1().min_w(gpui::px(0.0)))
+                    .child(
+                        crate::completion_support::single_line_completion_editor(to_table_state)
+                            .w_full(),
+                    ),
             );
         } else {
             header = header.child(
@@ -134,6 +144,7 @@ pub fn render_joins(
                     &cond_lefts,
                     &cond_rights,
                     &cond_ops,
+                    &mark,
                     cx,
                 );
                 join_block = join_block.child(tree);
@@ -157,7 +168,13 @@ pub fn render_joins(
 
             JoinOn::RawExpression(_) => {
                 if let Some((_to_table_state, on_expr_state)) = join_states.get(i) {
-                    let mut raw_row = div().flex().flex_row().gap_1().items_center().pl_2();
+                    let mut raw_row = mark
+                        .row(&row_id::join_expression(i), div())
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .items_center()
+                        .pl_2();
                     raw_row = raw_row.child(
                         div()
                             .w(gpui::px(32.0))
@@ -182,15 +199,20 @@ pub fn render_joins(
     }
 
     container = container.child(
-        Button::new(
-            "qb-add-join",
-            dbflux_i18n::t!("document.query_builder.joins.add_join"),
-        )
-        .ghost()
-        .inline()
-        .on_click(cx.listener(move |this, _event, _window, cx| {
-            this.add_join(&source_alias.clone(), cx);
-        })),
+        mark.row(
+            &row_id::join_add(),
+            div().flex().child(
+                Button::new(
+                    "qb-add-join",
+                    dbflux_i18n::t!("document.query_builder.joins.add_join"),
+                )
+                .ghost()
+                .inline()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.add_join(&source_alias.clone(), cx);
+                })),
+            ),
+        ),
     );
 
     container
@@ -205,6 +227,7 @@ fn render_join_tree(
     cond_lefts: &HashMap<u64, Entity<EditorState>>,
     cond_rights: &HashMap<u64, Entity<EditorState>>,
     cond_ops: &HashMap<u64, Entity<Dropdown>>,
+    mark: &RailMark,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
     use dbflux_components::controls::{Button, Input};
@@ -221,22 +244,30 @@ fn render_join_tree(
             let right = cond_rights.get(&id).cloned();
             let op_dd = cond_ops.get(&id).cloned();
             let path_for_rm = path.clone();
+            let condition_row = row_id::join_condition(join_idx, id);
 
-            let mut row = div().flex().flex_row().gap_1().items_center().pl_2();
+            let mut row = mark
+                .row(&condition_row, div())
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .pl_2();
 
             if let Some(state) = left {
                 row = row.child(
-                    crate::completion_support::single_line_completion_editor(&state)
-                        .flex_1()
-                        .min_w(gpui::px(0.0))
-                        .w_full(),
+                    mark.ring(&condition_row, "left", div().flex_1().min_w(gpui::px(0.0)))
+                        .child(
+                            crate::completion_support::single_line_completion_editor(&state)
+                                .w_full(),
+                        ),
                 );
             }
 
             if let Some(dd) = op_dd {
                 let theme = cx.theme();
                 row = row.child(
-                    div()
+                    mark.ring(&condition_row, "op", div())
                         .w(gpui::px(76.0))
                         .h(Heights::BUTTON)
                         .flex_shrink_0()
@@ -250,10 +281,11 @@ fn render_join_tree(
 
             if let Some(state) = right {
                 row = row.child(
-                    crate::completion_support::single_line_completion_editor(&state)
-                        .flex_1()
-                        .min_w(gpui::px(0.0))
-                        .w_full(),
+                    mark.ring(&condition_row, "right", div().flex_1().min_w(gpui::px(0.0)))
+                        .child(
+                            crate::completion_support::single_line_completion_editor(&state)
+                                .w_full(),
+                        ),
                 );
             }
 
@@ -281,43 +313,63 @@ fn render_join_tree(
             });
 
             // Header row: AND/OR toggle + add buttons + (× when not root).
-            let mut header = div()
+            let group_row = row_id::join_group(join_idx, &path);
+            let mut header = mark
+                .row(&group_row, div())
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap_1()
                 .child(
-                    Button::new(
-                        node_id_seed("qb-join-grp-op", join_idx, &path_for_toggle),
-                        op_label,
-                    )
-                    .ghost()
-                    .inline()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_join_group_op(join_idx, path_for_toggle.clone(), cx);
-                    })),
+                    mark.ring_element(
+                        &group_row,
+                        "op",
+                        Button::new(
+                            node_id_seed("qb-join-grp-op", join_idx, &path_for_toggle),
+                            op_label,
+                        )
+                        .ghost()
+                        .inline()
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.toggle_join_group_op(join_idx, path_for_toggle.clone(), cx);
+                            },
+                        )),
+                    ),
                 )
                 .child(
-                    Button::new(
-                        node_id_seed("qb-join-grp-add-cond", join_idx, &path_for_add_pred),
-                        dbflux_i18n::t!("document.query_builder.joins.add_condition"),
-                    )
-                    .ghost()
-                    .inline()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.add_join_condition(join_idx, path_for_add_pred.clone(), cx);
-                    })),
+                    mark.ring_element(
+                        &group_row,
+                        "add-condition",
+                        Button::new(
+                            node_id_seed("qb-join-grp-add-cond", join_idx, &path_for_add_pred),
+                            dbflux_i18n::t!("document.query_builder.joins.add_condition"),
+                        )
+                        .ghost()
+                        .inline()
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.add_join_condition(join_idx, path_for_add_pred.clone(), cx);
+                            },
+                        )),
+                    ),
                 )
                 .child(
-                    Button::new(
-                        node_id_seed("qb-join-grp-add-grp", join_idx, &path_for_add_grp),
-                        dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
-                    )
-                    .ghost()
-                    .inline()
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.add_join_subgroup(join_idx, path_for_add_grp.clone(), cx);
-                    })),
+                    mark.ring_element(
+                        &group_row,
+                        "add-group",
+                        Button::new(
+                            node_id_seed("qb-join-grp-add-grp", join_idx, &path_for_add_grp),
+                            dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
+                        )
+                        .ghost()
+                        .inline()
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.add_join_subgroup(join_idx, path_for_add_grp.clone(), cx);
+                            },
+                        )),
+                    ),
                 );
 
             if !is_root {
@@ -344,6 +396,7 @@ fn render_join_tree(
                     cond_lefts,
                     cond_rights,
                     cond_ops,
+                    mark,
                     cx,
                 );
                 group = group.child(child_el);

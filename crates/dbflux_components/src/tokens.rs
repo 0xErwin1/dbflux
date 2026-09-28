@@ -2150,6 +2150,11 @@ impl BuilderMetrics {
     pub const FOOTER_GAP: Pixels = px(8.0);
     /// Link text ("+ Filter · + Group"). (12 px)
     pub const LINK_FONT: Pixels = px(12.0);
+    /// Keyboard cursor: the row it is on gets a tint wash at this alpha, and
+    /// the field it points at a 1 px tint ring.
+    pub const CURSOR_ROW_ALPHA: f32 = 0.10;
+    /// Space kept around a row the cursor scrolls into view. (8 px)
+    pub const CURSOR_REVEAL_MARGIN: Pixels = px(8.0);
 }
 
 /// Geometry of the dashboard grid (P1Dashboard): the grid padding and

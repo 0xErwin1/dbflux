@@ -175,6 +175,11 @@ components:
   file_picker:
     browse: 浏览…
 composites:
+  rail:
+    add: "添加"
+    add_group: "添加组"
+    remove: "移除"
+    toggle: "切换"
   refresh_split_button:
     label: 刷新
 controls:
@@ -3533,6 +3538,8 @@ settings:
       toggle_panel: 切换面板
       results_delete_row: 删除行
       results_add_row: 添加行
+      add_item: "添加项"
+      add_group: "添加组"
       results_duplicate_row: 复制行
       results_copy_row: 复制行
       results_copy_cell: 复制单元格
@@ -3649,6 +3656,8 @@ settings:
       settings: 设置窗口
       inspector: 检查器
       notifications: 通知
+      query_builder: "查询构建器"
+      document_builder: "文档构建器"
     category:
       global: 全局
       focus: 聚焦

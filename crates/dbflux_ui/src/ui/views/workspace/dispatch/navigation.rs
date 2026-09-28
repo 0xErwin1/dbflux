@@ -412,10 +412,14 @@ impl Workspace {
                 }
             }
 
-            Command::PageDown | Command::PageUp => {
-                log::debug!("Context-specific command {:?} not yet implemented", cmd);
-                Some(false)
-            }
+            // Paging belongs to the focused document (a side panel it
+            // draws, a builder rail); the other panes have no pages.
+            Command::PageDown | Command::PageUp => Some(match self.focus_target {
+                FocusTarget::Document => self
+                    .tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+                _ => false,
+            }),
 
             _ => None,
         }
@@ -432,7 +436,12 @@ impl Workspace {
             .map(|tab| tab.active_context(cx));
         if matches!(
             active_ctx,
-            Some(ContextId::ContextBar | ContextId::Inspector)
+            Some(
+                ContextId::ContextBar
+                    | ContextId::Inspector
+                    | ContextId::QueryBuilder
+                    | ContextId::DocumentBuilder
+            )
         ) && self.tab_manager.update(cx, |mgr, cx| {
             mgr.dispatch_active(Command::FocusLeft, window, cx)
         }) {
@@ -474,7 +483,13 @@ impl Workspace {
             .map(|tab| tab.active_context(cx));
         if matches!(
             active_ctx,
-            Some(ContextId::ContextBar | ContextId::Results | ContextId::Inspector)
+            Some(
+                ContextId::ContextBar
+                    | ContextId::Results
+                    | ContextId::Inspector
+                    | ContextId::QueryBuilder
+                    | ContextId::DocumentBuilder
+            )
         ) && self.tab_manager.update(cx, |mgr, cx| {
             mgr.dispatch_active(Command::FocusRight, window, cx)
         }) {
@@ -651,5 +666,61 @@ mod side_island_tests {
             FocusTarget::Document,
             "Ctrl+H from the rail stops at the grid, not the sidebar"
         );
+    }
+
+    /// The rail keys of a document's side rail (add, add group, paging)
+    /// reach the active document instead of falling through every dispatch
+    /// domain.
+    #[gpui::test]
+    fn rail_commands_reach_the_active_document(cx: &mut TestAppContext) {
+        use crate::keymap::{Command, CommandDispatcher as _};
+
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let result = QueryResult::table(
+                    vec![ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    }],
+                    vec![vec![Value::Text("first".to_string())]],
+                    None,
+                    Duration::ZERO,
+                );
+                let document = cx.new(|cx| {
+                    DataDocument::new_for_result(
+                        Arc::new(result),
+                        "SELECT name FROM users".to_string(),
+                        "users".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                let pane = DataDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        for command in [
+            Command::AddItem,
+            Command::AddGroup,
+            Command::PageDown,
+            Command::PageUp,
+        ] {
+            window.update(|window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.dispatch(command, window, cx));
+            });
+        }
+        assert_eq!(context(&workspace, window), ContextId::Results);
     }
 }

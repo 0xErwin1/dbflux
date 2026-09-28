@@ -36,6 +36,8 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(settings_layer());
     stack.add_layer(inspector_layer());
     stack.add_layer(notifications_layer());
+    stack.add_layer(builder_rail_layer(ContextId::QueryBuilder));
+    stack.add_layer(builder_rail_layer(ContextId::DocumentBuilder));
 
     stack
 });
@@ -1612,6 +1614,115 @@ fn inspector_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
     layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer
+}
+
+/// Keys of a query builder rail (SQL or document) once the keyboard moved
+/// into it: J and K move between its rows, H and L between the fields of a
+/// row, Enter or I work the field (type in it, open its list, press it),
+/// Space toggles the row's switch, A and Shift+A add an entry or a group, X
+/// or D remove the row, M lists every action of the rail, Alt+H / Alt+L
+/// switch its mode. The default predicate keeps these letters out of a text
+/// field or a dropdown inside the rail; Escape, Ctrl+H and the chords work
+/// from those too.
+fn builder_rail_layer(context: ContextId) -> KeymapLayer {
+    let mut layer = KeymapLayer::new(context);
+
+    let from_fields = match context {
+        ContextId::QueryBuilder => "QueryBuilder && !Modal",
+        _ => "DocumentBuilder && !Modal",
+    };
+    // On macOS Option+letter types a character, so there the fields keep it.
+    let mode_predicate = if cfg!(target_os = "macos") {
+        context.default_predicate()
+    } else {
+        from_fields
+    };
+
+    layer.bind_with_predicate(
+        KeyChord::new("escape", Modifiers::none()),
+        Command::Cancel,
+        from_fields,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::ctrl()),
+        Command::FocusLeft,
+        from_fields,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("enter", Modifiers::primary()),
+        Command::RunQuery,
+        from_fields,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("s", Modifiers::primary()),
+        Command::SaveQuery,
+        from_fields,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::alt()),
+        Command::NextPanelTab,
+        mode_predicate,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::PrevPanelTab,
+        mode_predicate,
+    );
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
+
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
+    layer.bind(
+        KeyChord::new("left", Modifiers::none()),
+        Command::ColumnLeft,
+    );
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::ColumnRight,
+    );
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("i", Modifiers::none()), Command::Execute);
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("a", Modifiers::none()), Command::AddItem);
+    layer.bind(KeyChord::new("a", Modifiers::shift()), Command::AddGroup);
+    layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
+    layer.bind(KeyChord::new("d", Modifiers::none()), Command::Delete);
+
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenPaneActions,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
 
     layer
 }
