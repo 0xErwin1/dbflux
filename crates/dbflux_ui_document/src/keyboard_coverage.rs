@@ -50,6 +50,16 @@ pub(crate) const CODE_EDITOR_CHROME: SurfaceRegistry = SurfaceRegistry {
             "hide-results-panel",
             KeyboardPath::Command(Command::ToggleEditor),
         ),
+        // The Table / JSON switch of the results chrome sets the result view,
+        // which no key switches (T only cycles a collection's views).
+        (
+            "seg-ctl-item-table",
+            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+        ),
+        (
+            "seg-ctl-item-json",
+            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+        ),
     ],
 };
 
@@ -139,13 +149,198 @@ pub(crate) const DATA_GRID: SurfaceRegistry = SurfaceRegistry {
             "seg-ctl-item-result-view-*",
             KeyboardPath::MouseOnly("gap: no key switches the Data / JSON / Chart result views"),
         ),
+        // The Tree / Table / JSON switch of a document collection.
+        (
+            "seg-ctl-item-tree",
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
         (
             "seg-ctl-item-table",
-            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+            KeyboardPath::Command(Command::CycleDocumentView),
         ),
         (
             "seg-ctl-item-json",
-            KeyboardPath::MouseOnly("gap: no key switches the Table / JSON result views"),
+            KeyboardPath::Command(Command::CycleDocumentView),
+        ),
+        // The Documents / Schema / Aggregate views of a document collection.
+        (
+            "seg-ctl-item-documents",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        (
+            "seg-ctl-item-schema",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        (
+            "seg-ctl-item-aggregate",
+            KeyboardPath::Command(Command::NextResultTab),
+        ),
+        ("collection-find", KeyboardPath::Menu("find")),
+        (
+            "collection-builder-toggle",
+            KeyboardPath::Menu("open-builder"),
+        ),
+    ],
+};
+
+/// The SQL query builder rail. Every control on a rail row is a field of
+/// that row (`QueryBuilderPanel::rail_rows`): J/K reach the row, H/L the
+/// field, Enter works it, Space toggles, A / Shift+A add, X removes. The
+/// header buttons are entries of the rail menu (`m`).
+pub(crate) const QUERY_BUILDER: SurfaceRegistry = SurfaceRegistry {
+    name: "SQL query builder",
+    contexts: &[ContextId::QueryBuilder, ContextId::ContextMenu],
+    entries: &[
+        ("qb-run", KeyboardPath::Command(Command::RunQuery)),
+        ("qb-hdr-save", KeyboardPath::Command(Command::SaveQuery)),
+        ("qb-hdr-reset", KeyboardPath::Menu("reset")),
+        ("qb-hdr-close", KeyboardPath::Menu("close")),
+        ("qb-open-editor", KeyboardPath::Menu("open-in-editor")),
+        ("qb-mode-*", KeyboardPath::Command(Command::NextPanelTab)),
+        ("qb-rail-menu.*", KeyboardPath::Command(Command::MenuSelect)),
+        ("qb-grp-add-grp", KeyboardPath::Command(Command::AddGroup)),
+        (
+            "qb-join-grp-add-grp",
+            KeyboardPath::Command(Command::AddGroup),
+        ),
+        (
+            "qb-add-first-group",
+            KeyboardPath::Command(Command::AddGroup),
+        ),
+        (
+            "qb-having-add-first-group",
+            KeyboardPath::Command(Command::AddGroup),
+        ),
+        ("qb-*-rm*", KeyboardPath::Command(Command::Delete)),
+        ("qb-rm-*", KeyboardPath::Command(Command::Delete)),
+        ("qb-*-add*", KeyboardPath::Command(Command::AddItem)),
+        ("qb-add-*", KeyboardPath::Command(Command::AddItem)),
+        (
+            "qb-all-columns",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "qb-col-toggle",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "qb-sortkey-dir",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "qb-assign-kind",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "qb-exec-mode*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "seg-ctl-item-qb-*grp-op-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        // Dropdowns, chips and the banner on a row: Enter on the field.
+        ("qb-pred-cmp-dd*", KeyboardPath::Command(Command::Execute)),
+        (
+            "qb-having-pred-cmp-dd*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("qb-agg-fn-dd*", KeyboardPath::Command(Command::Execute)),
+        ("qb-join-kind-dd*", KeyboardPath::Command(Command::Execute)),
+        ("qb-join-cond-op*", KeyboardPath::Command(Command::Execute)),
+        ("qb-sort-column*", KeyboardPath::Command(Command::Execute)),
+        ("qb-col-chip*", KeyboardPath::Command(Command::Execute)),
+        (
+            "qb-dismiss-fk-banner",
+            KeyboardPath::Command(Command::Execute),
+        ),
+    ],
+};
+
+/// The document builder rail, built like the SQL builder rail.
+pub(crate) const DOCUMENT_BUILDER: SurfaceRegistry = SurfaceRegistry {
+    name: "document builder",
+    contexts: &[ContextId::DocumentBuilder, ContextId::ContextMenu],
+    entries: &[
+        ("doc-builder-find", KeyboardPath::Command(Command::RunQuery)),
+        (
+            "doc-builder-run-pipeline",
+            KeyboardPath::Command(Command::RunQuery),
+        ),
+        (
+            "doc-builder-save",
+            KeyboardPath::Command(Command::SaveQuery),
+        ),
+        ("doc-builder-close", KeyboardPath::Menu("close")),
+        (
+            "doc-builder-open-editor",
+            KeyboardPath::Menu("open-in-editor"),
+        ),
+        ("doc-builder-saved-toggle", KeyboardPath::Menu("saved")),
+        (
+            "doc-builder-mode-*",
+            KeyboardPath::Command(Command::NextPanelTab),
+        ),
+        (
+            "doc-builder-rail-menu.*",
+            KeyboardPath::Command(Command::MenuSelect),
+        ),
+        (
+            "doc-builder-add-group-*",
+            KeyboardPath::Command(Command::AddGroup),
+        ),
+        ("doc-builder-*add*", KeyboardPath::Command(Command::AddItem)),
+        (
+            "doc-builder-*remove*",
+            KeyboardPath::Command(Command::Delete),
+        ),
+        // The AND / OR switch of a group and Include / Exclude of the
+        // projection flip with Space on their row.
+        (
+            "segmented-doc-builder-combinator-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "segmented-doc-builder-projection-mode-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "doc-builder-sort-dir-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "doc-builder-bool-*",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        (
+            "doc-builder-match-edit",
+            KeyboardPath::Command(Command::ExpandCollapse),
+        ),
+        // The fields of a row: Enter on the field.
+        (
+            "doc-builder-field-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "doc-builder-operator-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        ("doc-builder-acc-*", KeyboardPath::Command(Command::Execute)),
+        (
+            "doc-builder-saved-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "doc-builder-conflict-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "doc-builder-use-oid-*",
+            KeyboardPath::Command(Command::Execute),
+        ),
+        (
+            "doc-builder-picker*",
+            KeyboardPath::Command(Command::Execute),
         ),
     ],
 };

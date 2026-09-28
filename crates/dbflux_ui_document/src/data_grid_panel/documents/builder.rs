@@ -2760,6 +2760,54 @@ mod tests {
     /// list driven by J and Enter, and whose value is typed; Ctrl+Enter
     /// finds; X removes the condition; Alt+L switches to Aggregate; M opens
     /// the rail's menu.
+    /// The document builder rail with a condition, and its rail menu.
+    /// `the_document_builder_is_driven_by_keys` proves Ctrl+L reaches it and
+    /// `m` opens its menu.
+    #[gpui::test]
+    fn the_document_builder_rail_is_covered(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::tests::rail_keys::keys;
+        use crate::keyboard_coverage::{DATA_GRID, DOCUMENT_BUILDER};
+        use dbflux_components::composites::RailOwner as _;
+        use dbflux_ui_base::keyboard_coverage::{Coverage, FrameCapture};
+
+        let (panel, builder, window) = keyboard_rail(cx);
+        keys(window, "ctrl-l j a");
+
+        let menu: Vec<String> = window.update(|_, cx| {
+            let rail = builder
+                .read(cx)
+                .rail_actions(cx)
+                .into_iter()
+                .map(|entry| entry.id.to_string());
+            let toolbar = panel
+                .read(cx)
+                .toolbar_actions(cx)
+                .into_iter()
+                .map(|action| action.id().to_string());
+            rail.chain(toolbar).collect()
+        });
+
+        let capture = FrameCapture::observe(window);
+        let coverage = || {
+            Coverage::new(DOCUMENT_BUILDER)
+                .with_surface(DATA_GRID)
+                .with_menu_entries(menu.iter().cloned())
+        };
+
+        let checked = coverage().assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id.starts_with("doc-builder-")),
+            "{checked:?}"
+        );
+
+        keys(window, "m");
+        let checked = coverage().assert_covered(&capture.frame(window));
+        assert!(
+            checked.iter().any(|id| id == "rail-action-close"),
+            "{checked:?}"
+        );
+    }
+
     #[gpui::test]
     fn the_document_builder_is_driven_by_keys(cx: &mut TestAppContext) {
         use crate::data_grid_panel::tests::rail_keys::{context, keys};

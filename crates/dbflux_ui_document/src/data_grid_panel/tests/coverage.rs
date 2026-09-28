@@ -110,3 +110,61 @@ fn the_edit_bar_is_covered(cx: &mut TestAppContext) {
     let checked = assert_covered(&panel, &capture, window);
     assert!(checked.iter().any(|id| id == "save-btn"), "{checked:?}");
 }
+
+/// The SQL builder rail, with a WHERE condition and its rail menu open.
+/// `rail_keys::the_sql_builder_adds_fills_runs_and_removes_a_condition_by_keys`
+/// proves Ctrl+L reaches it and `m_opens_the_sql_builder_menu_and_runs_an_entry`
+/// that `m` opens its menu.
+#[gpui::test]
+fn the_sql_builder_rail_is_covered(cx: &mut TestAppContext) {
+    use crate::keyboard_coverage::QUERY_BUILDER;
+
+    let (panel, window) = host_table_grid_with_rail(cx);
+    window.update(|window, cx| {
+        panel.update(cx, |panel, cx| panel.open_query_builder(window, cx));
+    });
+    window.run_until_parked();
+    keys(window, "ctrl-l j a");
+
+    let builder = window.update(|_, cx| {
+        panel
+            .read(cx)
+            .builder
+            .builder_panel
+            .clone()
+            .expect("the builder is open")
+    });
+    let rail_menu: Vec<String> = window.update(|_, cx| {
+        use dbflux_components::composites::RailOwner as _;
+
+        builder
+            .read(cx)
+            .rail_actions(cx)
+            .iter()
+            .map(|entry| entry.id.to_string())
+            .collect()
+    });
+
+    let grid_menu = toolbar_menu(&panel, window);
+
+    let capture = FrameCapture::observe(window);
+    let coverage = || {
+        Coverage::new(QUERY_BUILDER)
+            .with_surface(DATA_GRID)
+            .with_menu_entries(rail_menu.iter().cloned())
+            .with_menu_entries(grid_menu.iter().cloned())
+    };
+
+    let checked = coverage().assert_covered(&capture.frame(window));
+    assert!(
+        checked.iter().any(|id| id.starts_with("qb-pred-rm")),
+        "{checked:?}"
+    );
+
+    keys(window, "m");
+    let checked = coverage().assert_covered(&capture.frame(window));
+    assert!(
+        checked.iter().any(|id| id == "rail-action-run"),
+        "{checked:?}"
+    );
+}
