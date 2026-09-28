@@ -43,8 +43,10 @@ static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
 
 /// A view that hosts an editor with Vim mode.
 pub trait VimHost: 'static + Sized {
-    fn vim(&self) -> &VimBinding;
-    fn vim_mut(&mut self) -> &mut VimBinding;
+    /// The binding of the host's editor, or `None` while the host has no
+    /// editor (a buffer that is still loading).
+    fn vim(&self) -> Option<&VimBinding>;
+    fn vim_mut(&mut self) -> Option<&mut VimBinding>;
 
     /// Whether the host keeps the text unchanged: motions and yanks work,
     /// edits do nothing.
@@ -185,7 +187,10 @@ impl VimBinding {
             let enabled = vim_enabled(cx);
             Self::set_enabled(host, enabled, cx);
         });
-        host.vim_mut()._setting = Some(subscription);
+        let Some(binding) = host.vim_mut() else {
+            return;
+        };
+        binding._setting = Some(subscription);
 
         let enabled = vim_enabled(cx);
         Self::set_enabled(host, enabled, cx);
@@ -200,14 +205,19 @@ impl VimBinding {
     fn refresh_host<H: VimHost>(host: &mut H, cx: &App) {
         let read_only = host.vim_read_only(cx);
         let accepts_focus = host.vim_accepts_focus();
-        let binding = host.vim_mut();
+        let Some(binding) = host.vim_mut() else {
+            return;
+        };
         binding.host_read_only = read_only;
         binding.host_accepts_focus = accepts_focus;
     }
 
     /// Tells the host about a text change that raised no Change event.
     fn report_text_change<H: VimHost>(host: &mut H, cx: &mut Context<H>) {
-        if std::mem::take(&mut host.vim_mut().text_changed) {
+        let changed = host
+            .vim_mut()
+            .is_some_and(|binding| std::mem::take(&mut binding.text_changed));
+        if changed {
             host.vim_text_changed(cx);
         }
     }
@@ -216,7 +226,9 @@ impl VimBinding {
     /// in Normal mode.
     pub fn set_enabled<H: VimHost>(host: &mut H, enabled: bool, cx: &mut Context<H>) {
         Self::refresh_host(host, cx);
-        host.vim_mut().set_vim_enabled(enabled, cx);
+        if let Some(binding) = host.vim_mut() {
+            binding.set_vim_enabled(enabled, cx);
+        }
     }
 
     /// Whether Vim mode is on.
@@ -374,7 +386,9 @@ impl VimBinding {
             return true;
         }
 
-        host.vim_mut().clear_vim_count_and_notify(cx);
+        if let Some(binding) = host.vim_mut() {
+            binding.clear_vim_count_and_notify(cx);
+        }
         false
     }
 
@@ -387,7 +401,9 @@ impl VimBinding {
         cx: &mut Context<H>,
     ) -> bool {
         Self::refresh_host(host, cx);
-        let consumed = host.vim_mut().handle_vim_key_down(event, window, cx);
+        let consumed = host
+            .vim_mut()
+            .is_some_and(|binding| binding.handle_vim_key_down(event, window, cx));
         Self::report_text_change(host, cx);
         consumed
     }
@@ -399,7 +415,9 @@ impl VimBinding {
         cx: &mut Context<H>,
     ) -> bool {
         Self::refresh_host(host, cx);
-        let consumed = host.vim_mut().handle_vim_escape_action(window, cx);
+        let consumed = host
+            .vim_mut()
+            .is_some_and(|binding| binding.handle_vim_escape_action(window, cx));
         Self::report_text_change(host, cx);
         consumed
     }
@@ -411,14 +429,17 @@ impl VimBinding {
         cx: &mut Context<H>,
     ) -> bool {
         Self::refresh_host(host, cx);
-        host.vim_mut().handle_vim_history_action(step, window, cx)
+        host.vim_mut()
+            .is_some_and(|binding| binding.handle_vim_history_action(step, window, cx))
     }
 
     /// Call on the input's `InputEvent::Change`: completes an `r` whose
     /// character arrived as typed or composed text.
     pub fn input_changed<H: VimHost>(host: &mut H, window: &mut Window, cx: &mut Context<H>) {
         Self::refresh_host(host, cx);
-        host.vim_mut().finish_replace_once(window, cx);
+        if let Some(binding) = host.vim_mut() {
+            binding.finish_replace_once(window, cx);
+        }
         Self::report_text_change(host, cx);
     }
 
@@ -426,7 +447,9 @@ impl VimBinding {
     /// pending `r`.
     pub fn blur<H: VimHost>(host: &mut H, cx: &mut Context<H>) {
         Self::refresh_host(host, cx);
-        host.vim_mut().close_change_group_on_blur(cx);
+        if let Some(binding) = host.vim_mut() {
+            binding.close_change_group_on_blur(cx);
+        }
         Self::report_text_change(host, cx);
     }
 
@@ -474,16 +497,18 @@ impl VimBinding {
             let Some(host) = host.upgrade() else {
                 return;
             };
-            let vim = host.read(cx).vim();
-            if vim.replace_once.is_none() && !(vim.enabled && vim.mode == VimMode::Replace) {
+            let waiting = host.read(cx).vim().is_some_and(|vim| {
+                vim.replace_once.is_some() || (vim.enabled && vim.mode == VimMode::Replace)
+            });
+            if !waiting {
                 return;
             }
 
             let consumed = host.update(cx, |host, cx| {
                 Self::refresh_host(host, cx);
-                let consumed = host
-                    .vim_mut()
-                    .intercept_vim_keystroke(&event.keystroke, window, cx);
+                let consumed = host.vim_mut().is_some_and(|binding| {
+                    binding.intercept_vim_keystroke(&event.keystroke, window, cx)
+                });
                 Self::report_text_change(host, cx);
                 consumed
             });
@@ -2004,10 +2029,11 @@ impl VimBinding {
 
             host.update(cx, |host, cx| {
                 Self::refresh_host(host, cx);
-                let binding = host.vim_mut();
-                binding.history_unlocked = false;
-                binding.sync_editor_lock(cx);
-                binding.clamp_cursor_for_normal(cx);
+                if let Some(binding) = host.vim_mut() {
+                    binding.history_unlocked = false;
+                    binding.sync_editor_lock(cx);
+                    binding.clamp_cursor_for_normal(cx);
+                }
                 cx.notify();
             })
             .log_err();

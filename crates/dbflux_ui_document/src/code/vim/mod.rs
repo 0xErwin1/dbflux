@@ -8,12 +8,12 @@ use dbflux_components::vim::{VimBinding, VimHost};
 pub use dbflux_components::vim::VimMode;
 
 impl VimHost for CodeDocument {
-    fn vim(&self) -> &VimBinding {
-        &self.vim
+    fn vim(&self) -> Option<&VimBinding> {
+        Some(&self.vim)
     }
 
-    fn vim_mut(&mut self) -> &mut VimBinding {
-        &mut self.vim
+    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
+        Some(&mut self.vim)
     }
 
     fn vim_read_only(&self, _cx: &App) -> bool {
