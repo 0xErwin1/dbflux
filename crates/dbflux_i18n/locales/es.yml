@@ -3403,8 +3403,15 @@ settings:
     editor:
       group: "Editor"
     vim_mode:
-      label: "Modo Vim en los editores de código"
+      label: "Modo Vim en los editores"
       hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
+    vim_leader:
+      label: "Tecla líder"
+      hint: "Inicia las secuencias de líder de Vim en los modos Normal y Visual, como líder y luego a para las acciones del panel. Se aplica a los editores abiertos al guardar."
+      option:
+        space: "Espacio"
+        comma: "Coma (,)"
+        backslash: "Barra invertida (\\)"
     restore_session:
       label: "Restaurar las pestañas abiertas al iniciar"
     reopen_connections:

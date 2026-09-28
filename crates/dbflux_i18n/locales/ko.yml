@@ -3403,8 +3403,15 @@ settings:
     editor:
       group: "편집기"
     vim_mode:
-      label: "코드 편집기에서 Vim 모드 사용"
+      label: "편집기에서 Vim 모드 사용"
       hint: "노멀 모드와 삽입 모드: h, j, k, l, Enter로 이동하고, i로 입력을 시작하고, Esc로 노멀 모드로 돌아가고, x로 문자를 삭제하고, u로 실행을 취소합니다. 저장하면 열려 있는 편집기에 적용됩니다."
+    vim_leader:
+      label: "리더 키"
+      hint: "노멀 모드와 비주얼 모드에서 Vim 리더 시퀀스를 시작합니다. 예를 들어 리더 다음 a를 누르면 패널 작업이 열립니다. 저장하면 열려 있는 편집기에 적용됩니다."
+      option:
+        space: "스페이스"
+        comma: "쉼표 (,)"
+        backslash: "백슬래시 (\\)"
     restore_session:
       label: "시작 시 열린 탭 복원"
     reopen_connections:

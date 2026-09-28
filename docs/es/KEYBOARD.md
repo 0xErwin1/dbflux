@@ -139,7 +139,7 @@ Cerrar pestaña de resultados, Maximizar (Restaurar) resultados y Ocultar
 
 Los editores de varias líneas pueden usar edición modal con un conjunto
 reducido de comandos de Vim. Viene desactivado. Actívalo en **Settings → General
-→ Editor → Modo Vim en los editores de código** y guarda: los editores abiertos
+→ Editor → Modo Vim en los editores** y guarda: los editores abiertos
 cambian al instante. Se aplica a todos los editores de varias líneas:
 
 - el editor de código (SQL y los demás lenguajes de query, Lua, Python, Bash);
@@ -297,7 +297,8 @@ Cada ejecución de `x`, `dd` o `d` con movimiento es un paso de deshacer, tambi�
 
 **Tecla líder.** En modo Normal y en los modos Visual, la tecla líder inicia
 una secuencia de dos teclas que ejecuta un comando sin salir de la fila
-central del teclado. La tecla líder es `Space`. Después de ella, DBFlux espera
+central del teclado. La tecla líder es `Space` por defecto; elige `,` o `\` en
+**Settings → General → Editor → Tecla líder**, y las secuencias la siguen. Después de ella, DBFlux espera
 hasta un segundo la tecla siguiente: una tecla que ninguna secuencia usa actúa
 como lo haría sola, y si no llega ninguna, la tecla líder no hace nada. En los
 modos Insertar y Reemplazar, y mientras el panel de búsqueda tiene el foco, la

@@ -3403,8 +3403,15 @@ settings:
     editor:
       group: "Editor"
     vim_mode:
-      label: "Vim mode in code editors"
+      label: "Vim mode in editors"
       hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
+    vim_leader:
+      label: "Leader key"
+      hint: "Starts the Vim leader sequences in Normal and Visual modes, such as leader then a for the pane actions. Applies to open editors when saved."
+      option:
+        space: "Space"
+        comma: "Comma (,)"
+        backslash: "Backslash (\\)"
     restore_session:
       label: "Restore open tabs on startup"
     reopen_connections:

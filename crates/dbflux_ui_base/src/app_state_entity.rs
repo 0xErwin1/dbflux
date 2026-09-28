@@ -24,18 +24,26 @@ use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
 use crate::user_error::{ErrorKind, UserFacingError};
 
-/// Publishes the Vim mode setting to `dbflux_components::vim::VimSettingGlobal`
-/// now and after every app-state change, so editors outside the code editor
-/// follow Settings > General live.
+/// Publishes the Vim settings now and after every app-state change, so every
+/// editor follows Settings > General live: Vim mode to
+/// `dbflux_components::vim::VimSettingGlobal`, and the leader key to the
+/// keymap, which moves the leader bindings.
 pub fn publish_vim_setting(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
-    let enabled = app_state.read(cx).general_settings().vim_mode;
-    dbflux_components::vim::set_vim_enabled(cx, enabled);
+    apply_vim_settings(app_state, cx);
 
     cx.subscribe(app_state, |app_state, _: &AppStateChanged, cx| {
-        let enabled = app_state.read(cx).general_settings().vim_mode;
-        dbflux_components::vim::set_vim_enabled(cx, enabled);
+        apply_vim_settings(&app_state, cx);
     })
     .detach();
+}
+
+fn apply_vim_settings(app_state: &Entity<AppStateEntity>, cx: &mut gpui::App) {
+    let settings = app_state.read(cx).general_settings();
+    let enabled = settings.vim_mode;
+    let leader = crate::keymap::vim_leader_from_setting(&settings.vim_leader);
+
+    dbflux_components::vim::set_vim_enabled(cx, enabled);
+    crate::keymap::set_vim_leader(leader, cx);
 }
 
 /// Drains startup hook-load diagnostics into safe, actionable user-facing errors.
@@ -595,5 +603,46 @@ mod vim_setting_tests {
 
         set(false, cx);
         assert!(!cx.update(|cx| vim_enabled(cx)));
+    }
+
+    /// A saved leader moves the leader bindings at once, and a stored value
+    /// that is not one key falls back to Space.
+    #[gpui::test]
+    fn the_vim_leader_is_published_to_the_keymap(cx: &mut TestAppContext) {
+        use crate::keymap::{default_vim_leader, init_keymap, set_vim_leader, vim_leader};
+        use dbflux_app::keymap::{KeyChord, Modifiers};
+
+        cx.update(init_keymap);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| publish_vim_setting(&app_state, cx));
+        assert_eq!(vim_leader(), default_vim_leader());
+
+        let set = |leader: &str, cx: &mut TestAppContext| {
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    let mut settings = state.general_settings().clone();
+                    settings.vim_leader = leader.to_string();
+                    state.update_general_settings(settings);
+                    cx.emit(AppStateChanged);
+                });
+            });
+            cx.run_until_parked();
+        };
+
+        set(",", cx);
+        assert_eq!(vim_leader(), KeyChord::new(",", Modifiers::none()));
+
+        set("ctrl+k g", cx);
+        assert_eq!(vim_leader(), default_vim_leader());
+
+        cx.update(|cx| set_vim_leader(default_vim_leader(), cx));
     }
 }

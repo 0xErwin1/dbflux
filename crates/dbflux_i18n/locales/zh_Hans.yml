@@ -3403,8 +3403,15 @@ settings:
     editor:
       group: "编辑器"
     vim_mode:
-      label: "在代码编辑器中使用 Vim 模式"
+      label: "在编辑器中使用 Vim 模式"
       hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
+    vim_leader:
+      label: "Leader 键"
+      hint: "在普通模式和可视模式下开始 Vim Leader 序列，例如先按 Leader 再按 a 打开面板操作。保存后应用于已打开的编辑器。"
+      option:
+        space: "空格"
+        comma: "逗号 (,)"
+        backslash: "反斜杠 (\\)"
     restore_session:
       label: "启动时恢复打开的标签页"
     reopen_connections:

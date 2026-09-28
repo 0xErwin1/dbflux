@@ -250,6 +250,18 @@ pub fn keymap_overrides() -> KeymapOverrides {
         .clone()
 }
 
+/// The leader key the stored setting `text` names (`space`, `,`), or the
+/// default leader when it does not name exactly one key.
+pub fn vim_leader_from_setting(text: &str) -> KeyChord {
+    match KeySequence::from_storage_string(text.trim()) {
+        Ok(keys) if keys.is_single() && !keys.first().is_leader() => keys.first().clone(),
+        _ => {
+            log::warn!("Ignoring Vim leader setting `{text}`: it is not one key");
+            default_vim_leader()
+        }
+    }
+}
+
 /// The key Vim leader bindings start with.
 pub fn vim_leader() -> KeyChord {
     EFFECTIVE_KEYMAP

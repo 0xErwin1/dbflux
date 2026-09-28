@@ -132,7 +132,7 @@ results. The menu is also in the command palette as **Open pane actions**.
 
 Multi-line editors can use modal editing with a small set of Vim commands. It
 is off by default. Turn it on in **Settings → General → Editor → Vim mode in
-code editors** and save: open editors switch over at once. It applies to every
+editors** and save: open editors switch over at once. It applies to every
 multi-line editor:
 
 - the code editor (SQL and the other query languages, Lua, Python, Bash);
@@ -281,7 +281,8 @@ Each `x`, `dd`, or motion-based `d` invocation is one undo step, including count
 
 **Leader key.** In Normal mode and the Visual modes, the leader key starts a
 two-key sequence that runs a command without leaving the home row. The leader
-is `Space`. After it, DBFlux waits up to one second for the next key: a key no
+is `Space` by default; choose `,` or `\` in **Settings → General → Editor →
+Leader key**, and the sequences move with it. After it, DBFlux waits up to one second for the next key: a key no
 sequence uses runs as it would on its own, and when no key follows, the leader
 does nothing. The leader types as usual in Insert and Replace modes and while
 the find panel has focus.
