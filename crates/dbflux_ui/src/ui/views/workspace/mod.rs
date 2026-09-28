@@ -1,6 +1,8 @@
 mod actions;
 mod dispatch;
 pub mod inspector;
+#[cfg(test)]
+mod keyboard_coverage_tests;
 mod notifications;
 mod pane_actions;
 pub mod pipeline;

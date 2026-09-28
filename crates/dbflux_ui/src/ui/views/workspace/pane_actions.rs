@@ -39,6 +39,15 @@ pub(super) struct PaneActionsMenu {
 }
 
 impl PaneActionsMenu {
+    /// The ids of the menu's entries, in order.
+    #[cfg(test)]
+    pub(super) fn entry_ids(&self) -> Vec<String> {
+        self.actions
+            .iter()
+            .map(|action| action.id.to_string())
+            .collect()
+    }
+
     /// A menu over `actions`, pointing at the first enabled one, or `None`
     /// when no entry can be chosen.
     fn new(owner: PaneActionsOwner, actions: Vec<PaneAction>) -> Option<Self> {
