@@ -140,7 +140,11 @@ impl Workspace {
             // So do the result tabs of a query.
             | Command::NextResultTab
             | Command::PrevResultTab
-            | Command::CloseResultTab => Some(
+            | Command::CloseResultTab
+            // So do the tabs of a panel a document draws (the query
+            // history's Recent and Saved).
+            | Command::NextPanelTab
+            | Command::PrevPanelTab => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

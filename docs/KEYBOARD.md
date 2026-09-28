@@ -531,3 +531,6 @@ returns focus to the bar.
 | `Ctrl+d` | Delete |
 | `/` | Focus search; inside the search, rename and save fields it types a `/` |
 | `Ctrl+s` / `Cmd+s` | Save query |
+| `Alt+l` / `Alt+h` | Show the next / previous list (Recent, Saved) |
+
+`Alt+l` and `Alt+h` also work in the history's search, rename and save fields, except on macOS, where `Option` with a letter types a character: there they work from the list only.

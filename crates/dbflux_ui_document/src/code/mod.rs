@@ -1698,6 +1698,12 @@ impl CodeDocument {
                     .update(cx, |panel, cx| panel.save_selected_history(window, cx));
                 true
             }
+            Command::NextPanelTab | Command::PrevPanelTab => {
+                self.history
+                    .history_panel
+                    .update(cx, |panel, cx| panel.step_tab(cx));
+                true
+            }
             // Other commands are not handled by the modal
             _ => false,
         }

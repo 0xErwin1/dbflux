@@ -33,6 +33,11 @@ pub enum Command {
     SelectLast,
     PageDown,
     PageUp,
+    /// Shows the next tab or filter of the focused panel (the query
+    /// history's Recent and Saved, the notification filters), wrapping.
+    NextPanelTab,
+    /// Shows the previous tab or filter of the focused panel, wrapping.
+    PrevPanelTab,
 
     // === Multi-selection ===
     ExtendSelectNext,
@@ -269,6 +274,8 @@ impl Command {
             Command::SelectLast => "Select last",
             Command::PageDown => "Page down",
             Command::PageUp => "Page up",
+            Command::NextPanelTab => "Next panel tab",
+            Command::PrevPanelTab => "Previous panel tab",
 
             Command::ExtendSelectNext => "Extend selection down",
             Command::ExtendSelectPrev => "Extend selection up",
@@ -429,6 +436,8 @@ impl Command {
             Command::SelectLast => "select_last",
             Command::PageDown => "page_down",
             Command::PageUp => "page_up",
+            Command::NextPanelTab => "next_panel_tab",
+            Command::PrevPanelTab => "prev_panel_tab",
 
             Command::ExtendSelectNext => "extend_select_next",
             Command::ExtendSelectPrev => "extend_select_prev",
@@ -611,6 +620,8 @@ impl Command {
             Command::SelectLast,
             Command::PageDown,
             Command::PageUp,
+            Command::NextPanelTab,
+            Command::PrevPanelTab,
             Command::ExtendSelectNext,
             Command::ExtendSelectPrev,
             Command::ToggleSelection,
@@ -763,6 +774,8 @@ impl Command {
             | Command::SelectLast
             | Command::PageDown
             | Command::PageUp
+            | Command::NextPanelTab
+            | Command::PrevPanelTab
             | Command::ExtendSelectNext
             | Command::ExtendSelectPrev
             | Command::ToggleSelection

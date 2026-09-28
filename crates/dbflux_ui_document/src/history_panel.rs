@@ -41,7 +41,7 @@ pub struct QuerySaved {
     pub name: String,
 }
 
-#[derive(Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum HistoryTab {
     #[default]
     Recent,
@@ -195,6 +195,11 @@ impl HistoryPanel {
         self.visible && self.focus_within
     }
 
+    /// The list shown: recent queries or saved ones.
+    pub fn active_tab(&self) -> HistoryTab {
+        self.active_tab
+    }
+
     /// Returns true if the modal is in a mode where text input is expected
     /// (save mode or renaming). In this case, navigation keys should not be processed.
     #[allow(dead_code)]
@@ -232,6 +237,20 @@ impl HistoryPanel {
         self.selected_index = Some(0);
         self.editing_id = None;
         cx.notify();
+    }
+
+    /// Shows the other list (Recent or Saved), like its segmented control.
+    /// The save form has no tabs, so it ignores the key.
+    pub fn step_tab(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.mode, PanelMode::Browse) {
+            return;
+        }
+
+        let next = match self.active_tab {
+            HistoryTab::Recent => HistoryTab::Saved,
+            HistoryTab::Saved => HistoryTab::Recent,
+        };
+        self.set_active_tab(next, cx);
     }
 
     /// Shows the search field and focuses it, or hides it and clears the

@@ -3487,6 +3487,8 @@ settings:
       select_last: Seleccionar último
       page_down: Página siguiente
       page_up: Página anterior
+      next_panel_tab: Siguiente pestaña del panel
+      prev_panel_tab: Pestaña anterior del panel
       extend_select_next: Extender selección hacia abajo
       extend_select_prev: Extender selección hacia arriba
       toggle_selection: Alternar selección

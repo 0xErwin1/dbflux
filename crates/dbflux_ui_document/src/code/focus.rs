@@ -146,3 +146,121 @@ impl CodeDocument {
         }
     }
 }
+
+#[cfg(test)]
+mod history_keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::code::CodeDocument;
+    use crate::history_panel::{HistoryPanel, HistoryTab};
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+
+    /// The editor next to its query history, under a workspace-like root
+    /// that reports the document's context and hands it every command.
+    struct HistoryHost {
+        document: Entity<CodeDocument>,
+        history: Entity<HistoryPanel>,
+    }
+
+    impl gpui::Render for HistoryHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use dbflux_ui_base::keymap::{
+                RunCommand, WORKSPACE_KEY_CONTEXT, root_key_context, run_command,
+            };
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            let context = self.document.read(cx).active_context(cx);
+
+            gpui::div()
+                .size_full()
+                .flex()
+                .key_context(root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]))
+                .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                    if let Some(command) = run_command(action) {
+                        this.document.update(cx, |document, cx| {
+                            document.dispatch_command(command, window, cx)
+                        });
+                    }
+                }))
+                .child(self.document.clone())
+                .child(self.history.clone())
+        }
+    }
+
+    fn keys(window: &mut VisualTestContext, keystrokes: &str) {
+        for keystroke in keystrokes.split(' ') {
+            window.simulate_keystrokes(keystroke);
+            window.update(|window, _| window.refresh());
+            window.run_until_parked();
+        }
+    }
+
+    /// With the query history holding the keyboard, Alt+L and Alt+H switch
+    /// between its Recent and Saved lists, from the list and from its search
+    /// field alike.
+    #[gpui::test]
+    fn alt_l_and_alt_h_switch_the_history_lists(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            });
+            let history = document.read(cx).history.history_panel.clone();
+            HistoryHost { document, history }
+        });
+        let history = window.update(|_, cx| host.read(cx).history.clone());
+
+        window.update(|window, cx| {
+            window.activate_window();
+            history.update(cx, |panel, cx| panel.open(window, cx));
+        });
+        window.run_until_parked();
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        keys(window, "alt-l");
+
+        let tab =
+            |window: &mut VisualTestContext| window.update(|_, cx| history.read(cx).active_tab());
+
+        assert!(window.update(|_, cx| history.read(cx).owns_keyboard()));
+        assert_eq!(tab(window), HistoryTab::Saved, "Alt+L shows Saved");
+
+        keys(window, "alt-l");
+        assert_eq!(tab(window), HistoryTab::Recent, "the tabs wrap");
+
+        keys(window, "/");
+        keys(window, "alt-h");
+        if cfg!(target_os = "macos") {
+            assert_eq!(tab(window), HistoryTab::Recent, "Option+H types there");
+        } else {
+            assert_eq!(tab(window), HistoryTab::Saved, "the search field too");
+        }
+    }
+}

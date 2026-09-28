@@ -3487,6 +3487,8 @@ settings:
       select_last: 选择最后一项
       page_down: 向下翻页
       page_up: 向上翻页
+      next_panel_tab: 下一个面板标签页
+      prev_panel_tab: 上一个面板标签页
       extend_select_next: 向下扩展选择
       extend_select_prev: 向上扩展选择
       toggle_selection: 切换选择

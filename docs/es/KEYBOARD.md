@@ -553,3 +553,6 @@ foco vuelve a la barra.
 | `Ctrl+d`                              | Eliminar                         |
 | `/`                                   | Enfocar búsqueda; en los campos de búsqueda, renombrar y guardar escribe una `/` |
 | `Ctrl+s` / `Cmd+s`                    | Guardar query                    |
+| `Alt+l` / `Alt+h`                     | Mostrar la lista siguiente / anterior (Recientes, Guardadas) |
+
+`Alt+l` y `Alt+h` también funcionan en los campos de búsqueda, renombrar y guardar del historial, salvo en macOS, donde `Option` con una letra escribe un carácter: allí funcionan solo desde la lista.

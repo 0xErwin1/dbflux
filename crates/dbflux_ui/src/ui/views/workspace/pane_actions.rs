@@ -405,7 +405,9 @@ mod tests {
 
     /// The result tab entries run their commands through the workspace, like
     /// their keys: the commands reach the active document, which reports
-    /// that a query without results has no tab to switch or close.
+    /// that a query without results has no tab to switch or close. The
+    /// panel tab commands reach it the same way; with the history closed
+    /// there is no panel to switch.
     #[gpui::test]
     fn result_tab_commands_reach_the_active_document(cx: &mut TestAppContext) {
         let (workspace, window) = open_workspace(cx);
@@ -419,12 +421,14 @@ mod tests {
                     Command::NextResultTab,
                     Command::PrevResultTab,
                     Command::CloseResultTab,
+                    Command::NextPanelTab,
+                    Command::PrevPanelTab,
                 ]
                 .map(|command| workspace.dispatch(command, window, cx))
             })
         });
 
-        assert_eq!(handled, [false, false, false]);
+        assert_eq!(handled, [false, false, false, false, false]);
     }
 
     fn action(id: &'static str, enabled: bool) -> PaneAction {

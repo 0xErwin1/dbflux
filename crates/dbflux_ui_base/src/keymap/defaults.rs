@@ -447,6 +447,25 @@ fn history_modal_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
 
+    // Recent / Saved, with the Alt+H / Alt+L pair every in-pane tab strip
+    // uses. The workspace keeps Ctrl+Tab for the document tabs. On macOS
+    // Option+letter types a character, so there the fields keep it.
+    let panel_tab_predicate = if cfg!(target_os = "macos") {
+        "HistoryModal && !Input"
+    } else {
+        "HistoryModal"
+    };
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::alt()),
+        Command::NextPanelTab,
+        panel_tab_predicate,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::PrevPanelTab,
+        panel_tab_predicate,
+    );
+
     layer
 }
 

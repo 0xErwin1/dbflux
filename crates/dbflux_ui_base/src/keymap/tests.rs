@@ -1809,3 +1809,34 @@ fn slash_in_the_query_history_fields_is_typed_text() {
     field.push(KeyContext::parse("Input").expect("valid key context"));
     assert!(top_action(&keymap, "/", &field).is_none());
 }
+
+/// Alt+L and Alt+H show the next and previous tab of the query history
+/// (Recent, Saved) from its list. In its search, rename and save fields they
+/// do too, except on macOS, where Option+letter types a character.
+#[test]
+fn alt_keys_switch_the_query_history_tabs() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::HistoryModal, &[]);
+    let list = element_stack(root, &["HistoryModal"]);
+    let mut field = list.clone();
+    field.push(KeyContext::parse("Input").expect("valid key context"));
+
+    for (keys, command) in [
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+    ] {
+        let action = top_action(&keymap, keys, &list).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the history list"
+        );
+
+        let in_field = top_action(&keymap, keys, &field);
+        if cfg!(target_os = "macos") {
+            assert!(in_field.is_none(), "`{keys}` types a character on macOS");
+        } else {
+            let action = in_field.expect("bound in the history fields");
+            assert!(runs_command(action.as_ref(), command));
+        }
+    }
+}
