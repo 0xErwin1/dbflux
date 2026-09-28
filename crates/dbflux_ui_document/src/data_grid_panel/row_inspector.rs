@@ -484,6 +484,9 @@ pub struct RowInspectorContent {
     generation: u64,
     pinned: bool,
     focus_handle: FocusHandle,
+    /// Scroll position of the field list, moved by the keys while the
+    /// keyboard is in the inspector.
+    scroll_handle: ScrollHandle,
 }
 
 /// Requests from the inspector's buttons; the owning grid carries them out.
@@ -512,7 +515,18 @@ impl RowInspectorContent {
             generation: 0,
             pinned: false,
             focus_handle: cx.focus_handle(),
+            scroll_handle: ScrollHandle::new(),
         }
+    }
+
+    /// Scroll the field list by a line, a page, or to either end.
+    pub fn scroll(
+        &self,
+        step: crate::data_grid_panel::side_island::IslandScroll,
+        cx: &mut Context<Self>,
+    ) {
+        crate::data_grid_panel::side_island::scroll_by(&self.scroll_handle, step);
+        cx.notify();
     }
 
     /// Replace the snapshot for a new row selection while keeping the entity alive.
@@ -778,6 +792,7 @@ impl Render for RowInspectorContent {
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
             .children(
                 self.snapshot
                     .cells

@@ -3618,6 +3618,7 @@ settings:
       modal: 模态对话框
       key_value: 键值浏览器
       settings: 设置窗口
+      inspector: 检查器
     category:
       global: 全局
       focus: 聚焦

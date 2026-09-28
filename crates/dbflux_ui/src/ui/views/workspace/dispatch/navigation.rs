@@ -386,18 +386,20 @@ impl Workspace {
     }
 
     fn handle_focus_left(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // Only try document dispatch when in context bar mode,
-        // otherwise FocusLeft would be swallowed by DataGridPanel column navigation.
+        // Only try document dispatch in the context bar and in a side panel
+        // the document owns (Ctrl+H goes back to the document); in the grid
+        // FocusLeft would be swallowed by DataGridPanel column navigation.
         let active_ctx = self
             .tab_manager
             .read(cx)
             .active_tab()
             .map(|tab| tab.active_context(cx));
-        if active_ctx == Some(ContextId::ContextBar)
-            && self.tab_manager.update(cx, |mgr, cx| {
-                mgr.dispatch_active(Command::FocusLeft, window, cx)
-            })
-        {
+        if matches!(
+            active_ctx,
+            Some(ContextId::ContextBar | ContextId::Inspector)
+        ) && self.tab_manager.update(cx, |mgr, cx| {
+            mgr.dispatch_active(Command::FocusLeft, window, cx)
+        }) {
             return true;
         }
 
@@ -426,18 +428,20 @@ impl Workspace {
     }
 
     fn handle_focus_right(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // Only try document dispatch when in context bar mode,
-        // otherwise FocusRight would be swallowed by DataGridPanel column navigation.
+        // The context bar moves between its controls, and a result grid
+        // moves into the side panel it has open (the value panel, row
+        // inspector or query builder in the inspector rail).
         let active_ctx = self
             .tab_manager
             .read(cx)
             .active_tab()
             .map(|tab| tab.active_context(cx));
-        if active_ctx == Some(ContextId::ContextBar)
-            && self.tab_manager.update(cx, |mgr, cx| {
-                mgr.dispatch_active(Command::FocusRight, window, cx)
-            })
-        {
+        if matches!(
+            active_ctx,
+            Some(ContextId::ContextBar | ContextId::Results | ContextId::Inspector)
+        ) && self.tab_manager.update(cx, |mgr, cx| {
+            mgr.dispatch_active(Command::FocusRight, window, cx)
+        }) {
             return true;
         }
 
@@ -486,5 +490,130 @@ impl Workspace {
         };
         self.set_focus(prev, window, cx);
         true
+    }
+}
+
+#[cfg(test)]
+mod side_island_tests {
+    // Explicit imports rather than a glob: combining one with `#[gpui::test]`
+    // sends the macro expansion into unbounded recursion.
+    use crate::keymap::{ContextId, FocusTarget};
+    use crate::ui::document::{DataDocument, Tab};
+    use crate::ui::views::workspace::Workspace;
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryResult, Value};
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn open_workspace(cx: &mut TestAppContext) -> (Entity<Workspace>, &mut VisualTestContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(dbflux_ui_base::keymap::init_keymap);
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let holder = holder.clone();
+            move |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(app_state, window, cx));
+                holder.replace(Some(workspace.clone()));
+                gpui_component::Root::new(workspace, window, cx)
+            }
+        });
+        let workspace = holder.borrow().clone().expect("workspace created");
+        window.run_until_parked();
+
+        (workspace, window)
+    }
+
+    fn keys(window: &mut VisualTestContext, keystrokes: &str) {
+        for keystroke in keystrokes.split(' ') {
+            window.simulate_keystrokes(keystroke);
+            window.update(|window, _| window.refresh());
+            window.run_until_parked();
+        }
+    }
+
+    fn context(workspace: &Entity<Workspace>, window: &mut VisualTestContext) -> ContextId {
+        window.update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)))
+    }
+
+    /// In a result tab, Ctrl+L moves the keyboard from the grid into the
+    /// value panel the workspace draws in its inspector rail, and Ctrl+H
+    /// brings it back to the grid.
+    #[gpui::test]
+    fn ctrl_l_enters_the_inspector_rail_and_ctrl_h_returns(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let result = QueryResult::table(
+                    vec![ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    }],
+                    vec![vec![Value::Text("first".to_string())]],
+                    None,
+                    Duration::ZERO,
+                );
+                let document = cx.new(|cx| {
+                    DataDocument::new_for_result(
+                        Arc::new(result),
+                        "SELECT name FROM users".to_string(),
+                        "users".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                let pane = DataDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        keys(window, "j v");
+        assert!(
+            window.update(|_, cx| workspace.read(cx).workspace_inspector.read(cx).is_open()),
+            "`v` opens the value panel in the rail"
+        );
+        assert_eq!(context(&workspace, window), ContextId::Results);
+
+        keys(window, "ctrl-l");
+        assert_eq!(
+            context(&workspace, window),
+            ContextId::Inspector,
+            "Ctrl+L moves the keyboard into the rail"
+        );
+
+        keys(window, "ctrl-h");
+        assert_eq!(
+            context(&workspace, window),
+            ContextId::Results,
+            "Ctrl+H returns to the grid"
+        );
+        assert_eq!(
+            window.update(|_, cx| workspace.read(cx).focus_target),
+            FocusTarget::Document,
+            "Ctrl+H from the rail stops at the grid, not the sidebar"
+        );
     }
 }

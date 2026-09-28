@@ -291,7 +291,8 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 
 | Teclas                                        | Acción                                     |
 | --------------------------------------------- | ------------------------------------------ |
-| `Ctrl+h` / `Ctrl+k` / `Ctrl+l`                | Enfocar panel izquierda / arriba / derecha |
+| `Ctrl+h` / `Ctrl+k`                           | Enfocar panel izquierda / arriba           |
+| `Ctrl+l`                                      | Entrar al panel lateral abierto a la derecha (panel de valor, inspector de fila, panel de documento o constructor de consultas); ver [Paneles laterales](#paneles-laterales) |
 | `Ctrl+j`                                      | Enfocar la toolbar                         |
 | `j` / `k` (o `Down` / `Up`)                   | Fila siguiente / anterior                  |
 | `h` / `l` (o `Left` / `Right`)                | Columna izquierda / derecha                |
@@ -398,6 +399,23 @@ foco y no se está editando ninguna celda.
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Rehacer |
 | `e` | Expandir o contraer una columna anidada (grillas de documentos) |
 | `Backspace` | Salir de un valor anidado (grillas de documentos) |
+
+## Paneles laterales
+
+Estas teclas se aplican después de que `Ctrl+l` mueve el foco desde una grilla de
+resultados al panel de valor, el inspector de fila, el panel de documento o el
+constructor de consultas que está a su lado.
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Desplazar una línea abajo / arriba |
+| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Desplazar una página abajo / arriba |
+| `g` / `Shift+g` (o `Home` / `End`) | Ir al principio / al final |
+| `Enter` | Editar el valor (panel de valor) |
+| `Escape` | Dejar de editar el valor, o volver a la grilla |
+| `Ctrl+h` | Volver a la grilla |
+
+El constructor de consultas recibe el foco pero solo se desplaza con el puntero.
 
 ## Árbol de documentos
 

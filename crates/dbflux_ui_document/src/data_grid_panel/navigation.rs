@@ -623,6 +623,10 @@ impl DataGridPanel {
             return self.dispatch_export_menu_command(cmd, window, cx);
         }
 
+        if let Some(handled) = self.dispatch_side_island_command(cmd, window, cx) {
+            return handled;
+        }
+
         // The Aggregate view has its own editor and result views; commands
         // meant for the documents grid must not reach the hidden grid.
         if self.collection.tab == super::documents::CollectionTab::Aggregate {
@@ -651,7 +655,7 @@ impl DataGridPanel {
                     self.toolbar_left(cx);
                     return true;
                 }
-                Command::FocusRight | Command::ColumnRight => {
+                Command::ColumnRight => {
                     self.toolbar_right(cx);
                     return true;
                 }
@@ -747,10 +751,11 @@ impl DataGridPanel {
                 self.column_left(cx);
                 true
             }
-            Command::ColumnRight | Command::FocusRight => {
+            Command::ColumnRight => {
                 self.column_right(cx);
                 true
             }
+            Command::FocusRight => self.enter_side_island(window, cx),
             Command::ResultsNextPage | Command::PageDown => {
                 self.go_to_next_page(window, cx);
                 true

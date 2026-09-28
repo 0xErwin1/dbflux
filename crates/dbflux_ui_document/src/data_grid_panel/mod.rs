@@ -9,6 +9,7 @@ mod query;
 mod render;
 mod result_search;
 pub mod row_inspector;
+pub(crate) mod side_island;
 mod utils;
 pub mod value_panel;
 
@@ -644,6 +645,10 @@ struct FocusState {
     /// Holds the keyboard while the export menu is open, so the menu keys
     /// reach the menu rather than the table under it.
     export_menu_focus: FocusHandle,
+    /// The side panel the keyboard moved into with Ctrl+L, if any.
+    side_island: Option<side_island::SideIsland>,
+    /// Clears `side_island` when focus leaves that panel by another route.
+    _side_island_blur: Option<Subscription>,
 }
 
 /// Panel chrome flags and result-view text caches.
@@ -1523,6 +1528,8 @@ impl DataGridPanel {
                 switching_input: false,
                 context_menu_focus,
                 export_menu_focus: cx.focus_handle(),
+                side_island: None,
+                _side_island_blur: None,
             },
             chrome: ChromeState {
                 show_panel_controls: false,
@@ -5892,6 +5899,274 @@ mod tests {
                 || panel.read(cx).focus_handle.contains_focused(window, cx)
         });
         assert!(table_focused, "closing hands the keyboard back to the grid");
+    }
+
+    /// Stands in for the workspace around a grid: the root carries the key
+    /// context the grid reports and routes keymap commands to it, and the
+    /// side panel the grid opens is drawn beside it, as the inspector rail
+    /// draws it, so focus can move into it.
+    struct RailHost {
+        panel: gpui::Entity<DataGridPanel>,
+        rail: Option<gpui::AnyView>,
+        _subscription: gpui::Subscription,
+    }
+
+    impl gpui::Render for RailHost {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use dbflux_ui_base::keymap::{
+                RunCommand, WORKSPACE_KEY_CONTEXT, root_key_context, run_command,
+            };
+            use gpui::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            let context = self.panel.read(cx).active_context(cx);
+
+            gpui::div()
+                .size_full()
+                .flex()
+                .key_context(root_key_context(WORKSPACE_KEY_CONTEXT, context, &[]))
+                .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                    let Some(command) = run_command(action) else {
+                        return;
+                    };
+
+                    let handled = this
+                        .panel
+                        .update(cx, |panel, cx| panel.dispatch_command(command, window, cx));
+
+                    if !handled {
+                        cx.propagate();
+                    }
+                }))
+                .child(gpui::div().flex_1().child(self.panel.clone()))
+                .children(self.rail.clone())
+        }
+    }
+
+    /// A three-row query result hosted beside its inspector rail, under the
+    /// app keymap, with the table focused.
+    fn host_grid_with_rail(
+        cx: &mut TestAppContext,
+        app_state: gpui::Entity<AppStateEntity>,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        let slot: Rc<RefCell<Option<gpui::Entity<DataGridPanel>>>> = Rc::default();
+
+        let (_, window) = cx.add_window_view({
+            let slot = slot.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| {
+                    DataGridPanel::new_for_result(
+                        Arc::new(QueryResult::table(
+                            vec![key_column("id", false), key_column("name", false)],
+                            (1..=3)
+                                .map(|id| {
+                                    vec![
+                                        dbflux_core::Value::Int(id),
+                                        dbflux_core::Value::Text(format!("row {id}")),
+                                    ]
+                                })
+                                .collect(),
+                            None,
+                            Duration::ZERO,
+                        )),
+                        "SELECT id, name FROM users".to_string(),
+                        None,
+                        app_state,
+                        window,
+                        cx,
+                    )
+                });
+                slot.replace(Some(panel.clone()));
+
+                let host = cx.new(|cx| {
+                    let subscription = cx.subscribe(
+                        &panel,
+                        |host: &mut RailHost, _, event: &DataGridEvent, cx| match event {
+                            DataGridEvent::OpenInspector { content, .. } => {
+                                host.rail = Some(content.clone());
+                                cx.notify();
+                            }
+                            DataGridEvent::CloseInspector => {
+                                host.rail = None;
+                                cx.notify();
+                            }
+                            _ => {}
+                        },
+                    );
+
+                    RailHost {
+                        panel: panel.clone(),
+                        rail: None,
+                        _subscription: subscription,
+                    }
+                });
+
+                Root::new(host, window, cx)
+            }
+        });
+        window.run_until_parked();
+
+        let panel = slot
+            .borrow()
+            .clone()
+            .expect("the window builder stores the grid");
+        window.update(|window, cx| {
+            let table_state = panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("the result builds a table");
+            let focus_handle = table_state.read(cx).focus_handle().clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        (panel, window)
+    }
+
+    /// Whether keyboard focus is on the grid: its table or the panel itself.
+    fn table_has_focus(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> bool {
+        window.update(|window, cx| {
+            panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .as_ref()
+                .is_some_and(|state| state.read(cx).focus_handle().is_focused(window))
+                || panel.read(cx).focus_handle.is_focused(window)
+        })
+    }
+
+    fn active_row(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) -> Option<usize> {
+        window.update(|_, cx| {
+            panel
+                .read(cx)
+                .grid_table
+                .table_state
+                .as_ref()
+                .and_then(|state| state.read(cx).selection().active)
+                .map(|coord| coord.row)
+        })
+    }
+
+    /// Ctrl+L from the grid moves the keyboard into the open value panel,
+    /// where J and K belong to the panel and not to the grid's cursor; Enter
+    /// edits the value and Escape stops editing; Ctrl+H goes back to the grid.
+    #[gpui::test]
+    fn ctrl_l_enters_the_value_panel_and_ctrl_h_returns(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::init_keyboard_runtime;
+        use dbflux_app::keymap::ContextId;
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let (panel, window) = host_grid_with_rail(cx, app_state);
+        let context = |window: &mut VisualTestContext| {
+            window.update(|_, cx| panel.read(cx).active_context(cx))
+        };
+
+        for keys in ["j", "v"] {
+            window.simulate_keystrokes(keys);
+            window.run_until_parked();
+        }
+        assert!(window.update(|_, cx| panel.read(cx).value_panel_is_open()));
+        let row = active_row(&panel, window);
+
+        window.simulate_keystrokes("ctrl-l");
+        window.run_until_parked();
+        assert_eq!(
+            context(window),
+            ContextId::Inspector,
+            "Ctrl+L enters the panel"
+        );
+        assert!(!table_has_focus(&panel, window));
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(
+            active_row(&panel, window),
+            row,
+            "J inside the panel leaves the grid's cursor alone"
+        );
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(
+            context(window),
+            ContextId::TextInput,
+            "Enter edits the value"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            context(window),
+            ContextId::Inspector,
+            "Escape stops editing and stays in the panel"
+        );
+
+        window.simulate_keystrokes("ctrl-h");
+        window.run_until_parked();
+        assert_eq!(
+            context(window),
+            ContextId::Results,
+            "Ctrl+H returns to the grid"
+        );
+        assert!(table_has_focus(&panel, window));
+    }
+
+    /// Ctrl+L enters the row inspector too, and Escape returns to the grid.
+    /// With no side panel open, Ctrl+L leaves the grid where it is.
+    #[gpui::test]
+    fn ctrl_l_enters_the_row_inspector_and_escape_returns(cx: &mut TestAppContext) {
+        use crate::keyboard_test_support::init_keyboard_runtime;
+        use dbflux_app::keymap::ContextId;
+
+        init_keyboard_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let (panel, window) = host_grid_with_rail(cx, app_state);
+        let context = |window: &mut VisualTestContext| {
+            window.update(|_, cx| panel.read(cx).active_context(cx))
+        };
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        let row = active_row(&panel, window);
+
+        window.simulate_keystrokes("ctrl-l");
+        window.run_until_parked();
+        assert_eq!(context(window), ContextId::Results);
+        assert!(table_has_focus(&panel, window), "no side panel to enter");
+
+        window.simulate_keystrokes("ctrl-space");
+        window.run_until_parked();
+        assert!(window.update(|_, cx| panel.read(cx).row_inspector_is_open()));
+
+        window.simulate_keystrokes("ctrl-l");
+        window.run_until_parked();
+        assert_eq!(context(window), ContextId::Inspector);
+
+        window.simulate_keystrokes("k");
+        window.run_until_parked();
+        assert_eq!(active_row(&panel, window), row);
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(context(window), ContextId::Results);
+        assert!(table_has_focus(&panel, window));
+        assert!(
+            window.update(|_, cx| panel.read(cx).row_inspector_is_open()),
+            "leaving the inspector keeps it open"
+        );
     }
 
     #[gpui::test]

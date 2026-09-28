@@ -3617,6 +3617,7 @@ settings:
       modal: 모달 대화상자
       key_value: 키-값 브라우저
       settings: 설정 창
+      inspector: 인스펙터
     category:
       global: 전역
       focus: 포커스

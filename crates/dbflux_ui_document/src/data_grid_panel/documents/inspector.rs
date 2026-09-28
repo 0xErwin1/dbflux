@@ -338,6 +338,19 @@ impl DocumentInspectorContent {
     }
 }
 
+impl DocumentInspectorContent {
+    /// Scroll the field list by a line, a page, or to either end.
+    pub(crate) fn scroll(
+        &self,
+        step: crate::data_grid_panel::side_island::IslandScroll,
+        cx: &mut Context<Self>,
+    ) {
+        let handle = self.scroll_handle.0.borrow().base_handle.clone();
+        crate::data_grid_panel::side_island::scroll_by(&handle, step);
+        cx.notify();
+    }
+}
+
 impl Focusable for DocumentInspectorContent {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()

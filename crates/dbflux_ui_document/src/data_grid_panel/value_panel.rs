@@ -75,6 +75,9 @@ pub struct ValuePanelContent {
     editor_focused: bool,
     _input_subscription: Subscription,
     error: Option<String>,
+    /// Holds the keyboard while the user reads the panel without editing;
+    /// Enter moves it on into the editor.
+    focus_handle: FocusHandle,
 }
 
 impl EventEmitter<ValuePanelSaveEvent> for ValuePanelContent {}
@@ -95,7 +98,64 @@ impl ValuePanelContent {
             editor_focused: false,
             _input_subscription: subscription,
             error: None,
+            focus_handle: cx.focus_handle(),
         }
+    }
+
+    /// The panel's own focus handle, which keyboard focus takes when it moves
+    /// into the panel from the grid.
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    /// Hand the keyboard to the editor, to change the value.
+    ///
+    /// Marks the editor as focused right away rather than on its `Focus`
+    /// event, which arrives only with the next frame: until then the grid
+    /// would keep reporting the panel's keys and claim the letters typed.
+    pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |state, cx| state.focus(window, cx));
+        self.editor_focused = true;
+        cx.notify();
+    }
+
+    /// Take the keyboard back from the editor to the panel, keeping the
+    /// text as typed. Mirrors `focus_editor`.
+    pub fn leave_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+        self.editor_focused = false;
+        cx.notify();
+    }
+
+    /// Scroll the value by a line, a page, or to either end. The editor
+    /// clamps the offset to its content when it lays out.
+    pub fn scroll(
+        &self,
+        step: crate::data_grid_panel::side_island::IslandScroll,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::data_grid_panel::side_island::IslandScroll;
+
+        self.input.update(cx, |state, cx| {
+            let Some(line_height) = state.line_height() else {
+                return;
+            };
+
+            let viewport = state.input_bounds().size.height;
+            let page = (viewport - line_height).max(line_height);
+            let offset = state.scroll_offset();
+
+            let target = match step {
+                IslandScroll::LineUp => offset.y + line_height,
+                IslandScroll::LineDown => offset.y - line_height,
+                IslandScroll::PageUp => offset.y + page,
+                IslandScroll::PageDown => offset.y - page,
+                IslandScroll::Top => Pixels::ZERO,
+                IslandScroll::Bottom => Pixels::MIN,
+            };
+
+            state.set_scroll_offset(point(offset.x, target.min(Pixels::ZERO)), cx);
+        });
     }
 
     /// Whether the panel's editor currently owns the keyboard.
@@ -281,6 +341,7 @@ impl Render for ValuePanelContent {
 
         div()
             .id("value-panel-content")
+            .track_focus(&self.focus_handle)
             .size_full()
             .flex()
             .flex_col()

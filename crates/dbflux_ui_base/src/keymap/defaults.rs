@@ -34,6 +34,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(document_preview_modal_layer());
     stack.add_layer(key_value_layer());
     stack.add_layer(settings_layer());
+    stack.add_layer(inspector_layer());
 
     stack
 });
@@ -1450,6 +1451,42 @@ fn document_preview_modal_layer() -> KeymapLayer {
 
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
     layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
+
+    layer
+}
+
+/// Keys of a side panel the keyboard moved into from its document (the
+/// value panel, row inspector, document panel and query builder): Ctrl+H or
+/// Escape go back to the document, J and K scroll, Enter edits the value
+/// panel's text.
+fn inspector_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::Inspector);
+
+    layer.bind(KeyChord::new("h", Modifiers::ctrl()), Command::FocusLeft);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
 
     layer
 }

@@ -1011,6 +1011,10 @@ pub enum ContextId {
 
     /// Settings window.
     Settings,
+
+    /// A side panel beside a document that keyboard focus moved into: the
+    /// value panel, row inspector, document panel or query builder rail.
+    Inspector,
 }
 
 impl ContextId {
@@ -1046,6 +1050,7 @@ impl ContextId {
             ContextId::Modal => None,
             ContextId::KeyValue => None,
             ContextId::Settings => None,
+            ContextId::Inspector => Some(ContextId::Global),
         }
     }
 
@@ -1128,6 +1133,7 @@ impl ContextId {
             ContextId::Modal => "Modal Dialog",
             ContextId::KeyValue => "Key-Value Browser",
             ContextId::Settings => "Settings Window",
+            ContextId::Inspector => "Inspector",
         }
     }
 
@@ -1160,6 +1166,7 @@ impl ContextId {
             ContextId::Modal => "modal",
             ContextId::KeyValue => "key_value",
             ContextId::Settings => "settings",
+            ContextId::Inspector => "inspector",
         }
     }
 
@@ -1192,6 +1199,7 @@ impl ContextId {
             ContextId::Modal,
             ContextId::KeyValue,
             ContextId::Settings,
+            ContextId::Inspector,
         ]
     }
 
@@ -1224,6 +1232,7 @@ impl ContextId {
             ContextId::Modal => "Modal",
             ContextId::KeyValue => "KeyValueView",
             ContextId::Settings => "Settings",
+            ContextId::Inspector => "Inspector",
         }
     }
 
@@ -1247,6 +1256,7 @@ impl ContextId {
             ContextId::BackgroundTasks => "BackgroundTasks && !Modal",
             ContextId::Audit => "Audit && !Modal",
             ContextId::SchemaViz => "SchemaViz && !Modal",
+            ContextId::Inspector => "Inspector && !Modal",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

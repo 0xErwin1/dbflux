@@ -276,7 +276,8 @@ A read-only delete does not change the clipboard.
 
 | Keys | Action |
 |------|--------|
-| `Ctrl+h` / `Ctrl+k` / `Ctrl+l` | Focus left / up / right panel |
+| `Ctrl+h` / `Ctrl+k` | Focus left / up panel |
+| `Ctrl+l` | Move into the side panel that is open on the right (value panel, row inspector, document panel or query builder); see [Side panels](#side-panels) |
 | `Ctrl+j` | Focus toolbar |
 | `j` / `k` (or `Down` / `Up`) | Next / previous row |
 | `h` / `l` (or `Left` / `Right`) | Column left / right |
@@ -380,6 +381,22 @@ edited.
 | `Ctrl+r` / `Ctrl+Shift+z` / `Cmd+Shift+z` | Redo |
 | `e` | Expand or collapse a nested column (document grids) |
 | `Backspace` | Step out of a nested value (document grids) |
+
+## Side panels
+
+These keys apply after `Ctrl+l` moves focus from a result grid into the value
+panel, row inspector, document panel or query builder beside it.
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Scroll a line down / up |
+| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Scroll a page down / up |
+| `g` / `Shift+g` (or `Home` / `End`) | Scroll to the top / end |
+| `Enter` | Edit the value (value panel) |
+| `Escape` | Stop editing the value, or go back to the grid |
+| `Ctrl+h` | Go back to the grid |
+
+The query builder takes focus but scrolls only with the pointer.
 
 ## Document tree
 

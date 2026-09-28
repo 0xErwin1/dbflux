@@ -178,7 +178,7 @@ pub(super) fn step_export_selection(
 }
 
 impl DataGridPanel {
-    fn restore_focus_after_context_menu(
+    pub(in crate::data_grid_panel) fn restore_focus_after_context_menu(
         &mut self,
         is_document_view: bool,
         window: &mut Window,
@@ -706,6 +706,10 @@ impl DataGridPanel {
             && panel.read(cx).editor_has_focus()
         {
             return ContextId::TextInput;
+        }
+
+        if self.focused_side_island(cx).is_some() {
+            return ContextId::Inspector;
         }
 
         let inline_text_input_active = self
