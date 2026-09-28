@@ -9,6 +9,7 @@ use super::sections::{MenuRowCursor, submenu_flyout, submenu_frame};
 use crate::DataViewMode;
 use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::documents::CollectionTab;
+use crate::data_grid_panel::documents::builder::BuilderSupport;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::chart::AxisPill;
@@ -294,6 +295,10 @@ impl DataGridPanel {
     fn document_query_bar_actions(&self, cx: &App) -> Vec<ToolbarAction> {
         let mut actions = Vec::new();
 
+        if self.document_builder_support(cx) == BuilderSupport::Available {
+            actions.push(ToolbarAction::OpenBuilder);
+        }
+
         if self.collection.tab == CollectionTab::Documents {
             actions.push(ToolbarAction::Find);
 
@@ -345,6 +350,9 @@ impl DataGridPanel {
                     dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
                 }
             },
+            ToolbarAction::OpenBuilder if self.collection.builder.open => {
+                dbflux_i18n::t!("document.collection.builder.close")
+            }
             ToolbarAction::OpenBuilder => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.open_builder")
             }
@@ -496,6 +504,9 @@ impl DataGridPanel {
                 self.clear_filter(window, cx);
             }
             ToolbarAction::ToggleView => self.toggle_view_mode(cx),
+            ToolbarAction::OpenBuilder if self.is_document_collection(cx) => {
+                self.toggle_document_builder(window, cx)
+            }
             ToolbarAction::OpenBuilder => self.open_query_builder(window, cx),
             ToolbarAction::ResetBuilder => {
                 self.reset_builder_query(window, cx);

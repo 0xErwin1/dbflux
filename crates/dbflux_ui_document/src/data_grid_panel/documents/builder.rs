@@ -2659,6 +2659,34 @@ mod tests {
         window.run_until_parked();
     }
 
+    /// The Toolbar submenu lists the collection's Builder toggle: its entry
+    /// opens the builder rail, and closes it again while it is open.
+    #[gpui::test]
+    fn the_toolbar_entry_opens_and_closes_the_document_builder(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::context_menu::toolbar::ToolbarAction;
+
+        let (panel, window) = keyboard_collection(cx);
+        let is_open = |window: &mut VisualTestContext| {
+            window.update(|_, cx| panel.read(cx).document_builder_is_open())
+        };
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(
+            actions.contains(&ToolbarAction::OpenBuilder),
+            "the Toolbar lists the Builder toggle: {actions:?}"
+        );
+        assert!(!is_open(window));
+
+        run_toolbar(&panel, window, ToolbarAction::OpenBuilder);
+        assert!(is_open(window), "the entry opens the builder");
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(actions.contains(&ToolbarAction::OpenBuilder));
+
+        run_toolbar(&panel, window, ToolbarAction::OpenBuilder);
+        assert!(!is_open(window), "the entry closes the open builder");
+    }
+
     /// The query bar's Find, history and clear filter and the view tabs are
     /// reachable from the keyboard: the Toolbar entries run Find and open
     /// the history menu, whose menu keys rerun a query; Shift+F empties the
