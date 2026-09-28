@@ -3201,6 +3201,10 @@ palette:
       name: 다음 탭
     prev_tab:
       name: 이전 탭
+    move_tab_left:
+      name: 탭을 왼쪽으로 이동
+    move_tab_right:
+      name: 탭을 오른쪽으로 이동
     export_results:
       name: 결과 내보내기
     open_connection_manager:
@@ -3475,6 +3479,8 @@ settings:
       prev_tab: 이전 탭
       switch_to_tab: 탭으로 전환
       open_tab_menu: 탭 메뉴 열기
+      move_tab_left: 탭을 왼쪽으로 이동
+      move_tab_right: 탭을 오른쪽으로 이동
       focus_sidebar: 사이드바 포커스
       focus_editor: 편집기 포커스
       focus_results: 결과 포커스

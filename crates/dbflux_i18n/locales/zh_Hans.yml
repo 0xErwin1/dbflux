@@ -3201,6 +3201,10 @@ palette:
       name: 下一个标签页
     prev_tab:
       name: 上一个标签页
+    move_tab_left:
+      name: 向左移动标签页
+    move_tab_right:
+      name: 向右移动标签页
     export_results:
       name: 导出结果
     open_connection_manager:
@@ -3475,6 +3479,8 @@ settings:
       prev_tab: 上一个标签页
       switch_to_tab: 切换到标签页
       open_tab_menu: 打开标签页菜单
+      move_tab_left: 向左移动标签页
+      move_tab_right: 向右移动标签页
       focus_sidebar: 聚焦侧边栏
       focus_editor: 聚焦编辑器
       focus_results: 聚焦结果

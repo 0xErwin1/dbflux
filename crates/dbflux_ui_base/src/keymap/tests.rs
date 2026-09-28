@@ -703,6 +703,14 @@ fn workspace_command_chords() -> Vec<(Command, KeyChord)> {
             KeyChord::new("y", Modifiers::primary_shift()),
         ),
         (
+            Command::MoveTabLeft,
+            KeyChord::new("pageup", Modifiers::ctrl_shift()),
+        ),
+        (
+            Command::MoveTabRight,
+            KeyChord::new("pagedown", Modifiers::ctrl_shift()),
+        ),
+        (
             Command::OpenLoginModal,
             KeyChord::new("l", Modifiers::primary_shift()),
         ),

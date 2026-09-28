@@ -47,6 +47,14 @@ impl Workspace {
                 Some(true)
             }
 
+            Command::MoveTabLeft | Command::MoveTabRight => {
+                let forward = cmd == Command::MoveTabRight;
+                Some(
+                    self.tab_manager
+                        .update(cx, |mgr, cx| mgr.move_active_tab(forward, cx)),
+                )
+            }
+
             Command::OpenTabMenu => {
                 self.tab_bar
                     .update(cx, |tb, cx| tb.open_context_menu_for_active(cx));

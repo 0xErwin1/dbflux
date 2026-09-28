@@ -742,6 +742,30 @@ impl TabManager {
 
     /// Moves a tab from one position to another (for drag & drop).
     #[allow(unused_variables)]
+    /// Moves the active tab one place left (`forward == false`) or right,
+    /// keeping it active. Returns `false` at either end or without tabs.
+    pub fn move_active_tab(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let Some(active) = self.active_index else {
+            return false;
+        };
+
+        let target = if forward {
+            active + 1
+        } else {
+            match active.checked_sub(1) {
+                Some(target) => target,
+                None => return false,
+            }
+        };
+
+        if target >= self.documents.len() {
+            return false;
+        }
+
+        self.move_tab(active, target, cx);
+        true
+    }
+
     pub fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if from == to || from >= self.documents.len() || to >= self.documents.len() {
             return;

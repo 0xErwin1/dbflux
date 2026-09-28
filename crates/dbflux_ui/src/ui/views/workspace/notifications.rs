@@ -1526,6 +1526,13 @@ mod tests {
 
         assert_eq!(requested.borrow().as_slice(), &[Some(latest_id)]);
         assert_eq!(active_tab_icon(&mut harness), Some(DocumentIcon::Audit));
+        assert_eq!(
+            harness
+                .window
+                .update(|_, cx| app_state.read(cx).unread_error_count),
+            0,
+            "like the status bar's error badge, it clears the unread count"
+        );
     }
 
     #[gpui::test]

@@ -60,15 +60,19 @@ impl Workspace {
     }
 
     /// Opens the audit viewer on the most recent user-facing error, through
-    /// the same request as the error toast's "View in Audit". Before any
-    /// error was reported it opens the viewer on the user errors.
+    /// the same request as the error toast's "View in Audit", and clears the
+    /// unread count of the status bar's error badge. Before any error was
+    /// reported it opens the viewer on the user errors.
     pub(in crate::ui::views::workspace) fn open_last_error_in_audit(
         &mut self,
         cx: &mut Context<Self>,
     ) {
         let correlation_id = self.last_user_error;
 
+        // The errors are now in view, as after a click on the status bar's
+        // error badge.
         self.app_state.update(cx, |state, cx| {
+            state.clear_unread_errors(cx);
             state.request_open_audit(correlation_id, cx);
         });
     }

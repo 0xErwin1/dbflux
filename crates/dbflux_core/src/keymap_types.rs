@@ -13,6 +13,10 @@ pub enum Command {
     PrevTab,
     SwitchToTab(usize),
     OpenTabMenu,
+    /// Moves the active document tab one place to the left.
+    MoveTabLeft,
+    /// Moves the active document tab one place to the right.
+    MoveTabRight,
 
     // === Focus Navigation ===
     FocusSidebar,
@@ -225,6 +229,8 @@ impl Command {
             "close_tab" => Some(Command::CloseCurrentTab),
             "next_tab" => Some(Command::NextTab),
             "prev_tab" => Some(Command::PrevTab),
+            "move_tab_left" => Some(Command::MoveTabLeft),
+            "move_tab_right" => Some(Command::MoveTabRight),
             "export_results" => Some(Command::ExportResults),
             "open_connection_manager" => Some(Command::OpenConnectionManager),
             "export_connections" => Some(Command::ExportConnections),
@@ -272,6 +278,8 @@ impl Command {
             Command::PrevTab => "Previous tab",
             Command::SwitchToTab(_) => "Switch to tab",
             Command::OpenTabMenu => "Open tab menu",
+            Command::MoveTabLeft => "Move tab left",
+            Command::MoveTabRight => "Move tab right",
 
             Command::FocusSidebar => "Focus sidebar",
             Command::FocusEditor => "Focus editor",
@@ -441,6 +449,8 @@ impl Command {
             Command::PrevTab => "prev_tab",
             Command::SwitchToTab(_) => "switch_to_tab",
             Command::OpenTabMenu => "open_tab_menu",
+            Command::MoveTabLeft => "move_tab_left",
+            Command::MoveTabRight => "move_tab_right",
 
             Command::FocusSidebar => "focus_sidebar",
             Command::FocusEditor => "focus_editor",
@@ -634,6 +644,8 @@ impl Command {
             Command::PrevTab,
             Command::SwitchToTab(0),
             Command::OpenTabMenu,
+            Command::MoveTabLeft,
+            Command::MoveTabRight,
             Command::FocusSidebar,
             Command::FocusEditor,
             Command::FocusResults,
@@ -792,6 +804,8 @@ impl Command {
             | Command::NextTab
             | Command::PrevTab
             | Command::SwitchToTab(_)
+            | Command::MoveTabLeft
+            | Command::MoveTabRight
             | Command::OpenTabMenu => "Global",
 
             Command::FocusSidebar
@@ -959,6 +973,8 @@ impl Command {
                 | Command::CloseCurrentTab
                 | Command::NextTab
                 | Command::PrevTab
+                | Command::MoveTabLeft
+                | Command::MoveTabRight
                 | Command::SwitchToTab(_)
                 | Command::RunQuery
                 | Command::Cancel

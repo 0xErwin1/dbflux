@@ -1818,6 +1818,16 @@ impl Workspace {
                 dbflux_i18n::t!("palette.command.prev_tab.name"),
                 dbflux_i18n::t!("palette.category.tabs"),
             ),
+            PaletteCommand::new(
+                "move_tab_left",
+                dbflux_i18n::t!("palette.command.move_tab_left.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            ),
+            PaletteCommand::new(
+                "move_tab_right",
+                dbflux_i18n::t!("palette.command.move_tab_right.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            ),
             // Results
             PaletteCommand::new(
                 "export_results",
@@ -4199,6 +4209,47 @@ mod tab_close_request_tests {
 
         window.simulate_keystrokes("ctrl-shift-1");
         assert_eq!(target(window), FocusTarget::Sidebar);
+    }
+
+    /// Ctrl+Shift+Page Up and Page Down move the active tab one place left
+    /// or right, as dragging it does, and stop at either end.
+    #[gpui::test]
+    fn ctrl_shift_page_keys_move_the_active_tab(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let first = open_code_tab(window, &workspace, &app_state);
+        let second = open_code_tab(window, &workspace, &app_state);
+        let order = |window: &mut VisualTestContext| -> Vec<DocumentId> {
+            window.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .documents()
+                    .iter()
+                    .map(|tab| tab.id())
+                    .collect()
+            })
+        };
+        activate_tab(window, &workspace, second);
+        window.update(|window, _| window.activate_window());
+
+        window.simulate_keystrokes("ctrl-shift-pageup");
+        window.run_until_parked();
+        assert_eq!(order(window), vec![second, first]);
+        assert_eq!(active_tab_id(window, &workspace), Some(second));
+
+        window.simulate_keystrokes("ctrl-shift-pageup");
+        window.run_until_parked();
+        assert_eq!(
+            order(window),
+            vec![second, first],
+            "the first place stops it"
+        );
+
+        window.simulate_keystrokes("ctrl-shift-pagedown");
+        window.run_until_parked();
+        assert_eq!(order(window), vec![first, second]);
+        assert_eq!(active_tab_id(window, &workspace), Some(second));
     }
 
     fn tasks_panel_rendered(window: &mut VisualTestContext) -> bool {

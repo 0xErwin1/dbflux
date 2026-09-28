@@ -80,6 +80,15 @@ fn global_layer() -> KeymapLayer {
         KeyChord::new("tab", Modifiers::ctrl_shift()),
         Command::PrevTab,
     );
+    // Move the active tab, as dragging it does; literal Ctrl like Ctrl+Tab.
+    layer.bind(
+        KeyChord::new("pageup", Modifiers::ctrl_shift()),
+        Command::MoveTabLeft,
+    );
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::ctrl_shift()),
+        Command::MoveTabRight,
+    );
     for i in 1..=9 {
         layer.bind(
             KeyChord::new(i.to_string(), Modifiers::primary()),

@@ -3201,6 +3201,10 @@ palette:
       name: Pestaña siguiente
     prev_tab:
       name: Pestaña anterior
+    move_tab_left:
+      name: Mover pestaña a la izquierda
+    move_tab_right:
+      name: Mover pestaña a la derecha
     export_results:
       name: Exportar resultados
     open_connection_manager:
@@ -3475,6 +3479,8 @@ settings:
       prev_tab: Pestaña anterior
       switch_to_tab: Cambiar a pestaña
       open_tab_menu: Abrir menú de pestaña
+      move_tab_left: Mover pestaña a la izquierda
+      move_tab_right: Mover pestaña a la derecha
       focus_sidebar: Enfocar barra lateral
       focus_editor: Enfocar editor
       focus_results: Enfocar resultados

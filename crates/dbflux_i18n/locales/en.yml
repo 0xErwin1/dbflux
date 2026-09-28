@@ -3201,6 +3201,10 @@ palette:
       name: Next tab
     prev_tab:
       name: Previous tab
+    move_tab_left:
+      name: Move tab left
+    move_tab_right:
+      name: Move tab right
     export_results:
       name: Export results
     open_connection_manager:
@@ -3475,6 +3479,8 @@ settings:
       prev_tab: Previous tab
       switch_to_tab: Switch to tab
       open_tab_menu: Open tab menu
+      move_tab_left: Move tab left
+      move_tab_right: Move tab right
       focus_sidebar: Focus sidebar
       focus_editor: Focus editor
       focus_results: Focus results

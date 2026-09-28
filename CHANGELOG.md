@@ -23,6 +23,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Toast buttons from the keyboard** — Ctrl+Shift+Y opens a menu of the newest toast's buttons, such as Copy, View in Audit or Reconnect now, plus Show or Hide details and Dismiss. J and K move, Enter runs the button and Escape closes the menu. It is also in the command palette as Open toast actions. macOS uses Cmd+Shift+Y.
 * **Switch the query history lists from the keyboard** — Alt+L and Alt+H show the next and previous list of the query history, Recent or Saved, from the list and from its search, rename and save fields. On macOS, where Option with a letter types a character, the fields keep the key. The keys are listed under the History context in Settings > Keybindings.
 * **Keyboard keys for the SQL and query previews** — In the SQL Preview and Query Preview dialogs, Enter or Ctrl+C copies the query and closes the dialog, as the Copy button does, J and K or the arrows scroll the query a line, and Page Up and Page Down scroll it a page. macOS uses Cmd+C. The keys are listed under the SQL Preview context in Settings > Keybindings.
+* **Reorder tabs from the keyboard** — Ctrl+Shift+Page Up and Ctrl+Shift+Page Down move the active tab one place left or right, as dragging it does. Both are also command palette entries (Move tab left, Move tab right). They use Ctrl on macOS too, like Ctrl+Tab.
 
 ### Changed
 
@@ -30,6 +31,7 @@ All notable changes to DBFlux will be documented in this file.
 * **Global shortcuts while typing** — Shortcuts that hold Ctrl or Cmd, such as Ctrl+Tab, Ctrl+1 to Ctrl+9, Ctrl+W and Ctrl+Shift+P, now work while a text field outside a dialog has focus, such as the sidebar search or the execution context bar. Letters, Tab, Escape, Enter and the arrows stay with the field, and dialogs, menus, dropdowns and pickers keep the shortcuts out until they close.
 * **Tab in the code editor** — In Vim Normal and Visual modes, Tab and Shift+Tab now move focus to the next or previous pane instead of doing nothing. Insert mode and editors without Vim keep Tab for indentation.
 * **Buttons activate on release** — Buttons, menu rows, list rows and links that acted as soon as the mouse button went down, such as chart axis pickers, dropdown items, the window controls, key-value rows and the tab close button, now act when the button is released and are exposed to assistive technology as clickable. Drag handles, resize grips and dismissing a menu by pressing outside it still act on press.
+* **Ctrl+Shift+X clears the error badge** — Opening the most recent error in the audit viewer with Ctrl+Shift+X (Cmd+Shift+X on macOS) now also clears the unread count on the status bar's error badge, as a click on the badge does.
 
 ### Fixed
 

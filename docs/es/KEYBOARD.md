@@ -26,6 +26,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+n` / `Cmd+n`                               | Nueva pestaña de query                                            |
 | `Ctrl+w` / `Cmd+w`                               | Cerrar pestaña actual                                             |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`                    | Pestaña siguiente / anterior                                      |
+| `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown`      | Mover la pestaña activa a la izquierda / derecha                  |
 | `Ctrl+1` .. `Ctrl+9` / `Cmd+1` .. `Cmd+9`        | Cambiar a la pestaña N                                            |
 | `Ctrl+o` / `Cmd+o`                               | Abrir archivo de script                                           |
 | `Ctrl+Enter` / `Cmd+Enter`                       | Ejecutar query                                                    |
@@ -54,7 +55,9 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+Shift+M` / `Cmd+Shift+M`                   | Abrir aprobaciones de MCP                                         |
 | `Ctrl+Shift+G` / `Cmd+Shift+G`                   | Actualizar gobernanza de MCP                                      |
 
-`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
+`Ctrl+Shift+X` abre el visor de auditoría en el error más reciente de esta sesión, como hace **Ver en auditoría** en el toast del error, y pone a cero el contador de la insignia de errores de la barra de estado; antes de cualquier error muestra los errores de usuario. `Ctrl+Shift+5` .. `Ctrl+Shift+7` se comportan como la barra de actividad: elegir la vista que ya se muestra colapsa la sidebar. `Ctrl+Shift+Y` lista los botones del toast más reciente en pantalla, como **Copiar**, **Ver en auditoría** o **Reconectar ahora**, luego **Mostrar detalles** u **Ocultar detalles** cuando tiene detalles, y **Descartar**; se maneja con las teclas del menú contextual y, sin ningún toast en pantalla, no abre nada. Los atajos de MCP existen en las compilaciones con soporte de MCP. **Exportar conexiones** e **Importar dashboard desde JSON** se ejecutan desde la command palette.
+
+Todo lo que se puede clicar en la estructura de la ventana tiene una tecla, y nada de eso entra en el ciclo de `Tab`: las entradas de la barra de actividad son `Ctrl+Shift+5` .. `Ctrl+Shift+7`, `Ctrl+Shift+A` (Auditoría), `Ctrl+Shift+M` (Aprobaciones) y `Ctrl+,` (Configuración); la búsqueda de comandos de la barra de título es `Ctrl+Shift+P` y su campana `Ctrl+Shift+B`; la entrada de tareas de la barra de estado es `Ctrl+Shift+T`, la de aprobaciones `Ctrl+Shift+M` y la insignia de errores `Ctrl+Shift+X`; una pestaña se cierra con `Ctrl+w`, se abre con `Ctrl+n`, se reordena con `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` y su menú de clic derecho se abre con `Ctrl+m`. Los botones de minimizar, maximizar y cerrar de la ventana quedan en manos de los atajos del escritorio.
 
 ## Sidebar
 
