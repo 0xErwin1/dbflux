@@ -762,6 +762,91 @@ mod tests {
         );
     }
 
+    /// `m` in a document whose results have no context menu (a dump
+    /// analysis) opens its pane actions.
+    #[gpui::test]
+    fn m_without_a_document_menu_opens_the_pane_actions(cx: &mut TestAppContext) {
+        use dbflux_core::{
+            DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,
+        };
+        use dbflux_ui_document::DumpAnalysisDocument;
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct OneKeyAnalyzer;
+
+        impl DumpAnalyzer for OneKeyAnalyzer {
+            fn display_name(&self) -> &'static str {
+                "One key"
+            }
+
+            fn file_extensions(&self) -> &'static [&'static str] {
+                &["one"]
+            }
+
+            fn size_caveat(&self) -> &'static str {
+                "caveat"
+            }
+
+            fn analyze(
+                &self,
+                _path: &Path,
+                _progress: &(dyn Fn(u64, Option<u64>) + Sync),
+                _cancelled: &(dyn Fn() -> bool + Sync),
+            ) -> Result<DumpAnalysisReport, DumpAnalysisError> {
+                Ok(DumpAnalysisReport {
+                    total_keys: 1,
+                    total_serialized_bytes: 1,
+                    keys_by_type: Vec::new(),
+                    largest_keys: vec![DumpKeyEntry {
+                        key: "only".to_string(),
+                        type_name: "string".to_string(),
+                        serialized_bytes: 1,
+                        expires_at_ms: None,
+                        database: 0,
+                    }],
+                    prefix_rollup: vec![DumpPrefixEntry {
+                        prefix: "only".to_string(),
+                        key_count: 1,
+                        serialized_bytes: 1,
+                    }],
+                })
+            }
+        }
+
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let document = cx.new(|cx| {
+                    DumpAnalysisDocument::new(
+                        Arc::new(OneKeyAnalyzer),
+                        PathBuf::from("/tmp/dump.one"),
+                        false,
+                        app_state,
+                        cx,
+                    )
+                });
+                let pane = DumpAnalysisDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        keys(window, "m");
+
+        assert_eq!(
+            menu_ids(&workspace, window).first().map(String::as_str),
+            Some("dump-show-by-prefix"),
+            "m lists the dump analysis pane actions"
+        );
+    }
+
     /// A running query, an export that finished with output and a failed
     /// import, in the order the tasks panel lists them.
     fn start_three_tasks(

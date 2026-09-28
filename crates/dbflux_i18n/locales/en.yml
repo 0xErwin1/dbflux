@@ -1723,6 +1723,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "Analyzing %{file} (%{analyzer})"
     multiple_analyzers_note: "Multiple registered drivers can read this extension; analyzed with %{analyzer}."
+    pane_actions:
+      sort_by: "Sort by %{column}"
     parsing:
       title: "Parsing dump…"
       cancel: Cancel

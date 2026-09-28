@@ -329,6 +329,30 @@ menú contextual de la fila elegida con las acciones de fila del driver (por
 ejemplo Kill session), `Enter` o `Escape` responden la confirmación y `F5` pide
 una instantánea nueva.
 
+Cuando los resultados no tienen menú contextual propio, `m` abre en su lugar el
+menú de acciones del panel, el mismo que muestra **Open pane actions** en la
+command palette.
+
+Una pestaña de análisis de dump toma las teclas de tabla en cada una de sus dos
+tablas: `Alt+l` y `Alt+h` pasan de Claves más grandes a Por prefijo y viceversa,
+`Escape` cancela un análisis que todavía lee el archivo, y `m` lista la otra
+tabla, un orden por columna de la tabla donde está el teclado (como lo hace un
+clic en la cabecera) y Cancelar mientras se lee el archivo.
+
+## Diferencia de esquemas
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Fila siguiente / anterior: el modo de comparación, cada base de datos, conexión o instantánea de referencia, Calcular diferencia, cada cambio aplicable y los botones Vista previa del DDL / Aplicar |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última fila |
+| `h` / `l` (o `Left` / `Right`) | Botón anterior / siguiente de la fila (En vivo o Instantánea, Vista previa del DDL o Aplicar) |
+| `Enter` | Pulsar el botón bajo el cursor: elegir el modo o la referencia, calcular, marcar un cambio, previsualizar o aplicar |
+| `Space` | Marcar o desmarcar el cambio bajo el cursor |
+| `F5` | Volver a calcular la diferencia |
+| `m` (o `Shift+F10`) | Acciones del panel: Calcular diferencia, Vista previa del DDL, Aplicar y los dos modos de comparación |
+
+Aplicar sigue pidiendo la misma confirmación que el botón.
+
 ## Diagrama de esquema
 
 | Teclas                                      | Acción                                                      |

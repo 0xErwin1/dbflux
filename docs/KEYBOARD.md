@@ -312,6 +312,29 @@ An instance inspector tab takes these keys too: `m` opens the context menu of
 the selected row with the driver's row actions (for example Kill session),
 `Enter` or `Escape` answer the confirmation, and `F5` fetches a fresh snapshot.
 
+When the results offer no context menu of their own, `m` opens the pane actions
+menu instead, the same one the command palette's **Open pane actions** shows.
+
+A dump analysis tab takes the table keys in each of its two tables: `Alt+l` and
+`Alt+h` move between Largest keys and By prefix, `Escape` cancels an analysis
+that is still reading the file, and `m` lists the other table, a sort per column
+of the table the keyboard is in (as a header click sorts it) and Cancel while
+the file is read.
+
+## Schema diff
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous row: the comparison mode, each reference database, connection or snapshot, Compute, each applicable change, and the Preview DDL / Apply buttons |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last row |
+| `h` / `l` (or `Left` / `Right`) | Previous / next button of the row (Live or Snapshot, Preview DDL or Apply) |
+| `Enter` | Press the button under the cursor: choose the mode or the reference, compute, check a change, preview or apply |
+| `Space` | Check or uncheck the change under the cursor |
+| `F5` | Compute the diff again |
+| `m` (or `Shift+F10`) | Pane actions: Compute, Preview DDL, Apply and the two comparison modes |
+
+Apply still asks for the same confirmation as the button.
+
 ## Schema diagram
 
 | Keys | Action |

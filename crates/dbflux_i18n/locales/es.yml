@@ -1723,6 +1723,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "Analizando %{file} (%{analyzer})"
     multiple_analyzers_note: "Varios controladores registrados pueden leer esta extensión; se analizó con %{analyzer}."
+    pane_actions:
+      sort_by: "Ordenar por %{column}"
     parsing:
       title: "Analizando volcado…"
       cancel: Cancelar

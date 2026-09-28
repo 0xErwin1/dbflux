@@ -82,7 +82,8 @@ impl Workspace {
 
             // Context menu commands — route to the pane-actions menu or the
             // tab bar when one is open, otherwise to the active document
-            // (DataGridPanel).
+            // (DataGridPanel). A document with no context menu to open lists
+            // its pane actions instead.
             Command::OpenContextMenu
             | Command::MenuUp
             | Command::MenuDown
@@ -99,9 +100,13 @@ impl Workspace {
                         _ => {}
                     });
                 } else {
-                    self.tab_manager.update(cx, |mgr, cx| {
-                        mgr.dispatch_active(cmd, window, cx);
-                    });
+                    let handled = self
+                        .tab_manager
+                        .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx));
+
+                    if !handled && cmd == Command::OpenContextMenu {
+                        self.open_pane_actions(window, cx);
+                    }
                 }
                 Some(true)
             }

@@ -47,6 +47,13 @@ enum DumpAnalysisPhase {
     Done(DumpAnalysisReport),
 }
 
+/// The two report tables, for keyboard focus.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DumpTable {
+    LargestKeys,
+    PrefixRollup,
+}
+
 /// Searchable, read-only analysis report opened for a driver's native
 /// dump/export file, without a live connection to any profile.
 pub struct DumpAnalysisDocument {
@@ -67,6 +74,9 @@ pub struct DumpAnalysisDocument {
     largest_keys_table: Option<Entity<DataTable>>,
     prefix_rollup_state: Option<Entity<DataTableState>>,
     prefix_rollup_table: Option<Entity<DataTable>>,
+    /// The table the keyboard was last in, whose columns the pane actions
+    /// sort.
+    focused_table: DumpTable,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -107,6 +117,7 @@ impl DumpAnalysisDocument {
             largest_keys_table: None,
             prefix_rollup_state: None,
             prefix_rollup_table: None,
+            focused_table: DumpTable::LargestKeys,
             _subscriptions: Vec::new(),
         };
 
@@ -170,25 +181,140 @@ impl DumpAnalysisDocument {
         dbflux_app::keymap::ContextId::Results
     }
 
+    /// Table navigation runs inside the embedded `DataTable`s through their
+    /// own key context. The document answers the keys around them: Escape
+    /// cancels a running analysis, and the result tab keys move between the
+    /// two tables. Anything else, `m` included, falls through: the
+    /// workspace lists the pane actions when no menu answers `m`.
     pub fn dispatch_command(
         &mut self,
-        _cmd: dbflux_app::keymap::Command,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        command: dbflux_app::keymap::Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
-        // Table navigation is handled internally by the embedded `DataTable`
-        // entities via their own focus handles; this document has no
-        // additional commands to intercept.
-        false
+        use dbflux_app::keymap::Command;
+
+        match command {
+            Command::Cancel if matches!(self.phase, DumpAnalysisPhase::Parsing { .. }) => {
+                self.cancel_analysis(cx);
+                true
+            }
+            Command::NextResultTab | Command::PrevResultTab
+                if self.prefix_rollup_state.is_some() =>
+            {
+                let next = match self.focused_table {
+                    DumpTable::LargestKeys => DumpTable::PrefixRollup,
+                    DumpTable::PrefixRollup => DumpTable::LargestKeys,
+                };
+                self.focus_table(next, window, cx);
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(state) = &self.largest_keys_state {
-            let handle = state.read(cx).focus_handle().clone();
-            handle.focus(window, cx);
+        if self.table_state(self.focused_table).is_some() {
+            self.focus_table(self.focused_table, window, cx);
         } else {
             self.focus_handle.focus(window, cx);
         }
+    }
+
+    fn table_state(&self, table: DumpTable) -> Option<&Entity<DataTableState>> {
+        match table {
+            DumpTable::LargestKeys => self.largest_keys_state.as_ref(),
+            DumpTable::PrefixRollup => self.prefix_rollup_state.as_ref(),
+        }
+    }
+
+    fn focus_table(&mut self, table: DumpTable, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.table_state(table) else {
+            return;
+        };
+
+        let handle = state.read(cx).focus_handle().clone();
+        handle.focus(window, cx);
+        self.focused_table = table;
+        cx.notify();
+    }
+
+    /// The Cancel button while the dump is read, then the other table and a
+    /// sort per column of the focused table, as its header clicks sort it.
+    pub(crate) fn pane_actions(
+        &self,
+        this: &Entity<Self>,
+        cx: &App,
+    ) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+        use dbflux_components::icons::AppIcon;
+
+        let mut actions = Vec::new();
+
+        if matches!(self.phase, DumpAnalysisPhase::Parsing { .. }) {
+            let target = this.downgrade();
+            actions.push(
+                PaneAction::callback(
+                    "dump-cancel",
+                    dbflux_i18n::t!("document.dump_analysis.parsing.cancel"),
+                    move |_window, cx| {
+                        if let Some(document) = target.upgrade() {
+                            document.update(cx, |document, cx| document.cancel_analysis(cx));
+                        }
+                    },
+                )
+                .icon(AppIcon::X),
+            );
+        }
+
+        if self.prefix_rollup_state.is_none() {
+            return actions;
+        }
+
+        let (switch_id, switch_label, other) = match self.focused_table {
+            DumpTable::LargestKeys => (
+                "dump-show-by-prefix",
+                dbflux_i18n::t!("document.dump_analysis.done.by_prefix.title"),
+                DumpTable::PrefixRollup,
+            ),
+            DumpTable::PrefixRollup => (
+                "dump-show-largest-keys",
+                dbflux_i18n::t!("document.dump_analysis.done.largest_keys.title"),
+                DumpTable::LargestKeys,
+            ),
+        };
+        let target = this.downgrade();
+        actions.push(PaneAction::callback(
+            switch_id,
+            switch_label,
+            move |window, cx| {
+                if let Some(document) = target.upgrade() {
+                    document.update(cx, |document, cx| document.focus_table(other, window, cx));
+                }
+            },
+        ));
+
+        let Some(state) = self.table_state(self.focused_table) else {
+            return actions;
+        };
+
+        for (index, column) in state.read(cx).model().columns.iter().enumerate() {
+            let state = state.downgrade();
+            actions.push(PaneAction::callback(
+                format!("dump-sort-{index}"),
+                dbflux_i18n::t!(
+                    "document.dump_analysis.pane_actions.sort_by",
+                    column = column.title
+                ),
+                move |_window, cx| {
+                    if let Some(state) = state.upgrade() {
+                        state.update(cx, |state, cx| state.cycle_sort(index, cx));
+                    }
+                },
+            ));
+        }
+
+        actions
     }
 
     fn start_analysis(&mut self, analyzer: Arc<dyn DumpAnalyzer>, cx: &mut Context<Self>) {
@@ -316,10 +442,12 @@ impl DumpAnalysisDocument {
         let largest_keys_state = cx.new(|cx| DataTableState::new(largest_model, cx));
         let largest_keys_subscription = cx.subscribe(
             &largest_keys_state,
-            |this, _, event: &DataTableEvent, cx| {
-                if let DataTableEvent::SortChanged(Some(sort)) = event {
+            |this, _, event: &DataTableEvent, cx| match event {
+                DataTableEvent::SortChanged(Some(sort)) => {
                     this.sort_largest_keys(sort.column_ix, sort.direction, cx);
                 }
+                DataTableEvent::Focused => this.focused_table = DumpTable::LargestKeys,
+                _ => {}
             },
         );
         let largest_keys_table = cx
@@ -329,10 +457,12 @@ impl DumpAnalysisDocument {
         let prefix_rollup_state = cx.new(|cx| DataTableState::new(prefix_model, cx));
         let prefix_rollup_subscription = cx.subscribe(
             &prefix_rollup_state,
-            |this, _, event: &DataTableEvent, cx| {
-                if let DataTableEvent::SortChanged(Some(sort)) = event {
+            |this, _, event: &DataTableEvent, cx| match event {
+                DataTableEvent::SortChanged(Some(sort)) => {
                     this.sort_prefix_rollup(sort.column_ix, sort.direction, cx);
                 }
+                DataTableEvent::Focused => this.focused_table = DumpTable::PrefixRollup,
+                _ => {}
             },
         );
         let prefix_rollup_table =
@@ -407,6 +537,191 @@ mod tests {
     #[test]
     fn progress_fraction_computes_ratio_when_total_known() {
         assert_eq!(progress_fraction(50, Some(200)), Some(0.25));
+    }
+
+    mod keyboard {
+        use super::super::DumpAnalysisDocument;
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use crate::pane::PaneActionRun;
+        use dbflux_app::keymap::Command;
+        use dbflux_core::{
+            DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,
+        };
+        use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+        use std::path::{Path, PathBuf};
+        use std::sync::Arc;
+
+        struct FakeAnalyzer;
+
+        impl DumpAnalyzer for FakeAnalyzer {
+            fn display_name(&self) -> &'static str {
+                "Fake dump"
+            }
+
+            fn file_extensions(&self) -> &'static [&'static str] {
+                &["fake"]
+            }
+
+            fn size_caveat(&self) -> &'static str {
+                "caveat"
+            }
+
+            fn analyze(
+                &self,
+                _path: &Path,
+                _progress: &(dyn Fn(u64, Option<u64>) + Sync),
+                cancelled: &(dyn Fn() -> bool + Sync),
+            ) -> Result<DumpAnalysisReport, DumpAnalysisError> {
+                if cancelled() {
+                    return Err(DumpAnalysisError::Cancelled);
+                }
+
+                let key = |key: &str, bytes| DumpKeyEntry {
+                    key: key.to_string(),
+                    type_name: "string".to_string(),
+                    serialized_bytes: bytes,
+                    expires_at_ms: None,
+                    database: 0,
+                };
+
+                Ok(DumpAnalysisReport {
+                    total_keys: 2,
+                    total_serialized_bytes: 30,
+                    keys_by_type: Vec::new(),
+                    largest_keys: vec![key("big", 20), key("alpha", 10)],
+                    prefix_rollup: vec![DumpPrefixEntry {
+                        prefix: "user".to_string(),
+                        key_count: 2,
+                        serialized_bytes: 30,
+                    }],
+                })
+            }
+        }
+
+        fn app_state(cx: &mut TestAppContext) -> Entity<dbflux_ui_base::AppStateEntity> {
+            cx.update(|cx| {
+                cx.new(|_| {
+                    let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                        .expect("in-memory storage");
+                    dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                        .expect("test storage setup")
+                })
+            })
+        }
+
+        fn open(
+            cx: &mut TestAppContext,
+            cancel_first: bool,
+        ) -> (Entity<DumpAnalysisDocument>, &mut VisualTestContext) {
+            init_keyboard_runtime(cx);
+            let app_state = app_state(cx);
+
+            let (host, window) = host_document(
+                cx,
+                move |window, cx| {
+                    let document = cx.new(|cx| {
+                        DumpAnalysisDocument::new(
+                            Arc::new(FakeAnalyzer),
+                            PathBuf::from("/tmp/dump.fake"),
+                            false,
+                            app_state,
+                            cx,
+                        )
+                    });
+                    if cancel_first {
+                        document.update(cx, |document, cx| {
+                            document.dispatch_command(Command::Cancel, window, cx);
+                        });
+                    }
+                    document
+                },
+                |document, _cx| document.active_context(),
+                |document, command, window, cx| document.dispatch_command(command, window, cx),
+            );
+
+            let document = window.update(|_, cx| host.read(cx).document.clone());
+            window.update(|window, cx| document.update(cx, |d, cx| d.focus(window, cx)));
+            window.run_until_parked();
+
+            (document, window)
+        }
+
+        fn prefix_table_has_focus(
+            document: &Entity<DumpAnalysisDocument>,
+            window: &mut VisualTestContext,
+        ) -> bool {
+            window.update(|window, cx| {
+                document
+                    .read(cx)
+                    .prefix_rollup_state
+                    .as_ref()
+                    .is_some_and(|state| state.read(cx).focus_handle().is_focused(window))
+            })
+        }
+
+        #[gpui::test]
+        fn alt_l_and_alt_h_switch_between_the_two_tables(cx: &mut TestAppContext) {
+            let (document, window) = open(cx, false);
+            assert!(!prefix_table_has_focus(&document, window));
+
+            window.simulate_keystrokes("alt-l");
+            assert!(
+                prefix_table_has_focus(&document, window),
+                "Alt+L moves to By prefix"
+            );
+
+            window.simulate_keystrokes("alt-h");
+            assert!(
+                !prefix_table_has_focus(&document, window),
+                "Alt+H moves back"
+            );
+        }
+
+        #[gpui::test]
+        fn the_pane_actions_sort_the_focused_table(cx: &mut TestAppContext) {
+            let (document, window) = open(cx, false);
+
+            let actions = window.update(|_, cx| document.read(cx).pane_actions(&document, cx));
+            let ids: Vec<String> = actions.iter().map(|action| action.id.to_string()).collect();
+            assert_eq!(
+                ids,
+                [
+                    "dump-show-by-prefix",
+                    "dump-sort-0",
+                    "dump-sort-1",
+                    "dump-sort-2",
+                    "dump-sort-3"
+                ]
+            );
+
+            let Some(PaneActionRun::Callback(sort_by_key)) =
+                actions.get(1).map(|action| action.run.clone())
+            else {
+                panic!("sorting is a callback");
+            };
+            window.update(|window, cx| sort_by_key(window, cx));
+            window.run_until_parked();
+
+            let first_key = window.update(|_, cx| match &document.read(cx).phase {
+                super::super::DumpAnalysisPhase::Done(report) => report.largest_keys[0].key.clone(),
+                _ => String::new(),
+            });
+            assert_eq!(first_key, "alpha", "sorting by Key orders the keys by name");
+        }
+
+        #[gpui::test]
+        fn cancel_stops_a_running_analysis(cx: &mut TestAppContext) {
+            let (document, window) = open(cx, true);
+
+            assert!(matches!(
+                window.update(|_, cx| document.read(cx).state()),
+                crate::types::DocumentState::Clean
+            ));
+            assert!(window.update(|_, cx| matches!(
+                document.read(cx).phase,
+                super::super::DumpAnalysisPhase::Cancelled
+            )));
+        }
     }
 
     #[test]

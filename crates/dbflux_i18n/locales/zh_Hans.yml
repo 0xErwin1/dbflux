@@ -1723,6 +1723,8 @@ document:
     title: "%{analyzer} — %{file}"
     task: "正在分析 %{file}（%{analyzer}）"
     multiple_analyzers_note: "多个已注册驱动都能读取此扩展名；已使用 %{analyzer} 进行分析。"
+    pane_actions:
+      sort_by: "按 %{column} 排序"
     parsing:
       title: 正在解析转储…
       cancel: 取消

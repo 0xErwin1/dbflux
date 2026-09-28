@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::{TimestampDisplayMode, format_timestamp_ms};
+use dbflux_components::composites::{RailMark, RailNav, rail_scroll_area};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::{
     ModalMutationConfirmHard, MutationConfirmHardRequest, MutationConfirmOutcome,
@@ -103,17 +104,17 @@ fn invalidate_snapshot_profile_if_missing(
 }
 
 /// One table's slice of the diff, grouped for rendering.
-struct TableDiffGroup {
+pub(super) struct TableDiffGroup {
     table: TableRef,
     /// Human header, e.g. "public.users".
     header: String,
     /// Changes the driver can apply, with a stable index used for selection.
-    applicable: Vec<RiskedChange>,
+    pub(super) applicable: Vec<RiskedChange>,
     /// Changes surfaced explicitly as unsupported (never applied).
     unsupported: Vec<UnsupportedChange>,
     /// Present for whole-table add/remove (`TableChange::TableAdded`/
     /// `TableRemoved`), which carry no per-column `RiskedChange` of their own.
-    table_action: Option<TableActionOutcome>,
+    pub(super) table_action: Option<TableActionOutcome>,
 }
 
 impl TableDiffGroup {
@@ -449,7 +450,8 @@ pub struct SchemaDiffDocument {
     pending_prepared_action: Option<PreparedAction>,
 
     focus_handle: FocusHandle,
-    diff_scroll: ScrollHandle,
+    /// Keyboard cursor over the picker, the diff rows and the footer.
+    pub(super) rail: RailNav<Self>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -533,7 +535,7 @@ impl SchemaDiffDocument {
             pending_prepared_action: None,
 
             focus_handle: cx.focus_handle(),
-            diff_scroll: ScrollHandle::new(),
+            rail: RailNav::default(),
             _subscriptions: vec![confirm_sub, app_state_sub],
         };
 
@@ -615,7 +617,19 @@ impl SchemaDiffDocument {
         document_state_for(&self.compute_state)
     }
 
-    fn is_busy(&self) -> bool {
+    pub(super) fn picker(&self) -> &SourcePicker {
+        &self.picker
+    }
+
+    pub(super) fn groups(&self) -> &[TableDiffGroup] {
+        &self.groups
+    }
+
+    pub(super) fn focus_handle_ref(&self) -> &FocusHandle {
+        &self.focus_handle
+    }
+
+    pub(super) fn is_busy(&self) -> bool {
         schema_diff_is_busy(
             &self.compute_state,
             &self.preparation,
@@ -627,8 +641,9 @@ impl SchemaDiffDocument {
         Some(self.profile_id)
     }
 
+    /// The Results keys drive the document's cursor (see `keyboard.rs`).
     pub fn active_context(&self) -> ContextId {
-        ContextId::Global
+        ContextId::Results
     }
 
     pub fn current_refresh_policy(&self) -> RefreshPolicy {
@@ -643,11 +658,11 @@ impl SchemaDiffDocument {
 
     pub fn dispatch_command(
         &mut self,
-        _cmd: Command,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        self.keyboard_command(cmd, window, cx)
     }
 
     /// Dedup match: same target profile + database.
@@ -657,7 +672,7 @@ impl SchemaDiffDocument {
 
     // ── Source picker ─────────────────────────────────────────────────────
 
-    fn set_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+    pub(super) fn set_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
         self.invalidate_active_compute();
         if self.picker.mode == mode {
             return;
@@ -759,7 +774,7 @@ impl SchemaDiffDocument {
         .detach();
     }
 
-    fn select_snapshot(&mut self, snapshot_id: Uuid, cx: &mut Context<Self>) {
+    pub(super) fn select_snapshot(&mut self, snapshot_id: Uuid, cx: &mut Context<Self>) {
         if !self
             .app_state
             .read(cx)
@@ -780,7 +795,11 @@ impl SchemaDiffDocument {
     }
 
     /// Selects another database on the target's own connection as the reference.
-    fn select_same_connection_database(&mut self, database: String, cx: &mut Context<Self>) {
+    pub(super) fn select_same_connection_database(
+        &mut self,
+        database: String,
+        cx: &mut Context<Self>,
+    ) {
         self.invalidate_active_compute();
         self.picker.mode = DiffMode::LiveVsLive;
         self.invalidate_preparation();
@@ -790,7 +809,11 @@ impl SchemaDiffDocument {
     }
 
     /// Selects a different open relational connection as the reference.
-    fn select_reference_connection(&mut self, other_profile_id: Uuid, cx: &mut Context<Self>) {
+    pub(super) fn select_reference_connection(
+        &mut self,
+        other_profile_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
         self.invalidate_active_compute();
         self.picker.mode = DiffMode::LiveVsLive;
         self.invalidate_preparation();
@@ -851,7 +874,7 @@ impl SchemaDiffDocument {
         }
     }
 
-    fn compute_diff(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn compute_diff(&mut self, cx: &mut Context<Self>) {
         self.invalidate_active_compute();
         self.invalidate_preparation();
         let reference = self.reference.clone();
@@ -1088,7 +1111,7 @@ impl SchemaDiffDocument {
             .collect()
     }
 
-    fn toggle_selection(
+    pub(super) fn toggle_selection(
         &mut self,
         group_index: usize,
         change_index: usize,
@@ -1102,7 +1125,11 @@ impl SchemaDiffDocument {
         cx.notify();
     }
 
-    fn toggle_table_action_selection(&mut self, group_index: usize, cx: &mut Context<Self>) {
+    pub(super) fn toggle_table_action_selection(
+        &mut self,
+        group_index: usize,
+        cx: &mut Context<Self>,
+    ) {
         self.invalidate_preparation();
         if !self.selected_table_actions.remove(&group_index) {
             self.selected_table_actions.insert(group_index);
@@ -1487,13 +1514,13 @@ impl SchemaDiffDocument {
 
     // ── Preview ───────────────────────────────────────────────────────────
 
-    fn open_preview(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_preview(&mut self, cx: &mut Context<Self>) {
         self.prepare_selected(PreparedAction::Preview, cx);
     }
 
     // ── Apply (hard-confirm gated) ────────────────────────────────────────
 
-    fn request_apply(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn request_apply(&mut self, cx: &mut Context<Self>) {
         let selected = self.selected_changes_by_table();
         if selected.is_empty() {
             self.pending_toast = Some(PendingToast {
@@ -1995,7 +2022,7 @@ fn badge_tone(badge: RiskBadge) -> BadgeTone {
 }
 
 impl SchemaDiffDocument {
-    fn can_compute(&self) -> bool {
+    pub(super) fn can_compute(&self) -> bool {
         match self.picker.mode {
             DiffMode::LiveVsLive => live_reference_ready(&self.reference),
             DiffMode::SnapshotVsLive => self.picker.selected_snapshot.is_some(),
@@ -2055,32 +2082,43 @@ impl SchemaDiffDocument {
             })
     }
 
-    fn render_source_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_source_picker(&self, mark: &RailMark, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
         let mode = self.picker.mode;
 
-        let mode_toggle = div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .child(self.mode_chip(
-                "mode-live",
-                dbflux_i18n::t!("document.schema_diff.view.mode.live"),
-                mode == DiffMode::LiveVsLive,
-                DiffMode::LiveVsLive,
-                cx,
-            ))
-            .child(self.mode_chip(
-                "mode-snapshot",
-                dbflux_i18n::t!("document.schema_diff.view.mode.snapshot"),
-                mode == DiffMode::SnapshotVsLive,
-                DiffMode::SnapshotVsLive,
-                cx,
-            ));
+        let mode_toggle = mark.fixed_row(
+            super::keyboard::MODE_ROW,
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .child(mark.ring_element(
+                    super::keyboard::MODE_ROW,
+                    super::keyboard::MODE_LIVE_FIELD,
+                    self.mode_chip(
+                        "mode-live",
+                        dbflux_i18n::t!("document.schema_diff.view.mode.live"),
+                        mode == DiffMode::LiveVsLive,
+                        DiffMode::LiveVsLive,
+                        cx,
+                    ),
+                ))
+                .child(mark.ring_element(
+                    super::keyboard::MODE_ROW,
+                    super::keyboard::MODE_SNAPSHOT_FIELD,
+                    self.mode_chip(
+                        "mode-snapshot",
+                        dbflux_i18n::t!("document.schema_diff.view.mode.snapshot"),
+                        mode == DiffMode::SnapshotVsLive,
+                        DiffMode::SnapshotVsLive,
+                        cx,
+                    ),
+                )),
+        );
 
         let reference = match mode {
-            DiffMode::LiveVsLive => self.render_live_reference_list(cx).into_any_element(),
-            DiffMode::SnapshotVsLive => self.render_snapshot_list(cx).into_any_element(),
+            DiffMode::LiveVsLive => self.render_live_reference_list(mark, cx).into_any_element(),
+            DiffMode::SnapshotVsLive => self.render_snapshot_list(mark, cx).into_any_element(),
         };
 
         div()
@@ -2101,12 +2139,16 @@ impl SchemaDiffDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)
-                    .child(self.primary_button(
-                        "compute-diff",
-                        dbflux_i18n::t!("document.schema_diff.action.compute_diff"),
-                        self.can_compute() && !self.is_busy(),
-                        cx,
-                        |this, _w, cx| this.compute_diff(cx),
+                    .child(mark.ring_element(
+                        super::keyboard::COMPUTE_ROW,
+                        super::keyboard::COMPUTE_FIELD,
+                        self.primary_button(
+                            "compute-diff",
+                            dbflux_i18n::t!("document.schema_diff.action.compute_diff"),
+                            self.can_compute() && !self.is_busy(),
+                            cx,
+                            |this, _w, cx| this.compute_diff(cx),
+                        ),
                     )),
             )
     }
@@ -2146,11 +2188,14 @@ impl SchemaDiffDocument {
 
     /// One selectable reference row (a database or a connection), styled the
     /// same way regardless of which group it belongs to.
+    /// One selectable reference row (a database, a connection or a
+    /// snapshot). Its element id doubles as its keyboard cursor row id.
     fn reference_option_row(
         &self,
         id: SharedString,
         label: String,
         selected: bool,
+        mark: &RailMark,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> AnyElement {
@@ -2158,8 +2203,8 @@ impl SchemaDiffDocument {
             let theme = cx.theme();
             (ChromeColors::tint(theme), theme.muted)
         };
-        div()
-            .id(id)
+        let row = div()
+            .id(id.clone())
             .px(Spacing::SM)
             .py(Spacing::XS)
             .rounded(Radii::SM)
@@ -2167,29 +2212,69 @@ impl SchemaDiffDocument {
             .when(selected, |d| d.bg(tint.opacity(0.15)))
             .hover(move |h| h.bg(muted))
             .child(Text::body(label))
-            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
-            .into_any_element()
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)));
+
+        mark.fixed_row(&id, row).into_any_element()
     }
 
-    fn render_live_reference_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The other databases of the target's connection and the other open
+    /// relational connections, in the order the picker lists them.
+    pub(super) fn live_reference_candidates(&self, cx: &App) -> (Vec<String>, Vec<(Uuid, String)>) {
         let database_candidates = same_connection_reference_databases(
             &self.connection_databases,
             self.database.as_deref(),
         );
 
-        let connection_candidates: Vec<(Uuid, String)> = {
-            let state = self.app_state.read(cx);
-            state
-                .connections()
-                .iter()
-                .filter(|(id, connected)| {
-                    **id != self.profile_id
-                        && connected.connection.metadata().category
-                            == dbflux_core::DatabaseCategory::Relational
-                })
-                .map(|(id, connected)| (*id, connected.profile.name.clone()))
-                .collect()
-        };
+        let connection_candidates: Vec<(Uuid, String)> = self
+            .app_state
+            .read(cx)
+            .connections()
+            .iter()
+            .filter(|(id, connected)| {
+                **id != self.profile_id
+                    && connected.connection.metadata().category
+                        == dbflux_core::DatabaseCategory::Relational
+            })
+            .map(|(id, connected)| (*id, connected.profile.name.clone()))
+            .collect();
+
+        (database_candidates, connection_candidates)
+    }
+
+    /// The snapshots the picker lists, as `(id, label)`; none when the target
+    /// profile is gone.
+    pub(super) fn snapshot_options(&self, cx: &App) -> Vec<(Uuid, String)> {
+        let profile_exists = self
+            .app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .any(|p| p.id == self.profile_id);
+
+        if !profile_exists {
+            return Vec::new();
+        }
+
+        self.snapshots
+            .iter()
+            .filter_map(|summary| {
+                let snapshot_id = Uuid::parse_str(&summary.id).ok()?;
+                let label = format!(
+                    "{}  ·  {:?}",
+                    format_captured_at(summary.captured_at),
+                    summary.depth
+                );
+                Some((snapshot_id, label))
+            })
+            .collect()
+    }
+
+    fn render_live_reference_list(
+        &self,
+        mark: &RailMark,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let (database_candidates, connection_candidates) = self.live_reference_candidates(cx);
 
         if database_candidates.is_empty() && connection_candidates.is_empty() {
             return div()
@@ -2220,6 +2305,7 @@ impl SchemaDiffDocument {
                     SharedString::from(format!("ref-db-{database}")),
                     database,
                     selected,
+                    mark,
                     cx,
                     move |this, _w, cx| {
                         this.select_same_connection_database(database_for_click.clone(), cx)
@@ -2253,6 +2339,7 @@ impl SchemaDiffDocument {
                     SharedString::from(format!("ref-conn-{id}")),
                     name,
                     selected,
+                    mark,
                     cx,
                     move |this, _w, cx| this.select_reference_connection(id, cx),
                 ));
@@ -2275,20 +2362,10 @@ impl SchemaDiffDocument {
             .into_any_element()
     }
 
-    fn render_snapshot_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (tint, muted) = {
-            let theme = cx.theme();
-            (ChromeColors::tint(theme), theme.muted)
-        };
+    fn render_snapshot_list(&self, mark: &RailMark, cx: &mut Context<Self>) -> impl IntoElement {
+        let options = self.snapshot_options(cx);
 
-        if self.snapshots.is_empty()
-            || !self
-                .app_state
-                .read(cx)
-                .profiles()
-                .iter()
-                .any(|p| p.id == self.profile_id)
-        {
+        if options.is_empty() {
             return div()
                 .child(
                     Text::caption(dbflux_i18n::t!(
@@ -2299,33 +2376,20 @@ impl SchemaDiffDocument {
                 .into_any_element();
         }
 
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for summary in &self.snapshots {
-            let Ok(snapshot_id) = Uuid::parse_str(&summary.id) else {
-                continue;
-            };
-            let selected = self.picker.selected_snapshot == Some(snapshot_id);
-            let label = format!(
-                "{}  ·  {:?}",
-                format_captured_at(summary.captured_at),
-                summary.depth
-            );
-            rows.push(
-                div()
-                    .id(SharedString::from(format!("snap-{}", summary.id)))
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(tint.opacity(0.15)))
-                    .hover(move |h| h.bg(muted))
-                    .child(Text::body(label))
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.select_snapshot(snapshot_id, cx)),
-                    )
-                    .into_any_element(),
-            );
-        }
+        let rows: Vec<AnyElement> = options
+            .into_iter()
+            .map(|(snapshot_id, label)| {
+                let selected = self.picker.selected_snapshot == Some(snapshot_id);
+                self.reference_option_row(
+                    SharedString::from(format!("snap-{snapshot_id}")),
+                    label,
+                    selected,
+                    mark,
+                    cx,
+                    move |this, _w, cx| this.select_snapshot(snapshot_id, cx),
+                )
+            })
+            .collect();
 
         div()
             .flex()
@@ -2335,7 +2399,7 @@ impl SchemaDiffDocument {
             .into_any_element()
     }
 
-    fn render_diff_list(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_diff_list(&self, mark: &RailMark, cx: &mut Context<Self>) -> AnyElement {
         if matches!(self.preparation, PreparationState::Pending { .. }) {
             return diff_message_container()
                 .child(
@@ -2381,31 +2445,36 @@ impl SchemaDiffDocument {
 
         let mut groups: Vec<AnyElement> = Vec::with_capacity(self.groups.len());
         for index in 0..self.groups.len() {
-            groups.push(self.render_group(index, cx));
+            groups.push(self.render_group(index, mark, cx));
         }
 
-        div()
-            .id("schema-diff-list-scroll")
-            .flex_1()
-            .track_scroll(&self.diff_scroll)
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(Spacing::SM)
-            .p(Spacing::MD)
-            .bg(background)
-            .children(groups)
-            .into_any_element()
+        rail_scroll_area(
+            &self.rail,
+            "schema-diff-list-scroll",
+            div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::SM)
+                .p(Spacing::MD)
+                .children(groups),
+        )
+        .bg(background)
+        .into_any_element()
     }
 
-    fn render_group(&self, group_index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_group(
+        &self,
+        group_index: usize,
+        mark: &RailMark,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let border = cx.theme().border;
         let group = &self.groups[group_index];
 
         let mut rows: Vec<AnyElement> = Vec::new();
 
         for (change_index, change) in group.applicable.iter().enumerate() {
-            rows.push(self.render_change_row(group_index, change_index, change, cx));
+            rows.push(self.render_change_row(group_index, change_index, change, mark, cx));
         }
 
         for unsupported in &group.unsupported {
@@ -2413,7 +2482,7 @@ impl SchemaDiffDocument {
         }
 
         if let Some(outcome) = &group.table_action {
-            rows.push(self.render_table_action_row(group_index, outcome, cx));
+            rows.push(self.render_table_action_row(group_index, outcome, mark, cx));
         }
 
         div()
@@ -2441,6 +2510,7 @@ impl SchemaDiffDocument {
         group_index: usize,
         change_index: usize,
         change: &RiskedChange,
+        mark: &RailMark,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (border, primary, primary_foreground) = {
@@ -2472,21 +2542,26 @@ impl SchemaDiffDocument {
                 this.toggle_selection(group_index, change_index, cx)
             }));
 
-        div()
-            .flex()
-            .items_center()
-            .gap(Spacing::SM)
-            .py(Spacing::XS)
-            .child(checkbox)
-            .child(Badge::new(badge.label(), badge_tone(badge)))
-            .child(Text::body(description))
-            .into_any_element()
+        let row_id = super::keyboard::change_row_id(group_index, change_index);
+        mark.row(
+            &row_id,
+            div()
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .py(Spacing::XS)
+                .child(checkbox)
+                .child(Badge::new(badge.label(), badge_tone(badge)))
+                .child(Text::body(description)),
+        )
+        .into_any_element()
     }
 
     fn render_table_action_row(
         &self,
         group_index: usize,
         outcome: &TableActionOutcome,
+        mark: &RailMark,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match outcome {
@@ -2518,15 +2593,19 @@ impl SchemaDiffDocument {
                         this.toggle_table_action_selection(group_index, cx)
                     }));
 
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .py(Spacing::XS)
-                    .child(checkbox)
-                    .child(Badge::new(badge.label(), badge_tone(badge)))
-                    .child(Text::body(description))
-                    .into_any_element()
+                let row_id = super::keyboard::table_action_row_id(group_index);
+                mark.row(
+                    &row_id,
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .py(Spacing::XS)
+                        .child(checkbox)
+                        .child(Badge::new(badge.label(), badge_tone(badge)))
+                        .child(Text::body(description)),
+                )
+                .into_any_element()
             }
             TableActionOutcome::Unsupported {
                 is_create,
@@ -2560,9 +2639,9 @@ impl SchemaDiffDocument {
         }
     }
 
-    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_footer(&self, mark: &RailMark, cx: &mut Context<Self>) -> impl IntoElement {
         let border = cx.theme().border;
-        let has_selection = !self.selected.is_empty() || !self.selected_table_actions.is_empty();
+        let has_selection = self.has_selection();
 
         div()
             .flex()
@@ -2573,20 +2652,33 @@ impl SchemaDiffDocument {
             .py(Spacing::SM)
             .border_t_1()
             .border_color(border)
-            .child(self.secondary_button(
-                "preview-ddl",
-                dbflux_i18n::t!("document.schema_diff.action.preview_ddl"),
-                has_selection && !self.is_busy(),
-                cx,
-                |this, _w, cx| this.open_preview(cx),
+            .child(mark.ring_element(
+                super::keyboard::FOOTER_ROW,
+                super::keyboard::PREVIEW_FIELD,
+                self.secondary_button(
+                    "preview-ddl",
+                    dbflux_i18n::t!("document.schema_diff.action.preview_ddl"),
+                    has_selection && !self.is_busy(),
+                    cx,
+                    |this, _w, cx| this.open_preview(cx),
+                ),
             ))
-            .child(self.primary_button(
-                "apply-ddl",
-                dbflux_i18n::t!("document.schema_diff.action.apply"),
-                has_selection && !self.is_busy(),
-                cx,
-                |this, _w, cx| this.request_apply(cx),
+            .child(mark.ring_element(
+                super::keyboard::FOOTER_ROW,
+                super::keyboard::APPLY_FIELD,
+                self.primary_button(
+                    "apply-ddl",
+                    dbflux_i18n::t!("document.schema_diff.action.apply"),
+                    has_selection && !self.is_busy(),
+                    cx,
+                    |this, _w, cx| this.request_apply(cx),
+                ),
             ))
+    }
+
+    /// Whether any change or whole-table action is checked.
+    pub(super) fn has_selection(&self) -> bool {
+        !self.selected.is_empty() || !self.selected_table_actions.is_empty()
     }
 }
 
@@ -2657,6 +2749,9 @@ impl Render for SchemaDiffDocument {
         let theme = cx.theme().clone();
         let focus_handle = self.focus_handle.clone();
 
+        let rows = super::keyboard::rail_rows(self, cx);
+        let mark = self.rail.mark(&rows, focus_handle.is_focused(window), cx);
+
         div()
             .size_full()
             .flex()
@@ -2664,9 +2759,9 @@ impl Render for SchemaDiffDocument {
             .overflow_hidden()
             .bg(theme.background)
             .track_focus(&focus_handle)
-            .child(self.render_source_picker(cx))
-            .child(self.render_diff_list(cx))
-            .child(self.render_footer(cx))
+            .child(self.render_source_picker(&mark, cx))
+            .child(self.render_diff_list(&mark, cx))
+            .child(self.render_footer(&mark, cx))
             .child(self.sql_preview_modal.clone())
             .child(self.confirm_modal.clone())
     }
