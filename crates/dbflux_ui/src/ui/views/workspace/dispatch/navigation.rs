@@ -57,6 +57,16 @@ impl Workspace {
                 Some(true)
             }
 
+            // A form a document shows over itself (the key-value New key and
+            // Add member dialogs) takes Tab for its own fields.
+            Command::CycleFocusForward | Command::CycleFocusBackward
+                if self.active_context(cx) == ContextId::FormNavigation
+                    && self
+                        .tab_manager
+                        .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)) =>
+            {
+                Some(true)
+            }
             Command::CycleFocusForward => {
                 let next = self.next_focus_target(cx);
                 self.set_focus(next, window, cx);

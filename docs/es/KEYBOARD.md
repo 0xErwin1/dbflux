@@ -622,9 +622,20 @@ las coincidencias, así `n` y `Shift+n` las recorren, y `Escape` cierra la búsq
 | `` Ctrl+` `` | Mostrar u ocultar la consola de comandos, también desde su campo |
 | `Ctrl+j` | Cargar más claves |
 | `t` | Editar la expiración de la clave seleccionada |
+| `Alt+l` / `Alt+h` | Filtro de tipo de clave siguiente / anterior (Todos primero); en el editor de expiración, su modo siguiente / anterior (Nunca, En, El) |
 
 `Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
-un campo de texto.
+un campo de texto. `Alt+l` y `Alt+h` también funcionan desde los campos de patrón
+y de expiración, salvo en macOS, donde `Option` con una letra escribe un carácter.
+
+`m` abre el menú de la clave o el miembro seleccionado. Después de las acciones
+de la clave o el miembro lista los botones del panel de valor (recargar el valor,
+previsualizar los primeros bytes o cargar igual un valor grande, y las entradas
+pendientes y el formulario de claim de un stream) y los de la barra (mostrar las
+claves como árbol o lista, el intervalo de actualización automática, el borrado
+masivo, y Detener o Buscar en todo el keyspace mientras un escaneo filtrado lee
+página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
+`Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo.
 
 ## Visor de auditoría
 

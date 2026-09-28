@@ -847,6 +847,54 @@ mod tests {
         );
     }
 
+    /// Tab in a key-value New key dialog moves through the dialog instead of
+    /// moving focus to the next pane behind it.
+    #[gpui::test]
+    fn tab_stays_in_the_key_value_new_key_dialog(cx: &mut TestAppContext) {
+        use dbflux_ui_document::KeyValueDocument;
+
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let document = cx.new(|cx| {
+                    KeyValueDocument::new(uuid::Uuid::nil(), "0".to_string(), app_state, window, cx)
+                });
+                let pane = KeyValueDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        keys(window, "o");
+        let context = |window: &mut VisualTestContext| {
+            window
+                .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)))
+        };
+        assert_eq!(
+            context(window),
+            ContextId::FormNavigation,
+            "o opens New key"
+        );
+
+        keys(window, "tab");
+        assert_eq!(
+            window.update(|_, cx| workspace.read(cx).focus_target),
+            FocusTarget::Document,
+            "Tab does not move to another pane"
+        );
+        assert_eq!(
+            context(window),
+            ContextId::FormNavigation,
+            "the dialog stays open"
+        );
+    }
+
     /// A running query, an export that finished with output and a failed
     /// import, in the order the tasks panel lists them.
     fn start_three_tasks(

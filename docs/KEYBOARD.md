@@ -594,8 +594,19 @@ search field, `Enter` returns the keyboard to the tree with the matches kept, so
 | `` Ctrl+` `` | Show or hide the command console, also from the console input |
 | `Ctrl+j` | Load more keys |
 | `t` | Edit the expiry of the selected key |
+| `Alt+l` / `Alt+h` | Next / previous key type filter (All first); in the expiry editor, its next / previous mode (Never, In, At) |
 
 `Ctrl+j` and `t` apply while the key list has focus, not inside a text field.
+`Alt+l` and `Alt+h` also work from the pattern and expiry fields, except on
+macOS, where `Option` with a letter types a character.
+
+`m` opens the menu of the selected key or member. After the key or member
+actions it lists the value panel's buttons (reload the value, preview the first
+bytes or load a large value anyway, and a stream's pending entries and claim
+form) and the toolbar's (show the keys as a tree or a list, the auto-refresh
+interval, bulk delete, and Stop or Search whole keyspace while a filtered scan
+reads page by page). In the New key and Add member dialogs `Tab` and `Shift+Tab`
+move through the fields like `j` and `k` and stay in the dialog.
 
 ## Audit viewer
 

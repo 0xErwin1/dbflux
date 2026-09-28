@@ -2136,6 +2136,9 @@ document:
       delete_member: 删除元素
       edit_member: 编辑元素
       edit_value: 编辑值
+      show_as_tree: "以树形显示键"
+      show_as_list: "以列表显示键"
+      close_claim: "关闭认领表单"
       new_key: 新建键…
       rename: 重命名
     history_modal:

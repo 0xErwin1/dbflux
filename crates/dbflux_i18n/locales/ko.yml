@@ -2136,6 +2136,9 @@ document:
       delete_member: 멤버 삭제
       edit_member: 멤버 편집
       edit_value: 값 편집
+      show_as_tree: "키를 트리로 표시"
+      show_as_list: "키를 목록으로 표시"
+      close_claim: "클레임 양식 닫기"
       new_key: 새 키…
       rename: 이름 바꾸기
     history_modal:

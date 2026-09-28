@@ -2053,5 +2053,24 @@ fn key_value_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("j", Modifiers::ctrl()), Command::LoadMore);
     layer.bind(KeyChord::new("t", Modifiers::none()), Command::EditExpiry);
 
+    // Alt+L / Alt+H step the key type filter, or the mode of the open expiry
+    // editor, also from its duration field. On macOS Option with a letter
+    // types a character, so there they stay out of text fields.
+    let panel_tab_predicate = if cfg!(target_os = "macos") {
+        "KeyValueView && !Input"
+    } else {
+        "KeyValueView"
+    };
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::alt()),
+        Command::NextPanelTab,
+        panel_tab_predicate,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::PrevPanelTab,
+        panel_tab_predicate,
+    );
+
     layer
 }

@@ -2136,6 +2136,9 @@ document:
       delete_member: Eliminar miembro
       edit_member: Editar miembro
       edit_value: Editar valor
+      show_as_tree: "Mostrar las claves como árbol"
+      show_as_list: "Mostrar las claves como lista"
+      close_claim: "Cerrar el formulario de claim"
       new_key: Nueva clave…
       rename: Renombrar
     history_modal:
