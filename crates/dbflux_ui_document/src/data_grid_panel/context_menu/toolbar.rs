@@ -538,7 +538,9 @@ impl DataGridPanel {
                 }
             }
             ToolbarAction::SaveChart => self.open_collection_chart_save(window, cx),
-            ToolbarAction::ShowPointInTable(row_idx) => self.chart_host_scroll_to_row(row_idx, cx),
+            ToolbarAction::ShowPointInTable(row_idx) => {
+                self.chart_host_scroll_to_row(row_idx, window, cx)
+            }
             ToolbarAction::NextChartKind => {
                 if let Some(shell) = &self.chart.chart_shell {
                     shell.update(cx, |shell, cx| {
@@ -967,6 +969,28 @@ mod tests {
         Entity<DataGridPanel>,
         &mut VisualTestContext,
     ) {
+        host_chart_for(
+            cx,
+            DataSource::Table {
+                profile_id: Uuid::nil(),
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "samples"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: Some(3),
+            },
+        )
+    }
+
+    /// The chart of `host_chart`, read from `source`.
+    fn host_chart_for(
+        cx: &mut TestAppContext,
+        source: DataSource,
+    ) -> (
+        Entity<KeymapHost<DataGridPanel>>,
+        Entity<DataGridPanel>,
+        &mut VisualTestContext,
+    ) {
         init_keyboard_runtime(cx);
 
         let app_state = cx.update(|cx| {
@@ -990,15 +1014,6 @@ mod tests {
             cx,
             move |window, cx| {
                 cx.new(|cx| {
-                    let source = DataSource::Table {
-                        profile_id: Uuid::nil(),
-                        database: Some("app".to_string()),
-                        table: TableRef::with_schema("public", "samples"),
-                        pagination: Pagination::default(),
-                        order_by: Vec::new(),
-                        total_rows: Some(3),
-                    };
-
                     let mut panel = DataGridPanel::new_internal(
                         source,
                         app_state.clone(),
@@ -1071,6 +1086,120 @@ mod tests {
 
         window.simulate_keystrokes("escape");
         assert_eq!(hovered(window), None);
+    }
+
+    /// Keeps the latest frame drawn in the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    impl FrameCapture {
+        fn bounds_of(&self, id: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+            let frame = self.0.lock().expect("frame capture lock").clone()?;
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .map(|(_, node)| node.bounds())
+        }
+    }
+
+    fn capture_frames(window: &mut VisualTestContext) -> std::sync::Arc<FrameCapture> {
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        window.update(|window, _| {
+            window.observe_frames(&capture);
+            window.refresh();
+        });
+        window.run_until_parked();
+        capture
+    }
+
+    /// The chart of a table tracks the row behind each point: a point picked
+    /// with the keyboard opens the point inspector, and its "Show in tree"
+    /// leaves the chart for the table with that row selected.
+    #[gpui::test]
+    fn a_table_chart_inspects_the_keyboard_point_and_shows_its_row(cx: &mut TestAppContext) {
+        use super::ToolbarAction;
+        use dbflux_components::result_view::ResultViewMode;
+
+        let (_host, panel, window) = host_chart(cx);
+        let frames = capture_frames(window);
+
+        window.simulate_keystrokes("l l");
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        assert!(
+            actions.contains(&ToolbarAction::ShowPointInTable(1)),
+            "{actions:?}"
+        );
+
+        let show_in_tree = frames
+            .bounds_of("inspector-action-show-in-tree-row-1")
+            .expect("the point inspector shows the row behind the point");
+        window.simulate_click(show_in_tree.center(), gpui::Modifiers::default());
+        window.run_until_parked();
+
+        let (mode, active_row) = window.update(|_, cx| {
+            let panel = panel.read(cx);
+            let active_row = panel
+                .grid_table
+                .table_state
+                .as_ref()
+                .and_then(|state| state.read(cx).selection().active)
+                .map(|cell| cell.row);
+            (panel.chrome.result_view_mode, active_row)
+        });
+        assert_eq!(mode, ResultViewMode::Table);
+        assert_eq!(active_row, Some(1));
+    }
+
+    /// A chart of a query result keeps no row per point, so a keyboard point
+    /// opens no point inspector and offers no "Show in tree".
+    #[gpui::test]
+    fn a_query_result_chart_opens_no_point_inspector(cx: &mut TestAppContext) {
+        use super::ToolbarAction;
+
+        let (_host, panel, window) = host_chart_for(
+            cx,
+            DataSource::QueryResult {
+                result: std::sync::Arc::new(QueryResult::empty()),
+                original_query: "SELECT * FROM samples".to_string(),
+                profile_id: None,
+            },
+        );
+        let frames = capture_frames(window);
+
+        window.simulate_keystrokes("l");
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        let (hovered, actions) = window.update(|_, cx| {
+            let panel = panel.read(cx);
+            let hovered = panel
+                .chart
+                .chart_shell
+                .as_ref()
+                .and_then(|shell| shell.read(cx).hovered_data_point(cx));
+            (hovered.is_some(), panel.toolbar_actions(cx))
+        });
+        assert!(hovered, "the keyboard point is on the chart");
+        assert!(
+            !actions
+                .iter()
+                .any(|action| matches!(action, ToolbarAction::ShowPointInTable(_))),
+            "{actions:?}"
+        );
+        assert!(
+            frames
+                .bounds_of("inspector-action-show-in-tree-row-1")
+                .is_none()
+        );
     }
 
     /// The Toolbar submenu of a chart view offers the chart kind and the

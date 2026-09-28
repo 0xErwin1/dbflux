@@ -127,6 +127,12 @@ pub struct ChartShell {
     /// Y-axis scale mode. Persists across rebuilds (set_result / apply_bindings).
     pub(crate) y_scale: YScale,
 
+    // ---- source rows ----
+    /// Whether the charts this shell builds record the source row of each
+    /// point (`ChartSpec.track_source_indices`). Set by a host that can show
+    /// that row; off by default to spare the per-point index memory.
+    track_source_indices: bool,
+
     // ---- chart kind ----
     /// User-selected chart kind (Line, Bar, …). Applied to every `ChartSpec`
     /// the shell produces, so it survives rebuilds triggered by binding edits.
@@ -173,9 +179,25 @@ impl ChartShell {
             axis_open_pill: None,
             axis_picker_cursor: 0,
             y_scale: YScale::Linear,
+            track_source_indices: false,
             chart_kind: ChartKind::default(),
             metric_picker: None,
         }
+    }
+
+    /// Record, or stop recording, the source row of each chart point.
+    ///
+    /// A change drops the current chart view so the next `ensure_chart_view`
+    /// rebuilds it with the new setting.
+    pub fn set_track_source_indices(&mut self, track: bool, cx: &mut Context<Self>) {
+        if self.track_source_indices == track {
+            return;
+        }
+
+        self.track_source_indices = track;
+        self.chart_view = None;
+        self.chart_view_observer = None;
+        cx.notify();
     }
 
     /// Set the initial rail tab and open state without touching subscriptions.
@@ -274,6 +296,7 @@ impl ChartShell {
         spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
         spec.y_scale = self.y_scale;
         spec.kind = self.chart_kind;
+        spec.track_source_indices = self.track_source_indices;
 
         match ChartView::build(result, spec) {
             Ok(chart_view) => {

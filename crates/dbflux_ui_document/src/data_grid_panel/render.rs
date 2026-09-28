@@ -2040,9 +2040,8 @@ impl DataGridPanel {
     /// Render the PointInspector right-dock for the given source row.
     ///
     /// Builds the row-value list from the `QueryResult` columns and the raw row
-    /// at `source.row_idx`, then delegates to `point_inspector_element`. Wires
-    /// "Show in tree" via an element ID pattern: the caller listens for mousedown
-    /// on the action button's element ID and calls `chart_host_scroll_to_row`.
+    /// at `source.row_idx`, then delegates to `point_inspector_element`.
+    /// "Show in tree" runs `chart_host_scroll_to_row` on click.
     fn render_point_inspector(
         &mut self,
         source: SourceRowRef,
@@ -2132,8 +2131,8 @@ impl DataGridPanel {
                 None,
                 None,
                 &chart_colors,
-                cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                    this.chart_host_scroll_to_row(row_idx, cx);
+                cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.chart_host_scroll_to_row(row_idx, window, cx);
                     cx.notify();
                 }),
             ))

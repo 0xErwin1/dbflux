@@ -174,6 +174,8 @@ impl ChartView {
         // --- Extract and filter data ---
 
         let mut raw_x: Vec<f64> = Vec::with_capacity(result.rows.len());
+        // The `QueryResult.rows` index each retained X came from.
+        let mut raw_rows: Vec<usize> = Vec::with_capacity(result.rows.len());
         let mut raw_series: Vec<Vec<f64>> = spec
             .series
             .iter()
@@ -196,7 +198,7 @@ impl ChartView {
         // (e.g. a CloudWatch metric that returned no datapoints in the
         // selected window) coexist with populated siblings instead of forcing
         // the whole chart to fail with `NoUsableData`.
-        for row in &result.rows {
+        for (row_idx, row) in result.rows.iter().enumerate() {
             let x_val = extract_f64(&row[x_col], x_is_time);
             let Some(x) = x_val else { continue };
 
@@ -229,6 +231,7 @@ impl ChartView {
 
             if any_valid {
                 raw_x.push(x);
+                raw_rows.push(row_idx);
                 for (i, y) in y_vals.into_iter().enumerate() {
                     raw_series[i].push(y);
                 }
@@ -273,28 +276,15 @@ impl ChartView {
         // --- LTTB decimation per series ---
 
         let threshold = spec.decimation_threshold;
-        let n = raw_x_sorted.len();
         let track_indices = spec.track_source_indices;
 
-        // When tracking is enabled, build a mapping from sorted position back to
-        // the original QueryResult row index. The sort step above reorders via
-        // `indices` (which maps sorted_pos -> raw_pos); `raw_original_indices`
-        // maps raw_pos (after filtering) back to the QueryResult row. Because we
-        // filter on the fly we cannot track this precisely without re-running the
-        // filter with index recording — instead we approximate by recording the
-        // position after filtering. This is acceptable: `source_for_point` only
-        // needs an approximate row hint for the inspector, not an exact key.
-        //
-        // Precise tracking: we record the sorted position as the "source index"
-        // because each sorted position corresponds 1:1 to a row that passed the
-        // NaN/null filter. The `DataGridPanel::source_for_point` implementation
-        // maps this position back to the underlying sorted-result row.
+        // Maps each sorted position back to its `QueryResult.rows` index: the
+        // sort reorders through `indices` (sorted_pos -> raw_pos), and
+        // `raw_rows` maps raw_pos past the rows the extraction skipped.
         let sorted_source_indices: Vec<usize> = if swapped {
-            // After sort: sorted_pos i came from original (filtered) position
-            // indices[i]. We use `indices[i]` as the source row hint.
-            indices.clone()
+            indices.iter().map(|&raw_pos| raw_rows[raw_pos]).collect()
         } else {
-            (0..n).collect()
+            raw_rows
         };
 
         // Collect decimated points. When track_indices is true, also collect
@@ -3995,6 +3985,36 @@ mod tests {
             n - 1,
             "last source index must be n-1"
         );
+    }
+
+    /// A row the chart skips (no X, or no Y in any series) still counts in
+    /// the result, so the recorded index of every later point is its row in
+    /// `QueryResult.rows`, also when the rows arrive out of X order.
+    #[test]
+    fn source_indices_are_result_rows_when_rows_are_skipped_or_unsorted() {
+        let rows = vec![
+            vec![Value::Int(2000), Value::Float(3.0)],
+            vec![Value::Null, Value::Float(9.0)],
+            vec![Value::Int(0), Value::Float(1.0)],
+            vec![Value::Int(500), Value::Null],
+            vec![Value::Int(1000), Value::Float(2.0)],
+        ];
+        let result = QueryResult::table(
+            vec![
+                make_col("t", ColumnKind::Timestamp),
+                make_col("v", ColumnKind::Float),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+        let mut spec = simple_spec(0, &[1]);
+        spec.track_source_indices = true;
+
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+        let src = view.source_indices().expect("source_indices must be Some");
+
+        assert_eq!(src[0], vec![2usize, 4, 0]);
     }
 
     /// Regression baseline: captures the deterministic RenderModel snapshot for a

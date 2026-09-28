@@ -25,6 +25,7 @@ use dbflux_components::SqlPreviewContext;
 use dbflux_components::chart::{
     ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
 };
+use dbflux_components::components::data_table::selection::CellCoord;
 use dbflux_components::components::data_table::{
     ContextMenuAction, DataTable, DataTableEvent, DataTableState, ModelSwap,
     SortState as TableSortState, TableModel,
@@ -2670,12 +2671,18 @@ impl DataGridPanel {
             return;
         }
 
+        let track_source_rows = Self::chart_tracks_source_rows(&self.source);
+
         if let Some(shell) = &self.chart.chart_shell {
-            shell.update(cx, |s, cx| s.set_result(result, was_chart_mode, cx));
+            shell.update(cx, |s, cx| {
+                s.set_track_source_indices(track_source_rows, cx);
+                s.set_result(result, was_chart_mode, cx);
+            });
         } else {
             let host = crate::chart::HostAdapter::DataGrid(cx.entity().clone());
             let shell = cx.new(|cx| {
                 let mut shell = crate::chart::ChartShell::new(host, cx);
+                shell.set_track_source_indices(track_source_rows, cx);
                 shell.set_result(result, false, cx);
                 shell
             });
@@ -3657,15 +3664,49 @@ impl DataGridPanel {
         Some(SourceRowRef { row_idx })
     }
 
-    /// Scroll the underlying table view to the given row index.
+    /// Whether this grid's charts record the source row of each point, which
+    /// the point inspector and its "Show in tree" need.
     ///
-    /// Uses `DataTableState::scroll_to_row` when the table state is available.
-    /// For document-tree sources this is a no-op (document tree manages its own
-    /// scroll via `DocumentTreeState`).
-    pub(crate) fn chart_host_scroll_to_row(&self, row_idx: usize, cx: &App) {
-        if let Some(table_state) = &self.grid_table.table_state {
-            table_state.read(cx).scroll_to_row(row_idx);
+    /// A table or collection tab keeps its rows and can move to one, so it
+    /// tracks them. A query result (the query editor's results) does not, to
+    /// spare the per-point index memory.
+    pub(crate) fn chart_tracks_source_rows(source: &DataSource) -> bool {
+        matches!(
+            source,
+            DataSource::Table { .. } | DataSource::Collection { .. }
+        )
+    }
+
+    /// Show a chart point's source row in the table: leave a chart-only view
+    /// for the table, then select, scroll to and focus that row.
+    ///
+    /// Keeps the selected column when the table has one. A no-op when the
+    /// grid has no table or the row is out of range.
+    pub(crate) fn chart_host_scroll_to_row(
+        &mut self,
+        row_idx: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
+
+        if row_idx >= self.result.rows.len() {
+            return;
         }
+
+        if self.chrome.result_view_mode == ResultViewMode::Chart {
+            self.set_result_view_mode(ResultViewMode::Table, cx);
+        }
+
+        table_state.update(cx, |state, cx| {
+            let col = state.selection().active.map_or(0, |cell| cell.col);
+            state.select_cell(CellCoord::new(row_idx, col), cx);
+            state.scroll_to_row(row_idx);
+        });
+
+        self.focus_table(window, cx);
     }
 
     /// Build a `ViewHandle` that erases the concrete `DataGridPanel` type for
@@ -11867,6 +11908,47 @@ mod tests {
             .expect("panel should be created");
 
         (panel, window)
+    }
+
+    /// A time-series collection's chart tracks the row behind each point, and
+    /// "Show in tree" selects that row in the grid below the chart, keeping
+    /// the chart above it.
+    #[gpui::test]
+    fn a_time_series_collection_chart_shows_a_point_in_its_grid(cx: &mut TestAppContext) {
+        use dbflux_components::chart::DataPointRef;
+
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state.clone(), profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.ensure_chart_view(cx);
+
+                let point = DataPointRef {
+                    series_idx: 0,
+                    point_idx_in_series: 0,
+                };
+                let source = panel
+                    .chart_host_source_for_point(point, cx)
+                    .expect("a collection chart records the row behind each point");
+
+                panel.chart_host_scroll_to_row(source.row_idx, window, cx);
+
+                let active_row = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active)
+                    .map(|cell| cell.row);
+                assert_eq!(active_row, Some(source.row_idx));
+                assert_eq!(panel.result_view_mode(), super::ResultViewMode::Both);
+            });
+        });
     }
 
     #[gpui::test]
