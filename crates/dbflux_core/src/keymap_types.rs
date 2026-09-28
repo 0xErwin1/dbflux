@@ -118,6 +118,10 @@ pub enum Command {
     ToggleEditor,
     ToggleResults,
     ToggleTasks,
+    /// Cancels the task selected in the background tasks panel.
+    CancelTask,
+    /// Removes every finished task from the background tasks panel.
+    ClearFinishedTasks,
     ToggleSidebar,
     OpenSettings,
     OpenLoginModal,
@@ -224,6 +228,7 @@ impl Command {
             "toggle_editor" => Some(Command::ToggleEditor),
             "toggle_results" => Some(Command::ToggleResults),
             "toggle_tasks" => Some(Command::ToggleTasks),
+            "clear_finished_tasks" => Some(Command::ClearFinishedTasks),
             "open_settings" => Some(Command::OpenSettings),
             "open_login_modal" => Some(Command::OpenLoginModal),
             "open_sso_wizard" => Some(Command::OpenSsoWizard),
@@ -341,6 +346,8 @@ impl Command {
             Command::ToggleEditor => "Toggle editor panel",
             Command::ToggleResults => "Toggle results panel",
             Command::ToggleTasks => "Toggle tasks panel",
+            Command::CancelTask => "Cancel task",
+            Command::ClearFinishedTasks => "Clear finished tasks",
             Command::ToggleSidebar => "Toggle sidebar",
             Command::OpenSettings => "Open settings",
             Command::OpenLoginModal => "Open auth profile login",
@@ -503,6 +510,8 @@ impl Command {
             Command::ToggleEditor => "toggle_editor",
             Command::ToggleResults => "toggle_results",
             Command::ToggleTasks => "toggle_tasks",
+            Command::CancelTask => "cancel_task",
+            Command::ClearFinishedTasks => "clear_finished_tasks",
             Command::ToggleSidebar => "toggle_sidebar",
             Command::OpenSettings => "open_settings",
             Command::OpenLoginModal => "open_login_modal",
@@ -680,6 +689,8 @@ impl Command {
             Command::ToggleEditor,
             Command::ToggleResults,
             Command::ToggleTasks,
+            Command::CancelTask,
+            Command::ClearFinishedTasks,
             Command::ToggleSidebar,
             Command::OpenSettings,
             Command::OpenLoginModal,
@@ -837,6 +848,8 @@ impl Command {
             Command::ToggleEditor
             | Command::ToggleResults
             | Command::ToggleTasks
+            | Command::CancelTask
+            | Command::ClearFinishedTasks
             | Command::ToggleSidebar
             | Command::TogglePanel
             | Command::OpenSettings

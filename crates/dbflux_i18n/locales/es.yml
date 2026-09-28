@@ -3227,6 +3227,8 @@ palette:
       name: Mostrar u ocultar panel de resultados
     toggle_tasks:
       name: Mostrar u ocultar panel de tareas
+    clear_finished_tasks:
+      name: Borrar tareas terminadas
     toggle_notifications:
       name: "Mostrar u ocultar notificaciones"
     show_connections_view:
@@ -3547,6 +3549,8 @@ settings:
       toggle_editor: Mostrar u ocultar panel del editor
       toggle_results: Mostrar u ocultar panel de resultados
       toggle_tasks: Mostrar u ocultar panel de tareas
+      cancel_task: Cancelar tarea
+      clear_finished_tasks: Borrar tareas terminadas
       toggle_sidebar: Mostrar u ocultar barra lateral
       open_settings: Abrir configuración
       open_login_modal: Abrir inicio de sesión de Auth Profile
@@ -4584,6 +4588,9 @@ tasks_panel:
   clear_finished: "Limpiar terminadas"
   cancel: "Cancelar tarea"
   dismiss: "Descartar"
+  show_output: "Mostrar salida"
+  hide_output: "Ocultar salida"
+  collapse: "Ocultar el panel de tareas"
   empty: No hay tareas en segundo plano
   output_truncated: "… salida truncada en el panel"
 toast:

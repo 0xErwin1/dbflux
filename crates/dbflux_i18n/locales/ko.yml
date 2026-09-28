@@ -3227,6 +3227,8 @@ palette:
       name: 결과 패널 전환
     toggle_tasks:
       name: 작업 패널 전환
+    clear_finished_tasks:
+      name: 완료된 작업 지우기
     toggle_notifications:
       name: "알림 전환"
     show_connections_view:
@@ -3547,6 +3549,8 @@ settings:
       toggle_editor: 편집기 패널 전환
       toggle_results: 결과 패널 전환
       toggle_tasks: 작업 패널 전환
+      cancel_task: 작업 취소
+      clear_finished_tasks: 완료된 작업 지우기
       toggle_sidebar: 사이드바 전환
       open_settings: 설정 열기
       open_login_modal: 인증 프로필 로그인 열기
@@ -4583,6 +4587,9 @@ tasks_panel:
   clear_finished: "완료된 작업 지우기"
   cancel: "작업 취소"
   dismiss: "닫기"
+  show_output: "출력 보기"
+  hide_output: "출력 숨기기"
+  collapse: "작업 패널 숨기기"
   empty: 백그라운드 작업이 없습니다.
   output_truncated: "… 패널에서 출력이 잘렸습니다"
 toast:

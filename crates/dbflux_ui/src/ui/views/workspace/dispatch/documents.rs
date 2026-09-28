@@ -54,16 +54,20 @@ impl Workspace {
             }
 
             // The active document may answer this itself (with a menu of its
-            // own); otherwise the workspace lists the actions it offers.
+            // own); otherwise the workspace lists the actions the focused
+            // pane offers.
             Command::OpenPaneActions => {
                 if self.has_pane_actions_menu() {
                     self.close_pane_actions(cx);
                     return Some(true);
                 }
 
-                let handled_by_document = self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::OpenPaneActions, window, cx)
-                });
+                // The tasks panel lists its own actions, so a document menu
+                // does not open under it.
+                let handled_by_document = self.focus_target != FocusTarget::BackgroundTasks
+                    && self.tab_manager.update(cx, |mgr, cx| {
+                        mgr.dispatch_active(Command::OpenPaneActions, window, cx)
+                    });
 
                 Some(handled_by_document || self.open_pane_actions(cx))
             }

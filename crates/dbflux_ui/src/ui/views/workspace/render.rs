@@ -93,6 +93,22 @@ impl Workspace {
     /// own header. Collapsed, nothing is rendered there: the status bar's
     /// tasks chip is the only way back in.
     fn render_tasks_panel(&self, cx: &mut Context<Self>) -> ResizablePanel {
+        // The panel's pane-actions menu opens over its top right corner.
+        let tasks_menu = self
+            .pane_actions_menu_is_for_tasks()
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten()
+            .map(|menu| {
+                deferred(
+                    div()
+                        .absolute()
+                        .top(Spacing::SM)
+                        .right(Spacing::SM)
+                        .child(menu),
+                )
+                .with_priority(1)
+            });
+
         resizable_panel()
             .size(ShellMetrics::TASKS_PANEL_HEIGHT)
             .size_range(px(80.0)..px(2000.0))
@@ -100,6 +116,7 @@ impl Workspace {
                 div()
                     .id("tasks-panel")
                     .debug_selector(|| "tasks-panel".to_string())
+                    .relative()
                     .flex()
                     .flex_col()
                     .size_full()
@@ -111,7 +128,8 @@ impl Workspace {
                             }
                         }),
                     )
-                    .child(self.tasks_panel.clone()),
+                    .child(self.tasks_panel.clone())
+                    .children(tasks_menu),
             )
     }
 }
@@ -228,16 +246,19 @@ impl Render for Workspace {
 
         let has_tabs = !self.tab_manager.read(cx).is_empty();
         let active_doc_element = self.render_active_document(window, cx);
-        let pane_actions_menu = self.render_pane_actions_menu(cx).map(|menu| {
-            deferred(
-                div()
-                    .absolute()
-                    .top(Spacing::SM)
-                    .left(Spacing::SM)
-                    .child(menu),
-            )
-            .with_priority(1)
-        });
+        let pane_actions_menu = (!self.pane_actions_menu_is_for_tasks())
+            .then(|| self.render_pane_actions_menu(cx))
+            .flatten()
+            .map(|menu| {
+                deferred(
+                    div()
+                        .absolute()
+                        .top(Spacing::SM)
+                        .left(Spacing::SM)
+                        .child(menu),
+                )
+                .with_priority(1)
+            });
         let document_side_panels = self
             .tab_manager
             .update(cx, |mgr, cx| mgr.active_side_panels(window, cx));

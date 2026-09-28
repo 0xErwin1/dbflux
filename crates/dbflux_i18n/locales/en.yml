@@ -3227,6 +3227,8 @@ palette:
       name: Toggle results panel
     toggle_tasks:
       name: Toggle tasks panel
+    clear_finished_tasks:
+      name: Clear finished tasks
     toggle_notifications:
       name: "Toggle notifications"
     show_connections_view:
@@ -3547,6 +3549,8 @@ settings:
       toggle_editor: Toggle editor panel
       toggle_results: Toggle results panel
       toggle_tasks: Toggle tasks panel
+      cancel_task: Cancel task
+      clear_finished_tasks: Clear finished tasks
       toggle_sidebar: Toggle sidebar
       open_settings: Open settings
       open_login_modal: Open auth profile login
@@ -4584,6 +4588,9 @@ tasks_panel:
   clear_finished: "Clear finished"
   cancel: "Cancel task"
   dismiss: "Dismiss"
+  show_output: "Show output"
+  hide_output: "Hide output"
+  collapse: "Hide the tasks panel"
   empty: No background tasks
   output_truncated: "… output truncated in panel"
 toast:

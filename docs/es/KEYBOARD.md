@@ -339,10 +339,16 @@ El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado
 | Teclas                                        | Acción                                   |
 | --------------------------------------------- | ---------------------------------------- |
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k`                | Enfocar panel izquierda / abajo / arriba |
-| `j` / `k` (o `Down` / `Up`)                   | Seleccionar siguiente / anterior         |
-| `g` / `Shift+g` (o `Home` / `End`)            | Primero / último                         |
-| `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                    |
+| `j` / `k` (o `Down` / `Up`)                   | Seleccionar la tarea siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`)            | Seleccionar la primera / última tarea    |
+| `Space` / `Enter`                             | Mostrar u ocultar la salida de la tarea seleccionada |
+| `c`                                           | Cancelar la tarea seleccionada           |
+| `x`                                           | Descartar la tarea seleccionada cuando terminó |
+| `Shift+x`                                     | Limpiar las tareas terminadas            |
+| `m` / `Shift+F10`                             | Abrir el menú de acciones del panel      |
 | `z`                                           | Alternar colapso del panel               |
+
+La tarea seleccionada se resalta mientras el panel tiene el foco; hacer clic en una fila también la selecciona. El menú de acciones lista **Mostrar salida**, **Cancelar tarea** y **Descartar** de la tarea seleccionada, y después **Limpiar terminadas** y **Ocultar el panel de tareas**, cada una con su atajo; se maneja con las teclas del menú contextual. **Borrar tareas terminadas** también está en la paleta de comandos.
 
 ## Centro de notificaciones
 

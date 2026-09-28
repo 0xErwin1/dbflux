@@ -3,20 +3,30 @@
 //! `OpenPaneActions` and driven with the context-menu keys.
 //!
 //! Documents fill `PaneHandle::pane_actions`; the workspace only lists and
-//! runs the entries, so it never knows which document it is serving.
+//! runs the entries, so it never knows which document it is serving. The
+//! background tasks panel, which the workspace draws itself, offers its
+//! actions through the same menu.
 
 use super::Workspace;
-use crate::keymap::{Command, CommandDispatcher};
+use crate::keymap::{Command, CommandDispatcher, ContextId, FocusTarget};
 use dbflux_components::composites::{MenuItem, menu_row, render_menu_container};
+use dbflux_components::icons::AppIcon;
 use dbflux_ui_document::DocumentId;
 use dbflux_ui_document::pane::{PaneAction, PaneActionRun};
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, Window};
+use gpui::{AnyElement, App, Context, Window};
 
-/// The open pane-actions menu: the entries the document offered when it
+/// The pane that offered the entries of an open menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PaneActionsOwner {
+    Document(DocumentId),
+    BackgroundTasks,
+}
+
+/// The open pane-actions menu: the entries the pane offered when it
 /// opened, and the row the keyboard points at.
 pub(super) struct PaneActionsMenu {
-    document_id: DocumentId,
+    owner: PaneActionsOwner,
     actions: Vec<PaneAction>,
     selected_index: usize,
 }
@@ -24,11 +34,11 @@ pub(super) struct PaneActionsMenu {
 impl PaneActionsMenu {
     /// A menu over `actions`, pointing at the first enabled one, or `None`
     /// when no entry can be chosen.
-    fn new(document_id: DocumentId, actions: Vec<PaneAction>) -> Option<Self> {
+    fn new(owner: PaneActionsOwner, actions: Vec<PaneAction>) -> Option<Self> {
         let selected_index = actions.iter().position(|action| action.enabled)?;
 
         Some(Self {
-            document_id,
+            owner,
             actions,
             selected_index,
         })
@@ -74,17 +84,33 @@ impl Workspace {
         self.pane_actions_menu.is_some()
     }
 
-    /// Opens the pane-actions menu of the active document. Returns `false`
-    /// when there is no active document or it offers no action that can be
-    /// chosen now.
+    /// Whether the open menu belongs to the background tasks panel, which
+    /// draws it over itself instead of over the document area.
+    pub(super) fn pane_actions_menu_is_for_tasks(&self) -> bool {
+        self.pane_actions_menu
+            .as_ref()
+            .is_some_and(|menu| menu.owner == PaneActionsOwner::BackgroundTasks)
+    }
+
+    /// Opens the pane-actions menu of the focused pane: the background tasks
+    /// panel, or else the active document. Returns `false` when that pane
+    /// offers no action that can be chosen now.
     pub(super) fn open_pane_actions(&mut self, cx: &mut Context<Self>) -> bool {
-        let menu = {
+        let menu = if self.focus_target == FocusTarget::BackgroundTasks {
+            PaneActionsMenu::new(
+                PaneActionsOwner::BackgroundTasks,
+                self.tasks_pane_actions(cx),
+            )
+        } else {
             let tab_manager = self.tab_manager.read(cx);
             let Some(tab) = tab_manager.active_tab() else {
                 return false;
             };
 
-            PaneActionsMenu::new(tab.id(), tab.as_pane().pane_actions(cx))
+            PaneActionsMenu::new(
+                PaneActionsOwner::Document(tab.id()),
+                tab.as_pane().pane_actions(cx),
+            )
         };
 
         let Some(menu) = menu else {
@@ -134,8 +160,76 @@ impl Workspace {
         }
     }
 
+    /// The actions of the background tasks panel: the selected task's
+    /// output, cancel and dismiss buttons, then Clear finished and hiding
+    /// the panel.
+    fn tasks_pane_actions(&self, cx: &App) -> Vec<PaneAction> {
+        let panel = self.tasks_panel.read(cx);
+        let selected = panel.selected_actions(cx);
+        let context = ContextId::BackgroundTasks;
+
+        let output_label = if selected.is_some_and(|task| task.output_shown) {
+            dbflux_i18n::t!("tasks_panel.hide_output")
+        } else {
+            dbflux_i18n::t!("tasks_panel.show_output")
+        };
+
+        vec![
+            PaneAction::command(
+                "task-output",
+                output_label,
+                Command::ExpandCollapse,
+                context,
+            )
+            .icon(AppIcon::ChevronDown)
+            .enabled(selected.is_some_and(|task| task.has_output)),
+            PaneAction::command(
+                "task-cancel",
+                dbflux_i18n::t!("tasks_panel.cancel"),
+                Command::CancelTask,
+                context,
+            )
+            .icon(AppIcon::X)
+            .enabled(selected.is_some_and(|task| task.cancellable)),
+            PaneAction::command(
+                "task-dismiss",
+                dbflux_i18n::t!("tasks_panel.dismiss"),
+                Command::Delete,
+                context,
+            )
+            .icon(AppIcon::X)
+            .enabled(selected.is_some_and(|task| task.finished)),
+            PaneAction::command(
+                "tasks-clear-finished",
+                dbflux_i18n::t!("tasks_panel.clear_finished"),
+                Command::ClearFinishedTasks,
+                context,
+            )
+            .icon(AppIcon::CircleX)
+            .enabled(panel.has_finished_tasks(cx)),
+            PaneAction::command(
+                "tasks-collapse",
+                dbflux_i18n::t!("tasks_panel.collapse"),
+                Command::TogglePanel,
+                context,
+            )
+            .icon(AppIcon::ChevronDown),
+        ]
+    }
+
+    /// Whether the pane that offered `owner`'s entries still owns the
+    /// keyboard, so running one acts on what the menu listed.
+    fn pane_actions_owner_is_current(&self, owner: PaneActionsOwner, cx: &App) -> bool {
+        match owner {
+            PaneActionsOwner::Document(document_id) => {
+                self.tab_manager.read(cx).active_id() == Some(document_id)
+            }
+            PaneActionsOwner::BackgroundTasks => self.focus_target == FocusTarget::BackgroundTasks,
+        }
+    }
+
     /// Closes the menu and runs its entry at `index`, provided the entry is
-    /// enabled and the document that offered it is still the active one.
+    /// enabled and the pane that offered it still owns the keyboard.
     fn run_pane_action_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(menu) = self.pane_actions_menu.take() else {
             return;
@@ -146,7 +240,7 @@ impl Workspace {
             return;
         };
 
-        if self.tab_manager.read(cx).active_id() != Some(menu.document_id) {
+        if !self.pane_actions_owner_is_current(menu.owner, cx) {
             return;
         }
 
@@ -213,11 +307,13 @@ mod tests {
     // Explicit imports rather than the parent glob: combining `use super::*`
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
-    use super::PaneActionsMenu;
-    use crate::keymap::{Command, CommandDispatcher as _, FocusTarget};
+    use super::{PaneActionsMenu, PaneActionsOwner};
+    use crate::keymap::{Command, CommandDispatcher as _, ContextId, FocusTarget};
     use crate::ui::document::{CodeDocument, Tab};
+    use crate::ui::views::tasks_panel::TasksPanel;
     use crate::ui::views::workspace::Workspace;
-    use dbflux_ui_base::AppStateEntity;
+    use dbflux_core::{TaskId, TaskKind, TaskStatus};
+    use dbflux_ui_base::{AppStateChanged, AppStateEntity};
     use dbflux_ui_document::DocumentId;
     use dbflux_ui_document::pane::{PaneAction, PaneActionRun};
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
@@ -431,6 +527,158 @@ mod tests {
         assert_eq!(handled, [false, false, false, false, false]);
     }
 
+    /// A running query, an export that finished with output and a failed
+    /// import, in the order the tasks panel lists them.
+    fn start_three_tasks(
+        workspace: &Entity<Workspace>,
+        window: &mut VisualTestContext,
+    ) -> [TaskId; 3] {
+        let app_state = window.update(|_, cx| workspace.read(cx).app_state.clone());
+
+        let ids = app_state.update(window, |state, cx| {
+            let (running, _token) = state.start_task(TaskKind::Query, "running query");
+            let (export, _token) = state.start_task(TaskKind::Export, "export");
+            state.complete_task_with_details(export, "wrote 10 rows\nwrote 20 rows");
+            let (import, _token) = state.start_task(TaskKind::Import, "import");
+            state.fail_task(import, "disk full");
+            cx.emit(AppStateChanged);
+            [running, export, import]
+        });
+        window.run_until_parked();
+
+        ids
+    }
+
+    fn tasks_panel(
+        workspace: &Entity<Workspace>,
+        window: &mut VisualTestContext,
+    ) -> Entity<TasksPanel> {
+        window.update(|_, cx| workspace.read(cx).tasks_panel.clone())
+    }
+
+    fn selected_task(workspace: &Entity<Workspace>, window: &mut VisualTestContext) -> TaskId {
+        let panel = tasks_panel(workspace, window);
+        window
+            .update(|_, cx| panel.read(cx).selected_task(cx).map(|task| task.id))
+            .expect("a task is selected")
+    }
+
+    fn task_status(
+        workspace: &Entity<Workspace>,
+        window: &mut VisualTestContext,
+        task_id: TaskId,
+    ) -> Option<TaskStatus> {
+        window.update(|_, cx| {
+            workspace
+                .read(cx)
+                .app_state
+                .read(cx)
+                .tasks()
+                .get(task_id)
+                .map(|task| task.status)
+        })
+    }
+
+    /// With the tasks panel focused, J, K, G and Shift+G move over its rows,
+    /// Space shows a task's output, C cancels, X dismisses a finished task
+    /// and Shift+X clears the finished ones.
+    #[gpui::test]
+    fn the_tasks_panel_keys_select_and_act_on_a_task(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+        window.update(|window, _| window.activate_window());
+        let [running, export, import] = start_three_tasks(&workspace, window);
+
+        keys(window, "ctrl-shift-4");
+        assert_eq!(selected_task(&workspace, window), running);
+
+        keys(window, "shift-g");
+        let last = selected_task(&workspace, window);
+        assert_ne!(last, running);
+        keys(window, "g");
+        assert_eq!(selected_task(&workspace, window), running);
+
+        keys(window, "c");
+        assert_eq!(
+            task_status(&workspace, window, running),
+            Some(TaskStatus::Cancelled)
+        );
+
+        // Walk down to the export, which has output. The cancelled query
+        // moved to the finished tasks, so start again from the top.
+        let panel = tasks_panel(&workspace, window);
+        keys(window, "g");
+        for _ in 0..3 {
+            if selected_task(&workspace, window) == export {
+                break;
+            }
+            keys(window, "j");
+        }
+        assert_eq!(selected_task(&workspace, window), export);
+
+        keys(window, "space");
+        let actions = window.update(|_, cx| panel.read(cx).selected_actions(cx));
+        assert_eq!(actions.map(|actions| actions.output_shown), Some(true));
+
+        keys(window, "x");
+        assert_eq!(task_status(&workspace, window, export), None, "X dismisses");
+        assert!(task_status(&workspace, window, import).is_some());
+
+        keys(window, "shift-x");
+        assert_eq!(task_status(&workspace, window, import), None);
+        assert_eq!(task_status(&workspace, window, running), None);
+    }
+
+    /// Focusing the tasks panel from a code editor takes the keyboard from
+    /// the editor, so the panel keys move its selection instead of typing.
+    #[gpui::test]
+    fn the_tasks_panel_keys_reach_it_from_a_code_editor(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| workspace.new_query_tab(window, cx));
+        });
+        window.run_until_parked();
+        let [running, _export, _import] = start_three_tasks(&workspace, window);
+
+        keys(window, "ctrl-shift-4 j");
+
+        assert_ne!(selected_task(&workspace, window), running);
+        assert_eq!(
+            window
+                .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx))),
+            ContextId::BackgroundTasks
+        );
+    }
+
+    /// `m` in the tasks panel lists what can be done with the selected task
+    /// and the panel, and Enter runs the entry.
+    #[gpui::test]
+    fn m_in_the_tasks_panel_lists_the_task_actions(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+        window.update(|window, _| window.activate_window());
+        let [running, _export, _import] = start_three_tasks(&workspace, window);
+
+        keys(window, "ctrl-shift-4 m");
+        assert_eq!(
+            menu_ids(&workspace, window),
+            [
+                "task-output",
+                "task-cancel",
+                "task-dismiss",
+                "tasks-clear-finished",
+                "tasks-collapse"
+            ]
+        );
+
+        // The running query has no output, so the menu starts on Cancel.
+        keys(window, "enter");
+        assert!(menu_ids(&workspace, window).is_empty());
+        assert_eq!(
+            task_status(&workspace, window, running),
+            Some(TaskStatus::Cancelled)
+        );
+    }
+
     fn action(id: &'static str, enabled: bool) -> PaneAction {
         PaneAction {
             id: id.into(),
@@ -465,7 +713,7 @@ mod tests {
     #[test]
     fn the_menu_starts_on_the_first_enabled_entry_and_skips_disabled_ones() {
         let mut menu = PaneActionsMenu::new(
-            DocumentId::new(),
+            PaneActionsOwner::Document(DocumentId::new()),
             vec![
                 action("off", false),
                 action("first", true),
@@ -495,7 +743,16 @@ mod tests {
 
     #[test]
     fn no_menu_opens_without_an_enabled_entry() {
-        assert!(PaneActionsMenu::new(DocumentId::new(), Vec::new()).is_none());
-        assert!(PaneActionsMenu::new(DocumentId::new(), vec![action("off", false)]).is_none());
+        assert!(
+            PaneActionsMenu::new(PaneActionsOwner::Document(DocumentId::new()), Vec::new())
+                .is_none()
+        );
+        assert!(
+            PaneActionsMenu::new(
+                PaneActionsOwner::Document(DocumentId::new()),
+                vec![action("off", false)]
+            )
+            .is_none()
+        );
     }
 }

@@ -1888,6 +1888,11 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.view"),
             ),
             PaletteCommand::new(
+                "clear_finished_tasks",
+                dbflux_i18n::t!("palette.command.clear_finished_tasks.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
                 "toggle_notifications",
                 dbflux_i18n::t!("palette.command.toggle_notifications.name"),
                 dbflux_i18n::t!("palette.category.view"),

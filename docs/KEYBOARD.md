@@ -323,10 +323,16 @@ The tasks panel sits under the documents and starts collapsed. Collapsed, it tak
 | Keys | Action |
 |------|--------|
 | `Ctrl+h` / `Ctrl+j` / `Ctrl+k` | Focus left / down / up panel |
-| `j` / `k` (or `Down` / `Up`) | Select next / previous |
-| `g` / `Shift+g` (or `Home` / `End`) | First / last |
-| `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
+| `j` / `k` (or `Down` / `Up`) | Select the next / previous task |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last task |
+| `Space` / `Enter` | Show or hide the selected task's output |
+| `c` | Cancel the selected task |
+| `x` | Dismiss the selected task once it has finished |
+| `Shift+x` | Clear the finished tasks |
+| `m` / `Shift+F10` | Open the panel's actions menu |
 | `z` | Toggle panel collapse |
+
+The selected task is highlighted while the panel has focus; clicking a row selects it too. The actions menu lists the selected task's **Show output**, **Cancel task** and **Dismiss**, then **Clear finished** and **Hide the tasks panel**, each with its shortcut; the context menu keys drive it. **Clear finished tasks** is also a command palette entry.
 
 ## Notifications center
 

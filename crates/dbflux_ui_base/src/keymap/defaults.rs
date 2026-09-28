@@ -690,6 +690,31 @@ fn background_tasks_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
     layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
 
+    // The selected task: show its output, cancel it, dismiss it once finished.
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(
+        KeyChord::new("enter", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("c", Modifiers::none()), Command::CancelTask);
+    layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
+    layer.bind(
+        KeyChord::new("x", Modifiers::shift()),
+        Command::ClearFinishedTasks,
+    );
+
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenPaneActions,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
 

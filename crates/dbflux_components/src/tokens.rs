@@ -1596,6 +1596,8 @@ impl ShellMetrics {
     pub const TASK_ERROR_INDENT: Pixels = px(58.0);
     pub const TASK_ERROR_FONT: Pixels = px(11.5);
     pub const TASK_ERROR_ALPHA: f32 = 0.06;
+    /// The task row the keyboard points at: a 10% tint wash.
+    pub const TASK_SELECTED_ALPHA: f32 = 0.10;
 
     /// Empty workspace: 620 px column, 26 px between blocks, 16 px between
     /// the glyph and the title and between the cards.

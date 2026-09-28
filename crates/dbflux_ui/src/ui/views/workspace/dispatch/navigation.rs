@@ -83,7 +83,11 @@ impl Workspace {
                     });
                     true
                 }
-                _ => false,
+                FocusTarget::BackgroundTasks => {
+                    self.tasks_panel
+                        .update(cx, |panel, cx| panel.select_next(cx));
+                    true
+                }
             }),
 
             Command::SelectPrev => Some(match self.focus_target {
@@ -102,7 +106,11 @@ impl Workspace {
                     });
                     true
                 }
-                _ => false,
+                FocusTarget::BackgroundTasks => {
+                    self.tasks_panel
+                        .update(cx, |panel, cx| panel.select_prev(cx));
+                    true
+                }
             }),
 
             Command::SelectFirst => Some(match self.focus_target {
@@ -121,7 +129,11 @@ impl Workspace {
                     });
                     true
                 }
-                _ => false,
+                FocusTarget::BackgroundTasks => {
+                    self.tasks_panel
+                        .update(cx, |panel, cx| panel.select_first(cx));
+                    true
+                }
             }),
 
             Command::SelectLast => Some(match self.focus_target {
@@ -140,7 +152,11 @@ impl Workspace {
                     });
                     true
                 }
-                _ => false,
+                FocusTarget::BackgroundTasks => {
+                    self.tasks_panel
+                        .update(cx, |panel, cx| panel.select_last(cx));
+                    true
+                }
             }),
 
             Command::Execute => Some(match self.focus_target {
@@ -169,7 +185,9 @@ impl Workspace {
                 FocusTarget::Document => self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(Command::ExpandCollapse, window, cx)
                 }),
-                _ => false,
+                FocusTarget::BackgroundTasks => self
+                    .tasks_panel
+                    .update(cx, |panel, cx| panel.toggle_selected_output(cx)),
             }),
 
             Command::ColumnLeft => Some(match self.focus_target {
@@ -264,18 +282,35 @@ impl Workspace {
                 false
             }),
 
-            Command::Delete => Some(if self.focus_target == FocusTarget::Sidebar {
-                self.sidebar
-                    .update(cx, |s, cx| s.request_delete_selected(cx));
-                true
-            } else if self.focus_target == FocusTarget::Document {
-                self.tab_manager.update(cx, |mgr, cx| {
-                    mgr.dispatch_active(Command::Delete, window, cx);
-                });
-                true
-            } else {
-                false
+            Command::Delete => Some(match self.focus_target {
+                FocusTarget::Sidebar => {
+                    self.sidebar
+                        .update(cx, |s, cx| s.request_delete_selected(cx));
+                    true
+                }
+                FocusTarget::Document => {
+                    self.tab_manager.update(cx, |mgr, cx| {
+                        mgr.dispatch_active(Command::Delete, window, cx);
+                    });
+                    true
+                }
+                FocusTarget::BackgroundTasks => self
+                    .tasks_panel
+                    .update(cx, |panel, cx| panel.dismiss_selected(cx)),
             }),
+
+            Command::CancelTask => Some(
+                self.focus_target == FocusTarget::BackgroundTasks
+                    && self
+                        .tasks_panel
+                        .update(cx, |panel, cx| panel.cancel_selected(cx)),
+            ),
+
+            Command::ClearFinishedTasks => {
+                self.tasks_panel
+                    .update(cx, |panel, cx| panel.clear_finished(cx));
+                Some(true)
+            }
 
             Command::CreateFolder => {
                 if self.focus_target == FocusTarget::Sidebar {

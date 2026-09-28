@@ -3227,6 +3227,8 @@ palette:
       name: 切换结果面板
     toggle_tasks:
       name: 切换任务面板
+    clear_finished_tasks:
+      name: 清除已完成任务
     toggle_notifications:
       name: "切换通知"
     show_connections_view:
@@ -3547,6 +3549,8 @@ settings:
       toggle_editor: 切换编辑器面板
       toggle_results: 切换结果面板
       toggle_tasks: 切换任务面板
+      cancel_task: 取消任务
+      clear_finished_tasks: 清除已完成任务
       toggle_sidebar: 切换侧边栏
       open_settings: 打开设置
       open_login_modal: 打开认证配置文件登录
@@ -4582,6 +4586,9 @@ tasks_panel:
   clear_finished: "清除已完成"
   cancel: "取消任务"
   dismiss: "关闭"
+  show_output: "显示输出"
+  hide_output: "隐藏输出"
+  collapse: "隐藏任务面板"
   empty: 无后台任务
   output_truncated: …面板中输出已截断
 toast:
