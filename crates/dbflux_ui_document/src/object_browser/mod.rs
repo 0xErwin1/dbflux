@@ -946,6 +946,33 @@ impl ObjectBrowserDocument {
         cx.notify();
     }
 
+    /// Whether the listing's level has another page to load.
+    pub(super) fn current_level_has_more(&self) -> bool {
+        self.tree
+            .level(&self.tree.current_prefix)
+            .is_some_and(|level| level.next_token.is_some())
+    }
+
+    /// Whether the preview shows the "View versions" link.
+    pub(super) fn preview_offers_versions(&self) -> bool {
+        self.preview_key.is_some()
+            && matches!(self.versions, ObjectVersionsState::Idle)
+            && metadata::versioning_tracks_history(&self.bucket_details)
+    }
+
+    /// Whether the preview shows the size gate's "Load anyway".
+    pub(super) fn preview_offers_load_anyway(&self) -> bool {
+        self.preview_key.is_some()
+            && !self.size_gate_override
+            && matches!(
+                self.metadata,
+                Some(ObjectMetadataState::Loaded {
+                    gate: PreviewGate::TooLarge { .. },
+                    ..
+                })
+            )
+    }
+
     pub fn dispatch_command(
         &mut self,
         cmd: Command,
@@ -1143,6 +1170,8 @@ impl ObjectBrowserDocument {
                 self.reload_current_prefix(cx);
                 true
             }
+            // Without a selected row the workspace lists the pane actions.
+            Command::OpenContextMenu => self.open_context_menu_at_selection(cx),
             Command::FocusSearch | Command::FocusToolbar => {
                 self.focus_filter(window, cx);
                 true
@@ -1222,6 +1251,99 @@ mod tests {
             common_prefixes: prefixes.iter().map(|p| p.to_string()).collect(),
             next_continuation_token: None,
         }
+    }
+
+    /// `m` opens the selected row's menu, which also lists the listing's
+    /// own buttons (upload, new folder, copy the path); without a selected
+    /// row the same buttons are the pane actions.
+    #[gpui::test]
+    fn m_opens_the_row_menu_with_the_listing_buttons(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use context_menu::ObjectMenuAction;
+        use dbflux_app::keymap::Command;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    ObjectBrowserDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.apply_prefix_page("", Ok(page(&["logs/"], &["a.txt"])), cx);
+                doc.focus(window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("m");
+        window.run_until_parked();
+        let actions: Vec<ObjectMenuAction> = window.update(|_, cx| {
+            doc.read(cx)
+                .context_menu
+                .as_ref()
+                .map(|menu| menu.items.iter().map(|item| item.action).collect())
+                .unwrap_or_default()
+        });
+        for expected in [
+            ObjectMenuAction::OpenPrefix,
+            ObjectMenuAction::Upload,
+            ObjectMenuAction::NewFolderHere,
+            ObjectMenuAction::CopyPath,
+        ] {
+            assert!(
+                actions.contains(&expected),
+                "m lists {expected:?}: {actions:?}"
+            );
+        }
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(window.update(|_, cx| doc.read(cx).context_menu.is_none()));
+
+        window.update(|_, cx| doc.update(cx, |doc, _| doc.tree.selected = None));
+        let handled = window.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.dispatch_command(Command::OpenContextMenu, window, cx)
+            })
+        });
+        assert!(
+            !handled,
+            "without a row, m is left to the workspace, which lists the pane actions"
+        );
+        let pane_ids: Vec<String> = window.update(|_, cx| {
+            doc.read(cx)
+                .pane_actions(&doc)
+                .into_iter()
+                .map(|action| action.id.to_string())
+                .collect()
+        });
+        assert!(
+            pane_ids.contains(&"object-browser-upload".to_string()),
+            "{pane_ids:?}"
+        );
     }
 
     /// A freshly listed level puts the cursor on its first row, so Enter
@@ -1477,10 +1599,11 @@ mod tests {
             assert_eq!(
                 doc.context_menu
                     .as_ref()
-                    .map(|menu| menu.items.len())
+                    .map(|menu| menu.items.len() - doc.listing_menu_items().len())
                     .unwrap_or_default(),
-                7,
-                "Preview, Open in editor, Download, Rename, Presign, Copy S3 URI, Delete"
+                8,
+                "Preview, Open in editor, Download, Rename, Presign, Copy S3 URI, \
+                 Open in system viewer, Delete, then the listing's entries"
             );
         });
 

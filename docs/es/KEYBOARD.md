@@ -639,6 +639,24 @@ página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
 consola pide confirmar un comando peligroso, `Enter` en su campo vacío lo ejecuta
 y `Escape` lo cancela.
 
+## Almacenamiento de objetos
+
+En el explorador de objetos, `m` abre el menú de la fila seleccionada. Después
+de las entradas de la fila (un objeto también ofrece Abrir en el visor del
+sistema) lista los botones del listado: Subir, Nueva carpeta, Copiar la ruta
+actual, Cargar más mientras el nivel tenga otra página, Mostrar como lista o como
+árbol y, mientras una vista previa los muestra, Ver versiones, Cargar de todas
+formas y Descartar para cambios sin guardar. Sin una fila seleccionada, `m` abre
+esas mismas entradas como acciones del panel.
+
+En la lista de buckets, `m` lista Explorar, Calcular tamaño, Nuevo bucket y
+Actualizar.
+
+En una pestaña de editor de objetos, `Escape` saca el teclado del texto, `Enter`
+lo devuelve, y `m` lista entonces Guardar, Descartar, Buscar, la interpretación
+Automático / Raw, Recargar y, para un objeto por encima del límite de tamaño,
+Cargar de todas formas.
+
 ## Visor de auditoría
 
 | Teclas | Acción |

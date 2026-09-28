@@ -2368,6 +2368,10 @@ document:
         expand: Expandir
         open: Abrir
         new_folder_inside: Nueva carpeta dentro…
+        copy_path: "Copiar la ruta actual"
+        load_more: "Cargar más"
+        show_as_list: "Mostrar como lista"
+        show_as_tree: "Mostrar como árbol"
         delete_folder: Eliminar carpeta
     create_folder:
       cancel: Cancelar
@@ -2583,6 +2587,8 @@ document:
       loading: "Cargando objeto…"
       preparing: "Preparando editor…"
       size_tooltip: Tamaño del objeto tal como se cargó o guardó por última vez
+    pane_actions:
+      reload: "Recargar el objeto"
   query_builder:
     aggregate:
       fn:

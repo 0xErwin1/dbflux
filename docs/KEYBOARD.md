@@ -610,6 +610,21 @@ move through the fields like `j` and `k` and stay in the dialog. When the
 console asks to confirm a dangerous command, `Enter` in its empty field runs it
 and `Escape` cancels it.
 
+## Object storage
+
+In the object browser, `m` opens the selected row's menu. After the row's
+entries (an object also offers Open in system viewer) it lists the listing's
+buttons: Upload, New folder, Copy the current path, Load more while the level
+has another page, Show as a list or a tree, and, while a preview shows them,
+View versions, Load anyway and Discard for unsaved edits. With no row selected,
+`m` opens the same listing entries as the pane actions.
+
+In the bucket list, `m` lists Browse, Calculate size, New bucket and Refresh.
+
+In an object editor tab, `Escape` takes the keyboard out of the text, `Enter`
+puts it back, and `m` then lists Save, Discard, Find, the Auto / Raw
+interpretation, Reload and, for an object over the size limit, Load anyway.
+
 ## Audit viewer
 
 | Keys | Action |

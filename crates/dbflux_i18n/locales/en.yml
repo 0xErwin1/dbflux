@@ -2368,6 +2368,10 @@ document:
         expand: Expand
         open: Open
         new_folder_inside: New folder inside…
+        copy_path: "Copy the current path"
+        load_more: "Load more"
+        show_as_list: "Show as a list"
+        show_as_tree: "Show as a tree"
         delete_folder: Delete folder
     create_folder:
       cancel: Cancel
@@ -2583,6 +2587,8 @@ document:
       loading: "Loading object…"
       preparing: "Preparing editor…"
       size_tooltip: Size of the object as last loaded or saved
+    pane_actions:
+      reload: "Reload the object"
   query_builder:
     aggregate:
       fn:

@@ -123,6 +123,10 @@ pub struct ObjectEditorDocument {
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
     close_after_save: bool,
+    /// Whether the buffer holds the keyboard. Escape takes it out, so the
+    /// Results keys reach the tab (Enter, `m`), and Enter or a click puts it
+    /// back.
+    buffer_has_keyboard: bool,
 }
 
 impl EventEmitter<DocumentEvent> for ObjectEditorDocument {}
@@ -153,6 +157,7 @@ impl ObjectEditorDocument {
             encoding_override: None,
             on_saved,
             close_after_save: false,
+            buffer_has_keyboard: true,
         };
 
         doc.load_object(cx);
@@ -242,11 +247,19 @@ impl ObjectEditorDocument {
     }
 
     /// The buffer is a text input and owns every letter it is given.
+    /// Text input while the buffer holds the keyboard; the Results keys
+    /// otherwise (no buffer yet, or Escape took the keyboard out of it).
     pub fn active_context(&self) -> ContextId {
-        ContextId::TextInput
+        if self.buffer.is_some() && self.buffer_has_keyboard {
+            ContextId::TextInput
+        } else {
+            ContextId::Results
+        }
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.buffer_has_keyboard = true;
+
         match self.buffer.as_ref() {
             Some(buffer) => buffer
                 .input
@@ -401,6 +414,13 @@ impl ObjectEditorDocument {
             &input,
             window,
             |this, input, event: &InputEvent, _window, cx| {
+                // A click into the buffer takes the keyboard back.
+                if matches!(event, InputEvent::Focus) && !this.buffer_has_keyboard {
+                    this.buffer_has_keyboard = true;
+                    cx.notify();
+                    return;
+                }
+
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
@@ -667,8 +687,139 @@ impl ObjectEditorDocument {
                 self.open_find(window, cx);
                 true
             }
+            // Escape in the buffer hands the keyboard to the tab; the
+            // component's find panel closes on its own Escape first.
+            Command::Cancel if self.buffer.is_some() && self.buffer_has_keyboard => {
+                self.buffer_has_keyboard = false;
+                self.focus_handle.focus(window, cx);
+                cx.notify();
+                true
+            }
+            Command::Execute if self.buffer.is_some() => {
+                self.focus(window, cx);
+                true
+            }
+            Command::Execute if self.shows_load_anyway() => {
+                self.load_anyway(cx);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Whether the size gate's Load anyway button shows.
+    fn shows_load_anyway(&self) -> bool {
+        matches!(&self.load, LoadState::Failed(refusal) if refusal.is_too_large())
+    }
+
+    /// The header's and the size gate's buttons, each enabled when its
+    /// button is: Save, Discard, Find, the Auto / Raw interpretation, Reload
+    /// and Load anyway.
+    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        use crate::pane::PaneAction;
+        use dbflux_components::icons::AppIcon;
+
+        let editable = self.is_editable();
+        let can_act = editable && self.is_dirty() && !self.saving;
+        let context = ContextId::TextInput;
+
+        let callback =
+            |id: &'static str,
+             label: String,
+             run: fn(&mut ObjectEditorDocument, &mut Window, &mut Context<Self>)| {
+                let target = this.downgrade();
+                PaneAction::callback(id, label, move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| run(doc, window, cx));
+                    }
+                })
+            };
+
+        let mut actions = Vec::new();
+
+        if editable {
+            actions.push(
+                PaneAction::command(
+                    "object-editor-save",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.save"),
+                    Command::SaveQuery,
+                    context,
+                )
+                .icon(AppIcon::Save)
+                .enabled(can_act),
+            );
+            actions.push(
+                callback(
+                    "object-editor-discard",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                    |doc, window, cx| doc.discard_edits(window, cx),
+                )
+                .icon(AppIcon::RotateCcw)
+                .enabled(can_act),
+            );
+        }
+
+        if self.buffer.is_some() {
+            actions.push(
+                callback(
+                    "object-editor-find",
+                    dbflux_i18n::t!("document.object_browser.editor.footer.find"),
+                    |doc, window, cx| {
+                        doc.focus(window, cx);
+                        doc.open_find(window, cx);
+                    },
+                )
+                .icon(AppIcon::Search),
+            );
+        }
+
+        if (self.buffer.is_some() && !editable) || self.has_raw_override() {
+            let (label, raw) = if self.has_raw_override() {
+                (
+                    dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
+                    false,
+                )
+            } else {
+                (
+                    dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
+                    true,
+                )
+            };
+            let target = this.downgrade();
+            actions.push(PaneAction::callback(
+                "object-editor-interpretation",
+                label,
+                move |_window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.set_raw_override(raw, cx));
+                    }
+                },
+            ));
+        }
+
+        actions.push(
+            PaneAction::command(
+                "object-editor-reload",
+                dbflux_i18n::t!("document.object_editor.pane_actions.reload"),
+                Command::RefreshSchema,
+                ContextId::Results,
+            )
+            .icon(AppIcon::RefreshCcw)
+            .enabled(!self.is_dirty()),
+        );
+
+        if self.shows_load_anyway() {
+            actions.push(
+                callback(
+                    "object-editor-load-anyway",
+                    dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
+                    |doc, _window, cx| doc.load_anyway(cx),
+                )
+                .icon(AppIcon::Download),
+            );
+        }
+
+        actions
     }
 
     /// Opens the editor component's find panel over the buffer.
@@ -990,6 +1141,94 @@ mod tests {
             // Closing is never blocked; the modal handles the decision.
             assert!(doc.can_close());
         });
+    }
+
+    /// Escape takes the keyboard out of the buffer, where the Results keys
+    /// reach the tab; Enter hands it back. The pane actions list Discard,
+    /// which restores the baseline like its button.
+    #[gpui::test]
+    fn escape_leaves_the_buffer_and_the_pane_actions_discard(cx: &mut gpui::TestAppContext) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use crate::pane::PaneActionRun;
+        use dbflux_app::keymap::ContextId;
+        use dbflux_storage::bootstrap::StorageRuntime;
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = StorageRuntime::in_memory().expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                let doc = cx.new(|cx| {
+                    ObjectEditorDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        "notes.md".to_string(),
+                        Rc::new(|_key: &str, _cx: &mut gpui::App| {}),
+                        app_state,
+                        cx,
+                    )
+                });
+                doc.update(cx, |doc, cx| {
+                    doc.install_buffer_for_test("baseline", window, cx);
+                    doc.type_for_test("edited", window, cx);
+                });
+                doc
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| doc.update(cx, |doc, cx| doc.focus(window, cx)));
+        window.run_until_parked();
+
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::TextInput
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::Results,
+            "Escape leaves the buffer"
+        );
+
+        let discard = window.update(|_, cx| {
+            doc.read(cx)
+                .pane_actions(&doc)
+                .into_iter()
+                .find(|action| action.id.as_ref() == "object-editor-discard")
+        });
+        let Some(discard) = discard else {
+            panic!("the pane actions list Discard");
+        };
+        assert!(
+            discard.enabled,
+            "Discard is enabled while the buffer is dirty"
+        );
+        let PaneActionRun::Callback(run) = discard.run else {
+            panic!("Discard runs a callback");
+        };
+        window.update(|window, cx| run(window, cx));
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| doc.read(cx).is_dirty()));
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| doc.read(cx).active_context()),
+            ContextId::TextInput,
+            "Enter hands the keyboard back to the buffer"
+        );
     }
 
     /// Discarding restores the baseline and clears the dirty state, so the tab

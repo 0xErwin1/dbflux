@@ -2368,6 +2368,10 @@ document:
         expand: 펼치기
         open: 열기
         new_folder_inside: 이 폴더에 새 폴더…
+        copy_path: "현재 경로 복사"
+        load_more: "더 불러오기"
+        show_as_list: "목록으로 보기"
+        show_as_tree: "트리로 보기"
         delete_folder: 폴더 삭제
     create_folder:
       cancel: 취소
@@ -2583,6 +2587,8 @@ document:
       loading: "개체를 불러오는 중…"
       preparing: "편집기를 준비하는 중…"
       size_tooltip: "마지막으로 불러오거나 저장한 개체 크기"
+    pane_actions:
+      reload: "객체 다시 불러오기"
   query_builder:
     aggregate:
       fn:

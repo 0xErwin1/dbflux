@@ -16,7 +16,7 @@ use super::{ObjectAction, ObjectBrowserDocument, ObjectBrowserFocusMode};
 use dbflux_app::keymap::Command;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, SurfaceRole, Text, surface};
-use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, ObjectStoreMetrics, Radii, Spacing};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -56,6 +56,35 @@ pub(super) enum ObjectMenuAction {
     OpenPrefix,
     NewFolderInside,
     DeletePrefix,
+    /// Object: the preview header's "Open in system viewer".
+    OpenExternally,
+    // The listing's own buttons, offered after the row's entries and, with
+    // no row selected, as the pane actions.
+    Upload,
+    NewFolderHere,
+    CopyPath,
+    LoadMore,
+    ToggleTreeMode,
+    ViewVersions,
+    LoadPreviewAnyway,
+    DiscardEdits,
+}
+
+impl ObjectMenuAction {
+    /// Whether the action acts on the listing rather than on the menu's row.
+    fn is_listing_action(self) -> bool {
+        matches!(
+            self,
+            ObjectMenuAction::Upload
+                | ObjectMenuAction::NewFolderHere
+                | ObjectMenuAction::CopyPath
+                | ObjectMenuAction::LoadMore
+                | ObjectMenuAction::ToggleTreeMode
+                | ObjectMenuAction::ViewVersions
+                | ObjectMenuAction::LoadPreviewAnyway
+                | ObjectMenuAction::DiscardEdits
+        )
+    }
 }
 
 impl ObjectBrowserDocument {
@@ -99,12 +128,172 @@ impl ObjectBrowserDocument {
                 is_danger: false,
             },
             ObjectMenuItem {
+                label: dbflux_i18n::t!(
+                    "document.object_browser.preview.header.open_in_system_viewer"
+                )
+                .into(),
+                action: ObjectMenuAction::OpenExternally,
+                icon: AppIcon::ExternalLink,
+                is_danger: false,
+            },
+            ObjectMenuItem {
                 label: dbflux_i18n::t!("document.object_browser.context_menu.item.delete").into(),
                 action: ObjectMenuAction::DeleteObject,
                 icon: AppIcon::Delete,
                 is_danger: true,
             },
         ]
+    }
+
+    /// The listing's toolbar, path, load-more and preview buttons that are
+    /// shown now, in the order the menu lists them.
+    pub(super) fn listing_menu_items(&self) -> Vec<ObjectMenuItem> {
+        let item = |label: String, action, icon| ObjectMenuItem {
+            label: label.into(),
+            action,
+            icon,
+            is_danger: false,
+        };
+
+        let mut items = vec![
+            item(
+                dbflux_i18n::t!("document.object_browser.toolbar.upload"),
+                ObjectMenuAction::Upload,
+                AppIcon::ArrowUp,
+            ),
+            item(
+                dbflux_i18n::t!("document.object_browser.toolbar.new_folder"),
+                ObjectMenuAction::NewFolderHere,
+                AppIcon::Folder,
+            ),
+            item(
+                dbflux_i18n::t!("document.object_browser.context_menu.item.copy_path"),
+                ObjectMenuAction::CopyPath,
+                AppIcon::Copy,
+            ),
+        ];
+
+        if self.current_level_has_more() {
+            items.push(item(
+                dbflux_i18n::t!("document.object_browser.context_menu.item.load_more"),
+                ObjectMenuAction::LoadMore,
+                AppIcon::ChevronDown,
+            ));
+        }
+
+        let (mode_label, mode_icon) = if self.tree.is_tree_mode() {
+            (
+                dbflux_i18n::t!("document.object_browser.context_menu.item.show_as_list"),
+                AppIcon::Rows3,
+            )
+        } else {
+            (
+                dbflux_i18n::t!("document.object_browser.context_menu.item.show_as_tree"),
+                AppIcon::Layers,
+            )
+        };
+        items.push(item(
+            mode_label,
+            ObjectMenuAction::ToggleTreeMode,
+            mode_icon,
+        ));
+
+        if self.preview_offers_versions() {
+            items.push(item(
+                dbflux_i18n::t!("document.object_browser.preview.versions.view"),
+                ObjectMenuAction::ViewVersions,
+                AppIcon::History,
+            ));
+        }
+
+        if self.preview_offers_load_anyway() {
+            items.push(item(
+                dbflux_i18n::t!("document.object_browser.preview.body.load_anyway"),
+                ObjectMenuAction::LoadPreviewAnyway,
+                AppIcon::Download,
+            ));
+        }
+
+        if self.editor_is_dirty() {
+            items.push(item(
+                dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
+                ObjectMenuAction::DiscardEdits,
+                AppIcon::RotateCcw,
+            ));
+        }
+
+        items
+    }
+
+    /// Opens the selected row's menu from the keyboard (`m`), under the
+    /// listing's toolbar. Returns false without a selected row.
+    pub(super) fn open_context_menu_at_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(target) = self.tree.selected.clone() else {
+            return false;
+        };
+
+        let position = Point {
+            x: self.panel_origin.x + Spacing::LG,
+            y: self.panel_origin.y + ObjectStoreMetrics::OBJECT_ROW_HEIGHT * 3.0,
+        };
+        self.open_context_menu(target, position, cx);
+        true
+    }
+
+    /// The listing entries as pane actions, for the workspace menu `m` opens
+    /// when no row is selected.
+    pub(crate) fn pane_actions(&self, this: &Entity<Self>) -> Vec<crate::pane::PaneAction> {
+        self.listing_menu_items()
+            .into_iter()
+            .map(|item| {
+                let target = this.downgrade();
+                let action = item.action;
+                let id = listing_action_id(action);
+
+                crate::pane::PaneAction::callback(id, item.label, move |window, cx| {
+                    if let Some(doc) = target.upgrade() {
+                        doc.update(cx, |doc, cx| doc.run_listing_action(action, window, cx));
+                    }
+                })
+                .icon(item.icon)
+            })
+            .collect()
+    }
+
+    /// Runs a listing entry, from the row menu or the pane actions.
+    pub(super) fn run_listing_action(
+        &mut self,
+        action: ObjectMenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            ObjectMenuAction::Upload => self.request_upload(cx),
+            ObjectMenuAction::NewFolderHere => self.request_new_folder(cx),
+            ObjectMenuAction::CopyPath => {
+                let prefix = self.tree.current_prefix.clone();
+                self.copy_object_uri(&prefix, cx);
+            }
+            ObjectMenuAction::LoadMore => {
+                let prefix = self.tree.current_prefix.clone();
+                self.load_more(prefix, cx);
+            }
+            ObjectMenuAction::ToggleTreeMode => self.toggle_tree_mode(cx),
+            ObjectMenuAction::ViewVersions => {
+                if let Some(key) = self.preview_key.clone() {
+                    self.load_object_versions(key, cx);
+                }
+            }
+            ObjectMenuAction::LoadPreviewAnyway => {
+                if let Some(key) = self.preview_key.clone() {
+                    self.load_preview_body_override(key, cx);
+                }
+            }
+            ObjectMenuAction::DiscardEdits => self.discard_object_edits(window, cx),
+            _ => {}
+        }
+
+        cx.notify();
     }
 
     /// Folder entries. The first one mirrors what a click on the row does in
@@ -172,10 +361,11 @@ impl ObjectBrowserDocument {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let items = match &target {
+        let mut items = match &target {
             ObjectTreeNodeId::Object(_) => self.build_object_menu_items(),
             ObjectTreeNodeId::Prefix(prefix) => self.build_prefix_menu_items(prefix),
         };
+        items.extend(self.listing_menu_items());
 
         self.select_node(target.clone(), cx);
         self.focus_mode = ObjectBrowserFocusMode::Listing;
@@ -247,7 +437,15 @@ impl ObjectBrowserDocument {
     ) {
         self.context_menu = None;
 
+        if action.is_listing_action() {
+            self.run_listing_action(action, window, cx);
+            return;
+        }
+
         match (action, target) {
+            (ObjectMenuAction::OpenExternally, ObjectTreeNodeId::Object(key)) => {
+                self.open_object_externally(key, cx)
+            }
             (ObjectMenuAction::Preview, ObjectTreeNodeId::Object(key)) => {
                 self.open_preview(key, cx)
             }
@@ -415,5 +613,20 @@ impl ObjectBrowserDocument {
                 ),
         )
         .with_priority(1)
+    }
+}
+
+/// Stable id of a listing entry in the pane actions menu.
+fn listing_action_id(action: ObjectMenuAction) -> &'static str {
+    match action {
+        ObjectMenuAction::Upload => "object-browser-upload",
+        ObjectMenuAction::NewFolderHere => "object-browser-new-folder",
+        ObjectMenuAction::CopyPath => "object-browser-copy-path",
+        ObjectMenuAction::LoadMore => "object-browser-load-more",
+        ObjectMenuAction::ToggleTreeMode => "object-browser-toggle-tree",
+        ObjectMenuAction::ViewVersions => "object-browser-view-versions",
+        ObjectMenuAction::LoadPreviewAnyway => "object-browser-load-anyway",
+        ObjectMenuAction::DiscardEdits => "object-browser-discard",
+        _ => "object-browser-action",
     }
 }

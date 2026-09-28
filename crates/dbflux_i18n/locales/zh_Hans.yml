@@ -2368,6 +2368,10 @@ document:
         expand: 展开
         open: 打开
         new_folder_inside: 在内部新建文件夹…
+        copy_path: "复制当前路径"
+        load_more: "加载更多"
+        show_as_list: "以列表显示"
+        show_as_tree: "以树形显示"
         delete_folder: 删除文件夹
     create_folder:
       cancel: 取消
@@ -2583,6 +2587,8 @@ document:
       loading: 正在加载对象…
       preparing: 正在准备编辑器…
       size_tooltip: 上次加载或保存时的对象大小
+    pane_actions:
+      reload: "重新加载对象"
   query_builder:
     aggregate:
       fn:
