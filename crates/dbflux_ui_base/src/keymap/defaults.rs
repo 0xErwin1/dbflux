@@ -1214,84 +1214,53 @@ fn schema_viz_layer() -> KeymapLayer {
 /// The tree handles these as its own GPUI actions inside its own key
 /// context, which keeps the precedence it has always had over the window
 /// root. The text inputs nested in it (search box, inline value editor)
-/// keep their typed letters: only Escape and Ctrl+F reach the tree from
-/// them.
+/// keep their typed keys: only Escape and Ctrl+F reach the tree from them.
 fn document_tree_layer() -> KeymapLayer {
+    const OUTSIDE_FIELDS: &str = "DocumentTree && !Input";
+
     let mut layer = KeymapLayer::new(ContextId::DocumentTree);
 
-    // Cursor movement
-    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
-    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
-    layer.bind(
-        KeyChord::new("down", Modifiers::none()),
-        Command::SelectNext,
-    );
-    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    let chord = |key: &str, modifiers: Modifiers| KeySequence::from(KeyChord::new(key, modifiers));
 
-    // Collapse / go to parent, and expand / go to first child.
-    layer.bind(
-        KeyChord::new("left", Modifiers::none()),
-        Command::ColumnLeft,
-    );
-    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
-    layer.bind(
-        KeyChord::new("right", Modifiers::none()),
-        Command::ColumnRight,
-    );
-    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
+    for (keys, command) in [
+        // Cursor movement
+        (chord("up", Modifiers::none()), Command::SelectPrev),
+        (chord("k", Modifiers::none()), Command::SelectPrev),
+        (chord("down", Modifiers::none()), Command::SelectNext),
+        (chord("j", Modifiers::none()), Command::SelectNext),
+        // Collapse / go to parent, and expand / go to first child.
+        (chord("left", Modifiers::none()), Command::ColumnLeft),
+        (chord("h", Modifiers::none()), Command::ColumnLeft),
+        (chord("right", Modifiers::none()), Command::ColumnRight),
+        (chord("l", Modifiers::none()), Command::ColumnRight),
+        (chord("home", Modifiers::none()), Command::SelectFirst),
+        (chord("g", Modifiers::none()), Command::SelectFirst),
+        (chord("end", Modifiers::none()), Command::SelectLast),
+        (chord("g", Modifiers::shift()), Command::SelectLast),
+        (chord("pageup", Modifiers::none()), Command::PageUp),
+        (chord("u", Modifiers::ctrl()), Command::PageUp),
+        (chord("pagedown", Modifiers::none()), Command::PageDown),
+        (chord("d", Modifiers::ctrl()), Command::PageDown),
+        // Node actions
+        (chord("space", Modifiers::none()), Command::ExpandCollapse),
+        (chord("enter", Modifiers::none()), Command::Execute),
+        (chord("f2", Modifiers::none()), Command::Execute),
+        (chord("e", Modifiers::none()), Command::PreviewDocument),
+        (chord("delete", Modifiers::none()), Command::Delete),
+        (sequence("d d"), Command::Delete),
+        (chord("t", Modifiers::none()), Command::CycleDocumentView),
+        (chord("r", Modifiers::none()), Command::ToggleRawView),
+        // Search
+        (chord("/", Modifiers::none()), Command::FocusSearch),
+        (chord("n", Modifiers::none()), Command::NextMatch),
+        (chord("n", Modifiers::shift()), Command::PrevMatch),
+    ] {
+        layer.bind_with_predicate(keys, command, OUTSIDE_FIELDS);
+    }
 
-    layer.bind(
-        KeyChord::new("home", Modifiers::none()),
-        Command::SelectFirst,
-    );
-    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
-    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
-    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
-
-    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
-    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
-    layer.bind(
-        KeyChord::new("pagedown", Modifiers::none()),
-        Command::PageDown,
-    );
-    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
-
-    // Node actions
-    layer.bind(
-        KeyChord::new("space", Modifiers::none()),
-        Command::ExpandCollapse,
-    );
-    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
-    layer.bind(KeyChord::new("f2", Modifiers::none()), Command::Execute);
-    layer.bind(
-        KeyChord::new("e", Modifiers::none()),
-        Command::PreviewDocument,
-    );
-    layer.bind(KeyChord::new("delete", Modifiers::none()), Command::Delete);
-    layer.bind(sequence("d d"), Command::Delete);
-    layer.bind(
-        KeyChord::new("t", Modifiers::none()),
-        Command::CycleDocumentView,
-    );
-    layer.bind(
-        KeyChord::new("r", Modifiers::none()),
-        Command::ToggleRawView,
-    );
-
-    // Search
-    layer.bind_with_predicate(
-        KeyChord::new("f", Modifiers::ctrl()),
-        Command::FocusSearch,
-        "DocumentTree",
-    );
-    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
-    layer.bind(KeyChord::new("n", Modifiers::none()), Command::NextMatch);
-    layer.bind(KeyChord::new("n", Modifiers::shift()), Command::PrevMatch);
-    layer.bind_with_predicate(
-        KeyChord::new("escape", Modifiers::none()),
-        Command::Cancel,
-        "DocumentTree",
-    );
+    // Also from the search field: Ctrl+F reopens it, Escape closes it.
+    layer.bind(KeyChord::new("f", Modifiers::ctrl()), Command::FocusSearch);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     layer
 }

@@ -1513,7 +1513,6 @@ impl ContextId {
             ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
             ContextId::AddPanelPicker => "AddPanelPicker && !Input",
             ContextId::McpApprovals => "McpApprovals && !Input && !Modal",
-            ContextId::DocumentTree => "DocumentTree && !Input",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

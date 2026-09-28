@@ -1752,11 +1752,14 @@ fn overrides_rebind_native_document_tree_keys_live(cx: &mut gpui::TestAppContext
     });
     window.run_until_parked();
 
+    // The tree's letters stay out of its text fields, so the slot carries
+    // that predicate rather than the context's own.
     let slot = BindingSlot::new(
         ContextId::DocumentTree,
         Command::CycleDocumentView,
         KeyChord::new("t", Modifiers::none()),
-    );
+    )
+    .with_predicate("DocumentTree && !Input");
     let rebound = KeyChord::new("t", Modifiers::alt());
 
     let mut overrides = KeymapOverrides::new();
