@@ -36,7 +36,7 @@ use gpui::{
 };
 use gpui_base::input::{EditAnchor, EditAnchorAffinity, InputCursorShape};
 use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Editor, EditorState, Redo, Undo};
+use gpui_component::input::{Editor, EditorState, InputEvent, Redo, Undo};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_CHANGE_GROUP: AtomicU64 = AtomicU64::new(1);
@@ -110,6 +110,7 @@ pub struct VimBinding {
     /// time either starts so idle editors add nothing to every key press.
     keystroke_interceptor: Option<Subscription>,
     _focus_out: Subscription,
+    _input_changes: Subscription,
     _setting: Option<Subscription>,
 }
 
@@ -141,7 +142,8 @@ enum ReplaceOnceText {
 
 impl VimBinding {
     /// A disabled binding for `input`. Leaving the input ends an open change
-    /// group, as leaving Insert mode would.
+    /// group, as leaving Insert mode would, and every edit of the input
+    /// completes a pending `r`.
     pub fn new<H: VimHost>(
         input: Entity<EditorState>,
         window: &mut Window,
@@ -151,6 +153,12 @@ impl VimBinding {
         let focus_out = cx.on_focus_out(&focus_handle, window, |host, _, _, cx| {
             Self::blur(host, cx);
         });
+        let input_changes =
+            cx.subscribe_in(&input, window, |host, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    Self::input_changed(host, window, cx);
+                }
+            });
 
         Self {
             input,
@@ -175,6 +183,7 @@ impl VimBinding {
             visual_cursor: None,
             keystroke_interceptor: None,
             _focus_out: focus_out,
+            _input_changes: input_changes,
             _setting: None,
         }
     }
@@ -340,10 +349,18 @@ impl VimBinding {
     }
 
     /// Hands the keymap's `RunCommand` to Vim first, for hosts without a
-    /// `RunCommand` capture of their own. See [`VimBinding::route_binding`].
+    /// `RunCommand` capture of their own. A binding the user made wins over
+    /// Vim, as in [`VimBinding::route_binding`].
     pub fn capture_run_command<H: VimHost>(element: Div, cx: &mut Context<H>) -> Div {
         element.capture_action(cx.listener(|host, action: &RunCommand, window, cx| {
-            if Self::route_binding(host, action.from_user_binding, window, cx) {
+            if action.from_user_binding {
+                if let Some(binding) = host.vim_mut() {
+                    binding.clear_vim_count_and_notify(cx);
+                }
+                return;
+            }
+
+            if Self::route_bound_key(host, action, window, cx) {
                 cx.stop_propagation();
             }
         }))
@@ -352,11 +369,60 @@ impl VimBinding {
     /// Hands a host action bound to a key (a modal's Cancel or Execute, a
     /// scroll binding) to Vim first, so Vim sees keys the host binds too.
     pub fn capture_action<A: Action, H: VimHost>(element: Div, cx: &mut Context<H>) -> Div {
-        element.capture_action(cx.listener(|host, _: &A, window, cx| {
-            if Self::route_binding(host, false, window, cx) {
+        element.capture_action(cx.listener(|host, action: &A, window, cx| {
+            if Self::route_bound_key(host, action, window, cx) {
                 cx.stop_propagation();
             }
         }))
+    }
+
+    /// Replays the last key to Vim when `action` runs because that key is
+    /// bound to it here, and not because something dispatched it directly.
+    /// Returns true when Vim consumed the key.
+    fn route_bound_key<H: VimHost>(
+        host: &mut H,
+        action: &dyn Action,
+        window: &mut Window,
+        cx: &mut Context<H>,
+    ) -> bool {
+        let Some(keystroke) = last_keystroke(cx) else {
+            return false;
+        };
+
+        // Every binding of the action, shadowed ones included: the action
+        // usually runs because a deeper binding for the same key (the
+        // editor's own Escape or Enter) let the key through.
+        let bound = cx
+            .key_bindings()
+            .borrow()
+            .bindings_for_action(action)
+            .any(|binding| {
+                binding
+                    .keystrokes()
+                    .last()
+                    .is_some_and(|target| keystroke.should_match(target))
+            });
+
+        if !bound {
+            return false;
+        }
+
+        let consumed = Self::key_down(
+            host,
+            &KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            },
+            window,
+            cx,
+        );
+
+        if !consumed && let Some(binding) = host.vim_mut() {
+            binding.clear_vim_count_and_notify(cx);
+        }
+
+        consumed
     }
 
     /// A keymap binding runs before key listeners, so the key it matched is
@@ -433,8 +499,9 @@ impl VimBinding {
             .is_some_and(|binding| binding.handle_vim_history_action(step, window, cx))
     }
 
-    /// Call on the input's `InputEvent::Change`: completes an `r` whose
-    /// character arrived as typed or composed text.
+    /// Completes an `r` whose character arrived as typed or composed text.
+    /// The binding calls it on the input's `InputEvent::Change`; a host may
+    /// call it earlier in its own Change handler, the second call is a no-op.
     pub fn input_changed<H: VimHost>(host: &mut H, window: &mut Window, cx: &mut Context<H>) {
         Self::refresh_host(host, cx);
         if let Some(binding) = host.vim_mut() {

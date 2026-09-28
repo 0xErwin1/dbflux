@@ -264,12 +264,10 @@ impl ObjectBrowserDocument {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |this, input, event: &InputEvent, window, cx| {
+            |this, input, event: &InputEvent, _window, cx| {
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
-
-                VimBinding::input_changed(this, window, cx);
 
                 let value = input.read(cx).value().to_string();
 

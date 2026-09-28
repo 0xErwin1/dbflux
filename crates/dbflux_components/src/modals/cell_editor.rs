@@ -2,6 +2,7 @@ use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
+use crate::vim::{VimBinding, VimHost};
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -32,6 +33,7 @@ pub struct CellEditorModal {
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    vim: VimBinding,
     /// Re-renders on every edit so the JSON status line follows the text.
     _input_observation: Subscription,
 }
@@ -45,8 +47,9 @@ impl CellEditorModal {
                 .line_number(true)
         });
         let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
+        let vim = VimBinding::new(input.clone(), window, cx);
 
-        Self {
+        let mut modal = Self {
             visible: false,
             row: 0,
             col: 0,
@@ -55,8 +58,12 @@ impl CellEditorModal {
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            vim,
             _input_observation: input_observation,
-        }
+        };
+
+        VimBinding::follow_setting(&mut modal, cx);
+        modal
     }
 
     pub fn is_visible(&self) -> bool {
@@ -150,8 +157,27 @@ impl CellEditorModal {
     }
 }
 
+impl VimHost for CellEditorModal {
+    fn vim(&self) -> Option<&VimBinding> {
+        Some(&self.vim)
+    }
+
+    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
+        Some(&mut self.vim)
+    }
+}
+
 impl EventEmitter<CellEditorSaveEvent> for CellEditorModal {}
 impl EventEmitter<CellEditorClosedEvent> for CellEditorModal {}
+
+/// Vim's listeners on the editor's container. In Insert mode the modal's
+/// Escape (`Cancel`) leaves Insert mode instead of closing, and in Normal
+/// mode Enter (`Execute`) moves down instead of reaching the modal.
+fn vim_wrapper(element: Div, cx: &mut Context<CellEditorModal>) -> Div {
+    let element = VimBinding::wire(element, cx);
+    let element = VimBinding::capture_action::<crate::actions::Cancel, _>(element, cx);
+    VimBinding::capture_action::<crate::actions::Execute, _>(element, cx)
+}
 
 impl Render for CellEditorModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -173,6 +199,8 @@ impl Render for CellEditorModal {
             cx.listener(|this, _, _, cx| this.close(cx)),
         )
         .validation_error(self.validation_error.clone())
+        .readonly(self.vim.locked(false))
+        .below_editor(self.vim.render_indicator(cx))
         .min_editor_height(px(300.0));
 
         if is_json {
@@ -200,15 +228,18 @@ impl Render for CellEditorModal {
             .icon(AppIcon::Pencil)
             .width(CELL_EDITOR_WIDTH)
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
-                        this.save(window, cx);
-                    }))
-                    .child(editor.render(cx)),
+                vim_wrapper(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                            this.save(window, cx);
+                        })),
+                    cx,
+                )
+                .child(editor.render(cx)),
             )
             .into_any_element()
     }
@@ -374,6 +405,88 @@ mod keyboard_tests {
         window.run_until_parked();
 
         assert_eq!(saved.borrow().as_deref(), Some("typed"));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// Opens the cell editor with the app's modal bindings for Escape and
+    /// Enter, Vim mode set to `vim`, and the keyboard in the editor.
+    fn open_with_vim<'a>(
+        cx: &'a mut TestAppContext,
+        vim: bool,
+        value: &str,
+    ) -> (Entity<CellEditorModal>, &'a mut gpui::VisualTestContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, vim);
+            let context = dbflux_core::keymap_types::ContextId::CellEditorModal.as_gpui_context();
+            cx.bind_keys([
+                gpui::KeyBinding::new("escape", crate::actions::Cancel, Some(context)),
+                gpui::KeyBinding::new("enter", crate::actions::Execute, Some("Modal")),
+            ]);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| CellEditorModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+        let value = value.to_string();
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, 0, value, false, None, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window)
+    }
+
+    fn text_and_cursor(
+        modal: &Entity<CellEditorModal>,
+        window: &mut gpui::VisualTestContext,
+    ) -> (String, usize) {
+        window.update(|_, cx| {
+            let state = modal.read(cx).input.read(cx);
+            (state.value().to_string(), state.cursor())
+        })
+    }
+
+    /// With Vim mode on, the first Escape leaves Insert mode and keeps the
+    /// editor open, the second closes it; Enter in Normal mode moves down.
+    #[gpui::test]
+    fn vim_mode_edits_the_cell_and_escape_steps_out(cx: &mut TestAppContext) {
+        let (modal, window) = open_with_vim(cx, true, "ab\ncd");
+
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&modal, window), ("ab\ncd".into(), 3));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&modal, window).0, "ab\nXcd");
+        assert!(
+            window.update(|_, cx| modal.read(cx).is_visible()),
+            "the first Escape only leaves Insert mode"
+        );
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// With Vim mode off, keys type and one Escape closes, as before.
+    #[gpui::test]
+    fn without_vim_mode_escape_closes_at_once(cx: &mut TestAppContext) {
+        let (modal, window) = open_with_vim(cx, false, "ab");
+
+        window.simulate_input("j");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(text_and_cursor(&modal, window).0, "jab");
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

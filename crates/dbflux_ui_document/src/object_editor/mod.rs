@@ -432,7 +432,7 @@ impl ObjectEditorDocument {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |this, input, event: &InputEvent, window, cx| {
+            |this, input, event: &InputEvent, _window, cx| {
                 // A click into the buffer takes the keyboard back.
                 if matches!(event, InputEvent::Focus) && !this.buffer_has_keyboard {
                     this.buffer_has_keyboard = true;
@@ -443,8 +443,6 @@ impl ObjectEditorDocument {
                 if !matches!(event, InputEvent::Change) {
                     return;
                 }
-
-                VimBinding::input_changed(this, window, cx);
 
                 let value = input.read(cx).value().to_string();
 

@@ -2,6 +2,7 @@ use crate::actions::SaveEdit;
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::icons::AppIcon;
 use crate::modals::Modal;
+use crate::vim::{VimBinding, VimHost};
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -29,6 +30,7 @@ pub struct DocumentPreviewModal {
     input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
+    vim: VimBinding,
     /// Re-renders on every edit so the JSON status line follows the text.
     _input_observation: Subscription,
 }
@@ -42,15 +44,20 @@ impl DocumentPreviewModal {
                 .line_number(true)
         });
         let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
+        let vim = VimBinding::new(input.clone(), window, cx);
 
-        Self {
+        let mut modal = Self {
             visible: false,
             doc_index: 0,
             input,
             focus_handle: cx.focus_handle(),
             validation_error: None,
+            vim,
             _input_observation: input_observation,
-        }
+        };
+
+        VimBinding::follow_setting(&mut modal, cx);
+        modal
     }
 
     pub fn is_visible(&self) -> bool {
@@ -128,8 +135,27 @@ impl DocumentPreviewModal {
     }
 }
 
+impl VimHost for DocumentPreviewModal {
+    fn vim(&self) -> Option<&VimBinding> {
+        Some(&self.vim)
+    }
+
+    fn vim_mut(&mut self) -> Option<&mut VimBinding> {
+        Some(&mut self.vim)
+    }
+}
+
 impl EventEmitter<DocumentPreviewSaveEvent> for DocumentPreviewModal {}
 impl EventEmitter<DocumentPreviewClosedEvent> for DocumentPreviewModal {}
+
+/// Vim's listeners on the editor's container. In Insert mode the modal's
+/// Escape (`Cancel`) leaves Insert mode instead of closing, and in Normal
+/// mode Enter (`Execute`) moves down instead of reaching the modal.
+fn vim_wrapper(element: Div, cx: &mut Context<DocumentPreviewModal>) -> Div {
+    let element = VimBinding::wire(element, cx);
+    let element = VimBinding::capture_action::<crate::actions::Cancel, _>(element, cx);
+    VimBinding::capture_action::<crate::actions::Execute, _>(element, cx)
+}
 
 impl Render for DocumentPreviewModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -150,6 +176,8 @@ impl Render for DocumentPreviewModal {
             cx.listener(|this, _, _, cx| this.close(cx)),
         )
         .validation_error(self.validation_error.clone())
+        .readonly(self.vim.locked(false))
+        .below_editor(self.vim.render_indicator(cx))
         .min_editor_height(px(400.0))
         .show_format_buttons(
             cx.listener(|this, _, window, cx| this.format(window, cx)),
@@ -167,15 +195,18 @@ impl Render for DocumentPreviewModal {
             .top_offset(px(60.0))
             .block_scroll()
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
-                        this.save(window, cx);
-                    }))
-                    .child(editor.render(cx)),
+                vim_wrapper(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .on_action(cx.listener(|this, _: &SaveEdit, window, cx| {
+                            this.save(window, cx);
+                        })),
+                    cx,
+                )
+                .child(editor.render(cx)),
             )
             .into_any_element()
     }
@@ -263,5 +294,49 @@ mod keyboard_tests {
             !window.update(|_, cx| modal.read(cx).is_visible()),
             "Escape closes the preview while its buffer has focus"
         );
+    }
+
+    /// With Vim mode on, the first Escape leaves Insert mode and keeps the
+    /// document open; the second closes it.
+    #[gpui::test]
+    fn vim_mode_escape_leaves_insert_before_closing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::actions::record_last_keystroke(cx);
+            crate::vim::set_vim_enabled(cx, true);
+            let context =
+                dbflux_core::keymap_types::ContextId::DocumentPreviewModal.as_gpui_context();
+            cx.bind_keys([gpui::KeyBinding::new(
+                "escape",
+                crate::actions::Cancel,
+                Some(context),
+            )]);
+        });
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| DocumentPreviewModal::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(0, "{}".to_string(), window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("a");
+        window.simulate_input("1");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).input.read(cx).value().to_string()),
+            "{1}"
+        );
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }
