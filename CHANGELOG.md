@@ -20,6 +20,7 @@ All notable changes to DBFlux will be documented in this file.
 * **MongoDB extended JSON dates** — `{"$date": "<RFC 3339>"}` in the query bar, in aggregation pipelines and in document edits is now stored as a date. An invalid date string there now fails with an error instead of being saved as a nested object.
 * **Global shortcuts while typing** — Shortcuts that hold Ctrl or Cmd, such as Ctrl+Tab, Ctrl+1 to Ctrl+9, Ctrl+W and Ctrl+Shift+P, now work while a text field outside a dialog has focus, such as the sidebar search or the execution context bar. Letters, Tab, Escape, Enter and the arrows stay with the field, and dialogs, menus, dropdowns and pickers keep the shortcuts out until they close.
 * **Tab in the code editor** — In Vim Normal and Visual modes, Tab and Shift+Tab now move focus to the next or previous pane instead of doing nothing. Insert mode and editors without Vim keep Tab for indentation.
+* **Buttons activate on release** — Buttons, menu rows, list rows and links that acted as soon as the mouse button went down, such as chart axis pickers, dropdown items, the window controls, key-value rows and the tab close button, now act when the button is released and are exposed to assistive technology as clickable. Drag handles, resize grips and dismissing a menu by pressing outside it still act on press.
 
 ### Fixed
 
