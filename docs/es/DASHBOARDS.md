@@ -286,8 +286,8 @@ Algunos inspectors ofrecen acciones por fila (por ejemplo **Kill connection** /
   toast con un enlace a la fila de audit correspondiente.
 
 Las filas del inspector pueden exponer acciones de fila suministradas por el
-driver (menú contextual de clic derecho), por ejemplo *Kill connection* /
-*Terminate session*. El flujo:
+driver (menú contextual de clic derecho, o `m` sobre la fila elegida), por
+ejemplo *Kill connection* / *Terminate session*. El flujo:
 
 1. El driver devuelve `InspectorRowAction`s desde
    `InstanceCatalog::row_actions(metric_id)`. La disponibilidad está

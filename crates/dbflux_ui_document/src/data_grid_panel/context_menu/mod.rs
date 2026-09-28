@@ -251,7 +251,7 @@ impl DataGridPanel {
             is_column_header: false,
             doc_field_path: None,
             doc_field_value: None,
-            row_actions: Vec::new(),
+            row_actions: self.menu_row_actions(),
         });
 
         // Focus the context menu to receive keyboard events

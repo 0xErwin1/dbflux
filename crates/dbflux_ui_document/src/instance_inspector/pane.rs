@@ -12,7 +12,7 @@ impl InspectorPanel {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::Chart,
             // render
@@ -64,7 +64,7 @@ impl InspectorPanel {
             // active_context
             {
                 let e = entity.clone();
-                Box::new(move |cx| e.read(cx).active_context())
+                Box::new(move |cx| e.read(cx).active_context(cx))
             },
             // change_summary
             Box::new(|_cx| None),
@@ -109,6 +109,13 @@ impl InspectorPanel {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions())
+        });
+
+        pane
     }
 }

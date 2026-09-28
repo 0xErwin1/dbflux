@@ -265,7 +265,8 @@ Some inspectors offer per-row actions (for example **Kill connection** /
   with a link to the matching audit row.
 
 Inspector rows can expose driver-supplied row actions (right-click context
-menu), e.g. *Kill connection* / *Terminate session*. The flow:
+menu, or `m` on the selected row), e.g. *Kill connection* / *Terminate session*.
+The flow:
 
 1. The driver returns `InspectorRowAction`s from `InstanceCatalog::row_actions(metric_id)`. Availability is gated by per-driver privilege probes (see the driver READMEs), so an under-privileged session never sees an action it cannot run.
 2. `is_destructive` actions prompt a confirmation modal before execution.

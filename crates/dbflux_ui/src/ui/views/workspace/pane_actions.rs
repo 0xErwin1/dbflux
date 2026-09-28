@@ -425,7 +425,7 @@ mod tests {
     // recursion.
     use super::{PaneActionsMenu, PaneActionsOwner};
     use crate::keymap::{Command, CommandDispatcher as _, ContextId, FocusTarget};
-    use crate::ui::document::{ChartDocument, CodeDocument, Tab};
+    use crate::ui::document::{ChartDocument, CodeDocument, InspectorPanel, Tab};
     use crate::ui::views::tasks_panel::TasksPanel;
     use crate::ui::views::workspace::Workspace;
     use dbflux_components::chart::ChartKind;
@@ -723,6 +723,43 @@ mod tests {
         ] {
             assert!(ids.iter().any(|entry| entry == id), "{id} in {ids:?}");
         }
+    }
+
+    /// An instance inspector tab takes the refresh (X6): F5 fetches a fresh
+    /// snapshot instead of reloading the connection's schema.
+    #[gpui::test]
+    fn refresh_reaches_the_instance_inspector(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        let inspector = window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let inspector = cx.new(|cx| {
+                    InspectorPanel::new(uuid::Uuid::new_v4(), "sessions".to_string(), app_state, cx)
+                });
+                let pane = InspectorPanel::into_pane(inspector.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                inspector
+            })
+        });
+        window.run_until_parked();
+
+        let handled = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::RefreshSchema, window, cx)
+            })
+        });
+
+        assert!(handled);
+        assert_eq!(
+            window.update(|_, cx| inspector.read(cx).state()),
+            dbflux_ui_document::DocumentState::Error,
+            "the inspector ran its fetch and found no connection"
+        );
     }
 
     /// A running query, an export that finished with output and a failed

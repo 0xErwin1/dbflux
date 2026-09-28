@@ -308,6 +308,10 @@ A read-only delete does not change the clipboard.
 | `z` | Maximize the results of a query document over the editor, or restore the split |
 | `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
 
+An instance inspector tab takes these keys too: `m` opens the context menu of
+the selected row with the driver's row actions (for example Kill session),
+`Enter` or `Escape` answer the confirmation, and `F5` fetches a fresh snapshot.
+
 ## Schema diagram
 
 | Keys | Action |

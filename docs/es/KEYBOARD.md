@@ -324,6 +324,11 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
 
+Una pestaña de inspector de instancia también toma estas teclas: `m` abre el
+menú contextual de la fila elegida con las acciones de fila del driver (por
+ejemplo Kill session), `Enter` o `Escape` responden la confirmación y `F5` pide
+una instantánea nueva.
+
 ## Diagrama de esquema
 
 | Teclas                                      | Acción                                                      |

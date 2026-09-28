@@ -1610,6 +1610,19 @@ impl DataGridPanel {
         }
     }
 
+    /// The driver-supplied row actions (e.g. Kill, Cancel) a row's context
+    /// menu lists at its end, whether the menu opened on a right click or
+    /// from the keyboard.
+    pub(super) fn menu_row_actions(&self) -> Vec<dbflux_core::InspectorRowAction> {
+        match self.inspector.row_action_provider.as_ref() {
+            Some(provider) => {
+                let metric_id = self.row_action_metric_id();
+                provider(metric_id.as_deref().unwrap_or(""))
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Collects all cell values for `visual_row` from the current result.
     ///
     /// Returns an empty `Vec` when the row index is out of bounds or no
@@ -3039,11 +3052,8 @@ impl DataGridPanel {
                         // than bypassing the context menu entirely.
                         let row_actions = if *is_column_header {
                             Vec::new()
-                        } else if let Some(provider) = this.inspector.row_action_provider.as_ref() {
-                            let metric_id = this.row_action_metric_id();
-                            provider(metric_id.as_deref().unwrap_or(""))
                         } else {
-                            Vec::new()
+                            this.menu_row_actions()
                         };
 
                         this.context_menu = Some(TableContextMenu {
