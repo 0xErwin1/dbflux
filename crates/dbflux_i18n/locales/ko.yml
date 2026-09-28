@@ -3558,6 +3558,10 @@ settings:
       open_audit_viewer: 감사 뷰어 열기
       open_last_error_in_audit: "감사에서 마지막 오류 열기"
       toggle_notifications: "알림 전환"
+      mark_notification_read: "알림 읽음으로 표시"
+      mark_all_notifications_read: "모든 알림 읽음으로 표시"
+      clear_read_notifications: "읽은 알림 지우기"
+      install_update: "업데이트 설치"
       show_connections_view: "연결 보기 표시"
       show_scripts_view: "스크립트 보기 표시"
       show_dashboards_view: "대시보드 보기 표시"
@@ -3634,6 +3638,7 @@ settings:
       key_value: 키-값 브라우저
       settings: 설정 창
       inspector: 인스펙터
+      notifications: 알림
     category:
       global: 전역
       focus: 포커스
@@ -4725,7 +4730,7 @@ notifications:
     updates: 업데이트
     earlier: 이전
   footer:
-    hint: 행을 클릭하면 열립니다
+    hint: 행을 클릭하거나 Enter 키를 누르면 열립니다
     clear_read: 읽은 항목 지우기
   empty:
     title: 모두 확인했습니다

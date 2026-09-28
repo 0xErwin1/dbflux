@@ -29,6 +29,12 @@ impl CommandDispatcher for Workspace {
             return true;
         }
 
+        // The open notifications popover owns the keyboard (its context has
+        // no parent), so its commands never reach the panels behind it.
+        if let Some(result) = self.dispatch_notifications(cmd, window, cx) {
+            return result;
+        }
+
         // A visible workspace confirmation captures the keyboard
         // (ContextId::ConfirmModal resolves only Enter/Escape), so it is
         // resolved before every other dispatch domain, including the sidebar

@@ -3558,6 +3558,10 @@ settings:
       open_audit_viewer: Abrir visor de auditoría
       open_last_error_in_audit: "Abrir el último error en auditoría"
       toggle_notifications: "Mostrar u ocultar notificaciones"
+      mark_notification_read: "Marcar notificación como leída"
+      mark_all_notifications_read: "Marcar todas las notificaciones como leídas"
+      clear_read_notifications: "Borrar notificaciones leídas"
+      install_update: "Instalar actualización"
       show_connections_view: "Mostrar la vista de conexiones"
       show_scripts_view: "Mostrar la vista de scripts"
       show_dashboards_view: "Mostrar la vista de dashboards"
@@ -3635,6 +3639,7 @@ settings:
       key_value: Explorador clave-valor
       settings: Ventana de configuración
       inspector: Inspector
+      notifications: Notificaciones
     category:
       global: Global
       focus: Foco
@@ -4726,7 +4731,7 @@ notifications:
     updates: Actualizaciones
     earlier: Anteriores
   footer:
-    hint: Haz clic en una fila para abrirla
+    hint: Haz clic en una fila o pulsa Enter para abrirla
     clear_read: Borrar leídas
   empty:
     title: Estás al día

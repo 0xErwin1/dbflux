@@ -35,6 +35,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(key_value_layer());
     stack.add_layer(settings_layer());
     stack.add_layer(inspector_layer());
+    stack.add_layer(notifications_layer());
 
     stack
 });
@@ -717,6 +718,59 @@ fn background_tasks_layer() -> KeymapLayer {
 
     // Toggle panel collapse
     layer.bind(KeyChord::new("z", Modifiers::none()), Command::TogglePanel);
+
+    layer
+}
+
+/// The open notifications popover. Its context has no parent, so the
+/// panels behind it see none of these keys; the bell shortcut is bound here
+/// again so it closes the popover it opened.
+fn notifications_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::Notifications);
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(
+        KeyChord::new("r", Modifiers::none()),
+        Command::MarkNotificationRead,
+    );
+    layer.bind(KeyChord::new("x", Modifiers::none()), Command::Delete);
+    layer.bind(
+        KeyChord::new("i", Modifiers::none()),
+        Command::InstallUpdate,
+    );
+    layer.bind(
+        KeyChord::new("r", Modifiers::shift()),
+        Command::MarkAllNotificationsRead,
+    );
+    layer.bind(
+        KeyChord::new("x", Modifiers::shift()),
+        Command::ClearReadNotifications,
+    );
+
+    // The filter chips, with the Alt+H / Alt+L pair of in-pane tab strips.
+    layer.bind(KeyChord::new("l", Modifiers::alt()), Command::NextPanelTab);
+    layer.bind(KeyChord::new("h", Modifiers::alt()), Command::PrevPanelTab);
+
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+    layer.bind(
+        KeyChord::new("b", Modifiers::primary_shift()),
+        Command::ToggleNotifications,
+    );
 
     layer
 }

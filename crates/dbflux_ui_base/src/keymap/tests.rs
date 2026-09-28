@@ -770,7 +770,9 @@ fn workspace_commands_have_global_chords() {
 }
 
 /// The new global chords take no key another layer already binds, so no
-/// panel shadows them and they shadow no panel.
+/// panel shadows them and they shadow no panel. A layer without the global
+/// parent may bind the chord to the same command (the notifications popover
+/// closes with the shortcut that opened it).
 #[test]
 fn workspace_command_chords_are_bound_nowhere_else() {
     let keymap = default_keymap();
@@ -785,7 +787,7 @@ fn workspace_command_chords_are_bound_nowhere_else() {
 
             if let Some(bound) = layer.get_sequence(&keys) {
                 assert!(
-                    *context == ContextId::Global && bound == command,
+                    bound == command,
                     "{chord} is also bound to {bound:?} in {context:?}"
                 );
             }

@@ -3558,6 +3558,10 @@ settings:
       open_audit_viewer: Open audit viewer
       open_last_error_in_audit: "Open last error in audit"
       toggle_notifications: "Toggle notifications"
+      mark_notification_read: "Mark notification read"
+      mark_all_notifications_read: "Mark all notifications read"
+      clear_read_notifications: "Clear read notifications"
+      install_update: "Install update"
       show_connections_view: "Show connections view"
       show_scripts_view: "Show scripts view"
       show_dashboards_view: "Show dashboards view"
@@ -3635,6 +3639,7 @@ settings:
       key_value: Key-Value Browser
       settings: Settings Window
       inspector: Inspector
+      notifications: Notifications
     category:
       global: Global
       focus: Focus
@@ -4726,7 +4731,7 @@ notifications:
     updates: Updates
     earlier: Earlier
   footer:
-    hint: Click a row to open it
+    hint: Click a row or press Enter to open it
     clear_read: Clear read
   empty:
     title: You are up to date

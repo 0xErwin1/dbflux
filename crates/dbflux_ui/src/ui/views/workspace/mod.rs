@@ -2046,6 +2046,12 @@ impl Workspace {
             return Some(ContextId::ConfirmModal);
         }
 
+        // The popover floats over every other layer and holds focus while
+        // it is open.
+        if self.notifications.is_open() {
+            return Some(ContextId::Notifications);
+        }
+
         if self.command_palette.read(cx).is_visible() {
             return Some(ContextId::CommandPalette);
         }

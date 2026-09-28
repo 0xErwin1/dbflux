@@ -354,7 +354,18 @@ session. Updates show here instead of in the status bar.
 | Keys | Action |
 |------|--------|
 | `Ctrl+Shift+B` / `Cmd+Shift+B` | Open or close the popover from anywhere in the workspace |
+| `j` / `k` (or `Down` / `Up`) | Select the next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last row |
+| `Enter` | Open the selected row's target, as a click on the row does |
+| `r` | Mark the selected row read |
+| `x` | Dismiss the selected row, as **Later** does for the update |
+| `i` | Install the listed update (builds installed from the direct download) |
+| `Alt+l` / `Alt+h` | Show the next / previous filter |
+| `Shift+r` | Mark all read |
+| `Shift+x` | Clear read |
 | `Escape` | Close the popover (a click outside it does the same) |
+
+While the popover is open it keeps the keyboard: the panels behind it see none of these keys. The selected row is drawn on a tint. Dismissing removes an error or a finished job, and hides an approval or the update until the session ends. The keys are listed under the Notifications context in Settings > Keybindings.
 
 ## Command palette
 

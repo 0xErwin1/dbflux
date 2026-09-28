@@ -1708,6 +1708,8 @@ impl NotificationMetrics {
     pub const ACTIONS_GAP: Pixels = px(6.0);
     pub const ACTIONS_MARGIN_TOP: Pixels = px(4.0);
     pub const READ_OPACITY: f32 = 0.72;
+    /// The row the keyboard points at: a 10% tint wash.
+    pub const SELECTED_ALPHA: f32 = 0.10;
 
     /// Footer: 40 px, 14 px side padding, 12 px text.
     pub const FOOTER_HEIGHT: Pixels = px(40.0);

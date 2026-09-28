@@ -132,6 +132,14 @@ pub enum Command {
     OpenLastErrorInAudit,
     /// Open or close the title-bar notifications popover.
     ToggleNotifications,
+    /// Marks the notification selected in the notifications center read.
+    MarkNotificationRead,
+    /// Marks every listed notification read.
+    MarkAllNotificationsRead,
+    /// Removes the read notifications, like Clear read in the notifications center.
+    ClearReadNotifications,
+    /// Downloads the update the notifications center lists, like its Install button.
+    InstallUpdate,
     /// Show the Connections view of the sidebar, as its activity rail entry does.
     ShowConnectionsView,
     /// Show the Scripts view of the sidebar, as its activity rail entry does.
@@ -355,6 +363,10 @@ impl Command {
             Command::OpenAuditViewer => "Open audit viewer",
             Command::OpenLastErrorInAudit => "Open last error in audit",
             Command::ToggleNotifications => "Toggle notifications",
+            Command::MarkNotificationRead => "Mark notification read",
+            Command::MarkAllNotificationsRead => "Mark all notifications read",
+            Command::ClearReadNotifications => "Clear read notifications",
+            Command::InstallUpdate => "Install update",
             Command::ShowConnectionsView => "Show connections view",
             Command::ShowScriptsView => "Show scripts view",
             Command::ShowDashboardsView => "Show dashboards view",
@@ -519,6 +531,10 @@ impl Command {
             Command::OpenAuditViewer => "open_audit_viewer",
             Command::OpenLastErrorInAudit => "open_last_error_in_audit",
             Command::ToggleNotifications => "toggle_notifications",
+            Command::MarkNotificationRead => "mark_notification_read",
+            Command::MarkAllNotificationsRead => "mark_all_notifications_read",
+            Command::ClearReadNotifications => "clear_read_notifications",
+            Command::InstallUpdate => "install_update",
             Command::ShowConnectionsView => "show_connections_view",
             Command::ShowScriptsView => "show_scripts_view",
             Command::ShowDashboardsView => "show_dashboards_view",
@@ -698,6 +714,10 @@ impl Command {
             Command::OpenAuditViewer,
             Command::OpenLastErrorInAudit,
             Command::ToggleNotifications,
+            Command::MarkNotificationRead,
+            Command::MarkAllNotificationsRead,
+            Command::ClearReadNotifications,
+            Command::InstallUpdate,
             Command::ShowConnectionsView,
             Command::ShowScriptsView,
             Command::ShowDashboardsView,
@@ -858,6 +878,10 @@ impl Command {
             | Command::OpenAuditViewer
             | Command::OpenLastErrorInAudit
             | Command::ToggleNotifications
+            | Command::MarkNotificationRead
+            | Command::MarkAllNotificationsRead
+            | Command::ClearReadNotifications
+            | Command::InstallUpdate
             | Command::ShowConnectionsView
             | Command::ShowScriptsView
             | Command::ShowDashboardsView => "View",
@@ -1059,6 +1083,9 @@ pub enum ContextId {
     /// A side panel beside a document that keyboard focus moved into: the
     /// value panel, row inspector, document panel or query builder rail.
     Inspector,
+
+    /// The notifications center popover under the title-bar bell.
+    Notifications,
 }
 
 impl ContextId {
@@ -1095,6 +1122,7 @@ impl ContextId {
             ContextId::KeyValue => None,
             ContextId::Settings => None,
             ContextId::Inspector => Some(ContextId::Global),
+            ContextId::Notifications => None,
         }
     }
 
@@ -1178,6 +1206,7 @@ impl ContextId {
             ContextId::KeyValue => "Key-Value Browser",
             ContextId::Settings => "Settings Window",
             ContextId::Inspector => "Inspector",
+            ContextId::Notifications => "Notifications",
         }
     }
 
@@ -1211,6 +1240,7 @@ impl ContextId {
             ContextId::KeyValue => "key_value",
             ContextId::Settings => "settings",
             ContextId::Inspector => "inspector",
+            ContextId::Notifications => "notifications",
         }
     }
 
@@ -1244,6 +1274,7 @@ impl ContextId {
             ContextId::KeyValue,
             ContextId::Settings,
             ContextId::Inspector,
+            ContextId::Notifications,
         ]
     }
 
@@ -1277,6 +1308,7 @@ impl ContextId {
             ContextId::KeyValue => "KeyValueView",
             ContextId::Settings => "Settings",
             ContextId::Inspector => "Inspector",
+            ContextId::Notifications => "Notifications",
         }
     }
 

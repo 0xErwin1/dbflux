@@ -373,7 +373,18 @@ actualizaciones aparecen aquí en lugar de en la barra de estado.
 | Teclas                         | Acción                                                         |
 | ------------------------------ | -------------------------------------------------------------- |
 | `Ctrl+Shift+B` / `Cmd+Shift+B` | Abrir o cerrar el popover desde cualquier parte del workspace  |
+| `j` / `k` (o `Down` / `Up`)    | Seleccionar la fila siguiente / anterior                       |
+| `g` / `Shift+g` (o `Home` / `End`) | Seleccionar la primera / última fila                       |
+| `Enter`                        | Abrir el destino de la fila seleccionada, como un clic en ella |
+| `r`                            | Marcar como leída la fila seleccionada                         |
+| `x`                            | Descartar la fila seleccionada, como **Más tarde** en la actualización |
+| `i`                            | Instalar la actualización listada (builds instalados desde la descarga directa) |
+| `Alt+l` / `Alt+h`              | Mostrar el filtro siguiente / anterior                         |
+| `Shift+r`                      | Marcar todo como leído                                         |
+| `Shift+x`                      | Borrar leídas                                                  |
 | `Escape`                       | Cerrar el popover (un clic fuera de él hace lo mismo)          |
+
+Mientras el popover está abierto se queda con el teclado: los paneles de atrás no reciben estas teclas. La fila seleccionada se dibuja sobre un tinte. Descartar quita un error o un trabajo terminado, y oculta una aprobación o la actualización hasta que termina la sesión. Las teclas aparecen en el contexto Notificaciones de Configuración > Atajos de teclado.
 
 ## Command palette
 

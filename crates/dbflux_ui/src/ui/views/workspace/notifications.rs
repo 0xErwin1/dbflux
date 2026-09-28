@@ -36,6 +36,12 @@ pub(super) const NOTIFICATIONS_LAYER_PRIORITY: usize = 3;
 pub(super) struct NotificationsPopoverState {
     open: bool,
     filter: NotificationFilter,
+    /// The row the keyboard points at. `None` until the keyboard moves,
+    /// which points at the first row.
+    selected: Option<NotificationKey>,
+    /// Position of the selected row when it was chosen: the selection lands
+    /// on the row now there once that notification leaves the list.
+    selected_index: usize,
     focus_handle: FocusHandle,
     /// Window bounds of the bell, recorded while painting the title bar, so
     /// the popover lines up under it.
@@ -47,14 +53,21 @@ impl NotificationsPopoverState {
         Self {
             open: false,
             filter: NotificationFilter::All,
+            selected: None,
+            selected_index: 0,
             focus_handle: cx.focus_handle(),
             anchor: Rc::default(),
         }
     }
 
-    #[cfg(test)]
     pub(super) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Points the keyboard at the first row of a fresh list.
+    fn reset_selection(&mut self) {
+        self.selected = None;
+        self.selected_index = 0;
     }
 }
 
@@ -266,6 +279,7 @@ impl Workspace {
 
         self.notifications.open = true;
         self.notifications.filter = NotificationFilter::All;
+        self.notifications.reset_selection();
         self.notifications.focus_handle.focus(window, cx);
         cx.notify();
     }
@@ -386,6 +400,220 @@ impl Workspace {
         self.app_state
             .update(cx, |state, _| state.notifications.clear_read(&sources));
         cx.notify();
+    }
+
+    /// Whether the row of `key` can be drawn: its approval is still pending,
+    /// its error or task is still recorded, its update is still offered.
+    fn notification_row_available(
+        &self,
+        key: &NotificationKey,
+        pending_approval_ids: &[String],
+        cx: &App,
+    ) -> bool {
+        let state = self.app_state.read(cx);
+
+        match key {
+            NotificationKey::Approval(id) => pending_approval_ids.contains(id),
+            NotificationKey::Error(correlation_id) => {
+                state.notifications.error(*correlation_id).is_some()
+            }
+            NotificationKey::Update(_) => state.visible_update().is_some(),
+            NotificationKey::Task(task_id) => state.notifications.task(*task_id).is_some(),
+        }
+    }
+
+    /// The rows the popover lists under its filter, top to bottom.
+    fn visible_notification_keys(&self, cx: &App) -> Vec<NotificationKey> {
+        let snapshot = self.notifications_snapshot(cx);
+        let filter = self.notifications.filter;
+        let pending_approval_ids: Vec<String> = self
+            .pending_approvals(cx)
+            .into_iter()
+            .map(|pending| pending.id)
+            .collect();
+
+        NotificationGroup::ALL
+            .into_iter()
+            .flat_map(|group| {
+                snapshot
+                    .filtered(filter)
+                    .filter(|entry| entry.group == group)
+                    .map(|entry| entry.key.clone())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|key| self.notification_row_available(key, &pending_approval_ids, cx))
+            .collect()
+    }
+
+    /// The row the keyboard points at, or `None` when the list is empty.
+    pub(super) fn selected_notification(&self, cx: &App) -> Option<NotificationKey> {
+        let keys = self.visible_notification_keys(cx);
+        let last = keys.len().checked_sub(1)?;
+
+        let index = self
+            .notifications
+            .selected
+            .as_ref()
+            .and_then(|selected| keys.iter().position(|key| key == selected))
+            .unwrap_or(self.notifications.selected_index.min(last));
+
+        keys.into_iter().nth(index)
+    }
+
+    fn move_notification_selection(
+        &mut self,
+        target: impl FnOnce(usize, usize) -> usize,
+        cx: &mut Context<Self>,
+    ) {
+        let keys = self.visible_notification_keys(cx);
+        let Some(last) = keys.len().checked_sub(1) else {
+            return;
+        };
+
+        let current = self
+            .notifications
+            .selected
+            .as_ref()
+            .and_then(|selected| keys.iter().position(|key| key == selected))
+            .unwrap_or(self.notifications.selected_index.min(last));
+
+        let index = target(current, last);
+        self.notifications.selected_index = index;
+        self.notifications.selected = keys.into_iter().nth(index);
+        cx.notify();
+    }
+
+    /// Shows the next or previous filter chip's list, wrapping.
+    fn step_notification_filter(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let filters = NotificationFilter::ALL;
+        let current = filters
+            .iter()
+            .position(|filter| *filter == self.notifications.filter)
+            .unwrap_or(0);
+        let count = filters.len();
+        let next = if forward {
+            (current + 1) % count
+        } else {
+            (current + count - 1) % count
+        };
+
+        self.notifications.filter = filters[next];
+        self.notifications.reset_selection();
+        cx.notify();
+    }
+
+    /// Removes a notification, as "Later" does for the update: an error or a
+    /// task leaves the list, an approval or the update is hidden for the
+    /// session.
+    fn dismiss_notification(&mut self, key: NotificationKey, cx: &mut Context<Self>) {
+        self.app_state
+            .update(cx, |state, _| state.notifications.dismiss(key));
+        cx.notify();
+    }
+
+    /// Installs the update the popover lists, like its Install button; only
+    /// builds installed from the direct download offer that button.
+    fn install_listed_update(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let is_direct =
+            dbflux_app::updates::install_source::current_install_source() == InstallSource::Direct;
+        let key = self
+            .visible_notification_keys(cx)
+            .into_iter()
+            .find(|key| matches!(key, NotificationKey::Update(_)));
+
+        let Some(key) = key.filter(|_| is_direct) else {
+            return false;
+        };
+
+        self.install_update(window, cx);
+        self.mark_notification_read(key, cx);
+        true
+    }
+
+    /// Answers the commands of the notifications center: while the popover
+    /// is open it owns the keyboard (`ContextId::Notifications`). Mark all
+    /// read and Clear read also work with the popover closed. `None` leaves
+    /// the command to the other dispatch domains.
+    pub(super) fn dispatch_notifications(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
+        match command {
+            Command::MarkAllNotificationsRead => {
+                self.mark_all_notifications_read(cx);
+                return Some(true);
+            }
+            Command::ClearReadNotifications => {
+                self.clear_read_notifications(cx);
+                return Some(true);
+            }
+            Command::MarkNotificationRead | Command::InstallUpdate if !self.notifications.open => {
+                return Some(false);
+            }
+            _ => {}
+        }
+
+        if !self.notifications.open {
+            return None;
+        }
+
+        let handled = match command {
+            Command::SelectNext => {
+                self.move_notification_selection(|current, last| (current + 1).min(last), cx);
+                true
+            }
+            Command::SelectPrev => {
+                self.move_notification_selection(|current, _| current.saturating_sub(1), cx);
+                true
+            }
+            Command::SelectFirst => {
+                self.move_notification_selection(|_, _| 0, cx);
+                true
+            }
+            Command::SelectLast => {
+                self.move_notification_selection(|_, last| last, cx);
+                true
+            }
+            Command::NextPanelTab => {
+                self.step_notification_filter(true, cx);
+                true
+            }
+            Command::PrevPanelTab => {
+                self.step_notification_filter(false, cx);
+                true
+            }
+            Command::Execute => match self.selected_notification(cx) {
+                Some(key) => {
+                    self.open_notification(key, window, cx);
+                    true
+                }
+                None => false,
+            },
+            Command::Delete => match self.selected_notification(cx) {
+                Some(key) => {
+                    self.dismiss_notification(key, cx);
+                    true
+                }
+                None => false,
+            },
+            Command::MarkNotificationRead => match self.selected_notification(cx) {
+                Some(key) => {
+                    self.mark_notification_read(key, cx);
+                    true
+                }
+                None => false,
+            },
+            Command::InstallUpdate => self.install_listed_update(window, cx),
+            Command::Cancel | Command::ToggleNotifications => {
+                self.close_notifications(window, cx);
+                true
+            }
+            _ => return None,
+        };
+
+        Some(handled)
     }
 
     /// The popover and the transparent layer behind it that closes it on a
@@ -515,12 +743,14 @@ impl Workspace {
                 )
                 .on_select(cx.listener(move |this, _, _, cx| {
                     this.notifications.filter = chip_filter;
+                    this.notifications.reset_selection();
                     cx.notify();
                 })),
             );
         }
 
         let visible: Vec<&NotificationEntry> = snapshot.filtered(filter).collect();
+        let selected = self.selected_notification(cx);
 
         for group in NotificationGroup::ALL {
             let entries: Vec<&NotificationEntry> = visible
@@ -533,7 +763,8 @@ impl Workspace {
             let mut section = NotificationGroupSection::new(group_label(group), count);
 
             for entry in entries {
-                if let Some(row) = self.notification_row(entry, cx) {
+                let is_selected = selected.as_ref() == Some(&entry.key);
+                if let Some(row) = self.notification_row(entry, is_selected, cx) {
                     section = section.row(row);
                 }
             }
@@ -547,6 +778,7 @@ impl Workspace {
     fn notification_row(
         &self,
         entry: &NotificationEntry,
+        is_selected: bool,
         cx: &mut Context<Self>,
     ) -> Option<NotificationRow> {
         let now = Utc::now();
@@ -578,6 +810,7 @@ impl Workspace {
         let open_key = key.clone();
         Some(
             row.unread(!entry.read)
+                .selected(is_selected)
                 .on_open(cx.listener(move |this, _, window, cx| {
                     this.open_notification(open_key.clone(), window, cx);
                 })),
@@ -790,7 +1023,7 @@ mod tests {
     use crate::ui::document::DocumentIcon;
     use crate::ui::views::workspace::Workspace;
     use dbflux_components::composites::BellUrgency;
-    use dbflux_ui_base::notifications::NotificationUrgency;
+    use dbflux_ui_base::notifications::{NotificationFilter, NotificationKey, NotificationUrgency};
     use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
     use dbflux_ui_base::{AppStateEntity, OpenAuditRequested};
     use dbflux_ui_sidebar::SidebarTab;
@@ -1086,6 +1319,123 @@ mod tests {
         harness.window.simulate_keystrokes("escape");
         harness.window.run_until_parked();
         assert!(!harness.is_open());
+    }
+
+    impl Harness<'_> {
+        fn keys(&mut self, keystrokes: &str) {
+            for keystroke in keystrokes.split(' ') {
+                self.window.simulate_keystrokes(keystroke);
+                self.redraw();
+            }
+        }
+
+        fn selected(&mut self) -> Option<NotificationKey> {
+            let workspace = self.workspace.clone();
+            self.window
+                .update(|_, cx| workspace.read(cx).selected_notification(cx))
+        }
+
+        fn is_read(&mut self, key: &NotificationKey) -> bool {
+            let app_state = self.app_state.clone();
+            self.window
+                .update(|_, cx| app_state.read(cx).notifications.is_read(key))
+        }
+
+        fn filter(&mut self) -> NotificationFilter {
+            let workspace = self.workspace.clone();
+            self.window
+                .update(|_, cx| workspace.read(cx).notifications.filter)
+        }
+
+        fn report(&mut self, summary: &str) -> NotificationKey {
+            let error = UserFacingError::new(ErrorKind::Storage, summary);
+            let key = NotificationKey::Error(error.correlation_id);
+            self.window.update(|_, cx| report_error(error, cx));
+            self.window.run_until_parked();
+            key
+        }
+    }
+
+    /// The open popover owns the keyboard: J and K move over its rows, R
+    /// marks one read, X dismisses it, Alt+L and Alt+H switch the filter,
+    /// Shift+R marks everything read and Shift+X clears the read rows.
+    #[gpui::test]
+    fn the_popover_rows_are_driven_by_the_keyboard(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let older = harness.report("Export failed");
+        let newer = harness.report("Connection lost");
+        let third = harness.report("Import failed");
+
+        harness.keys(&global_keys(Command::ToggleNotifications));
+        assert!(harness.is_open());
+        assert_eq!(harness.selected(), Some(third.clone()), "newest first");
+
+        harness.keys("j");
+        assert_eq!(harness.selected(), Some(newer.clone()));
+        harness.keys("shift-g");
+        assert_eq!(harness.selected(), Some(older.clone()));
+        harness.keys("g");
+        assert_eq!(harness.selected(), Some(third.clone()));
+
+        harness.keys("r");
+        assert!(harness.is_read(&third));
+        assert!(!harness.is_read(&newer));
+
+        harness.keys("x");
+        assert_eq!(
+            harness.selected(),
+            Some(newer.clone()),
+            "X removes the row and the selection stays in place"
+        );
+
+        harness.keys("alt-l");
+        assert_eq!(harness.filter(), NotificationFilter::Approvals);
+        assert_eq!(harness.selected(), None, "no approvals are listed");
+        harness.keys("alt-h");
+        assert_eq!(harness.filter(), NotificationFilter::All);
+
+        harness.keys("shift-r");
+        assert_eq!(harness.urgency(), NotificationUrgency::None);
+
+        harness.keys("shift-x");
+        assert_eq!(harness.selected(), None, "Shift+X clears the read rows");
+        assert!(harness.is_open());
+
+        harness.keys(&global_keys(Command::ToggleNotifications));
+        assert!(!harness.is_open(), "the bell shortcut closes it again");
+    }
+
+    /// Enter opens the selected row's target: an error opens Audit.
+    #[gpui::test]
+    fn enter_opens_the_selected_error_in_audit(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        harness.report("Export failed");
+
+        harness.keys(&global_keys(Command::ToggleNotifications));
+        harness.keys("enter");
+
+        assert!(!harness.is_open());
+        assert_eq!(active_tab_icon(&mut harness), Some(DocumentIcon::Audit));
+        assert_eq!(harness.urgency(), NotificationUrgency::None);
+    }
+
+    /// Keys the sidebar binds do not reach it while the popover is open.
+    #[gpui::test]
+    fn the_sidebar_keys_stay_out_of_the_open_popover(cx: &mut TestAppContext) {
+        let mut harness = open_workspace(cx);
+        let workspace = harness.workspace.clone();
+        harness.window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx)
+            })
+        });
+        harness.redraw();
+
+        harness.keys(&global_keys(Command::ToggleNotifications));
+        let context = harness
+            .window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)));
+        assert_eq!(context, ContextId::Notifications);
     }
 
     #[gpui::test]

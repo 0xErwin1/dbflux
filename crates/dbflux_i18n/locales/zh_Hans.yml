@@ -3558,6 +3558,10 @@ settings:
       open_audit_viewer: 打开审计查看器
       open_last_error_in_audit: "在审计中打开最近的错误"
       toggle_notifications: "切换通知"
+      mark_notification_read: "将通知标记为已读"
+      mark_all_notifications_read: "将所有通知标记为已读"
+      clear_read_notifications: "清除已读通知"
+      install_update: "安装更新"
       show_connections_view: "显示连接视图"
       show_scripts_view: "显示脚本视图"
       show_dashboards_view: "显示仪表盘视图"
@@ -3635,6 +3639,7 @@ settings:
       key_value: 键值浏览器
       settings: 设置窗口
       inspector: 检查器
+      notifications: 通知
     category:
       global: 全局
       focus: 聚焦
@@ -4724,7 +4729,7 @@ notifications:
     updates: 更新
     earlier: 更早
   footer:
-    hint: 点击一行即可打开
+    hint: 点击一行或按 Enter 即可打开
     clear_read: 清除已读
   empty:
     title: 一切都是最新的
