@@ -1034,6 +1034,27 @@ document:
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
     breadcrumb: "Buckets"
   chart:
+    pane_actions:
+      refresh: "Refresh"
+      auto_refresh: "Auto-refresh interval…"
+      next_time_range: "Next time range"
+      prev_time_range: "Previous time range"
+      date_range: "Custom range: dates…"
+      start_hour: "Custom range: start hour…"
+      start_minute: "Custom range: start minute…"
+      end_hour: "Custom range: end hour…"
+      end_minute: "Custom range: end minute…"
+      next_kind: "Next chart type"
+      prev_kind: "Previous chart type"
+      x_axis: "X axis…"
+      y_axis: "Y series…"
+      group_by: "Group by…"
+      aggregation: "Aggregation…"
+      metric_rail: "Metric picker"
+      next_dimension: "Next dimension filter"
+      prev_dimension: "Previous dimension filter"
+      period: "Period…"
+      statistic: "Statistic…"
     toolbar:
       type_label: TYPE
       stats: Stats
@@ -3629,6 +3650,17 @@ settings:
       load_more: Load more
       edit_expiry: Edit expiry…
       copy_preview: Copy preview
+      next_time_range: "Next time range"
+      prev_time_range: "Previous time range"
+      configure_panel: "Configure panel"
+      move_panel_left: "Move panel left"
+      move_panel_right: "Move panel right"
+      move_panel_up: "Move panel up"
+      move_panel_down: "Move panel down"
+      resize_panel_narrower: "Make panel narrower"
+      resize_panel_wider: "Make panel wider"
+      resize_panel_shorter: "Make panel shorter"
+      resize_panel_taller: "Make panel taller"
     context:
       global: Global
       sidebar: Sidebar
@@ -3660,6 +3692,8 @@ settings:
       notifications: Notifications
       query_builder: "Query Builder"
       document_builder: "Document Builder"
+      chart: "Chart"
+      dashboard: "Dashboard"
     category:
       global: Global
       focus: Focus

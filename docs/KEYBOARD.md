@@ -306,7 +306,7 @@ A read-only delete does not change the clipboard.
 | `Ctrl+Space` | Toggle the row inspector for the selected row |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Maximize the results of a query document over the editor, or restore the split |
-| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer in the table, maximize, hide) with their shortcuts |
+| `m` (or `Shift+F10`) | Open context menu. Its last entry, Toolbar, lists the result toolbar and header buttons shown at that moment (export, clear filter, reset the builder query, switch view, open the query builder, auto-refresh interval, save or revert all changes, chart stats, save chart, show the chart point under the pointer or highlighted in the table, next chart type, the axis pickers, next / previous time range, the custom range controls and Apply, maximize, hide) with their shortcuts. In the chart view the navigation keys move the chart's highlighted point instead; see [Charts](#charts) |
 
 ## Schema diagram
 
@@ -319,6 +319,36 @@ A read-only delete does not change the clipboard.
 | `r` / `s` / `c` | Left to right / Snowflake / Compact layout |
 | `m` | Open context menu |
 | `Escape` | Clear the selection |
+
+## Charts
+
+These keys apply in a chart tab and in the chart view of a result (Chart, not
+Table + Chart, where the keys stay with the table). A highlighted point stands
+in for the pointer: the crosshair, the readout and the point inspector show
+it. Moving the pointer over the chart replaces it.
+
+| Keys | Action |
+|------|--------|
+| `h` / `l` (or `Left` / `Right`) | Highlight the previous / next point of the focused series; the first key starts at the first point |
+| `g` / `Shift+g` (or `Home` / `End`) | Highlight the first / last point |
+| `j` / `k` (or `Down` / `Up`) | Move the highlighted point to the next / previous visible series, at the nearest X |
+| `Space` | Hide or show the focused series, like its legend entry |
+| `Escape` | Clear the highlighted point, or close an open axis picker |
+| `Alt+l` / `Alt+h` | Next / previous chart type (chart tab) |
+| `]` / `[` | Next / previous time range, Custom included (chart tab) |
+| `F5` | Run the chart again (chart tab) |
+| `Ctrl+s` / `Cmd+s` | Save the chart; in the name prompt `Enter` saves and `Escape` cancels (chart tab) |
+| `m` (or `Shift+F10`) | Pane actions (chart tab): refresh, auto-refresh interval, next / previous time range, the custom range controls and Apply while Custom is selected, next / previous chart type, the X, Y, Group and Aggregation pickers, Stats, the metric picker and its controls for a metric chart, Save chart |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
+
+An axis picker opened from the menu takes these keys until it closes: `j` / `k`
+move through its rows, `h` / `l` switch to the neighboring picker (X, Y, Group,
+Aggregation), `Enter` picks the row and closes it, `Space` toggles a Y column
+and keeps it open, `Escape` closes it. In the chart view of a result, the
+Toolbar entry of the context menu (`m`) lists the chart type, the axis pickers,
+the time range and the custom range controls. The date range of a custom range
+takes the keyboard from its menu entry and opens with `Enter`; picking the
+days in its calendar still needs the pointer.
 
 ## Background Tasks
 

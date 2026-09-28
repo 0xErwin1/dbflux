@@ -42,6 +42,7 @@ use dbflux_components::tokens::{
     ChartDocumentMetrics, ChromeColors, DocumentMetrics, Fields, IslandMetrics, Spacing,
 };
 use dbflux_components::typography::AppFonts;
+use dbflux_core::LogErr;
 use dbflux_ui_base::toast::flush_pending_toast;
 use gpui::prelude::*;
 use gpui::*;
@@ -155,10 +156,29 @@ impl Render for ChartDocument {
         let name_prompt_element = self.name_prompt.as_ref().map(|prompt| {
             let input = prompt.input.clone();
 
+            // Enter in the name field saves and Escape cancels, like the
+            // footer buttons.
             Modal::new(dbflux_i18n::t!("document.chart.toolbar.save_chart"))
                 .id("chart-save-prompt")
                 .icon(AppIcon::Save)
                 .width(CHART_SAVE_PROMPT_WIDTH)
+                .focus_handle(prompt.focus.handle())
+                .on_close({
+                    let weak_self = cx.weak_entity();
+                    move |_window, cx| {
+                        weak_self
+                            .update(cx, |this, cx| this.cancel_save(cx))
+                            .log_err();
+                    }
+                })
+                .on_confirm({
+                    let weak_self = cx.weak_entity();
+                    move |_window, cx| {
+                        weak_self
+                            .update(cx, |this, cx| this.confirm_save(cx))
+                            .log_err();
+                    }
+                })
                 .body(
                     Input::new(&input)
                         .placeholder(dbflux_i18n::t!("document.chart.shell.name_placeholder")),
@@ -380,10 +400,13 @@ impl ChartDocument {
 
         let chart_colors = ChartColors::for_current(cx);
 
+        let picker_cursor = self.chart_shell.read(cx).axis_picker_cursor();
+
         let axis_bar = axis_bar_element(
             &bindings,
             &columns,
             open_pill,
+            picker_cursor,
             &chart_colors,
             move |pill, _window, cx| {
                 chart_shell_for_pill.update(cx, |s, cx| s.toggle_axis_pill(pill, cx));

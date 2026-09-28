@@ -160,7 +160,20 @@ impl Workspace {
             // So do the rows of a side rail the document draws (the query
             // builders).
             | Command::AddItem
-            | Command::AddGroup => Some(
+            | Command::AddGroup
+            // So do the time range of a chart or dashboard and the panels of
+            // a dashboard.
+            | Command::NextTimeRange
+            | Command::PrevTimeRange
+            | Command::ConfigurePanel
+            | Command::MovePanelLeft
+            | Command::MovePanelRight
+            | Command::MovePanelUp
+            | Command::MovePanelDown
+            | Command::ResizePanelNarrower
+            | Command::ResizePanelWider
+            | Command::ResizePanelShorter
+            | Command::ResizePanelTaller => Some(
                 self.tab_manager
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),

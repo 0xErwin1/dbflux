@@ -38,6 +38,8 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(notifications_layer());
     stack.add_layer(builder_rail_layer(ContextId::QueryBuilder));
     stack.add_layer(builder_rail_layer(ContextId::DocumentBuilder));
+    stack.add_layer(chart_layer());
+    stack.add_layer(dashboard_layer());
 
     stack
 });
@@ -1731,6 +1733,157 @@ fn builder_rail_layer(context: ContextId) -> KeymapLayer {
         KeyChord::new("f10", Modifiers::shift()),
         Command::OpenPaneActions,
     );
+
+    layer
+}
+
+/// Keys a chart document and a dashboard share: Ctrl+H/J/K/L leave the
+/// pane (also from a focused control inside it), [ and ] step the time range,
+/// F5 re-runs, M and Shift+F10 list the pane's actions.
+fn bind_chart_pane_keys(layer: &mut KeymapLayer, from_controls: &'static str) {
+    for (key, command) in [
+        ("h", Command::FocusLeft),
+        ("j", Command::FocusDown),
+        ("k", Command::FocusUp),
+        ("l", Command::FocusRight),
+    ] {
+        layer.bind_with_predicate(
+            KeyChord::new(key, Modifiers::ctrl()),
+            command,
+            from_controls,
+        );
+    }
+
+    layer.bind(
+        KeyChord::new("]", Modifiers::none()),
+        Command::NextTimeRange,
+    );
+    layer.bind(
+        KeyChord::new("[", Modifiers::none()),
+        Command::PrevTimeRange,
+    );
+    layer.bind(
+        KeyChord::new("f5", Modifiers::none()),
+        Command::RefreshSchema,
+    );
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenPaneActions,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+}
+
+/// Keys of a chart document (and of a chart panel a dashboard entered):
+/// H and L move the highlighted point, J and K the series (or the rows of an
+/// open axis picker), G and Shift+G jump to the first and last point, Enter
+/// picks the picker row, Space toggles a Y column or hides the focused
+/// series, Alt+H / Alt+L switch the chart kind and Ctrl/Cmd+S saves.
+fn chart_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::Chart);
+
+    bind_chart_pane_keys(&mut layer, "Chart && !Modal");
+
+    for (keys, command) in [
+        (["h", "left"], Command::ColumnLeft),
+        (["l", "right"], Command::ColumnRight),
+        (["j", "down"], Command::SelectNext),
+        (["k", "up"], Command::SelectPrev),
+        (["g", "home"], Command::SelectFirst),
+    ] {
+        for key in keys {
+            layer.bind(KeyChord::new(key, Modifiers::none()), command);
+        }
+    }
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("l", Modifiers::alt()), Command::NextPanelTab);
+    layer.bind(KeyChord::new("h", Modifiers::alt()), Command::PrevPanelTab);
+    layer.bind(KeyChord::new("s", Modifiers::primary()), Command::SaveQuery);
+
+    layer
+}
+
+/// Keys of a dashboard's panel grid: hjkl and the arrows select a panel,
+/// Enter or I open it (its chart or table takes the keys until Escape), C
+/// configures it, R or F2 renames it, X or Delete removes it, Space folds a
+/// divider's section, A adds a panel, Shift+hjkl moves the panel and
+/// Alt+Shift+hjkl resizes it, Alt+H / Alt+L switch View and Edit.
+fn dashboard_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::Dashboard);
+
+    bind_chart_pane_keys(&mut layer, "Dashboard && !Modal");
+
+    for (keys, command) in [
+        (["h", "left"], Command::ColumnLeft),
+        (["l", "right"], Command::ColumnRight),
+        (["j", "down"], Command::SelectNext),
+        (["k", "up"], Command::SelectPrev),
+        (["g", "home"], Command::SelectFirst),
+        (["enter", "i"], Command::Execute),
+        (["r", "f2"], Command::Rename),
+        (["x", "delete"], Command::Delete),
+    ] {
+        for key in keys {
+            layer.bind(KeyChord::new(key, Modifiers::none()), command);
+        }
+    }
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    layer.bind(
+        KeyChord::new("c", Modifiers::none()),
+        Command::ConfigurePanel,
+    );
+    layer.bind(KeyChord::new("a", Modifiers::none()), Command::AddItem);
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("l", Modifiers::alt()), Command::NextPanelTab);
+    layer.bind(KeyChord::new("h", Modifiers::alt()), Command::PrevPanelTab);
+
+    let alt_shift = Modifiers {
+        alt: true,
+        shift: true,
+        ..Modifiers::none()
+    };
+
+    for (keys, move_command, resize_command) in [
+        (
+            ["h", "left"],
+            Command::MovePanelLeft,
+            Command::ResizePanelNarrower,
+        ),
+        (
+            ["l", "right"],
+            Command::MovePanelRight,
+            Command::ResizePanelWider,
+        ),
+        (
+            ["k", "up"],
+            Command::MovePanelUp,
+            Command::ResizePanelShorter,
+        ),
+        (
+            ["j", "down"],
+            Command::MovePanelDown,
+            Command::ResizePanelTaller,
+        ),
+    ] {
+        for key in keys {
+            layer.bind(KeyChord::new(key, Modifiers::shift()), move_command);
+            layer.bind(KeyChord::new(key, alt_shift), resize_command);
+        }
+    }
 
     layer
 }

@@ -1034,6 +1034,27 @@ document:
         created_with_limitations: "Bucket \"%{name}\" creado con limitaciones"
     breadcrumb: "Buckets"
   chart:
+    pane_actions:
+      refresh: "Actualizar"
+      auto_refresh: "Intervalo de actualización automática…"
+      next_time_range: "Siguiente rango de tiempo"
+      prev_time_range: "Rango de tiempo anterior"
+      date_range: "Rango personalizado: fechas…"
+      start_hour: "Rango personalizado: hora de inicio…"
+      start_minute: "Rango personalizado: minuto de inicio…"
+      end_hour: "Rango personalizado: hora de fin…"
+      end_minute: "Rango personalizado: minuto de fin…"
+      next_kind: "Siguiente tipo de gráfico"
+      prev_kind: "Tipo de gráfico anterior"
+      x_axis: "Eje X…"
+      y_axis: "Series Y…"
+      group_by: "Agrupar por…"
+      aggregation: "Agregación…"
+      metric_rail: "Selector de métricas"
+      next_dimension: "Siguiente filtro de dimensión"
+      prev_dimension: "Filtro de dimensión anterior"
+      period: "Periodo…"
+      statistic: "Estadística…"
     toolbar:
       type_label: TIPO
       stats: Estadísticas
@@ -3629,6 +3650,17 @@ settings:
       load_more: Cargar más
       edit_expiry: Editar expiración…
       copy_preview: Copiar vista previa
+      next_time_range: "Siguiente rango de tiempo"
+      prev_time_range: "Rango de tiempo anterior"
+      configure_panel: "Configurar panel"
+      move_panel_left: "Mover panel a la izquierda"
+      move_panel_right: "Mover panel a la derecha"
+      move_panel_up: "Mover panel arriba"
+      move_panel_down: "Mover panel abajo"
+      resize_panel_narrower: "Estrechar panel"
+      resize_panel_wider: "Ensanchar panel"
+      resize_panel_shorter: "Acortar panel"
+      resize_panel_taller: "Alargar panel"
     context:
       global: Global
       sidebar: Barra lateral
@@ -3660,6 +3692,8 @@ settings:
       notifications: Notificaciones
       query_builder: "Constructor de consultas"
       document_builder: "Constructor de documentos"
+      chart: "Gráfico"
+      dashboard: "Panel de control"
     category:
       global: Global
       focus: Foco

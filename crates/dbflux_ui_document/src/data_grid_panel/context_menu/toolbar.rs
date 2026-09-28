@@ -7,8 +7,11 @@
 
 use super::sections::{MenuRowCursor, submenu_flyout, submenu_frame};
 use crate::DataViewMode;
+use crate::chart::keyboard::step_time_range;
 use crate::data_grid_panel::{ChartRailTab, DataGridPanel, DataSource};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::chart::AxisPill;
+use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::composites::{MenuItem, menu_row, render_separator};
 use dbflux_components::icons::AppIcon;
 use dbflux_ui_base::keymap::{chord_display_parts, effective_keymap};
@@ -44,10 +47,40 @@ pub(crate) enum ToolbarAction {
     /// "Show in tree" in the chart's point inspector: scrolls the table to
     /// the source row of the point under the pointer.
     ShowPointInTable(usize),
+    /// The chart kind switch: the kind after the current one.
+    NextChartKind,
+    /// An axis-bar pill: opens its picker for the keyboard.
+    AxisPicker(AxisPill),
+    /// The time presets of the chart toolbar: the next or previous one.
+    TimeRange { forward: bool },
+    /// A control of the custom range row (date range, hour, minute).
+    CustomRange(CustomRangeControl),
+    /// Apply in the custom range row.
+    ApplyCustomRange,
     /// Maximize or restore in the embedded panel's header.
     ToggleMaximize,
     /// Hide in the embedded panel's header.
     HidePanel,
+}
+
+/// A control of the chart's custom range row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CustomRangeControl {
+    DateRange,
+    StartHour,
+    StartMinute,
+    EndHour,
+    EndMinute,
+}
+
+impl CustomRangeControl {
+    const ALL: [CustomRangeControl; 5] = [
+        CustomRangeControl::DateRange,
+        CustomRangeControl::StartHour,
+        CustomRangeControl::StartMinute,
+        CustomRangeControl::EndHour,
+        CustomRangeControl::EndMinute,
+    ];
 }
 
 impl ToolbarAction {
@@ -65,6 +98,19 @@ impl ToolbarAction {
             ToolbarAction::ToggleStatsRail => "stats",
             ToolbarAction::SaveChart => "save-chart",
             ToolbarAction::ShowPointInTable(_) => "show-in-tree",
+            ToolbarAction::NextChartKind => "next-chart-kind",
+            ToolbarAction::AxisPicker(AxisPill::X) => "axis-x",
+            ToolbarAction::AxisPicker(AxisPill::Y) => "axis-y",
+            ToolbarAction::AxisPicker(AxisPill::Group) => "axis-group",
+            ToolbarAction::AxisPicker(AxisPill::Agg) => "axis-agg",
+            ToolbarAction::TimeRange { forward: true } => "next-time-range",
+            ToolbarAction::TimeRange { forward: false } => "prev-time-range",
+            ToolbarAction::CustomRange(CustomRangeControl::DateRange) => "custom-date-range",
+            ToolbarAction::CustomRange(CustomRangeControl::StartHour) => "custom-start-hour",
+            ToolbarAction::CustomRange(CustomRangeControl::StartMinute) => "custom-start-minute",
+            ToolbarAction::CustomRange(CustomRangeControl::EndHour) => "custom-end-hour",
+            ToolbarAction::CustomRange(CustomRangeControl::EndMinute) => "custom-end-minute",
+            ToolbarAction::ApplyCustomRange => "custom-apply",
             ToolbarAction::ToggleMaximize => "maximize",
             ToolbarAction::HidePanel => "hide",
         }
@@ -83,6 +129,10 @@ impl ToolbarAction {
             ToolbarAction::ToggleStatsRail => AppIcon::Sigma,
             ToolbarAction::SaveChart => AppIcon::Save,
             ToolbarAction::ShowPointInTable(_) => AppIcon::Table,
+            ToolbarAction::NextChartKind => AppIcon::ChartSpline,
+            ToolbarAction::AxisPicker(_) => AppIcon::Hash,
+            ToolbarAction::TimeRange { .. } | ToolbarAction::CustomRange(_) => AppIcon::Clock,
+            ToolbarAction::ApplyCustomRange => AppIcon::Check,
             ToolbarAction::ToggleMaximize => AppIcon::Maximize2,
             ToolbarAction::HidePanel => AppIcon::PanelBottomClose,
         }
@@ -174,6 +224,25 @@ impl DataGridPanel {
             if let Some(source) = hovered_source {
                 actions.push(ToolbarAction::ShowPointInTable(source.row_idx));
             }
+
+            actions.push(ToolbarAction::NextChartKind);
+
+            if !self.result.columns.is_empty() {
+                actions.extend(
+                    [AxisPill::X, AxisPill::Y, AxisPill::Group, AxisPill::Agg]
+                        .map(ToolbarAction::AxisPicker),
+                );
+            }
+
+            if let Some(panel) = &self.chart.chart_source_time_range_panel {
+                actions.push(ToolbarAction::TimeRange { forward: true });
+                actions.push(ToolbarAction::TimeRange { forward: false });
+
+                if panel.read(cx).selected_time_range == Some(TimeRange::Custom) {
+                    actions.extend(CustomRangeControl::ALL.map(ToolbarAction::CustomRange));
+                    actions.push(ToolbarAction::ApplyCustomRange);
+                }
+            }
         }
 
         if self.chrome.show_panel_controls {
@@ -219,6 +288,45 @@ impl DataGridPanel {
             ToolbarAction::SaveChart => dbflux_i18n::t!("document.chart.toolbar.save_chart"),
             ToolbarAction::ShowPointInTable(_) => {
                 dbflux_i18n::t!("chart.point_inspector.show_in_tree")
+            }
+            ToolbarAction::NextChartKind => {
+                dbflux_i18n::t!("document.chart.pane_actions.next_kind")
+            }
+            ToolbarAction::AxisPicker(AxisPill::X) => {
+                dbflux_i18n::t!("document.chart.pane_actions.x_axis")
+            }
+            ToolbarAction::AxisPicker(AxisPill::Y) => {
+                dbflux_i18n::t!("document.chart.pane_actions.y_axis")
+            }
+            ToolbarAction::AxisPicker(AxisPill::Group) => {
+                dbflux_i18n::t!("document.chart.pane_actions.group_by")
+            }
+            ToolbarAction::AxisPicker(AxisPill::Agg) => {
+                dbflux_i18n::t!("document.chart.pane_actions.aggregation")
+            }
+            ToolbarAction::TimeRange { forward: true } => {
+                dbflux_i18n::t!("document.chart.pane_actions.next_time_range")
+            }
+            ToolbarAction::TimeRange { forward: false } => {
+                dbflux_i18n::t!("document.chart.pane_actions.prev_time_range")
+            }
+            ToolbarAction::CustomRange(CustomRangeControl::DateRange) => {
+                dbflux_i18n::t!("document.chart.pane_actions.date_range")
+            }
+            ToolbarAction::CustomRange(CustomRangeControl::StartHour) => {
+                dbflux_i18n::t!("document.chart.pane_actions.start_hour")
+            }
+            ToolbarAction::CustomRange(CustomRangeControl::StartMinute) => {
+                dbflux_i18n::t!("document.chart.pane_actions.start_minute")
+            }
+            ToolbarAction::CustomRange(CustomRangeControl::EndHour) => {
+                dbflux_i18n::t!("document.chart.pane_actions.end_hour")
+            }
+            ToolbarAction::CustomRange(CustomRangeControl::EndMinute) => {
+                dbflux_i18n::t!("document.chart.pane_actions.end_minute")
+            }
+            ToolbarAction::ApplyCustomRange => {
+                dbflux_i18n::t!("document.data.chart_dock.toolbar.apply")
             }
             ToolbarAction::ToggleMaximize if self.chrome.is_maximized => {
                 dbflux_i18n::t!("document.data.context_menu.toolbar.restore")
@@ -307,11 +415,70 @@ impl DataGridPanel {
             }
             ToolbarAction::SaveChart => self.open_collection_chart_save(window, cx),
             ToolbarAction::ShowPointInTable(row_idx) => self.chart_host_scroll_to_row(row_idx, cx),
+            ToolbarAction::NextChartKind => {
+                if let Some(shell) = &self.chart.chart_shell {
+                    shell.update(cx, |shell, cx| {
+                        shell.keyboard_command(Command::NextPanelTab, &[], cx)
+                    });
+                }
+            }
+            ToolbarAction::AxisPicker(pill) => {
+                let columns = self.result.columns.clone();
+                if let Some(shell) = &self.chart.chart_shell {
+                    shell.update(cx, |shell, cx| shell.open_axis_picker(pill, &columns, cx));
+                }
+            }
+            ToolbarAction::TimeRange { forward } => {
+                if let Some(panel) = &self.chart.chart_source_time_range_panel {
+                    step_time_range(panel, if forward { 1 } else { -1 }, cx);
+                }
+            }
+            ToolbarAction::CustomRange(control) => {
+                self.focus_custom_range_control(control, window, cx)
+            }
+            ToolbarAction::ApplyCustomRange => {
+                if let Some(panel) = &self.chart.chart_source_time_range_panel {
+                    // The bounds are discarded as the Apply button does: the
+                    // parent document's TimeRangeChanged subscription re-runs.
+                    let applied = panel.update(cx, |panel, cx| panel.apply_custom_range(cx));
+                    if let Err(error) = applied {
+                        log::debug!("custom range not applied: {error}");
+                    }
+                }
+            }
             ToolbarAction::ToggleMaximize => self.request_toggle_maximize(cx),
             ToolbarAction::HidePanel => self.request_hide(cx),
         }
 
         cx.notify();
+    }
+
+    /// Hands the keyboard to a control of the custom range row: the date
+    /// range picker (Enter opens its calendar) or a time list, opened.
+    fn focus_custom_range_control(
+        &self,
+        control: CustomRangeControl,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(panel) = self.chart.chart_source_time_range_panel.clone() else {
+            return;
+        };
+
+        let panel = panel.read(cx);
+        let dropdown = match control {
+            CustomRangeControl::DateRange => {
+                let handle = panel.custom_date_range_picker.read(cx).focus_handle(cx);
+                handle.focus(window, cx);
+                return;
+            }
+            CustomRangeControl::StartHour => panel.custom_start_hour_dropdown.clone(),
+            CustomRangeControl::StartMinute => panel.custom_start_minute_dropdown.clone(),
+            CustomRangeControl::EndHour => panel.custom_end_hour_dropdown.clone(),
+            CustomRangeControl::EndMinute => panel.custom_end_minute_dropdown.clone(),
+        };
+
+        dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
     }
 
     /// Closes the table's menu, hands the keyboard back to the grid and runs
@@ -654,6 +821,166 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A table of two numeric series over a time column, shown as its chart
+    /// only, under the app keymap with the table focused.
+    fn host_chart(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<KeymapHost<DataGridPanel>>,
+        Entity<DataGridPanel>,
+        &mut VisualTestContext,
+    ) {
+        init_keyboard_runtime(cx);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+
+        let column = |name: &str, kind: ColumnKind| ColumnMeta {
+            name: name.to_string(),
+            type_name: String::new(),
+            kind,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    let source = DataSource::Table {
+                        profile_id: Uuid::nil(),
+                        database: Some("app".to_string()),
+                        table: TableRef::with_schema("public", "samples"),
+                        pagination: Pagination::default(),
+                        order_by: Vec::new(),
+                        total_rows: Some(3),
+                    };
+
+                    let mut panel = DataGridPanel::new_internal(
+                        source,
+                        app_state.clone(),
+                        Vec::new(),
+                        window,
+                        cx,
+                    );
+                    panel.set_result(
+                        QueryResult::table(
+                            vec![
+                                column("ts", ColumnKind::Timestamp),
+                                column("a", ColumnKind::Float),
+                                column("b", ColumnKind::Float),
+                            ],
+                            [(0, 1.0, 10.0), (1_000, 2.0, 20.0), (2_000, 3.0, 15.0)]
+                                .into_iter()
+                                .map(|(ts, a, b)| {
+                                    vec![Value::Int(ts), Value::Float(a), Value::Float(b)]
+                                })
+                                .collect(),
+                            None,
+                            Duration::ZERO,
+                        ),
+                        cx,
+                    );
+                    panel.set_result_view_mode(
+                        dbflux_components::result_view::ResultViewMode::Chart,
+                        cx,
+                    );
+                    panel
+                })
+            },
+            |panel, cx| panel.active_context(cx),
+            DataGridPanel::dispatch_command,
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+
+        // The chart view draws no table, so the keyboard sits on the grid.
+        window.update(|window, cx| {
+            let focus_handle = panel.read(cx).focus_handle.clone();
+            focus_handle.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        (host, panel, window)
+    }
+
+    /// In the chart view of a result, H and L move a highlighted point that
+    /// the chart reports as the hovered one, which is what the point
+    /// inspector and its "Show in tree" entry follow, and J moves it to the
+    /// other series.
+    #[gpui::test]
+    fn chart_view_keys_move_the_hovered_point(cx: &mut TestAppContext) {
+        let (_host, panel, window) = host_chart(cx);
+
+        let hovered = |window: &mut VisualTestContext| {
+            window.update(|_, cx| {
+                let shell = panel.read(cx).chart.chart_shell.clone()?;
+                let point = shell.read(cx).hovered_data_point(cx)?;
+                Some((point.series_idx, point.point_idx_in_series))
+            })
+        };
+        assert_eq!(hovered(window), None);
+
+        window.simulate_keystrokes("l l");
+        assert_eq!(hovered(window), Some((0, 1)));
+
+        window.simulate_keystrokes("j");
+        assert_eq!(hovered(window), Some((1, 1)));
+
+        window.simulate_keystrokes("escape");
+        assert_eq!(hovered(window), None);
+    }
+
+    /// The Toolbar submenu of a chart view offers the chart kind and the
+    /// axis pickers; an axis picker it opens is driven by J and Enter.
+    #[gpui::test]
+    fn the_chart_toolbar_entries_open_a_keyboard_axis_picker(cx: &mut TestAppContext) {
+        use super::ToolbarAction;
+        use dbflux_components::chart::{AxisPill, ChartKind};
+
+        let (_host, panel, window) = host_chart(cx);
+
+        let actions = window.update(|_, cx| panel.read(cx).toolbar_actions(cx));
+        for action in [
+            ToolbarAction::NextChartKind,
+            ToolbarAction::AxisPicker(AxisPill::X),
+            ToolbarAction::AxisPicker(AxisPill::Y),
+        ] {
+            assert!(actions.contains(&action), "{action:?} in {actions:?}");
+        }
+
+        let shell = window
+            .update(|_, cx| panel.read(cx).chart.chart_shell.clone())
+            .expect("a chartable result has a chart");
+
+        window.update(|window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.run_toolbar_action(ToolbarAction::NextChartKind, window, cx);
+                panel.run_toolbar_action(ToolbarAction::AxisPicker(AxisPill::X), window, cx);
+            })
+        });
+        window.run_until_parked();
+        assert_eq!(
+            window.update(|_, cx| shell.read(cx).chart_kind()),
+            ChartKind::Bar
+        );
+
+        window.simulate_keystrokes("j enter");
+        assert_eq!(
+            window.update(|_, cx| {
+                let shell = shell.read(cx);
+                (shell.axis_open_pill, shell.active_bindings().x)
+            }),
+            (None, 1),
+            "J then Enter binds column `a` to X and closes the picker"
+        );
     }
 
     /// The entries a key binding reaches come first, in the grid's order.

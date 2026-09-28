@@ -6,12 +6,18 @@
 //! Created exclusively by promoting a query result (e.g. "Chart this query"
 //! from a data grid); the query is fixed for the document's lifetime.
 
+#[cfg(test)]
+mod keyboard_tests;
 pub mod pane;
 mod render;
 
+use super::chart::keyboard::{
+    ChartKeyOutcome, chart_shell_pane_actions, step_time_range, time_range_pane_actions,
+};
 use super::chart::shell::ChartShellEvent;
 use super::chart::{ChartHost, ChartShell, HostAdapter};
 use super::handle::DocumentEvent;
+use super::pane::PaneAction;
 use super::task_runner::DocumentTaskRunner;
 use super::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
@@ -25,6 +31,8 @@ use dbflux_components::controls::InputState;
 use dbflux_components::controls::{
     ButtonVariant, Dropdown, DropdownItem, DropdownSelectionChanged,
 };
+use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::ModalFocus;
 use dbflux_components::result_panel::{ResultPanel, SegmentPosition, ToolbarSegment, ViewHandle};
 use dbflux_components::result_view::ResultViewMode;
 use dbflux_components::saved_chart::{SavedChart, SavedChartSource};
@@ -32,7 +40,9 @@ use dbflux_core::{QueryResult, RefreshPolicy};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::PendingToast;
 use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Subscription, Task, Window};
+use gpui::{
+    App, Context, Entity, EventEmitter, FocusHandle, Focusable as _, Subscription, Task, Window,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -63,6 +73,9 @@ enum ExecState {
 /// State for the name-prompt modal shown during Save.
 struct NamePromptState {
     input: Entity<InputState>,
+    /// Moves the keyboard into the prompt's name field and gives it back to
+    /// the chart when the prompt closes.
+    focus: ModalFocus,
     _subscription: Subscription,
 }
 
@@ -641,20 +654,135 @@ impl ChartDocument {
     }
 
     pub fn active_context(&self) -> ContextId {
-        ContextId::Global
+        ContextId::Chart
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
     }
 
+    /// Runs a keymap command: the chart keys (point, series, kind, axis
+    /// pickers; see `chart::keyboard`), the time range, refresh and save,
+    /// and Enter / Escape for the save prompt while it is open.
     pub fn dispatch_command(
         &mut self,
-        _cmd: Command,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cmd: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        if self.name_prompt.is_some() {
+            return match cmd {
+                Command::Execute => {
+                    self.confirm_save(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.cancel_save(cx);
+                    true
+                }
+                _ => false,
+            };
+        }
+
+        let columns = self.last_result_columns().unwrap_or_default();
+        let outcome = self
+            .chart_shell
+            .update(cx, |shell, cx| shell.keyboard_command(cmd, &columns, cx));
+
+        if outcome == ChartKeyOutcome::BindingsChanged {
+            self.rebuild_chart_view(cx);
+        }
+
+        if outcome.handled() {
+            return true;
+        }
+
+        match cmd {
+            Command::NextTimeRange | Command::PrevTimeRange => {
+                let Some(panel) = self.time_range_panel.clone() else {
+                    return false;
+                };
+
+                let delta = if cmd == Command::NextTimeRange { 1 } else { -1 };
+                step_time_range(&panel, delta, cx);
+                true
+            }
+            Command::RefreshSchema => {
+                self.request_reexecute(window, cx);
+                true
+            }
+            Command::SaveQuery if !self.embedded => {
+                self.open_name_prompt(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The chart's toolbar and pointer-only controls, for the pane-actions
+    /// menu: refresh and its interval, the time range, the chart kind, the
+    /// axis pickers, the stats and metric rails, and save.
+    pub(crate) fn pane_actions(&self, entity: &Entity<Self>, cx: &App) -> Vec<PaneAction> {
+        let context = ContextId::Chart;
+        let mut actions = vec![
+            PaneAction::command(
+                "chart-refresh",
+                dbflux_i18n::t!("document.chart.pane_actions.refresh"),
+                Command::RefreshSchema,
+                context,
+            )
+            .icon(AppIcon::RefreshCcw),
+        ];
+
+        let refresh_dropdown = self.refresh_dropdown.clone();
+        actions.push(
+            PaneAction::callback(
+                "chart-auto-refresh",
+                dbflux_i18n::t!("document.chart.pane_actions.auto_refresh"),
+                move |window, cx| {
+                    refresh_dropdown.update(cx, |dropdown, cx| dropdown.focus_and_open(window, cx));
+                },
+            )
+            .icon(AppIcon::Clock),
+        );
+
+        if let Some(panel) = &self.time_range_panel {
+            let entity = entity.clone();
+            actions.extend(time_range_pane_actions(
+                panel,
+                "chart",
+                context,
+                move |_window, cx| {
+                    entity.update(cx, |this, cx| this.apply_custom_range(cx));
+                },
+                cx,
+            ));
+        }
+
+        let columns = self.last_result_columns().unwrap_or_default();
+        actions.extend(chart_shell_pane_actions(
+            &self.chart_shell,
+            &columns,
+            context,
+            cx,
+        ));
+
+        actions.push(
+            PaneAction::command(
+                "chart-save",
+                dbflux_i18n::t!("document.chart.toolbar.save_chart"),
+                Command::SaveQuery,
+                context,
+            )
+            .icon(AppIcon::Save),
+        );
+
+        actions
+    }
+
+    /// Row of the open axis picker the keyboard is on.
+    pub fn axis_picker_cursor(&self, cx: &App) -> Option<usize> {
+        self.chart_shell.read(cx).axis_picker_cursor()
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {
@@ -1070,8 +1198,13 @@ impl ChartDocument {
              _cx| {},
         );
 
+        let mut focus = ModalFocus::new(cx);
+        let input_handle = input.read(cx).focus_handle(cx);
+        focus.focus(Some(&input_handle), window, cx);
+
         self.name_prompt = Some(NamePromptState {
             input,
+            focus,
             _subscription: sub,
         });
 
@@ -1080,7 +1213,7 @@ impl ChartDocument {
 
     /// Confirm the name-prompt and persist the chart.
     fn confirm_save(&mut self, cx: &mut Context<Self>) {
-        let Some(prompt) = self.name_prompt.take() else {
+        let Some(mut prompt) = self.name_prompt.take() else {
             return;
         };
 
@@ -1089,6 +1222,8 @@ impl ChartDocument {
             self.name_prompt = Some(prompt);
             return;
         }
+
+        prompt.focus.restore(cx);
 
         let id = self.saved_chart_id.unwrap_or_else(Uuid::new_v4);
         let profile_id = self.profile_id.unwrap_or_else(Uuid::nil);
@@ -1166,7 +1301,9 @@ impl ChartDocument {
 
     /// Dismiss the name-prompt modal without saving.
     fn cancel_save(&mut self, cx: &mut Context<Self>) {
-        self.name_prompt = None;
+        if let Some(mut prompt) = self.name_prompt.take() {
+            prompt.focus.restore(cx);
+        }
         cx.notify();
     }
 
@@ -1337,6 +1474,31 @@ impl ChartDocument {
                 false
             }
         }
+    }
+
+    /// Shows `result` as if a run had returned it.
+    #[cfg(test)]
+    pub(crate) fn show_result_for_test(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        let result = Arc::new(result);
+
+        self.chart_shell.update(cx, |shell, cx| {
+            shell.set_result(&result, false, cx);
+            shell.ensure_chart_view(&result, cx);
+        });
+        self.last_result = Some(result);
+        cx.notify();
+    }
+
+    /// The chart shell, for tests that read the chart state.
+    #[cfg(test)]
+    pub(crate) fn chart_shell_for_test(&self) -> &Entity<ChartShell> {
+        &self.chart_shell
+    }
+
+    /// Whether the save prompt is open.
+    #[cfg(test)]
+    pub(crate) fn is_name_prompt_open(&self) -> bool {
+        self.name_prompt.is_some()
     }
 
     /// Produce a `ViewHandle` that lets `ResultPanel` host `ChartDocument`.

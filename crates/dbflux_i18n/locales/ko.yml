@@ -1034,6 +1034,27 @@ document:
         created_with_limitations: "\"%{name}\" 버킷 생성됨 (제한 있음)"
     breadcrumb: "버킷"
   chart:
+    pane_actions:
+      refresh: "새로 고침"
+      auto_refresh: "자동 새로 고침 간격…"
+      next_time_range: "다음 시간 범위"
+      prev_time_range: "이전 시간 범위"
+      date_range: "사용자 지정 범위: 날짜…"
+      start_hour: "사용자 지정 범위: 시작 시…"
+      start_minute: "사용자 지정 범위: 시작 분…"
+      end_hour: "사용자 지정 범위: 종료 시…"
+      end_minute: "사용자 지정 범위: 종료 분…"
+      next_kind: "다음 차트 유형"
+      prev_kind: "이전 차트 유형"
+      x_axis: "X 축…"
+      y_axis: "Y 계열…"
+      group_by: "그룹 기준…"
+      aggregation: "집계…"
+      metric_rail: "지표 선택기"
+      next_dimension: "다음 차원 필터"
+      prev_dimension: "이전 차원 필터"
+      period: "기간…"
+      statistic: "통계…"
     toolbar:
       type_label: 유형
       stats: 통계
@@ -3629,6 +3650,17 @@ settings:
       load_more: 더 불러오기
       edit_expiry: 만료 편집…
       copy_preview: 미리보기 복사
+      next_time_range: "다음 시간 범위"
+      prev_time_range: "이전 시간 범위"
+      configure_panel: "패널 구성"
+      move_panel_left: "패널 왼쪽으로 이동"
+      move_panel_right: "패널 오른쪽으로 이동"
+      move_panel_up: "패널 위로 이동"
+      move_panel_down: "패널 아래로 이동"
+      resize_panel_narrower: "패널 좁게"
+      resize_panel_wider: "패널 넓게"
+      resize_panel_shorter: "패널 낮게"
+      resize_panel_taller: "패널 높게"
     context:
       global: 전역
       sidebar: 사이드바
@@ -3659,6 +3691,8 @@ settings:
       notifications: 알림
       query_builder: "쿼리 빌더"
       document_builder: "문서 빌더"
+      chart: "차트"
+      dashboard: "대시보드"
     category:
       global: 전역
       focus: 포커스

@@ -1792,10 +1792,17 @@ impl DataGridPanel {
 
         let chart_colors = ChartColors::for_current(cx);
 
+        let picker_cursor = self
+            .chart
+            .chart_shell
+            .as_ref()
+            .and_then(|shell| shell.read(cx).axis_picker_cursor());
+
         let axis_row = dbflux_components::chart::axis_bar_element(
             &bindings,
             &columns,
             open_pill,
+            picker_cursor,
             &chart_colors,
             move |pill, _window, cx| {
                 if let Some(shell) = &shell_for_pill {

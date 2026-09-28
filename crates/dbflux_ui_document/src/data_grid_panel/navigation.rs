@@ -1,6 +1,6 @@
 use super::{
     DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState, PendingRequery,
-    TableReload, ToolbarFocus,
+    ResultViewMode, TableReload, ToolbarFocus,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
@@ -591,6 +591,31 @@ impl DataGridPanel {
         }
     }
 
+    /// Runs `cmd` as a chart key (see `chart::keyboard`) while the result
+    /// shows only its chart, or while an axis picker is open. In the table
+    /// half of Table + Chart the keys stay with the table.
+    fn dispatch_chart_key(&mut self, cmd: Command, cx: &mut Context<Self>) -> bool {
+        let Some(shell) = self.chart.chart_shell.clone() else {
+            return false;
+        };
+
+        let picker_open = shell.read(cx).axis_open_pill.is_some();
+        if !picker_open && self.result_view_mode() != ResultViewMode::Chart {
+            return false;
+        }
+
+        let columns = self.result.columns.clone();
+        let handled = shell
+            .update(cx, |shell, cx| shell.keyboard_command(cmd, &columns, cx))
+            .handled();
+
+        if handled {
+            cx.notify();
+        }
+
+        handled
+    }
+
     // === Command Dispatch ===
 
     pub fn dispatch_command(
@@ -631,6 +656,10 @@ impl DataGridPanel {
         // meant for the documents grid must not reach the hidden grid.
         if self.collection.tab == super::documents::CollectionTab::Aggregate {
             return self.dispatch_aggregate_command(cmd, window, cx);
+        }
+
+        if self.dispatch_chart_key(cmd, cx) {
+            return true;
         }
 
         // A modified value panel owns "save": while its editor holds the

@@ -141,6 +141,11 @@ pub struct ChartView {
     /// Series indices that are hidden. Hidden series are skipped when painting
     /// polylines, hover dots, and the readout overlay.
     hidden: HashSet<usize>,
+    /// Point highlighted from the keyboard: an index into the decimated
+    /// points of the focused series. While set, it stands in for the pointer
+    /// position, so the crosshair, the readout and the host's point inspector
+    /// show that point. Moving the pointer over the plot clears it.
+    keyboard_point: Option<usize>,
 }
 
 impl ChartView {
@@ -413,6 +418,7 @@ impl ChartView {
             focused_series_idx: 0,
             plot_bounds: Rc::new(RefCell::new(None)),
             hidden: HashSet::new(),
+            keyboard_point: None,
         })
     }
 
@@ -573,6 +579,10 @@ impl ChartView {
     /// been recorded yet. Requires `plot_bounds` to have been written by a
     /// previous paint.
     pub fn hover_data_x(&self) -> Option<f64> {
+        if let Some((x, _)) = self.keyboard_point_value() {
+            return Some(x);
+        }
+
         let hover_x = self.hover_x_screen?;
         let bounds = self.plot_bounds.borrow();
         let b = (*bounds)?;
@@ -584,6 +594,145 @@ impl ChartView {
         }
         let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
         Some(self.render_model.x_min + (rel_x as f64 / plot_w as f64) * x_range)
+    }
+
+    /// The point highlighted from the keyboard, if any.
+    pub fn keyboard_point(&self) -> Option<crate::chart::DataPointRef> {
+        let point_idx_in_series = self.keyboard_point?;
+
+        Some(crate::chart::DataPointRef {
+            series_idx: self.focused_series_idx,
+            point_idx_in_series,
+        })
+    }
+
+    /// The `(x, y)` data value of the keyboard point, when it still names a
+    /// point of the focused series.
+    fn keyboard_point_value(&self) -> Option<(f64, f64)> {
+        let index = self.keyboard_point?;
+
+        self.render_model
+            .decimated
+            .get(self.focused_series_idx)?
+            .get(index)
+            .copied()
+    }
+
+    /// Moves the keyboard point `delta` points along the focused series,
+    /// stopping at either end. Without a keyboard point it starts at the
+    /// first point (or the last, for a negative `delta`). Returns whether a
+    /// point is highlighted afterwards.
+    pub fn step_keyboard_point(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(count) = self.focused_series_len() else {
+            return false;
+        };
+
+        let next = match self.keyboard_point {
+            Some(current) => current.saturating_add_signed(delta).min(count - 1),
+            None if delta < 0 => count - 1,
+            None => 0,
+        };
+
+        self.set_keyboard_point(next, cx);
+        true
+    }
+
+    /// Moves the keyboard point to the first or the last point of the
+    /// focused series. Returns whether a point is highlighted afterwards.
+    pub fn jump_keyboard_point(&mut self, to_last: bool, cx: &mut Context<Self>) -> bool {
+        let Some(count) = self.focused_series_len() else {
+            return false;
+        };
+
+        self.set_keyboard_point(if to_last { count - 1 } else { 0 }, cx);
+        true
+    }
+
+    /// Moves the keyboard point to the next (or previous, for a negative
+    /// `delta`) visible series, on the point nearest to the X it had, and
+    /// makes that series the focused one. Without a keyboard point it starts
+    /// at the first point of the series it lands on. Returns whether the
+    /// focused series changed.
+    pub fn step_keyboard_series(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let series_count = self.spec.series.len();
+        let visible: Vec<usize> = (0..series_count)
+            .filter(|index| !self.hidden.contains(index))
+            .collect();
+
+        if visible.len() < 2 {
+            return false;
+        }
+
+        let current = visible
+            .iter()
+            .position(|index| *index == self.focused_series_idx)
+            .unwrap_or(0);
+        let next = visible[(current as isize + delta).rem_euclid(visible.len() as isize) as usize];
+
+        let anchor_x = self.keyboard_point_value().map(|(x, _)| x);
+
+        self.focused_series_idx = next;
+        self.keyboard_point = match anchor_x {
+            Some(x) => self.nearest_point_idx(next, x),
+            None => self
+                .render_model
+                .decimated
+                .get(next)
+                .filter(|points| !points.is_empty())
+                .map(|_| 0),
+        };
+
+        cx.notify();
+        true
+    }
+
+    /// Clears the keyboard point. Returns whether one was highlighted.
+    pub fn clear_keyboard_point(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.keyboard_point.take().is_none() {
+            return false;
+        }
+
+        cx.notify();
+        true
+    }
+
+    /// Number of points of the focused series, when it is visible and has
+    /// any. Moves the focus off a hidden series first.
+    fn focused_series_len(&mut self) -> Option<usize> {
+        if self.hidden.contains(&self.focused_series_idx) {
+            self.focused_series_idx =
+                (0..self.spec.series.len()).find(|index| !self.hidden.contains(index))?;
+            self.keyboard_point = None;
+        }
+
+        self.render_model
+            .decimated
+            .get(self.focused_series_idx)
+            .map(Vec::len)
+            .filter(|count| *count > 0)
+    }
+
+    fn set_keyboard_point(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.keyboard_point = Some(index);
+        self.hover_x_screen = None;
+        self.hover_y_screen = None;
+        cx.notify();
+    }
+
+    /// The window-space X the crosshair is drawn at: the pointer, or the
+    /// keyboard point once a paint has recorded the plot bounds.
+    fn crosshair_x_screen(&self) -> Option<Pixels> {
+        let Some((x, _)) = self.keyboard_point_value() else {
+            return self.hover_x_screen;
+        };
+
+        let bounds = (*self.plot_bounds.borrow())?;
+        let plot_x0 = f32::from(bounds.origin.x);
+        let plot_w = (f32::from(bounds.size.width) - MARGIN_RIGHT).max(1.0);
+        let x_range = (self.render_model.x_max - self.render_model.x_min).max(1.0);
+        let fraction = ((x - self.render_model.x_min) / x_range) as f32;
+
+        Some(gpui::px(plot_x0 + fraction * plot_w))
     }
 
     /// Replace the set of hidden series indices.
@@ -1117,7 +1266,7 @@ impl Render for ChartView {
 
         let model = &self.render_model;
         let spec = &self.spec;
-        let hover_x = self.hover_x_screen;
+        let hover_x = self.crosshair_x_screen();
         let focused_idx = self.focused_series_idx;
 
         let x_min = model.x_min;
@@ -1221,6 +1370,7 @@ impl Render for ChartView {
                                 .unwrap_or(false);
                             let had_hover = this.hover_x_screen.is_some();
                             if inside {
+                                this.keyboard_point = None;
                                 this.hover_x_screen = Some(ev.position.x);
                                 this.hover_y_screen = Some(ev.position.y);
                                 this.update_focused_from_hover();
@@ -3285,6 +3435,66 @@ mod tests {
             None,
             Duration::ZERO,
         )
+    }
+
+    /// H and L walk the keyboard point along the focused series, J and K
+    /// move it to the other series at the nearest X, and the point stands in
+    /// for the pointer: `hover_data_x` reports it, so the point inspector a
+    /// host draws from the hovered point shows it.
+    #[gpui::test]
+    fn keyboard_point_walks_points_and_series(cx: &mut gpui::TestAppContext) {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = cx.new(|_| {
+            ChartView::build(&partially_overlapping_hosts(), spec).expect("build should succeed")
+        });
+
+        let state = |cx: &mut gpui::TestAppContext| {
+            view.read_with(cx, |view, _| {
+                (
+                    view.keyboard_point(),
+                    view.hover_data_x(),
+                    view.focused_series_idx(),
+                )
+            })
+        };
+
+        assert_eq!(state(cx), (None, None, 0), "no point before a key");
+
+        view.update(cx, |view, cx| assert!(view.step_keyboard_point(1, cx)));
+        assert_eq!(
+            state(cx).1,
+            Some(1_000.0),
+            "the first key lands on the first point"
+        );
+
+        view.update(cx, |view, cx| view.step_keyboard_point(5, cx));
+        assert_eq!(
+            state(cx).1,
+            Some(3_000.0),
+            "the point stops at the last one"
+        );
+
+        view.update(cx, |view, cx| assert!(view.step_keyboard_series(1, cx)));
+        let (point, x, series) = state(cx);
+        assert_eq!(series, 1, "the other series takes the focus");
+        assert_eq!(x, Some(3_000.0), "at the point nearest to the same X");
+        assert_eq!(point.map(|point| point.point_idx_in_series), Some(1));
+
+        view.update(cx, |view, cx| view.jump_keyboard_point(false, cx));
+        assert_eq!(state(cx).1, Some(2_000.0), "the first point of series b");
+
+        view.update(cx, |view, cx| assert!(view.clear_keyboard_point(cx)));
+        assert_eq!(state(cx), (None, None, 1));
+
+        view.update(cx, |view, cx| {
+            view.set_hidden_series(HashSet::from([0]), cx);
+            assert!(
+                !view.step_keyboard_series(1, cx),
+                "one visible series has nowhere to move"
+            );
+        });
     }
 
     fn grouped_stacked_view() -> ChartView {

@@ -425,9 +425,10 @@ mod tests {
     // recursion.
     use super::{PaneActionsMenu, PaneActionsOwner};
     use crate::keymap::{Command, CommandDispatcher as _, ContextId, FocusTarget};
-    use crate::ui::document::{CodeDocument, Tab};
+    use crate::ui::document::{ChartDocument, CodeDocument, Tab};
     use crate::ui::views::tasks_panel::TasksPanel;
     use crate::ui::views::workspace::Workspace;
+    use dbflux_components::chart::ChartKind;
     use dbflux_core::{TaskId, TaskKind, TaskStatus};
     use dbflux_ui_base::{AppStateChanged, AppStateEntity};
     use dbflux_ui_document::DocumentId;
@@ -677,6 +678,51 @@ mod tests {
         });
 
         assert_eq!(handled, [false, false, false, false, false]);
+    }
+
+    /// A chart tab takes its keys (X6): Alt+L switches its kind, ] its time
+    /// range, and M lists its toolbar in the pane-actions menu.
+    #[gpui::test]
+    fn chart_keys_reach_the_chart_document(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        let chart = window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let chart =
+                    cx.new(|cx| ChartDocument::new(None, String::new(), app_state, window, cx));
+                let pane = ChartDocument::into_pane(chart.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                chart
+            })
+        });
+        window.run_until_parked();
+
+        let context = window
+            .update(|_, cx| workspace.update(cx, |workspace, cx| workspace.active_context(cx)));
+        assert_eq!(context, ContextId::Chart);
+
+        let chart_kind =
+            |window: &mut VisualTestContext| window.update(|_, cx| chart.read(cx).chart_kind(cx));
+        assert_eq!(chart_kind(window), ChartKind::Line);
+
+        keys(window, "alt-l ]");
+        assert_eq!(chart_kind(window), ChartKind::Bar);
+
+        keys(window, "m");
+        let ids = menu_ids(&workspace, window);
+        for id in [
+            "chart-refresh",
+            "chart-next-kind",
+            "chart-stats",
+            "chart-save",
+        ] {
+            assert!(ids.iter().any(|entry| entry == id), "{id} in {ids:?}");
+        }
     }
 
     /// A running query, an export that finished with output and a failed

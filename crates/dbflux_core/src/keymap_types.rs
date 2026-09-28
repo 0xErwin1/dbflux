@@ -171,6 +171,28 @@ pub enum Command {
     ImportDashboard,
     /// Open the "New dashboard…" creation modal (profile picker then name input).
     NewDashboard,
+    /// Selects the next time-range preset of a chart or dashboard.
+    NextTimeRange,
+    /// Selects the previous time-range preset of a chart or dashboard.
+    PrevTimeRange,
+    /// Opens the settings of the selected dashboard panel.
+    ConfigurePanel,
+    /// Moves the selected dashboard panel one grid column left.
+    MovePanelLeft,
+    /// Moves the selected dashboard panel one grid column right.
+    MovePanelRight,
+    /// Moves the selected dashboard panel one grid row up.
+    MovePanelUp,
+    /// Moves the selected dashboard panel one grid row down.
+    MovePanelDown,
+    /// Makes the selected dashboard panel one grid column narrower.
+    ResizePanelNarrower,
+    /// Makes the selected dashboard panel one grid column wider.
+    ResizePanelWider,
+    /// Makes the selected dashboard panel one grid row shorter.
+    ResizePanelShorter,
+    /// Makes the selected dashboard panel one grid row taller.
+    ResizePanelTaller,
 
     // === Document Tree ===
     PreviewDocument,
@@ -396,6 +418,17 @@ impl Command {
             Command::OpenSavedChart => "Open chart…",
             Command::ImportDashboard => "Import dashboard from JSON…",
             Command::NewDashboard => "New dashboard…",
+            Command::NextTimeRange => "Next time range",
+            Command::PrevTimeRange => "Previous time range",
+            Command::ConfigurePanel => "Configure panel",
+            Command::MovePanelLeft => "Move panel left",
+            Command::MovePanelRight => "Move panel right",
+            Command::MovePanelUp => "Move panel up",
+            Command::MovePanelDown => "Move panel down",
+            Command::ResizePanelNarrower => "Make panel narrower",
+            Command::ResizePanelWider => "Make panel wider",
+            Command::ResizePanelShorter => "Make panel shorter",
+            Command::ResizePanelTaller => "Make panel taller",
 
             Command::PreviewDocument => "Preview document",
             Command::ToggleRawView => "Toggle raw JSON view",
@@ -570,6 +603,17 @@ impl Command {
             Command::OpenSavedChart => "open_saved_chart",
             Command::ImportDashboard => "import_dashboard",
             Command::NewDashboard => "new_dashboard",
+            Command::NextTimeRange => "next_time_range",
+            Command::PrevTimeRange => "prev_time_range",
+            Command::ConfigurePanel => "configure_panel",
+            Command::MovePanelLeft => "move_panel_left",
+            Command::MovePanelRight => "move_panel_right",
+            Command::MovePanelUp => "move_panel_up",
+            Command::MovePanelDown => "move_panel_down",
+            Command::ResizePanelNarrower => "resize_panel_narrower",
+            Command::ResizePanelWider => "resize_panel_wider",
+            Command::ResizePanelShorter => "resize_panel_shorter",
+            Command::ResizePanelTaller => "resize_panel_taller",
 
             Command::PreviewDocument => "preview_document",
             Command::ToggleRawView => "toggle_raw_view",
@@ -753,6 +797,17 @@ impl Command {
             Command::OpenSavedChart,
             Command::ImportDashboard,
             Command::NewDashboard,
+            Command::NextTimeRange,
+            Command::PrevTimeRange,
+            Command::ConfigurePanel,
+            Command::MovePanelLeft,
+            Command::MovePanelRight,
+            Command::MovePanelUp,
+            Command::MovePanelDown,
+            Command::ResizePanelNarrower,
+            Command::ResizePanelWider,
+            Command::ResizePanelShorter,
+            Command::ResizePanelTaller,
             Command::PreviewDocument,
             Command::ToggleRawView,
             Command::NextMatch,
@@ -926,6 +981,18 @@ impl Command {
             Command::OpenSavedChart | Command::ImportDashboard | Command::NewDashboard => {
                 "Dashboards"
             }
+
+            Command::NextTimeRange | Command::PrevTimeRange => "View",
+
+            Command::ConfigurePanel
+            | Command::MovePanelLeft
+            | Command::MovePanelRight
+            | Command::MovePanelUp
+            | Command::MovePanelDown
+            | Command::ResizePanelNarrower
+            | Command::ResizePanelWider
+            | Command::ResizePanelShorter
+            | Command::ResizePanelTaller => "Dashboards",
 
             Command::NextMatch | Command::PrevMatch => "Navigation",
 
@@ -1129,6 +1196,12 @@ pub enum ContextId {
 
     /// The document query builder rail, once the keyboard moved into it.
     DocumentBuilder,
+
+    /// A chart document, or a chart panel a dashboard has entered.
+    Chart,
+
+    /// A dashboard document's panel grid.
+    Dashboard,
 }
 
 impl ContextId {
@@ -1168,6 +1241,8 @@ impl ContextId {
             ContextId::Notifications => None,
             ContextId::QueryBuilder => Some(ContextId::Global),
             ContextId::DocumentBuilder => Some(ContextId::Global),
+            ContextId::Chart => Some(ContextId::Global),
+            ContextId::Dashboard => Some(ContextId::Global),
         }
     }
 
@@ -1254,6 +1329,8 @@ impl ContextId {
             ContextId::Notifications => "Notifications",
             ContextId::QueryBuilder => "Query Builder",
             ContextId::DocumentBuilder => "Document Builder",
+            ContextId::Chart => "Chart",
+            ContextId::Dashboard => "Dashboard",
         }
     }
 
@@ -1290,6 +1367,8 @@ impl ContextId {
             ContextId::Notifications => "notifications",
             ContextId::QueryBuilder => "query_builder",
             ContextId::DocumentBuilder => "document_builder",
+            ContextId::Chart => "chart",
+            ContextId::Dashboard => "dashboard",
         }
     }
 
@@ -1326,6 +1405,8 @@ impl ContextId {
             ContextId::Notifications,
             ContextId::QueryBuilder,
             ContextId::DocumentBuilder,
+            ContextId::Chart,
+            ContextId::Dashboard,
         ]
     }
 
@@ -1362,6 +1443,8 @@ impl ContextId {
             ContextId::Notifications => "Notifications",
             ContextId::QueryBuilder => "QueryBuilder",
             ContextId::DocumentBuilder => "DocumentBuilder",
+            ContextId::Chart => "Chart",
+            ContextId::Dashboard => "Dashboard",
         }
     }
 
@@ -1388,6 +1471,8 @@ impl ContextId {
             ContextId::Inspector => "Inspector && !Modal",
             ContextId::QueryBuilder => "QueryBuilder && !Input && !Dropdown && !Modal",
             ContextId::DocumentBuilder => "DocumentBuilder && !Input && !Dropdown && !Modal",
+            ContextId::Chart => "Chart && !Input && !Dropdown && !Modal",
+            ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

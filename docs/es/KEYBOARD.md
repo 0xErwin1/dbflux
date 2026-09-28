@@ -322,7 +322,7 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `Ctrl+Space`                                  | Alternar el inspector de la fila           |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Maximizar los resultados de un documento de consulta sobre el editor, o restaurar la división |
-| `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero, maximizar, ocultar) con sus atajos |
+| `m` (o `Shift+F10`)                           | Abrir menú contextual. Su última entrada, Barra de herramientas, lista los botones de la toolbar y la cabecera de resultados visibles en ese momento (exportar, limpiar filtro, restablecer la consulta del constructor, cambiar de vista, abrir el constructor de consultas, intervalo de actualización automática, guardar o revertir todos los cambios, estadísticas del gráfico, guardar gráfico, mostrar en la tabla el punto del gráfico bajo el puntero o resaltado, tipo de gráfico siguiente, los selectores de eje, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar, maximizar, ocultar) con sus atajos. En la vista de gráfico las teclas de navegación mueven el punto resaltado del gráfico; ver [Gráficos](#gráficos) |
 
 ## Diagrama de esquema
 
@@ -335,6 +335,37 @@ no hacen nada. Borrar tampoco modifica el portapapeles.
 | `r` / `s` / `c`                             | Diseño De izquierda a derecha / Copo de nieve / Compacto    |
 | `m`                                         | Abrir menú contextual                                       |
 | `Escape`                                    | Quitar la selección                                         |
+
+## Gráficos
+
+Estas teclas valen en una pestaña de gráfico y en la vista de gráfico de un
+resultado (Gráfico, no Tabla + Gráfico, donde las teclas siguen en la tabla).
+Un punto resaltado hace de puntero: la cruz, la lectura y el inspector de
+puntos lo muestran. Mover el puntero sobre el gráfico lo reemplaza.
+
+| Teclas | Acción |
+|--------|--------|
+| `h` / `l` (o `Left` / `Right`) | Resaltar el punto anterior / siguiente de la serie enfocada; la primera tecla empieza en el primer punto |
+| `g` / `Shift+g` (o `Home` / `End`) | Resaltar el primer / último punto |
+| `j` / `k` (o `Down` / `Up`) | Llevar el punto resaltado a la serie visible siguiente / anterior, en la X más cercana |
+| `Space` | Ocultar o mostrar la serie enfocada, como su entrada de la leyenda |
+| `Escape` | Quitar el punto resaltado, o cerrar un selector de eje abierto |
+| `Alt+l` / `Alt+h` | Tipo de gráfico siguiente / anterior (pestaña de gráfico) |
+| `]` / `[` | Rango de tiempo siguiente / anterior, Personalizado incluido (pestaña de gráfico) |
+| `F5` | Volver a ejecutar el gráfico (pestaña de gráfico) |
+| `Ctrl+s` / `Cmd+s` | Guardar el gráfico; en el diálogo del nombre `Enter` guarda y `Escape` cancela (pestaña de gráfico) |
+| `m` (o `Shift+F10`) | Acciones del panel (pestaña de gráfico): actualizar, intervalo de actualización automática, rango de tiempo siguiente / anterior, los controles del rango personalizado y Aplicar mientras está elegido Personalizado, tipo de gráfico siguiente / anterior, los selectores X, Y, Agrupar y Agregación, Estadísticas, el selector de métricas y sus controles en un gráfico de métrica, Guardar gráfico |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
+
+Un selector de eje abierto desde el menú toma estas teclas hasta cerrarse:
+`j` / `k` recorren sus filas, `h` / `l` pasan al selector vecino (X, Y,
+Agrupar, Agregación), `Enter` elige la fila y lo cierra, `Space` alterna una
+columna Y y lo deja abierto, `Escape` lo cierra. En la vista de gráfico de un
+resultado, la entrada Barra de herramientas del menú contextual (`m`) lista el
+tipo de gráfico, los selectores de eje, el rango de tiempo y los controles del
+rango personalizado. El rango de fechas de un rango personalizado recibe el
+teclado desde su entrada del menú y se abre con `Enter`; elegir los días en su
+calendario todavía necesita el puntero.
 
 ## Tareas en segundo plano
 

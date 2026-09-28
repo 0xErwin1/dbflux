@@ -261,10 +261,13 @@ fn render_bindings_row(
 
     let _ = panel_index; // Reserved for future per-panel id namespacing.
 
+    let picker_cursor = panel_entity.read(cx).axis_picker_cursor(cx);
+
     axis_bar_element(
         bindings,
         columns,
         open_pill,
+        picker_cursor,
         &chart_colors,
         on_pill,
         on_x,

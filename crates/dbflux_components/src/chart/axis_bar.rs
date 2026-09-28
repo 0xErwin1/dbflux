@@ -51,6 +51,122 @@ fn agg_label(kind: AggKind) -> String {
     }
 }
 
+/// One row of an axis picker: what choosing it binds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AxisPickerOption {
+    /// A column for the X axis.
+    X(usize),
+    /// A Y column and whether it is plotted now; choosing it toggles it.
+    Y { column: usize, checked: bool },
+    /// A group-by column, or `None` for no grouping.
+    Group(Option<usize>),
+    /// An aggregation kind.
+    Agg(AggKind),
+}
+
+impl AxisPickerOption {
+    /// Whether this row is what `bindings` holds now (the bound X column,
+    /// a plotted Y column, the group-by column, the aggregation).
+    pub fn is_current(&self, bindings: &BindingSpec) -> bool {
+        match *self {
+            AxisPickerOption::X(column) => bindings.x == column,
+            AxisPickerOption::Y { checked, .. } => checked,
+            AxisPickerOption::Group(column) => bindings.group_by == column,
+            AxisPickerOption::Agg(kind) => bindings.aggregation == kind,
+        }
+    }
+
+    /// `bindings` with this row chosen, as clicking the row does.
+    pub fn apply(&self, bindings: &BindingSpec) -> BindingSpec {
+        let mut next = bindings.clone();
+
+        match *self {
+            AxisPickerOption::X(column) => next.x = column,
+            AxisPickerOption::Y { column, checked } => {
+                if checked {
+                    next.y.retain(|index| *index != column);
+                } else if !next.y.contains(&column) {
+                    next.y.push(column);
+                }
+            }
+            AxisPickerOption::Group(column) => next.group_by = column,
+            AxisPickerOption::Agg(kind) => next.aggregation = kind,
+        }
+
+        next
+    }
+}
+
+/// The rows the picker of `pill` lists, in display order: X takes time and
+/// numeric columns, Y numeric columns, Group "none" then text columns, Agg
+/// every aggregation kind. Column roles come from `ColumnKind` only.
+pub fn axis_picker_options(
+    pill: AxisPill,
+    bindings: &BindingSpec,
+    columns: &[ColumnMeta],
+) -> Vec<AxisPickerOption> {
+    match pill {
+        AxisPill::X => columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| {
+                matches!(
+                    column.kind,
+                    ColumnKind::Timestamp | ColumnKind::Integer | ColumnKind::Float
+                )
+            })
+            .map(|(index, _)| AxisPickerOption::X(index))
+            .collect(),
+        AxisPill::Y => columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| matches!(column.kind, ColumnKind::Integer | ColumnKind::Float))
+            .map(|(index, _)| AxisPickerOption::Y {
+                column: index,
+                checked: bindings.y.contains(&index),
+            })
+            .collect(),
+        AxisPill::Group => std::iter::once(AxisPickerOption::Group(None))
+            .chain(
+                columns
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, column)| matches!(column.kind, ColumnKind::Text))
+                    .map(|(index, _)| AxisPickerOption::Group(Some(index))),
+            )
+            .collect(),
+        AxisPill::Agg => [
+            AggKind::None,
+            AggKind::Sum,
+            AggKind::Avg,
+            AggKind::Min,
+            AggKind::Max,
+        ]
+        .into_iter()
+        .map(AxisPickerOption::Agg)
+        .collect(),
+    }
+}
+
+/// The untranslated name the aggregation picker lists for `kind`.
+fn agg_row(kind: AggKind) -> &'static str {
+    match kind {
+        AggKind::None => "none",
+        AggKind::Sum => "sum",
+        AggKind::Avg => "avg",
+        AggKind::Min => "min",
+        AggKind::Max => "max",
+    }
+}
+
+/// The name a picker row shows for `column`.
+fn column_name(columns: &[ColumnMeta], column: usize) -> SharedString {
+    columns
+        .get(column)
+        .map(|meta| SharedString::from(meta.name.clone()))
+        .unwrap_or_default()
+}
+
 /// Render the AxisBar pill row.
 ///
 /// # Parameters
@@ -58,6 +174,8 @@ fn agg_label(kind: AggKind) -> String {
 /// - `bindings`: current `BindingSpec`; drives pill labels.
 /// - `columns`: column metadata from the current `QueryResult`.
 /// - `open_pill`: which pill's picker is currently shown (`None` = all closed).
+/// - `highlighted`: the row of the open picker the keyboard is on, an index
+///   into [`axis_picker_options`] for that pill.
 /// - `on_pill_click`: called when the user clicks a pill header (to open/close
 ///   its picker). Receives the clicked `AxisPill`.
 /// - `on_x_select`: called when the user picks a column for the X axis.
@@ -76,6 +194,7 @@ pub fn axis_bar_element<FPill, FX, FY, FGroup, FAgg>(
     bindings: &BindingSpec,
     columns: &[ColumnMeta],
     open_pill: Option<AxisPill>,
+    highlighted: Option<usize>,
     colors: &ChartColors,
     on_pill_click: FPill,
     on_x_select: FX,
@@ -152,23 +271,21 @@ where
 
     // X picker dropdown (shown when x_open == true)
     let x_picker: Option<AnyElement> = if x_open {
-        let x_candidates: Vec<(usize, SharedString)> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                matches!(
-                    c.kind,
-                    ColumnKind::Timestamp | ColumnKind::Integer | ColumnKind::Float
-                )
-            })
-            .map(|(i, c)| (i, SharedString::from(c.name.clone())))
-            .collect();
+        let x_candidates: Vec<(usize, SharedString)> =
+            axis_picker_options(AxisPill::X, bindings, columns)
+                .into_iter()
+                .filter_map(|option| match option {
+                    AxisPickerOption::X(index) => Some((index, column_name(columns, index))),
+                    _ => None,
+                })
+                .collect();
 
         Some(
             column_picker_element(
                 "axis-picker-x",
                 x_candidates,
                 Some(bindings.x),
+                highlighted,
                 colors,
                 move |col_idx, w, cx| on_x_select(col_idx, w, cx),
             )
@@ -197,20 +314,22 @@ where
 
     // Y picker (multi-select: show all numeric columns with checkboxes)
     let y_picker: Option<AnyElement> = if y_open {
-        let y_candidates: Vec<(usize, SharedString, bool)> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| matches!(c.kind, ColumnKind::Integer | ColumnKind::Float))
-            .map(|(i, c)| {
-                let checked = bindings.y.contains(&i);
-                (i, SharedString::from(c.name.clone()), checked)
-            })
-            .collect();
+        let y_candidates: Vec<(usize, SharedString, bool)> =
+            axis_picker_options(AxisPill::Y, bindings, columns)
+                .into_iter()
+                .filter_map(|option| match option {
+                    AxisPickerOption::Y { column, checked } => {
+                        Some((column, column_name(columns, column), checked))
+                    }
+                    _ => None,
+                })
+                .collect();
 
         Some(
             y_picker_element(
                 "axis-picker-y",
                 y_candidates,
+                highlighted,
                 colors,
                 move |col_idx, checked, w, cx| {
                     on_y_toggle(col_idx, checked, w, cx);
@@ -242,17 +361,17 @@ where
 
     // Group picker (single-select from Text columns, plus "none")
     let group_picker: Option<AnyElement> = if group_open {
-        let mut group_candidates: Vec<(Option<usize>, SharedString)> =
-            vec![(None, SharedString::from("—"))];
-
-        let text_cols: Vec<(Option<usize>, SharedString)> = columns
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| matches!(c.kind, ColumnKind::Text))
-            .map(|(i, c)| (Some(i), SharedString::from(c.name.clone())))
-            .collect();
-
-        group_candidates.extend(text_cols);
+        let group_candidates: Vec<(Option<usize>, SharedString)> =
+            axis_picker_options(AxisPill::Group, bindings, columns)
+                .into_iter()
+                .filter_map(|option| match option {
+                    AxisPickerOption::Group(None) => Some((None, SharedString::from("—"))),
+                    AxisPickerOption::Group(Some(index)) => {
+                        Some((Some(index), column_name(columns, index)))
+                    }
+                    _ => None,
+                })
+                .collect();
 
         let current = bindings.group_by;
         Some(
@@ -260,6 +379,7 @@ where
                 "axis-picker-group",
                 group_candidates,
                 current,
+                highlighted,
                 colors,
                 move |sel, w, cx| on_group_select(sel, w, cx),
             )
@@ -288,13 +408,14 @@ where
 
     // Agg picker (enum dropdown)
     let agg_picker: Option<AnyElement> = if agg_open {
-        let agg_kinds: Vec<(AggKind, SharedString)> = vec![
-            (AggKind::None, "none".into()),
-            (AggKind::Sum, "sum".into()),
-            (AggKind::Avg, "avg".into()),
-            (AggKind::Min, "min".into()),
-            (AggKind::Max, "max".into()),
-        ];
+        let agg_kinds: Vec<(AggKind, SharedString)> =
+            axis_picker_options(AxisPill::Agg, bindings, columns)
+                .into_iter()
+                .filter_map(|option| match option {
+                    AxisPickerOption::Agg(kind) => Some((kind, SharedString::from(agg_row(kind)))),
+                    _ => None,
+                })
+                .collect();
         let current = bindings.aggregation;
 
         Some(
@@ -302,6 +423,7 @@ where
                 "axis-picker-agg",
                 agg_kinds,
                 current,
+                highlighted,
                 colors,
                 move |kind, w, cx| {
                     on_agg_select(kind, w, cx);
@@ -441,6 +563,7 @@ fn column_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(usize, SharedString)>,
     selected: Option<usize>,
+    highlighted: Option<usize>,
     colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
@@ -449,7 +572,8 @@ where
 {
     let rows: Vec<AnyElement> = candidates
         .into_iter()
-        .map(|(col_idx, label)| {
+        .enumerate()
+        .map(|(row, (col_idx, label))| {
             let is_selected = selected == Some(col_idx);
             let handler = on_select.clone();
             let hover_bg = colors.hover_bg;
@@ -457,6 +581,7 @@ where
 
             div()
                 .id(ElementId::Name(format!("col-pick-{}", col_idx).into()))
+                .when(highlighted == Some(row), |d| d.bg(colors.panel_border))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -487,6 +612,7 @@ where
 fn y_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(usize, SharedString, bool)>,
+    highlighted: Option<usize>,
     colors: &ChartColors,
     on_toggle: F,
 ) -> impl IntoElement
@@ -495,7 +621,8 @@ where
 {
     let rows: Vec<AnyElement> = candidates
         .into_iter()
-        .map(|(col_idx, label, checked)| {
+        .enumerate()
+        .map(|(row, (col_idx, label, checked))| {
             let handler = on_toggle.clone();
             let hover_bg = colors.hover_bg;
             let pill_border = colors.pill_border;
@@ -504,6 +631,7 @@ where
 
             div()
                 .id(ElementId::Name(format!("y-pick-{}", col_idx).into()))
+                .when(highlighted == Some(row), |d| d.bg(colors.panel_border))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -546,6 +674,7 @@ fn group_picker_element<F>(
     id: impl Into<ElementId>,
     candidates: Vec<(Option<usize>, SharedString)>,
     selected: Option<usize>,
+    highlighted: Option<usize>,
     colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
@@ -554,7 +683,8 @@ where
 {
     let rows: Vec<AnyElement> = candidates
         .into_iter()
-        .map(|(col_idx_opt, label)| {
+        .enumerate()
+        .map(|(row, (col_idx_opt, label))| {
             let is_selected = col_idx_opt == selected;
             let handler = on_select.clone();
             let hover_bg = colors.hover_bg;
@@ -570,6 +700,7 @@ where
                     )
                     .into(),
                 ))
+                .when(highlighted == Some(row), |d| d.bg(colors.panel_border))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -601,6 +732,7 @@ fn agg_picker_element<F>(
     id: impl Into<ElementId>,
     agg_kinds: Vec<(AggKind, SharedString)>,
     current: AggKind,
+    highlighted: Option<usize>,
     colors: &ChartColors,
     on_select: F,
 ) -> impl IntoElement
@@ -609,7 +741,8 @@ where
 {
     let rows: Vec<AnyElement> = agg_kinds
         .into_iter()
-        .map(|(kind, label)| {
+        .enumerate()
+        .map(|(row, (kind, label))| {
             let is_selected = kind == current;
             let handler = on_select.clone();
             let hover_bg = colors.hover_bg;
@@ -617,6 +750,7 @@ where
 
             div()
                 .id(ElementId::Name(format!("agg-pick-{:?}", kind).into()))
+                .when(highlighted == Some(row), |d| d.bg(colors.panel_border))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -686,6 +820,95 @@ mod tests {
             nullable: true,
             is_primary_key: false,
         }
+    }
+
+    #[test]
+    fn picker_options_follow_the_column_kinds() {
+        let cols = [
+            make_col("ts", ColumnKind::Timestamp),
+            make_col("cpu", ColumnKind::Float),
+            make_col("host", ColumnKind::Text),
+            make_col("seq", ColumnKind::Integer),
+        ];
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        assert_eq!(
+            axis_picker_options(AxisPill::X, &bindings, &cols),
+            vec![
+                AxisPickerOption::X(0),
+                AxisPickerOption::X(1),
+                AxisPickerOption::X(3)
+            ]
+        );
+        assert_eq!(
+            axis_picker_options(AxisPill::Y, &bindings, &cols),
+            vec![
+                AxisPickerOption::Y {
+                    column: 1,
+                    checked: true
+                },
+                AxisPickerOption::Y {
+                    column: 3,
+                    checked: false
+                },
+            ]
+        );
+        assert_eq!(
+            axis_picker_options(AxisPill::Group, &bindings, &cols),
+            vec![
+                AxisPickerOption::Group(None),
+                AxisPickerOption::Group(Some(2))
+            ]
+        );
+        assert_eq!(
+            axis_picker_options(AxisPill::Agg, &bindings, &cols).len(),
+            5
+        );
+    }
+
+    #[test]
+    fn choosing_a_picker_row_binds_it() {
+        let bindings = BindingSpec {
+            x: 0,
+            y: vec![1],
+            group_by: None,
+            filter: None,
+            aggregation: AggKind::None,
+        };
+
+        assert_eq!(AxisPickerOption::X(3).apply(&bindings).x, 3);
+        assert_eq!(
+            AxisPickerOption::Y {
+                column: 3,
+                checked: false
+            }
+            .apply(&bindings)
+            .y,
+            vec![1, 3],
+            "an unchecked Y column is added"
+        );
+        assert!(
+            AxisPickerOption::Y {
+                column: 1,
+                checked: true
+            }
+            .apply(&bindings)
+            .y
+            .is_empty(),
+            "a checked Y column is removed"
+        );
+        assert_eq!(
+            AxisPickerOption::Group(Some(2)).apply(&bindings).group_by,
+            Some(2)
+        );
+        assert!(AxisPickerOption::X(0).is_current(&bindings));
+        assert!(!AxisPickerOption::Group(Some(2)).is_current(&bindings));
     }
 
     #[test]

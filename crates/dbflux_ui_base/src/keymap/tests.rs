@@ -301,23 +301,33 @@ fn results_layer_binds_f5_to_refresh() {
     );
 }
 
-/// No other layer binds `F5`, so the Results binding cannot shadow or be
-/// shadowed by another command.
+/// `F5` refreshes the focused document: only the Results, chart and
+/// dashboard layers bind it, and always to `RefreshSchema`, so it cannot
+/// shadow or be shadowed by another command.
 #[test]
-fn f5_is_bound_only_in_the_results_layer() {
+fn f5_is_bound_only_in_the_document_refresh_layers() {
     let keymap = default_keymap();
     let f5 = KeyChord::new("f5", Modifiers::none());
+    let refresh_layers = [ContextId::Results, ContextId::Chart, ContextId::Dashboard];
 
     for context in ContextId::all_variants() {
-        let bound_here = keymap
+        let bindings: Vec<Command> = keymap
             .bindings_for_context(*context)
             .into_iter()
-            .any(|(keys, _, owner)| keys == KeySequence::from(f5.clone()) && owner == *context);
+            .filter(|(keys, _, owner)| *keys == KeySequence::from(f5.clone()) && owner == context)
+            .map(|(_, command, _)| command)
+            .collect();
 
         assert_eq!(
-            bound_here,
-            *context == ContextId::Results,
+            !bindings.is_empty(),
+            refresh_layers.contains(context),
             "unexpected F5 binding ownership in {context:?}"
+        );
+        assert!(
+            bindings
+                .iter()
+                .all(|command| *command == Command::RefreshSchema),
+            "F5 must refresh in {context:?}"
         );
     }
 }
@@ -1919,5 +1929,128 @@ fn builder_rail_keys_drive_the_rail_and_leave_its_fields_their_letters() {
                 "`{keys}` does not act on the rail row from a focused dropdown"
             );
         }
+    }
+}
+
+/// A chart document moves its highlighted point with H and L, the series
+/// with J and K, switches the chart kind with Alt+H / Alt+L and the time
+/// range with [ and ], and lists its toolbar on M. A focused dropdown in the
+/// chart (refresh interval, custom range) keeps those letters.
+#[test]
+fn chart_keys_move_the_point_and_reach_the_toolbar() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Chart, &[]);
+    let chart = element_stack(root.clone(), &[]);
+    let dropdown = element_stack(root, &["Dropdown"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("space", Command::ExpandCollapse),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("]", Command::NextTimeRange),
+        ("[", Command::PrevTimeRange),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("escape", Command::Cancel),
+        ("ctrl-h", Command::FocusLeft),
+        ("ctrl-l", Command::FocusRight),
+    ] {
+        let action = top_action(&keymap, keys, &chart)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the chart"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the chart"
+        );
+    }
+
+    for keys in ["h", "l", "m", "]"] {
+        let in_dropdown = top_action(&keymap, keys, &dropdown);
+        assert!(
+            in_dropdown.as_ref().is_none_or(|action| {
+                !runs_command(action.as_ref(), Command::ColumnLeft)
+                    && !runs_command(action.as_ref(), Command::ColumnRight)
+                    && !runs_command(action.as_ref(), Command::OpenPaneActions)
+                    && !runs_command(action.as_ref(), Command::NextTimeRange)
+            }),
+            "`{keys}` stays with a focused dropdown in the chart"
+        );
+    }
+}
+
+/// A dashboard selects panels with hjkl and the arrows, acts on the selected
+/// one (open, configure, rename, remove, fold), moves it with Shift and
+/// resizes it with Alt+Shift, and switches between View and Edit with
+/// Alt+H / Alt+L.
+#[test]
+fn dashboard_keys_select_and_act_on_panels() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Dashboard, &[]);
+    let grid = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("left", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("right", Command::ColumnRight),
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("c", Command::ConfigurePanel),
+        ("r", Command::Rename),
+        ("f2", Command::Rename),
+        ("x", Command::Delete),
+        ("delete", Command::Delete),
+        ("a", Command::AddItem),
+        ("space", Command::ExpandCollapse),
+        ("shift-h", Command::MovePanelLeft),
+        ("shift-l", Command::MovePanelRight),
+        ("shift-k", Command::MovePanelUp),
+        ("shift-j", Command::MovePanelDown),
+        ("alt-shift-h", Command::ResizePanelNarrower),
+        ("alt-shift-l", Command::ResizePanelWider),
+        ("alt-shift-k", Command::ResizePanelShorter),
+        ("alt-shift-j", Command::ResizePanelTaller),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+        ("]", Command::NextTimeRange),
+        ("[", Command::PrevTimeRange),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("escape", Command::Cancel),
+        ("ctrl-h", Command::FocusLeft),
+    ] {
+        let action = top_action(&keymap, keys, &grid)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the dashboard"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the dashboard"
+        );
+    }
+
+    for keys in ["h", "x", "r", "a", "c"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in a dashboard title field"
+        );
     }
 }

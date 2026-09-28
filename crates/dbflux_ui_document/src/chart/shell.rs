@@ -119,6 +119,10 @@ pub struct ChartShell {
     /// Which AxisBar pill picker is currently open.
     pub(crate) axis_open_pill: Option<AxisPill>,
 
+    /// Row of the open AxisBar picker the keyboard is on, an index into
+    /// `axis_picker_options` for that pill.
+    pub(crate) axis_picker_cursor: usize,
+
     // ---- Y scale ----
     /// Y-axis scale mode. Persists across rebuilds (set_result / apply_bindings).
     pub(crate) y_scale: YScale,
@@ -167,6 +171,7 @@ impl ChartShell {
             chart_rail_picker_x_col: 0,
             chart_rail_picker_y_checked: Vec::new(),
             axis_open_pill: None,
+            axis_picker_cursor: 0,
             y_scale: YScale::Linear,
             chart_kind: ChartKind::default(),
             metric_picker: None,

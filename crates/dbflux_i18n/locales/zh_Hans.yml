@@ -1034,6 +1034,27 @@ document:
         created_with_limitations: "已创建存储桶 %{name}（有限制）"
     breadcrumb: "存储桶"
   chart:
+    pane_actions:
+      refresh: "刷新"
+      auto_refresh: "自动刷新间隔…"
+      next_time_range: "下一个时间范围"
+      prev_time_range: "上一个时间范围"
+      date_range: "自定义范围：日期…"
+      start_hour: "自定义范围：开始小时…"
+      start_minute: "自定义范围：开始分钟…"
+      end_hour: "自定义范围：结束小时…"
+      end_minute: "自定义范围：结束分钟…"
+      next_kind: "下一个图表类型"
+      prev_kind: "上一个图表类型"
+      x_axis: "X 轴…"
+      y_axis: "Y 系列…"
+      group_by: "分组依据…"
+      aggregation: "聚合…"
+      metric_rail: "指标选择器"
+      next_dimension: "下一个维度筛选"
+      prev_dimension: "上一个维度筛选"
+      period: "周期…"
+      statistic: "统计…"
     toolbar:
       type_label: 类型
       stats: 统计
@@ -3629,6 +3650,17 @@ settings:
       load_more: 加载更多
       edit_expiry: 编辑过期时间…
       copy_preview: 复制预览
+      next_time_range: "下一个时间范围"
+      prev_time_range: "上一个时间范围"
+      configure_panel: "配置面板"
+      move_panel_left: "面板左移"
+      move_panel_right: "面板右移"
+      move_panel_up: "面板上移"
+      move_panel_down: "面板下移"
+      resize_panel_narrower: "面板变窄"
+      resize_panel_wider: "面板变宽"
+      resize_panel_shorter: "面板变矮"
+      resize_panel_taller: "面板变高"
     context:
       global: 全局
       sidebar: 侧边栏
@@ -3660,6 +3692,8 @@ settings:
       notifications: 通知
       query_builder: "查询构建器"
       document_builder: "文档构建器"
+      chart: "图表"
+      dashboard: "仪表板"
     category:
       global: 全局
       focus: 聚焦
