@@ -766,7 +766,13 @@ parte del formulario, y `Left` / `Right` cambian la opción de **Introducir como
 y del método de autenticación SSH. `Down` / `Up` se mueven como `j` / `k`;
 mientras se edita un campo lo dejan por el campo siguiente o anterior, y
 `Ctrl+l` / `Ctrl+h` lo dejan por la pestaña siguiente o anterior. `PageDown` /
-`PageUp` mueven el resaltado de un desplegable abierto una página. En el visor de auditoría, `Left` / `Right`
+`PageUp` mueven el resaltado de un desplegable abierto una página. Después de
+la contraseña, el recorrido del formulario sigue por los demás campos del
+driver, como el selector de perfil de autenticación de una conexión AWS, que
+`Enter` abre, luego el modo SSL, cuya opción cambian `Left` / `Right` o `Enter`,
+y los selectores de certificados, donde `Enter` abre el explorador. Tras una
+prueba de conexión fallida, el botón **Copiar** del aviso queda entre **Probar
+conexión** y **Guardar**. En el visor de auditoría, `Left` / `Right`
 sobre los intervalos de tiempo cambian el intervalo.
 
 ## Desplegables

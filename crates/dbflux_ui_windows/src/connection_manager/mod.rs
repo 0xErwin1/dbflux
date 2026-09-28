@@ -193,8 +193,15 @@ enum FormFocus {
     SettingsPreDisconnectHookExtra,
     SettingsPostDisconnectHookExtra,
     SettingsDriverField(u8),
+    /// A stop of the Main tab after the fields the ring names above: a
+    /// driver field without its own variant, then the transport controls
+    /// (see [`MainExtraStop`]), indexed in that order.
+    MainExtra(u8),
     // Actions (shared between tabs)
     TestConnection,
+    /// The Copy button of a failed connection test's banner, between Test
+    /// connection and Save while the banner shows.
+    CopyTestError,
     Save,
 }
 
@@ -224,6 +231,16 @@ enum AccessTabMode {
     Ssh,
     Proxy,
     ManagedSsm,
+}
+
+/// A Main-tab control the keyboard ring reaches through
+/// [`FormFocus::MainExtra`]: a field of the driver's main form that has no
+/// variant of its own, the SSL mode, or a certificate picker.
+#[derive(Clone, Debug)]
+pub(super) enum MainExtraStop {
+    DriverField(FormFieldDef),
+    SslMode,
+    SslCert(SslCertSlot),
 }
 
 /// Identifies which SSL certificate slot a file picker writes into.
@@ -1835,6 +1852,92 @@ impl ConnectionManagerWindow {
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
         form_renderer::is_field_enabled(field, &self.form.checkbox_states, &self.form.select_values)
+    }
+
+    /// The Main-tab controls after the named fields, in the order they are
+    /// drawn: the driver's own fields, then the SSL mode and the certificate
+    /// pickers the selected mode shows.
+    pub(super) fn main_extra_stops(&self) -> Vec<MainExtraStop> {
+        let Some(driver) = self.form.selected_driver.as_ref() else {
+            return Vec::new();
+        };
+
+        let form_def = driver.form_definition();
+        let mut stops: Vec<MainExtraStop> = form_def
+            .main_tab()
+            .map(|tab| {
+                tab.sections
+                    .iter()
+                    .flat_map(|section| section.fields.iter())
+                    .filter(|field| {
+                        field.id != "password"
+                            && Self::field_id_to_focus(&field.id, false).is_none()
+                            && !matches!(field.kind, FormFieldKind::DynamicSelect { .. })
+                    })
+                    .cloned()
+                    .map(MainExtraStop::DriverField)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let metadata = driver.metadata();
+        if metadata.ssl_modes.is_some() {
+            stops.push(MainExtraStop::SslMode);
+
+            if let Some(cert_fields) = &metadata.ssl_cert_fields {
+                let mode = &self.form.selected_ssl_mode;
+
+                if dbflux_core::ssl_mode_id_requires_root_cert(mode) {
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::CaCert));
+                }
+
+                if cert_fields.client_cert && dbflux_core::ssl_mode_id_is_cert_active(mode) {
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::ClientCert));
+                    stops.push(MainExtraStop::SslCert(SslCertSlot::ClientKey));
+                }
+            }
+        }
+
+        stops
+    }
+
+    /// The ring stop of the Main-tab driver field `field_id` when it has no
+    /// variant of its own.
+    pub(super) fn main_extra_focus_for_field(&self, field_id: &str) -> Option<FormFocus> {
+        self.main_extra_focus_where(
+            |stop| matches!(stop, MainExtraStop::DriverField(field) if field.id == field_id),
+        )
+    }
+
+    /// The ring stop of the SSL mode control.
+    pub(super) fn main_extra_focus_for_ssl_mode(&self) -> Option<FormFocus> {
+        self.main_extra_focus_where(|stop| matches!(stop, MainExtraStop::SslMode))
+    }
+
+    /// The ring stop of the certificate picker of `slot`.
+    pub(super) fn main_extra_focus_for_ssl_cert(&self, slot: SslCertSlot) -> Option<FormFocus> {
+        self.main_extra_focus_where(
+            |stop| matches!(stop, MainExtraStop::SslCert(candidate) if *candidate == slot),
+        )
+    }
+
+    fn main_extra_focus_where(
+        &self,
+        matches: impl Fn(&MainExtraStop) -> bool,
+    ) -> Option<FormFocus> {
+        self.main_extra_stops()
+            .iter()
+            .position(matches)
+            .map(|index| FormFocus::MainExtra(index as u8))
+    }
+
+    /// The input that holds the path of a certificate slot.
+    pub(super) fn ssl_cert_input(&self, slot: SslCertSlot) -> &Entity<InputState> {
+        match slot {
+            SslCertSlot::CaCert => &self.form.ssl_ca_cert_input,
+            SslCertSlot::ClientCert => &self.form.ssl_client_cert_input,
+            SslCertSlot::ClientKey => &self.form.ssl_client_key_input,
+        }
     }
 
     /// Map a field ID to its FormFocus variant.

@@ -733,7 +733,12 @@ anywhere in the form, and `Left` / `Right` change the choice of **Enter as** and
 of the SSH authentication method. `Down` / `Up` move like `j` / `k`; while a
 field is being edited they leave it for the next or previous field, and
 `Ctrl+l` / `Ctrl+h` leave it for the next or previous tab. `PageDown` /
-`PageUp` move the highlight of an open dropdown a page at a time. In the audit viewer, `Left` / `Right` on the
+`PageUp` move the highlight of an open dropdown a page at a time. After the
+password, the form's ring continues through the driver's other fields, such as
+the auth profile picker of an AWS connection, which `Enter` opens, then the SSL
+mode, whose choice `Left` / `Right` or `Enter` change, and the certificate
+pickers, where `Enter` browses. After a failed connection test, the banner's
+**Copy** button sits between **Test connection** and **Save**. In the audit viewer, `Left` / `Right` on the
 time presets change the preset.
 
 ## Dropdowns

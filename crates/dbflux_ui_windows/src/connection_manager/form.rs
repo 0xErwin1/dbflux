@@ -2301,6 +2301,169 @@ mod tests {
             .log_err();
     }
 
+    /// The ring reaches the transport section after the password: the SSL
+    /// mode is a stop whose choice Left and Right change.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_reaches_the_ssl_mode() {
+        use super::super::MainExtraStop;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        let ssl_stop = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.form_focus = FormFocus::TestConnection;
+                window.focus(&manager.focus_handle, cx);
+                manager.main_extra_focus_for_ssl_mode()
+            })
+            .expect("window is open")
+            .expect("PostgreSQL offers SSL modes");
+
+        cx.simulate_keystrokes(window.into(), "k");
+        let stops = window
+            .update(&mut cx, |manager, _, _| manager.main_extra_stops())
+            .expect("window is open");
+        assert_eq!(
+            form_state(window, &mut cx).0,
+            FormFocus::MainExtra((stops.len() - 1) as u8),
+            "k from Test connection lands on the last extra stop"
+        );
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = ssl_stop)
+            .expect("window is open");
+        assert!(matches!(
+            stops.get(match ssl_stop {
+                FormFocus::MainExtra(index) => index as usize,
+                _ => usize::MAX,
+            }),
+            Some(MainExtraStop::SslMode)
+        ));
+
+        let ssl_mode = |cx: &mut TestAppContext| {
+            window
+                .update(cx, |manager, _, _| manager.form.selected_ssl_mode.clone())
+                .expect("window is open")
+        };
+        let before = ssl_mode(&mut cx);
+
+        cx.simulate_keystrokes(window.into(), "right");
+        assert_ne!(ssl_mode(&mut cx), before, "Right picks the next SSL mode");
+        assert_eq!(form_state(window, &mut cx).0, ssl_stop, "the cursor stays");
+
+        cx.simulate_keystrokes(window.into(), "left");
+        assert_eq!(ssl_mode(&mut cx), before, "Left picks it back");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// A driver field without a ring stop of its own, such as the auth
+    /// profile picker of an AWS driver, is an extra stop: Enter opens it and
+    /// the dropdown keys drive it.
+    #[::core::prelude::v1::test]
+    fn the_form_ring_reaches_the_auth_profile_picker() {
+        use super::super::MainExtraStop;
+        use dbflux_core::FormFieldKind;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        let picker_stop = window
+            .update(&mut cx, |manager, window, cx| {
+                manager.select_driver("dynamodb", window, cx);
+                manager.edit_state = EditState::Navigating;
+                window.focus(&manager.focus_handle, cx);
+
+                manager
+                    .main_extra_stops()
+                    .iter()
+                    .position(|stop| {
+                        matches!(
+                            stop,
+                            MainExtraStop::DriverField(field)
+                                if matches!(field.kind, FormFieldKind::AuthProfileRef { .. })
+                        )
+                    })
+                    .map(|index| FormFocus::MainExtra(index as u8))
+            })
+            .expect("window is open")
+            .expect("the DynamoDB form has an auth profile picker");
+
+        window
+            .update(&mut cx, |manager, _, _| manager.form_focus = picker_stop)
+            .expect("window is open");
+        cx.simulate_keystrokes(window.into(), "enter");
+
+        let open = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .auth_profile
+                    .auth_profile_dropdown
+                    .read(cx)
+                    .is_open()
+            })
+            .expect("window is open");
+        assert!(open, "Enter opens the auth profile picker");
+
+        cx.simulate_keystrokes(window.into(), "escape");
+        let open = window
+            .update(&mut cx, |manager, _, cx| {
+                manager
+                    .auth_profile
+                    .auth_profile_dropdown
+                    .read(cx)
+                    .is_open()
+            })
+            .expect("window is open");
+        assert!(!open, "Escape closes it");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
+    /// After a failed test, the banner's Copy button sits between Test
+    /// connection and Save: Right reaches it and Enter copies the error.
+    #[::core::prelude::v1::test]
+    fn the_failed_test_copy_button_is_on_the_test_row() {
+        use super::super::TestStatus;
+
+        let mut cx = TestAppContext::single();
+        let window = open_postgres_form(&mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.test_status = TestStatus::Failed;
+                manager.test_error = Some("connection refused".to_string());
+                manager.form_focus = FormFocus::TestConnection;
+                window.focus(&manager.focus_handle, cx);
+            })
+            .expect("window is open");
+
+        cx.simulate_keystrokes(window.into(), "l");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::CopyTestError);
+
+        cx.simulate_keystrokes(window.into(), "enter");
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("connection refused")
+        );
+
+        cx.simulate_keystrokes(window.into(), "l");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::Save);
+
+        cx.simulate_keystrokes(window.into(), "h h");
+        assert_eq!(form_state(window, &mut cx).0, FormFocus::TestConnection);
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .log_err();
+    }
+
     /// Page Down moves an open dropdown's highlight a page at a time.
     #[::core::prelude::v1::test]
     fn page_down_moves_an_open_dropdown() {

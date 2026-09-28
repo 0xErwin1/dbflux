@@ -318,6 +318,10 @@ impl ConnectionManagerWindow {
             .collect();
 
         let entity = cx.entity().clone();
+        let show_focus =
+            self.edit_state == EditState::Navigating && self.active_tab == ActiveTab::Main;
+        let ssl_mode_focused =
+            show_focus && self.main_extra_focus_for_ssl_mode() == Some(self.form_focus);
 
         let ssl_control = SegmentedControl::new(
             ssl_items,
@@ -330,7 +334,8 @@ impl ConnectionManagerWindow {
                 });
             },
         )
-        .group("ssl-mode");
+        .group("ssl-mode")
+        .focused(ssl_mode_focused);
 
         // Wrap the segmented control in a content-width row with a trailing flex filler so
         // its segments hug their labels instead of stretching to fill the field column.
@@ -447,11 +452,15 @@ impl ConnectionManagerWindow {
             });
         });
 
+        let picker_focused = self.edit_state == EditState::Navigating
+            && self.active_tab == ActiveTab::Main
+            && self.main_extra_focus_for_ssl_cert(slot) == Some(self.form_focus);
+
         let control = div()
             .flex()
             .items_center()
             .gap_2()
-            .child(picker)
+            .child(layout::cursor_ring(picker_focused, picker, cx))
             .child(div().flex_1());
 
         Self::field_row_cm(label, false, control, None::<&str>, cx).into_any_element()
