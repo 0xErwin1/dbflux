@@ -9,6 +9,9 @@
 
 mod builder;
 mod configure_popover;
+mod keyboard;
+#[cfg(test)]
+mod keyboard_tests;
 pub mod pane;
 mod render;
 
@@ -271,8 +274,13 @@ pub struct DashboardDocument {
     focus_handle: FocusHandle,
 
     /// Index of the panel currently highlighted with the keyboard focus ring.
-    /// Arrow keys move this between panels; Enter / Delete / F2 act on it.
+    /// The navigation keys move this between panels and the panel keys act
+    /// on it (see `keyboard`).
     pub(crate) focused_panel_index: Option<u32>,
+
+    /// Index of the panel the keyboard went into with Enter: its chart or
+    /// table takes the keys until Escape brings them back to the dashboard.
+    pub(crate) entered_panel: Option<u32>,
 
     // ---- Visual builder state (Phase Q) ----
     /// Currently selected time-range preset (persisted in the dashboard row).
@@ -538,6 +546,7 @@ impl DashboardDocument {
             pending_refresh_on_focus: false,
             focus_handle: cx.focus_handle(),
             focused_panel_index: initial_focused,
+            entered_panel: None,
             // Visual builder state (Phase Q).
             shared_time_range_preset,
             shared_refresh_policy,
@@ -675,36 +684,8 @@ impl DashboardDocument {
         self.profile_id = Some(id);
     }
 
-    pub fn active_context(&self) -> ContextId {
-        ContextId::Global
-    }
-
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
-    }
-
-    pub fn dispatch_command(
-        &mut self,
-        cmd: Command,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if let Command::Cancel = cmd {
-            if self.panel_context_menu.is_some() {
-                self.close_panel_context_menu(cx);
-                return true;
-            } else if self.pending_configure_panel_index.is_some() {
-                self.close_configure_panel(cx);
-                return true;
-            } else if self.editing_dashboard_name {
-                self.cancel_dashboard_name_edit(cx);
-                return true;
-            } else if self.editing_title_panel_index.is_some() {
-                self.cancel_panel_title_edit(cx);
-                return true;
-            }
-        }
-        false
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1456,103 +1437,6 @@ impl DashboardDocument {
         self.dashboard_name_input = None;
         self._dashboard_name_edit_subscription = None;
         cx.notify();
-    }
-
-    // ---- Keyboard focus / navigation ----
-
-    /// Returns the panel slots sorted by `(grid_row, grid_column)` paired with
-    /// their original `panel_index` (the slot's position in `panel_slots`,
-    /// which is also the index every public API uses).
-    fn focus_navigation_order(&self) -> Vec<u32> {
-        let mut indexed: Vec<(u32, super::dashboard::PanelGridPos)> = self
-            .panel_slots
-            .iter()
-            .enumerate()
-            .map(|(i, slot)| (i as u32, slot.grid_pos()))
-            .collect();
-        indexed.sort_by_key(|(_, pos)| (pos.grid_row, pos.grid_column));
-        indexed.into_iter().map(|(idx, _)| idx).collect()
-    }
-
-    /// Move the keyboard focus ring by `delta` along the visual reading order
-    /// (left→right, top→bottom). `delta = -1` for previous, `+1` for next.
-    pub fn move_panel_focus(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let order = self.focus_navigation_order();
-        if order.is_empty() {
-            self.focused_panel_index = None;
-            return;
-        }
-
-        let current_pos = self
-            .focused_panel_index
-            .and_then(|idx| order.iter().position(|i| *i == idx))
-            .unwrap_or(0) as i32;
-
-        let new_pos = (current_pos + delta).rem_euclid(order.len() as i32) as usize;
-        self.focused_panel_index = Some(order[new_pos]);
-        cx.notify();
-    }
-
-    /// Move focus by `delta` rows in the grid (Arrow Up / Down).
-    ///
-    /// Walks the visual order until the focused panel's `grid_row` changes by
-    /// at least `delta` rows. Falls back to a single-step move when no panel
-    /// in the target row exists.
-    pub fn move_panel_focus_rows(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let order = self.focus_navigation_order();
-        if order.is_empty() {
-            return;
-        }
-
-        let current_idx = self
-            .focused_panel_index
-            .and_then(|idx| order.iter().position(|i| *i == idx))
-            .unwrap_or(0);
-
-        let current_row = self
-            .panel_slots
-            .get(order[current_idx] as usize)
-            .map(|s| s.grid_pos().grid_row)
-            .unwrap_or(0) as i32;
-
-        let target_row = current_row + delta;
-
-        let same_column = self
-            .panel_slots
-            .get(order[current_idx] as usize)
-            .map(|s| s.grid_pos().grid_column);
-
-        // Prefer a panel on `target_row` whose column matches the current one;
-        // otherwise fall back to the first panel on `target_row`.
-        let mut fallback: Option<u32> = None;
-        for &slot_idx in &order {
-            let pos = self.panel_slots[slot_idx as usize].grid_pos();
-            if pos.grid_row as i32 != target_row {
-                continue;
-            }
-            if fallback.is_none() {
-                fallback = Some(slot_idx);
-            }
-            if Some(pos.grid_column) == same_column {
-                self.focused_panel_index = Some(slot_idx);
-                cx.notify();
-                return;
-            }
-        }
-
-        if let Some(slot_idx) = fallback {
-            self.focused_panel_index = Some(slot_idx);
-            cx.notify();
-        } else {
-            // No panel on the target row — fall back to a single-step move.
-            self.move_panel_focus(delta.signum(), cx);
-        }
-    }
-
-    /// Returns the kebab menu items for keyboard activation on the focused
-    /// panel: Enter opens Configure, F2 starts the rename, Delete removes.
-    pub fn focused_panel_index(&self) -> Option<u32> {
-        self.focused_panel_index
     }
 
     // ---- Visual builder: per-panel context menu (Q.3) ----
@@ -3097,7 +2981,7 @@ mod tests {
         let (host, window) = host_document(
             cx,
             move |window, cx| make_empty_dashboard(app_state, window, cx),
-            |dashboard, _| dashboard.active_context(),
+            |dashboard, cx| dashboard.active_context(cx),
             DashboardDocument::dispatch_command,
         );
         let dashboard = window.update(|_, cx| host.read(cx).document.clone());

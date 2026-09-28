@@ -354,6 +354,45 @@ the time range and the custom range controls. The date range of a custom range
 takes the keyboard from its menu entry and opens with `Enter`; picking the
 days in its calendar still needs the pointer.
 
+## Dashboards
+
+These keys apply in a dashboard tab, in View and Edit mode. A ring marks the
+selected panel while the keyboard is in the dashboard.
+
+| Keys | Action |
+|------|--------|
+| `h` / `l` (or `Left` / `Right`) | Select the previous / next panel in reading order |
+| `j` / `k` (or `Down` / `Up`) | Select the nearest panel on the next / previous row |
+| `g` / `Shift+g` (or `Home` / `End`) | Select the first / last panel |
+| `Enter` / `i` | Open the selected panel: a chart takes the [chart keys](#charts), an inspector table the table keys, until `Escape`; on a divider, fold or unfold its section |
+| `Space` | Fold or unfold the selected divider's section |
+| `c` | Configure the selected chart panel |
+| `r` / `F2` | Rename the selected panel |
+| `x` / `Delete` | Remove the selected panel |
+| `a` | Add a panel |
+| `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected panel one grid cell (Edit mode) |
+| `Alt+Shift` + `h` / `l` | Make the selected panel narrower / wider (Edit mode) |
+| `Alt+Shift` + `k` / `j` | Make the selected panel shorter / taller (Edit mode) |
+| `Alt+l` / `Alt+h` | Switch between View and Edit |
+| `]` / `[` | Next / previous shared time range, Custom included |
+| `F5` | Refresh every panel, or only the open one |
+| `m` (or `Shift+F10`) | Pane actions: the selected panel's actions, add panel, refresh, auto-refresh interval, the time range and the custom range controls, View / Edit or Save as editable. With a chart panel open, its chart type and Stats |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Focus the panel in that direction |
+
+A move or resize that leaves the grid or lands on another panel is refused, as
+a drag is. In the Configure popover, `h` / `l` open the X, Y, Group and
+Aggregation pickers in turn, `j` / `k` move through the open one, `Space` or
+`Enter` pick, `Alt+l` / `Alt+h` switch the chart type, `Enter` without a picker
+applies and `Escape` closes the picker and then the popover.
+
+In the Add Panel dialog, `Alt+l` / `Alt+h` switch its tabs (also from its text
+fields, except on macOS). The arrows move through the chart list from the
+search and `Enter` adds the checked charts, or the highlighted one when none is
+checked. `Tab` moves into a list, where `j` / `k`, `g` / `Shift+g` and `Space`
+(check a chart, pick a namespace or metric) work, `h` / `l` switch between the
+Metric tab's namespace and metric lists and `/` goes back to the search.
+`Escape` closes the dialog.
+
 ## Background Tasks
 
 The tasks panel sits under the documents and starts collapsed. Collapsed, it takes no space: open it with the background tasks entry in the status bar, or with `Ctrl+Shift+4`, which also moves focus to it. `Tab` and `Shift+Tab` skip the panel while it is collapsed.

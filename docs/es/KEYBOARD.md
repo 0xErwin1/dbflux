@@ -372,6 +372,46 @@ rango personalizado. El rango de fechas de un rango personalizado recibe el
 teclado desde su entrada del menú y se abre con `Enter`; elegir los días en su
 calendario todavía necesita el puntero.
 
+## Dashboards
+
+Estas teclas valen en una pestaña de dashboard, en modo View y Edit. Un anillo
+marca el panel elegido mientras el teclado está en el dashboard.
+
+| Teclas | Acción |
+|--------|--------|
+| `h` / `l` (o `Left` / `Right`) | Elegir el panel anterior / siguiente en orden de lectura |
+| `j` / `k` (o `Down` / `Up`) | Elegir el panel más cercano en la fila siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Elegir el primer / último panel |
+| `Enter` / `i` | Abrir el panel elegido: un chart toma las [teclas de gráficos](#gráficos) y un inspector las de la tabla, hasta `Escape`; en un divider, plegar o desplegar su sección |
+| `Space` | Plegar o desplegar la sección del divider elegido |
+| `c` | Configurar el panel de chart elegido |
+| `r` / `F2` | Renombrar el panel elegido |
+| `x` / `Delete` | Eliminar el panel elegido |
+| `a` | Añadir un panel |
+| `Shift` + `h` / `j` / `k` / `l` (o flechas) | Mover el panel elegido una celda (modo Edit) |
+| `Alt+Shift` + `h` / `l` | Estrechar / ensanchar el panel elegido (modo Edit) |
+| `Alt+Shift` + `k` / `j` | Acortar / alargar el panel elegido (modo Edit) |
+| `Alt+l` / `Alt+h` | Cambiar entre View y Edit |
+| `]` / `[` | Rango de tiempo compartido siguiente / anterior, Personalizado incluido |
+| `F5` | Actualizar todos los panels, o solo el abierto |
+| `m` (o `Shift+F10`) | Acciones del panel: las del panel elegido, añadir panel, actualizar, intervalo de actualización automática, el rango de tiempo y los controles del rango personalizado, View / Edit o Guardar como editable. Con un panel de chart abierto, su tipo de chart y Stats |
+| `Ctrl+h` / `Ctrl+j` / `Ctrl+k` / `Ctrl+l` | Enfocar el panel en esa dirección |
+
+Un movimiento o cambio de tamaño que sale de la cuadrícula o cae sobre otro
+panel se rechaza, igual que al arrastrar. En el popover Configure, `h` / `l`
+abren por turno los selectores X, Y, Agrupar y Agregación, `j` / `k` recorren
+el abierto, `Space` o `Enter` eligen, `Alt+l` / `Alt+h` cambian el tipo de chart,
+`Enter` sin selector abierto aplica y `Escape` cierra el selector y luego el
+popover.
+
+En el diálogo Add Panel, `Alt+l` / `Alt+h` cambian sus pestañas (también desde
+sus campos de texto, salvo en macOS). Las flechas recorren la lista de charts
+desde la búsqueda y `Enter` añade los charts marcados, o el resaltado si no hay
+ninguno marcado. `Tab` entra en una lista, donde funcionan `j` / `k`, `g` /
+`Shift+g` y `Space` (marcar un chart, elegir un namespace o una métrica),
+`h` / `l` pasan entre las listas de namespaces y métricas de la pestaña Metric
+y `/` vuelve a la búsqueda. `Escape` cierra el diálogo.
+
 ## Tareas en segundo plano
 
 El panel de tareas está debajo de los documentos y empieza colapsado. Colapsado no ocupa espacio: se abre con la entrada de tareas en segundo plano de la barra de estado, o con `Ctrl+Shift+4`, que además le pasa el foco. `Tab` y `Shift+Tab` lo saltan mientras está colapsado.

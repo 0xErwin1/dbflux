@@ -684,17 +684,14 @@ impl ChartDocument {
             };
         }
 
-        let columns = self.last_result_columns().unwrap_or_default();
-        let outcome = self
-            .chart_shell
-            .update(cx, |shell, cx| shell.keyboard_command(cmd, &columns, cx));
-
-        if outcome == ChartKeyOutcome::BindingsChanged {
-            self.rebuild_chart_view(cx);
+        if self.chart_key(cmd, cx).handled() {
+            return true;
         }
 
-        if outcome.handled() {
-            return true;
+        // Embedded in a dashboard, the time range, the refresh and the save
+        // belong to the dashboard.
+        if self.embedded {
+            return false;
         }
 
         match cmd {
@@ -711,7 +708,7 @@ impl ChartDocument {
                 self.request_reexecute(window, cx);
                 true
             }
-            Command::SaveQuery if !self.embedded => {
+            Command::SaveQuery => {
                 self.open_name_prompt(window, cx);
                 true
             }
@@ -783,6 +780,39 @@ impl ChartDocument {
     /// Row of the open axis picker the keyboard is on.
     pub fn axis_picker_cursor(&self, cx: &App) -> Option<usize> {
         self.chart_shell.read(cx).axis_picker_cursor()
+    }
+
+    /// Runs `cmd` as a chart key (see `chart::keyboard`), rebuilding the
+    /// chart when it changed the axis bindings.
+    pub(crate) fn chart_key(&mut self, cmd: Command, cx: &mut Context<Self>) -> ChartKeyOutcome {
+        let columns = self.last_result_columns().unwrap_or_default();
+        let outcome = self
+            .chart_shell
+            .update(cx, |shell, cx| shell.keyboard_command(cmd, &columns, cx));
+
+        if outcome == ChartKeyOutcome::BindingsChanged {
+            self.rebuild_chart_view(cx);
+        }
+
+        outcome
+    }
+
+    /// Opens the axis picker of `pill` with the keyboard in it.
+    pub fn open_axis_picker(
+        &mut self,
+        pill: dbflux_components::chart::AxisPill,
+        cx: &mut Context<Self>,
+    ) {
+        let columns = self.last_result_columns().unwrap_or_default();
+        self.chart_shell
+            .update(cx, |shell, cx| shell.open_axis_picker(pill, &columns, cx));
+    }
+
+    /// The pane actions of a chart a dashboard panel shows: the chart type
+    /// and the stats. Its axis pickers live in the panel's Configure popover
+    /// and its time range, refresh and save in the dashboard.
+    pub(crate) fn embedded_pane_actions(&self, cx: &App) -> Vec<PaneAction> {
+        chart_shell_pane_actions(&self.chart_shell, &[], ContextId::Chart, cx)
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {

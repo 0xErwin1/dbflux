@@ -8,6 +8,7 @@
 //! popover never reaches into `chart_shell` directly.
 
 use super::{DashboardDocument, DashboardPanelSlot};
+use dbflux_app::keymap::Command;
 use dbflux_components::chart::{AggKind, AxisPill, BindingSpec, ChartKind, axis_bar_element};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
@@ -120,7 +121,8 @@ pub(super) fn render_configure_popover(
 
     // Bridge Modal's App-scoped handlers into the DashboardDocument
     // entity via a weak handle: Escape, the X button and a backdrop click
-    // close the popover, and Enter applies like the Apply button.
+    // close the popover, and Enter applies like the Apply button. While an
+    // axis picker is open, Enter picks its row and Escape closes it first.
     let modal_title = dbflux_i18n::t!("document.dashboard.configure.title", name = panel_title);
     let modal = Modal::new(modal_title)
         .body(body)
@@ -128,11 +130,16 @@ pub(super) fn render_configure_popover(
         .icon(AppIcon::Settings)
         .width(px(720.0))
         .focus_handle(dashboard.configure_focus.handle())
+        // The chart keys drive the axis pickers and the chart type here; the
+        // dashboard hands them to the panel (see `keyboard`).
+        .key_context(dbflux_app::keymap::ContextId::Chart.as_gpui_context())
         .on_close({
             let weak_self = cx.weak_entity();
             move |_window, cx| {
                 weak_self
-                    .update(cx, |this, cx| this.close_configure_panel(cx))
+                    .update(cx, |this, cx| {
+                        this.configure_popover_command(Command::Cancel, cx);
+                    })
                     .log_err();
             }
         })
@@ -141,7 +148,7 @@ pub(super) fn render_configure_popover(
             move |_window, cx| {
                 weak_self
                     .update(cx, |this, cx| {
-                        this.configure_apply_and_persist(panel_index, cx)
+                        this.configure_popover_command(Command::Execute, cx);
                     })
                     .log_err();
             }

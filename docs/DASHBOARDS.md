@@ -68,8 +68,12 @@ Switch between **View** and **Edit** in the header:
   corner to resize within the 12-column grid.
 - **View** mode is read-only.
 
-In Edit mode you can also use the keyboard on a focused panel: `F2` to rename,
-`Delete`/`Backspace` to remove, `Enter` to open its Configure popover.
+The whole dashboard works from the keyboard in both modes: `h`/`j`/`k`/`l` or
+the arrows select a panel, `Enter` opens it (its chart or table takes the keys
+until `Escape`), `c` opens its Configure popover, `r` or `F2` renames it, `x` or
+`Delete` removes it, `a` adds a panel and `m` lists every action. In Edit mode
+`Shift` + `h`/`j`/`k`/`l` moves the selected panel and `Alt+Shift` +
+`h`/`j`/`k`/`l` resizes it. See [Keyboard Reference](KEYBOARD.md#dashboards).
 
 ### Add panels
 

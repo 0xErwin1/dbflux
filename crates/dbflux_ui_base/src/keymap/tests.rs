@@ -2054,3 +2054,89 @@ fn dashboard_keys_select_and_act_on_panels() {
         );
     }
 }
+
+/// A dashboard panel's Configure popover carries the Chart context on its
+/// dialog, so the chart keys drive its axis pickers and chart type there,
+/// while the dashboard's own panel keys and the pane focus chords do not
+/// reach behind the dialog. Enter and Escape stay the dialog's own keys; the
+/// popover hands them to an open picker first.
+#[test]
+fn the_configure_popover_takes_the_chart_keys() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::Dashboard, &[]);
+    let popover = element_stack(root, &["Modal Chart"]);
+
+    for (keys, command) in [
+        ("h", Command::ColumnLeft),
+        ("j", Command::SelectNext),
+        ("alt-l", Command::NextPanelTab),
+        ("space", Command::ExpandCollapse),
+    ] {
+        let action = top_action(&keymap, keys, &popover)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the popover"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the popover"
+        );
+    }
+
+    for (keys, command) in [
+        ("shift-j", Command::MovePanelDown),
+        ("x", Command::Delete),
+        ("ctrl-h", Command::FocusLeft),
+    ] {
+        let action = top_action(&keymap, keys, &popover);
+        assert!(
+            action
+                .as_ref()
+                .is_none_or(|action| !runs_command(action.as_ref(), command)),
+            "`{keys}` does not reach behind the popover"
+        );
+    }
+}
+
+/// The Add Panel dialog carries its own context: Alt+H / Alt+L switch its
+/// tabs from anywhere in it (the text fields too, except on macOS), and the
+/// list letters work outside its text fields.
+#[test]
+fn add_panel_picker_keys_switch_tabs_and_move_the_lists() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::TextInput, &[]);
+    let list = element_stack(root.clone(), &["Modal AddPanelPicker"]);
+    let field = element_stack(root, &["Modal AddPanelPicker", "Input"]);
+
+    for (keys, command) in [
+        ("j", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("h", Command::ColumnLeft),
+        ("l", Command::ColumnRight),
+        ("space", Command::ExpandCollapse),
+        ("/", Command::FocusSearch),
+        ("alt-l", Command::NextPanelTab),
+        ("alt-h", Command::PrevPanelTab),
+    ] {
+        let action = top_action(&keymap, keys, &list)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the Add Panel dialog"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the Add Panel dialog"
+        );
+    }
+
+    for keys in ["j", "space", "/"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in the dialog's fields"
+        );
+    }
+
+    if !cfg!(target_os = "macos") {
+        let action = top_action(&keymap, "alt-l", &field).expect("bound in the fields");
+        assert!(runs_command(action.as_ref(), Command::NextPanelTab));
+    }
+}

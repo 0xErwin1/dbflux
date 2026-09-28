@@ -1318,6 +1318,11 @@ document:
     title:
       untitled: 未命名
   dashboard:
+    pane_actions:
+      open_panel: "打开面板"
+      fold_section: "折叠或展开分区"
+      switch_to_view: "切换到查看"
+      switch_to_edit: "切换到编辑"
     builder:
       preset:
         last_15_min: 最近 15 分钟
@@ -3694,6 +3699,7 @@ settings:
       document_builder: "文档构建器"
       chart: "图表"
       dashboard: "仪表板"
+      add_panel_picker: "添加面板选择器"
     category:
       global: 全局
       focus: 聚焦

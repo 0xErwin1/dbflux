@@ -1,3 +1,6 @@
+use crate::keymap::{RunCommand, run_command};
+use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::actions::{ScrollDown, ScrollToBottom, ScrollToTop, ScrollUp};
 use dbflux_components::chart::ChartKind;
 use dbflux_components::composites::{inline_tab, inline_tab_bar};
 use dbflux_components::controls::{Button, GpuiInput as Input, InputEvent, InputState};
@@ -10,8 +13,8 @@ use dbflux_components::typography::AppFonts;
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, IntoElement, Render,
-    SharedString, Subscription, Window, div, px,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    IntoElement, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Editor, EditorState};
@@ -83,6 +86,13 @@ pub enum AddPanelTab {
     Saved,
     Query,
     Metric,
+}
+
+/// The list of the Metric tab the keyboard is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetricList {
+    Namespaces,
+    Metrics,
 }
 
 /// Pure helper: submit button label given an active tab and current
@@ -165,6 +175,10 @@ pub struct ModalAddPanelPicker {
     // Saved-tab state.
     search_input: Entity<InputState>,
     selected_ids: Vec<Uuid>,
+    /// Row of the chart list the keyboard is on (into the filtered list).
+    saved_highlight: usize,
+    /// Tab stop of the chart list: the list keys work while it has focus.
+    saved_list_focus: FocusHandle,
 
     // Query-tab state.
     query_name_input: Entity<InputState>,
@@ -183,6 +197,13 @@ pub struct ModalAddPanelPicker {
     metric_metric_selected: Option<usize>,
     metric_period_input: Entity<InputState>,
     metric_statistic: String,
+    /// Rows of the namespace and metric lists the keyboard is on (into the
+    /// filtered lists).
+    namespace_highlight: usize,
+    metric_highlight: usize,
+    /// Tab stops of the namespace and metric lists.
+    namespace_list_focus: FocusHandle,
+    metric_list_focus: FocusHandle,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -234,6 +255,8 @@ impl ModalAddPanelPicker {
             focus: ModalFocus::new(cx),
             search_input,
             selected_ids: Vec::new(),
+            saved_highlight: 0,
+            saved_list_focus: cx.focus_handle().tab_stop(true),
             query_name_input,
             query_input,
             query_chart_kind: ChartKind::Line,
@@ -245,6 +268,10 @@ impl ModalAddPanelPicker {
             metric_metric_selected: None,
             metric_period_input,
             metric_statistic: "Average".to_string(),
+            namespace_highlight: 0,
+            metric_highlight: 0,
+            namespace_list_focus: cx.focus_handle().tab_stop(true),
+            metric_list_focus: cx.focus_handle().tab_stop(true),
             _subscriptions: Vec::new(),
         }
     }
@@ -268,6 +295,9 @@ impl ModalAddPanelPicker {
         self.visible = true;
         self.active_tab = AddPanelTab::Saved;
         self.selected_ids.clear();
+        self.saved_highlight = 0;
+        self.namespace_highlight = 0;
+        self.metric_highlight = 0;
         self.metric_namespace_selected = None;
         self.metric_metric_selected = None;
         self.metric_metrics_for_namespace.clear();
@@ -520,10 +550,289 @@ impl ModalAddPanelPicker {
         self.close(cx);
     }
 
+    // ---- keyboard ----
+
+    /// Ids of the saved charts the search leaves in the list, in order.
+    fn filtered_saved_ids(&self, cx: &App) -> Vec<Uuid> {
+        let Some(request) = self.request.as_ref() else {
+            return Vec::new();
+        };
+        let query = self.search_input.read(cx).value().to_string();
+
+        Self::filtered_candidates(&request.candidates, &query)
+            .into_iter()
+            .map(|chart| chart.id)
+            .collect()
+    }
+
+    /// Namespaces the filter leaves in the namespace list, in order.
+    fn filtered_namespaces(&self, cx: &App) -> Vec<String> {
+        let Some(request) = self.request.as_ref() else {
+            return Vec::new();
+        };
+        let filter = self
+            .metric_namespace_filter_input
+            .read(cx)
+            .value()
+            .to_lowercase();
+
+        request
+            .metric_namespaces
+            .iter()
+            .filter(|namespace| filter.is_empty() || namespace.to_lowercase().contains(&filter))
+            .cloned()
+            .collect()
+    }
+
+    /// Indices (into the cached metric list) the filter leaves in the metric
+    /// list, in order.
+    fn filtered_metric_indices(&self, cx: &App) -> Vec<usize> {
+        let Some(metrics) = self
+            .metric_namespace_selected
+            .as_ref()
+            .and_then(|namespace| self.metric_metrics_for_namespace.get(namespace))
+        else {
+            return Vec::new();
+        };
+        let filter = self
+            .metric_metric_filter_input
+            .read(cx)
+            .value()
+            .to_lowercase();
+
+        metrics
+            .iter()
+            .enumerate()
+            .filter(|(_, metric)| {
+                filter.is_empty()
+                    || metric.metric_name.to_lowercase().contains(&filter)
+                    || metric.dimensions.iter().any(|(key, value)| {
+                        format!("{key}={value}").to_lowercase().contains(&filter)
+                    })
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// The Metric tab list the keyboard works: the focused list, or the one
+    /// under the focused filter field, otherwise the namespaces.
+    fn active_metric_list(&self, window: &Window, cx: &App) -> MetricList {
+        let metric_filter_focused = self
+            .metric_metric_filter_input
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window);
+
+        if self.metric_list_focus.is_focused(window) || metric_filter_focused {
+            MetricList::Metrics
+        } else {
+            MetricList::Namespaces
+        }
+    }
+
+    /// Moves the keyboard into a list of the Metric tab.
+    fn focus_metric_list(&mut self, list: MetricList, window: &mut Window, cx: &mut Context<Self>) {
+        match list {
+            MetricList::Namespaces => self.namespace_list_focus.focus(window, cx),
+            MetricList::Metrics => self.metric_list_focus.focus(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// Selects the tab `delta` places away among the visible ones, wrapping,
+    /// and moves the keyboard to its first field: the field that had it is
+    /// no longer drawn.
+    fn step_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let tabs = self.visible_tabs();
+        let current = tabs
+            .iter()
+            .position(|tab| *tab == self.active_tab)
+            .unwrap_or(0);
+        let next = tabs[(current as isize + delta).rem_euclid(tabs.len() as isize) as usize];
+
+        self.set_active_tab(next, cx);
+
+        let first_field = match next {
+            AddPanelTab::Saved => self.search_input.clone(),
+            AddPanelTab::Query => self.query_name_input.clone(),
+            AddPanelTab::Metric => self.metric_name_input.clone(),
+        };
+        first_field.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Moves the highlighted row of the list the keyboard works by `delta`,
+    /// or to its first (`Some(false)`) or last (`Some(true)`) row.
+    fn move_highlight(
+        &mut self,
+        delta: isize,
+        to_edge: Option<bool>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (count, highlight) = match self.active_tab {
+            AddPanelTab::Saved => (self.filtered_saved_ids(cx).len(), &mut self.saved_highlight),
+            AddPanelTab::Metric => match self.active_metric_list(window, cx) {
+                MetricList::Namespaces => (
+                    self.filtered_namespaces(cx).len(),
+                    &mut self.namespace_highlight,
+                ),
+                MetricList::Metrics => (
+                    self.filtered_metric_indices(cx).len(),
+                    &mut self.metric_highlight,
+                ),
+            },
+            AddPanelTab::Query => return,
+        };
+
+        if count == 0 {
+            return;
+        }
+
+        *highlight = match to_edge {
+            Some(true) => count - 1,
+            Some(false) => 0,
+            None => (*highlight)
+                .min(count - 1)
+                .saturating_add_signed(delta)
+                .min(count - 1),
+        };
+        cx.notify();
+    }
+
+    /// Space: checks or unchecks the highlighted chart, or picks the
+    /// highlighted namespace or metric.
+    fn toggle_highlighted(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.active_tab {
+            AddPanelTab::Saved => {
+                if let Some(id) = self
+                    .filtered_saved_ids(cx)
+                    .get(self.saved_highlight)
+                    .copied()
+                {
+                    self.toggle_chart(id, cx);
+                }
+            }
+            AddPanelTab::Metric => self.pick_highlighted_metric_row(window, cx),
+            AddPanelTab::Query => {}
+        }
+    }
+
+    fn pick_highlighted_metric_row(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.active_metric_list(window, cx) {
+            MetricList::Namespaces => {
+                let namespace = self
+                    .filtered_namespaces(cx)
+                    .get(self.namespace_highlight)
+                    .cloned();
+
+                if let Some(namespace) = namespace {
+                    self.metric_highlight = 0;
+                    if let Some(request) = self.select_namespace(namespace, cx) {
+                        cx.emit(request);
+                    }
+                }
+            }
+            MetricList::Metrics => {
+                if let Some(index) = self
+                    .filtered_metric_indices(cx)
+                    .get(self.metric_highlight)
+                    .copied()
+                {
+                    self.metric_metric_selected = Some(index);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// Whether Enter has something to do: the tab's form is complete, or a
+    /// highlighted row Enter would pick first.
+    fn can_confirm_from_keys(&self, cx: &App) -> bool {
+        self.can_confirm(cx)
+            || match self.active_tab {
+                AddPanelTab::Saved => {
+                    self.selected_ids.is_empty() && !self.filtered_saved_ids(cx).is_empty()
+                }
+                AddPanelTab::Metric => true,
+                AddPanelTab::Query => false,
+            }
+    }
+
+    /// Enter: in the chart list with nothing checked, adds the highlighted
+    /// chart; in a Metric tab list, picks its highlighted row first. Then
+    /// submits, as the submit button does, once the form is complete.
+    fn confirm_from_keys(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.active_tab {
+            AddPanelTab::Saved if self.selected_ids.is_empty() => {
+                if let Some(id) = self
+                    .filtered_saved_ids(cx)
+                    .get(self.saved_highlight)
+                    .copied()
+                {
+                    self.selected_ids.push(id);
+                }
+            }
+            AddPanelTab::Metric
+                if self.namespace_list_focus.is_focused(window)
+                    || self.metric_list_focus.is_focused(window) =>
+            {
+                self.pick_highlighted_metric_row(window, cx);
+            }
+            _ => {}
+        }
+
+        self.confirm(cx);
+    }
+
+    /// `/`: moves the keyboard to the search or filter field of the tab.
+    fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = match self.active_tab {
+            AddPanelTab::Saved => self.search_input.clone(),
+            AddPanelTab::Query => self.query_name_input.clone(),
+            AddPanelTab::Metric => match self.active_metric_list(window, cx) {
+                MetricList::Namespaces => self.metric_namespace_filter_input.clone(),
+                MetricList::Metrics => self.metric_metric_filter_input.clone(),
+            },
+        };
+
+        input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Runs a keymap command of the dialog's own layer (see the module's
+    /// `AddPanelPicker` keys). Returns whether it applied.
+    fn run_key(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        match command {
+            Command::NextPanelTab => self.step_tab(1, window, cx),
+            Command::PrevPanelTab => self.step_tab(-1, window, cx),
+            Command::SelectNext => self.move_highlight(1, None, window, cx),
+            Command::SelectPrev => self.move_highlight(-1, None, window, cx),
+            Command::SelectFirst => self.move_highlight(0, Some(false), window, cx),
+            Command::SelectLast => self.move_highlight(0, Some(true), window, cx),
+            Command::ExpandCollapse => self.toggle_highlighted(window, cx),
+            Command::FocusSearch => self.focus_search(window, cx),
+            // Only the Metric tab has two lists; elsewhere the keys do
+            // nothing rather than reach the dashboard behind the dialog.
+            Command::ColumnLeft | Command::ColumnRight => {
+                if self.active_tab == AddPanelTab::Metric {
+                    let list = if command == Command::ColumnLeft {
+                        MetricList::Namespaces
+                    } else {
+                        MetricList::Metrics
+                    };
+                    self.focus_metric_list(list, window, cx);
+                }
+            }
+            _ => return false,
+        }
+
+        true
+    }
+
     fn render_chart_row(
         chart_id: uuid::Uuid,
         chart_name: String,
         is_selected: bool,
+        is_highlighted: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -574,6 +883,12 @@ impl ModalAddPanelPicker {
             .py(Spacing::XS)
             .rounded(dbflux_components::tokens::Radii::SM)
             .bg(row_bg)
+            .border_1()
+            .border_color(if is_highlighted {
+                theme.ring
+            } else {
+                gpui::transparent_black()
+            })
             .when(!is_selected, |el| el.hover(move |d| d.bg(hover_bg)))
             .cursor_pointer()
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -644,15 +959,27 @@ impl ModalAddPanelPicker {
             .child(Input::new(&self.search_input))
             .into_any_element();
 
+        let highlight = self.saved_highlight.min(filtered.len().saturating_sub(1));
         let chart_rows: Vec<AnyElement> = filtered
             .iter()
-            .map(|chart| {
+            .enumerate()
+            .map(|(row, chart)| {
                 let is_selected = selected_ids.contains(&chart.id);
-                Self::render_chart_row(chart.id, chart.name.clone(), is_selected, cx)
+                Self::render_chart_row(
+                    chart.id,
+                    chart.name.clone(),
+                    is_selected,
+                    row == highlight,
+                    cx,
+                )
             })
             .collect();
 
+        // A tab stop after the search: J / K, Space and Enter work the list
+        // from here, and the arrows work it from the search too.
         let chart_list = div()
+            .id("add-panel-chart-list")
+            .track_focus(&self.saved_list_focus)
             .flex()
             .flex_col()
             .gap(Spacing::XS)
@@ -800,13 +1127,16 @@ impl ModalAddPanelPicker {
             .to_lowercase();
         let selected = self.metric_namespace_selected.clone();
 
+        let highlight = self.namespace_highlight;
         let rows: Vec<AnyElement> = request
             .metric_namespaces
             .iter()
             .filter(|ns| filter.is_empty() || ns.to_lowercase().contains(&filter))
             .cloned()
-            .map(|ns| {
+            .enumerate()
+            .map(|(row, ns)| {
                 let is_selected = selected.as_deref() == Some(ns.as_str());
+                let is_highlighted = row == highlight;
                 let ns_for_listener = ns.clone();
                 div()
                     .id(gpui::ElementId::Name(
@@ -816,6 +1146,12 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
+                    .border_1()
+                    .border_color(if is_highlighted {
+                        theme.ring
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .when(is_selected, |el| {
                         el.bg(theme.accent)
                             .text_color(theme.accent_foreground)
@@ -833,6 +1169,8 @@ impl ModalAddPanelPicker {
             .collect();
 
         div()
+            .id("add-panel-namespace-list")
+            .track_focus(&self.namespace_list_focus)
             .border_1()
             .border_color(theme.border)
             .rounded(Radii::SM)
@@ -923,11 +1261,14 @@ impl ModalAddPanelPicker {
         }
 
         let selected = self.metric_metric_selected;
+        let highlight = self.metric_highlight;
         let rows: Vec<AnyElement> = filtered
             .iter()
-            .map(|(idx, m)| {
+            .enumerate()
+            .map(|(row, (idx, m))| {
                 let idx = *idx;
                 let is_selected = selected == Some(idx);
+                let is_highlighted = row == highlight;
                 let dim_summary = if m.dimensions.is_empty() {
                     String::new()
                 } else {
@@ -946,6 +1287,12 @@ impl ModalAddPanelPicker {
                     .py(Spacing::XS)
                     .text_sm()
                     .cursor_pointer()
+                    .border_1()
+                    .border_color(if is_highlighted {
+                        theme.ring
+                    } else {
+                        gpui::transparent_black()
+                    })
                     .when(is_selected, |el| {
                         el.bg(theme.accent)
                             .text_color(theme.accent_foreground)
@@ -962,6 +1309,8 @@ impl ModalAddPanelPicker {
             .collect();
 
         div()
+            .id("add-panel-metric-list")
+            .track_focus(&self.metric_list_focus)
             .border_1()
             .border_color(theme.border)
             .rounded(Radii::SM)
@@ -1115,6 +1464,7 @@ impl Render for ModalAddPanelPicker {
         let candidates = request.candidates.clone();
         let submit_label = self.submit_label();
         let can_confirm = self.can_confirm(cx);
+        let can_confirm_from_keys = self.can_confirm_from_keys(cx);
 
         let tab_strip = self.render_tab_strip(cx);
         let body_inner: AnyElement = match self.active_tab {
@@ -1152,12 +1502,13 @@ impl Render for ModalAddPanelPicker {
                     .on_click(on_confirm),
             );
 
-        Modal::new(dbflux_i18n::t!("modals.add_panel_picker.title"))
+        let modal = Modal::new(dbflux_i18n::t!("modals.add_panel_picker.title"))
             .body(body)
             .footer(footer)
             .icon(AppIcon::Plus)
             .width(gpui::px(900.0))
             .focus_handle(self.focus.handle())
+            .key_context(ContextId::AddPanelPicker.as_gpui_context())
             .on_close({
                 let entity = cx.entity().downgrade();
                 move |_, cx| {
@@ -1166,11 +1517,42 @@ impl Render for ModalAddPanelPicker {
             })
             .on_confirm({
                 let entity = cx.entity().downgrade();
-                move |_, cx| {
-                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                move |window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.confirm_from_keys(window, cx))
+                        .log_err();
                 }
             })
-            .confirm_enabled(can_confirm)
+            .confirm_enabled(can_confirm_from_keys);
+
+        // The dialog's keys: its own layer's commands, and the arrow and
+        // Home / End keys the modal answers only when it scrolls, which move
+        // through the lists here (also from the search field).
+        div()
+            .id("add-panel-picker")
+            .absolute()
+            .inset_0()
+            .on_action(cx.listener(|this, action: &RunCommand, window, cx| {
+                let handled =
+                    run_command(action).is_some_and(|command| this.run_key(command, window, cx));
+
+                if !handled {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ScrollDown, window, cx| {
+                this.move_highlight(1, None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ScrollUp, window, cx| {
+                this.move_highlight(-1, None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ScrollToTop, window, cx| {
+                this.move_highlight(0, Some(false), window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ScrollToBottom, window, cx| {
+                this.move_highlight(0, Some(true), window, cx);
+            }))
+            .child(modal)
             .into_any_element()
     }
 }
@@ -1622,28 +2004,162 @@ mod keyboard_tests {
         (modal, outside, window, outcomes)
     }
 
+    /// Enter adds the checked charts, or with none checked the highlighted
+    /// one; with no chart left in the list it does nothing.
     #[gpui::test]
-    fn enter_adds_only_once_a_chart_is_selected(cx: &mut TestAppContext) {
+    fn enter_adds_the_highlighted_chart_when_none_is_checked(cx: &mut TestAppContext) {
         let (modal, _outside, window, outcomes) = open_modal(cx);
         assert_eq!(
             window.update(|_, cx| modal.read(cx).active_tab()),
             AddPanelTab::Saved
         );
 
-        window.simulate_keystrokes("enter");
-        assert!(outcomes.borrow().is_empty());
+        window.simulate_keystrokes("x enter");
+        assert!(
+            outcomes.borrow().is_empty(),
+            "a search that leaves no chart adds nothing"
+        );
         assert!(window.update(|_, cx| modal.read(cx).is_visible()));
 
-        window.update(|_, cx| {
-            modal.update(cx, |modal, cx| modal.toggle_chart(Uuid::nil(), cx));
-        });
-        window.simulate_keystrokes("enter");
+        window.simulate_keystrokes("backspace enter");
 
         assert!(matches!(
             outcomes.borrow().as_slice(),
             [AddPanelOutcome::Confirmed { chart_ids, .. }] if chart_ids == &[Uuid::nil()]
         ));
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    /// The same picker, open on the Metric tab's connection, with two saved
+    /// charts.
+    fn open_modal_with(
+        cx: &mut TestAppContext,
+        candidates: Vec<SavedChart>,
+        has_metric_catalog: bool,
+    ) -> (
+        Entity<ModalAddPanelPicker>,
+        &mut VisualTestContext,
+        Outcomes,
+    ) {
+        let (modal, _outside, window) = host_modal(cx, ModalAddPanelPicker::new);
+
+        let outcomes: Outcomes = Rc::default();
+        window.update(|window, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &AddPanelOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    AddPanelRequest {
+                        dashboard_id: Uuid::nil(),
+                        profile_id: Uuid::nil(),
+                        candidates,
+                        has_metric_catalog,
+                        metric_namespaces: vec!["AWS/EC2".to_string(), "AWS/RDS".to_string()],
+                        metric_namespaces_loading: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window, outcomes)
+    }
+
+    fn named_chart(name: &str) -> SavedChart {
+        SavedChart {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            ..chart()
+        }
+    }
+
+    /// Alt+L and Alt+H switch the tabs from the search field, wrapping.
+    #[gpui::test]
+    fn alt_l_and_alt_h_switch_the_tabs(cx: &mut TestAppContext) {
+        let (modal, window, _outcomes) = open_modal_with(cx, vec![chart()], true);
+        let tab =
+            |window: &mut VisualTestContext| window.update(|_, cx| modal.read(cx).active_tab());
+
+        window.simulate_keystrokes("alt-l");
+        assert_eq!(tab(window), AddPanelTab::Query);
+
+        window.simulate_keystrokes("alt-l alt-l");
+        assert_eq!(tab(window), AddPanelTab::Saved, "the tabs wrap around");
+
+        window.simulate_keystrokes("alt-h");
+        assert_eq!(tab(window), AddPanelTab::Metric);
+    }
+
+    /// From the search field Down moves the highlighted chart and Enter adds
+    /// it when nothing is checked.
+    #[gpui::test]
+    fn down_and_enter_add_the_highlighted_chart(cx: &mut TestAppContext) {
+        let first = named_chart("Latency");
+        let second = named_chart("Throughput");
+        let second_id = second.id;
+        let (_modal, window, outcomes) = open_modal_with(cx, vec![first, second], false);
+
+        window.simulate_keystrokes("down enter");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [AddPanelOutcome::Confirmed { chart_ids, .. }] if chart_ids == &[second_id]
+        ));
+    }
+
+    /// In the chart list (the tab stop after the search) J moves and Space
+    /// checks charts; Enter adds the checked ones.
+    #[gpui::test]
+    fn j_and_space_check_charts_in_the_list(cx: &mut TestAppContext) {
+        let first = named_chart("Latency");
+        let second = named_chart("Throughput");
+        let ids = [first.id, second.id];
+        let (modal, window, outcomes) = open_modal_with(cx, vec![first, second], false);
+
+        window.update(|window, cx| {
+            let list = modal.read(cx).saved_list_focus.clone();
+            list.focus(window, cx);
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("space j space");
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).selected_ids.clone()),
+            ids.to_vec()
+        );
+
+        window.simulate_keystrokes("enter");
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [AddPanelOutcome::Confirmed { chart_ids, .. }] if chart_ids == &ids.to_vec()
+        ));
+    }
+
+    /// On the Metric tab, the namespace list takes J and Space: Space picks
+    /// the highlighted namespace.
+    #[gpui::test]
+    fn the_metric_namespace_list_is_driven_by_keys(cx: &mut TestAppContext) {
+        let (modal, window, _outcomes) = open_modal_with(cx, vec![chart()], true);
+
+        window.update(|window, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.set_active_tab(AddPanelTab::Metric, cx);
+                modal.focus_metric_list(super::MetricList::Namespaces, window, cx);
+            })
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("j space");
+        assert_eq!(
+            window.update(|_, cx| modal.read(cx).metric_namespace_selected.clone()),
+            Some("AWS/RDS".to_string())
+        );
     }
 
     #[gpui::test]

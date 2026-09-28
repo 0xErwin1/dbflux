@@ -1202,6 +1202,9 @@ pub enum ContextId {
 
     /// A dashboard document's panel grid.
     Dashboard,
+
+    /// The Add Panel dialog of a dashboard (its tabs and lists).
+    AddPanelPicker,
 }
 
 impl ContextId {
@@ -1243,6 +1246,7 @@ impl ContextId {
             ContextId::DocumentBuilder => Some(ContextId::Global),
             ContextId::Chart => Some(ContextId::Global),
             ContextId::Dashboard => Some(ContextId::Global),
+            ContextId::AddPanelPicker => None,
         }
     }
 
@@ -1331,6 +1335,7 @@ impl ContextId {
             ContextId::DocumentBuilder => "Document Builder",
             ContextId::Chart => "Chart",
             ContextId::Dashboard => "Dashboard",
+            ContextId::AddPanelPicker => "Add Panel Picker",
         }
     }
 
@@ -1369,6 +1374,7 @@ impl ContextId {
             ContextId::DocumentBuilder => "document_builder",
             ContextId::Chart => "chart",
             ContextId::Dashboard => "dashboard",
+            ContextId::AddPanelPicker => "add_panel_picker",
         }
     }
 
@@ -1407,6 +1413,7 @@ impl ContextId {
             ContextId::DocumentBuilder,
             ContextId::Chart,
             ContextId::Dashboard,
+            ContextId::AddPanelPicker,
         ]
     }
 
@@ -1445,6 +1452,7 @@ impl ContextId {
             ContextId::DocumentBuilder => "DocumentBuilder",
             ContextId::Chart => "Chart",
             ContextId::Dashboard => "Dashboard",
+            ContextId::AddPanelPicker => "AddPanelPicker",
         }
     }
 
@@ -1471,8 +1479,11 @@ impl ContextId {
             ContextId::Inspector => "Inspector && !Modal",
             ContextId::QueryBuilder => "QueryBuilder && !Input && !Dropdown && !Modal",
             ContextId::DocumentBuilder => "DocumentBuilder && !Input && !Dropdown && !Modal",
-            ContextId::Chart => "Chart && !Input && !Dropdown && !Modal",
+            // A dialog can carry the Chart context (a dashboard panel's
+            // Configure popover) to take the chart keys.
+            ContextId::Chart => "Chart && !Input && !Dropdown",
             ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
+            ContextId::AddPanelPicker => "AddPanelPicker && !Input",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",
             ContextId::FormNavigation => "FormNavigation && !Input",

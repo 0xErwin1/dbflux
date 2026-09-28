@@ -1318,6 +1318,11 @@ document:
     title:
       untitled: Untitled
   dashboard:
+    pane_actions:
+      open_panel: "Open panel"
+      fold_section: "Fold or unfold section"
+      switch_to_view: "Switch to View"
+      switch_to_edit: "Switch to Edit"
     builder:
       preset:
         last_15_min: Last 15 min
@@ -3694,6 +3699,7 @@ settings:
       document_builder: "Document Builder"
       chart: "Chart"
       dashboard: "Dashboard"
+      add_panel_picker: "Add Panel Picker"
     category:
       global: Global
       focus: Focus

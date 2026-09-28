@@ -40,6 +40,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(builder_rail_layer(ContextId::DocumentBuilder));
     stack.add_layer(chart_layer());
     stack.add_layer(dashboard_layer());
+    stack.add_layer(add_panel_picker_layer());
 
     stack
 });
@@ -1776,15 +1777,19 @@ fn bind_chart_pane_keys(layer: &mut KeymapLayer, from_controls: &'static str) {
     );
 }
 
-/// Keys of a chart document (and of a chart panel a dashboard entered):
+/// Keys of a chart document (and of a chart panel a dashboard entered, and
+/// of a dashboard panel's Configure popover, which carries the context):
 /// H and L move the highlighted point, J and K the series (or the rows of an
 /// open axis picker), G and Shift+G jump to the first and last point, Enter
 /// picks the picker row, Space toggles a Y column or hides the focused
-/// series, Alt+H / Alt+L switch the chart kind and Ctrl/Cmd+S saves.
+/// series, Escape closes the picker or clears the point, Alt+H / Alt+L switch
+/// the chart kind and Ctrl/Cmd+S saves.
 fn chart_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Chart);
 
     bind_chart_pane_keys(&mut layer, "Chart && !Modal");
+
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     for (keys, command) in [
         (["h", "left"], Command::ColumnLeft),
@@ -1884,6 +1889,47 @@ fn dashboard_layer() -> KeymapLayer {
             layer.bind(KeyChord::new(key, alt_shift), resize_command);
         }
     }
+
+    layer
+}
+
+/// Keys of a dashboard's Add Panel dialog, carried by the dialog itself:
+/// Alt+H / Alt+L switch its tabs (also from its text fields, except on macOS
+/// where Option+letter types a character), and outside the text fields J / K
+/// and G / Shift+G move through the focused list, H / L switch between the
+/// metric tab's namespace and metric lists, Space toggles or picks the row
+/// and / goes to the search. The arrows, Enter and Escape are the dialog's
+/// own keys.
+fn add_panel_picker_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::AddPanelPicker);
+
+    let tab_predicate = if cfg!(target_os = "macos") {
+        ContextId::AddPanelPicker.default_predicate()
+    } else {
+        "AddPanelPicker"
+    };
+    layer.bind_with_predicate(
+        KeyChord::new("l", Modifiers::alt()),
+        Command::NextPanelTab,
+        tab_predicate,
+    );
+    layer.bind_with_predicate(
+        KeyChord::new("h", Modifiers::alt()),
+        Command::PrevPanelTab,
+        tab_predicate,
+    );
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
 
     layer
 }

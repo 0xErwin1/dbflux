@@ -1318,6 +1318,11 @@ document:
     title:
       untitled: 제목 없음
   dashboard:
+    pane_actions:
+      open_panel: "패널 열기"
+      fold_section: "섹션 접기 또는 펼치기"
+      switch_to_view: "보기로 전환"
+      switch_to_edit: "편집으로 전환"
     builder:
       preset:
         last_15_min: 최근 15분
@@ -3693,6 +3698,7 @@ settings:
       document_builder: "문서 빌더"
       chart: "차트"
       dashboard: "대시보드"
+      add_panel_picker: "패널 추가 선택기"
     category:
       global: 전역
       focus: 포커스

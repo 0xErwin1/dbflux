@@ -72,9 +72,12 @@ Cambia entre **View** y **Edit** en la cabecera:
   cuadrícula de 12 columnas.
 - El modo **View** es de solo lectura.
 
-En modo Edit también puedes usar el teclado sobre un panel enfocado: `F2` para
-renombrar, `Delete`/`Backspace` para eliminar, `Enter` para abrir su popover
-Configure.
+Todo el dashboard funciona con el teclado en ambos modos: `h`/`j`/`k`/`l` o las
+flechas eligen un panel, `Enter` lo abre (su chart o su tabla toman las teclas
+hasta `Escape`), `c` abre su popover Configure, `r` o `F2` lo renombra, `x` o
+`Delete` lo elimina, `a` añade un panel y `m` lista todas las acciones. En modo
+Edit `Shift` + `h`/`j`/`k`/`l` mueve el panel elegido y `Alt+Shift` +
+`h`/`j`/`k`/`l` lo redimensiona. Ver [Referencia de teclado](KEYBOARD.md#dashboards).
 
 ### Añadir panels
 

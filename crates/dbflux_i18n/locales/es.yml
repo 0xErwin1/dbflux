@@ -1318,6 +1318,11 @@ document:
     title:
       untitled: Sin título
   dashboard:
+    pane_actions:
+      open_panel: "Abrir panel"
+      fold_section: "Plegar o desplegar sección"
+      switch_to_view: "Cambiar a Ver"
+      switch_to_edit: "Cambiar a Editar"
     builder:
       preset:
         last_15_min: Últimos 15 min
@@ -3694,6 +3699,7 @@ settings:
       document_builder: "Constructor de documentos"
       chart: "Gráfico"
       dashboard: "Panel de control"
+      add_panel_picker: "Selector de panel"
     category:
       global: Global
       focus: Foco

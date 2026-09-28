@@ -24,7 +24,7 @@ impl DashboardDocument {
         let dashboard_id = doc.dashboard_id();
         let is_read_only = doc.read_only;
 
-        PaneHandle::new_chart(
+        let mut pane = PaneHandle::new_chart(
             id,
             DocumentKind::Dashboard,
             // render
@@ -76,7 +76,7 @@ impl DashboardDocument {
             // active_context
             {
                 let e = entity.clone();
-                Box::new(move |cx| e.read(cx).active_context())
+                Box::new(move |cx| e.read(cx).active_context(cx))
             },
             // change_summary — DashboardDocument has no unsaved-change tracking
             Box::new(|_cx| None),
@@ -124,6 +124,13 @@ impl DashboardDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        pane.pane_actions = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).pane_actions(&e, cx))
+        });
+
+        pane
     }
 }
