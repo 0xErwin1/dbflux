@@ -212,7 +212,7 @@ impl CodeDocument {
     /// Shows the dangerous query confirmation and moves focus into it, off
     /// the editor input, so Enter and Escape resolve it instead of editing the
     /// buffer behind it.
-    fn ask_dangerous_query_confirm(
+    pub(super) fn ask_dangerous_query_confirm(
         &mut self,
         pending: PendingDangerousQuery,
         window: &mut Window,

@@ -512,4 +512,48 @@ mod tests {
         );
         assert!(!return_target, "the list, not the ring, has the keys now");
     }
+
+    /// Inside the dangerous-query dialog, Tab moves from the close button to
+    /// the "Don't ask again" box, and Space checks it (a keyboard click, on
+    /// key release) without running or closing anything.
+    #[gpui::test]
+    fn tab_and_space_check_dont_ask_again(cx: &mut TestAppContext) {
+        use crate::code::PendingDangerousQuery;
+        use dbflux_core::DangerousQueryKind;
+
+        let (document, window) = open_sql_document(cx);
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.focus(window, cx);
+                document.ask_dangerous_query_confirm(
+                    PendingDangerousQuery {
+                        query: "DELETE FROM orders".to_string(),
+                        kind: DangerousQueryKind::DeleteNoWhere,
+                        in_new_tab: false,
+                        suppress: false,
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("tab tab space");
+        window.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("space").expect("valid keystroke"),
+        });
+        window.run_until_parked();
+
+        let suppress = window.update(|_, cx| {
+            document
+                .read(cx)
+                .pending
+                .dangerous_query
+                .as_ref()
+                .map(|pending| pending.suppress)
+        });
+        assert_eq!(suppress, Some(true), "the dialog stays open, box checked");
+    }
 }
