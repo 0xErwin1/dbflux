@@ -11,6 +11,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Chamfer, Icon, Kbd, SegmentedControl, SegmentedItem};
 use dbflux_components::tokens::{ChamferCut, ChromeColors, CollectionMetrics, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use dbflux_core::{FieldSchemaStats, FieldValueSummary, NULL_TYPE_NAME, Value};
 use gpui::prelude::*;
 use gpui::*;
@@ -615,19 +616,29 @@ impl DataGridPanel {
         &self,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let editable = self.commits_document_patches(cx);
+        let vim = &self.collection.json_vim;
+        let input = vim.input_id();
+        let container =
+            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx);
         let theme = cx.theme();
 
-        div()
+        container
             .id("collection-json-view")
             .size_full()
+            .flex()
+            .flex_col()
             .bg(theme.background)
             .font_family(AppFonts::MONO)
             .child(
-                Editor::new(&self.collection.json_editor)
-                    .bordered(false)
-                    .size_full()
-                    .disabled(!self.commits_document_patches(cx)),
+                div().flex_1().min_h_0().child(
+                    vim.editor(!editable)
+                        .bordered(false)
+                        .size_full()
+                        .disabled(!editable),
+                ),
             )
+            .children(vim.render_indicator(cx))
     }
 
     /// Schema view (P1DocSchema): sample controls and one row per field.

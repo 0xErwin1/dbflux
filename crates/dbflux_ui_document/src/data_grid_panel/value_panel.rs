@@ -33,6 +33,7 @@ use dbflux_components::controls::{
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::vim::{VimBinding, VimHost};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::input::EditorState;
@@ -69,6 +70,8 @@ pub struct ValuePanelContent {
     /// count as an edit the user must resolve.
     loaded_text: String,
     input: Entity<EditorState>,
+    /// Vim mode for the editor; rebuilt with it.
+    vim: VimBinding,
     /// Whether the editor holds the keyboard. The results keymap binds bare
     /// letters to grid commands, so `DataGridPanel::active_context` has to
     /// hand the keyboard to the text layer while the user is typing here.
@@ -82,24 +85,55 @@ pub struct ValuePanelContent {
 
 impl EventEmitter<ValuePanelSaveEvent> for ValuePanelContent {}
 
+impl VimHost for ValuePanelContent {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.vim.for_input(input)
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        self.vim.for_input_mut(input)
+    }
+}
+
 impl ValuePanelContent {
     pub fn new(target: ValuePanelTarget, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let format = value_format::detect_format(&target.value);
         let word_wrap = true;
         let text = initial_text(&target.value, format);
         let (input, subscription) = build_input(text.clone(), format, word_wrap, window, cx);
+        let vim = VimBinding::new(input.clone(), window, cx);
 
-        Self {
+        let mut panel = Self {
             target,
             format,
             word_wrap,
             loaded_text: text,
             input,
+            vim,
             editor_focused: false,
             _input_subscription: subscription,
             error: None,
             focus_handle: cx.focus_handle(),
-        }
+        };
+
+        let input = panel.vim.input_id();
+        VimBinding::follow_setting(&mut panel, input, cx);
+        panel
+    }
+
+    /// Replaces the editor, with a fresh Vim binding for it.
+    fn install_input(
+        &mut self,
+        input: Entity<EditorState>,
+        subscription: Subscription,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim = VimBinding::new(input.clone(), window, cx);
+        self.input = input;
+        self._input_subscription = subscription;
+        let input = self.vim.input_id();
+        VimBinding::follow_setting(self, input, cx);
     }
 
     /// The panel's own focus handle, which keyboard focus takes when it moves
@@ -189,8 +223,7 @@ impl ValuePanelContent {
         let text = initial_text(&self.target.value, self.format);
         let (input, subscription) =
             build_input(text.clone(), self.format, self.word_wrap, window, cx);
-        self.input = input;
-        self._input_subscription = subscription;
+        self.install_input(input, subscription, window, cx);
         self.editor_focused = false;
         self.loaded_text = text;
         cx.notify();
@@ -216,8 +249,7 @@ impl ValuePanelContent {
         };
 
         let (input, subscription) = build_input(text.clone(), format, self.word_wrap, window, cx);
-        self.input = input;
-        self._input_subscription = subscription;
+        self.install_input(input, subscription, window, cx);
         self.editor_focused = false;
         // A modified buffer stays modified across the switch, so `loaded_text`
         // must keep pointing at the stored value's rendering.
@@ -348,13 +380,18 @@ impl Render for ValuePanelContent {
             .overflow_hidden()
             .child(self.render_header(cx))
             .child(
-                div()
-                    .id("value-panel-editor")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(gpui_component::input::Editor::new(&self.input).h_full()),
+                VimBinding::capture_run_command(
+                    VimBinding::wire(div(), self.vim.input_id(), cx),
+                    self.vim.input_id(),
+                    cx,
+                )
+                .id("value-panel-editor")
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(self.vim.editor(false).h_full()),
             )
+            .children(self.vim.render_indicator(cx))
             .when_some(self.error.clone(), |d, error| {
                 d.child(
                     div()
@@ -561,5 +598,106 @@ impl ValuePanelContent {
                         })),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod vim_tests {
+    use super::{ValuePanelContent, ValuePanelTarget};
+    use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+    use dbflux_app::keymap::{Command, ContextId};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+
+    /// The panel under a keymap host that routes Cancel the way the grid's
+    /// inspector does: out of the editor into the panel.
+    fn open_panel(
+        cx: &mut TestAppContext,
+        vim: bool,
+    ) -> (Entity<ValuePanelContent>, &mut VisualTestContext) {
+        init_keyboard_runtime(cx);
+        cx.update(|cx| dbflux_components::vim::set_vim_enabled(cx, vim));
+
+        let (host, window) = host_document(
+            cx,
+            |window, cx| {
+                cx.new(|cx| {
+                    ValuePanelContent::new(
+                        ValuePanelTarget {
+                            row: 0,
+                            col: 0,
+                            column_name: "notes".to_string(),
+                            value: "ab\ncd".to_string(),
+                            editable: true,
+                        },
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |panel, _cx| {
+                if panel.editor_has_focus() {
+                    ContextId::TextInput
+                } else {
+                    ContextId::Inspector
+                }
+            },
+            |panel, command, window, cx| {
+                if command == Command::Cancel && panel.editor_has_focus() {
+                    panel.leave_editor(window, cx);
+                    return true;
+                }
+                false
+            },
+        );
+        let panel = window.update(|_, cx| host.read(cx).document.clone());
+        window.update(|window, cx| panel.update(cx, |panel, cx| panel.focus_editor(window, cx)));
+        window.run_until_parked();
+
+        (panel, window)
+    }
+
+    fn text_and_cursor(
+        panel: &Entity<ValuePanelContent>,
+        window: &mut VisualTestContext,
+    ) -> (String, usize) {
+        window.update(|_, cx| {
+            let state = panel.read(cx).input.read(cx);
+            (state.value().to_string(), state.cursor())
+        })
+    }
+
+    /// With Vim mode on, `j` moves, the first Escape leaves Insert mode and
+    /// keeps the editor, and Escape in Normal mode leaves the editor.
+    #[gpui::test]
+    fn vim_mode_in_the_value_editor(cx: &mut TestAppContext) {
+        let (panel, window) = open_panel(cx, true);
+
+        window.simulate_keystrokes("j");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window), ("ab\ncd".into(), 3));
+
+        window.simulate_keystrokes("i");
+        window.simulate_input("X");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert_eq!(text_and_cursor(&panel, window).0, "ab\nXcd");
+        assert!(window.update(|_, cx| panel.read(cx).editor_has_focus()));
+
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
+    }
+
+    /// With Vim mode off, keys type and Escape leaves the editor at once.
+    #[gpui::test]
+    fn without_vim_mode_escape_leaves_the_editor(cx: &mut TestAppContext) {
+        let (panel, window) = open_panel(cx, false);
+
+        window.simulate_input("j");
+        window.simulate_keystrokes("escape");
+        window.run_until_parked();
+
+        assert_eq!(text_and_cursor(&panel, window).0, "jab\ncd");
+        assert!(!window.update(|_, cx| panel.read(cx).editor_has_focus()));
     }
 }

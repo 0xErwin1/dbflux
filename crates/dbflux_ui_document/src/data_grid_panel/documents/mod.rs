@@ -32,6 +32,7 @@ use dbflux_components::components::data_table::{
 };
 use dbflux_components::components::document_tree::NodeId;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputEvent};
+use dbflux_components::vim::{VimBinding, VimHost};
 use dbflux_core::{
     CollectionCountEstimate, CollectionSchemaRequest, CollectionSchemaSample, DatabaseCategory,
     DocumentFeatures, DocumentFetchRequest, DocumentIdentity, DocumentPatch, DocumentPatchRequest,
@@ -221,6 +222,8 @@ pub(super) struct CollectionViewState {
     /// A landed commit needs the page reloaded to show it.
     reload_after_commit: bool,
     pub json_editor: Entity<EditorState>,
+    /// Vim mode for the JSON view's editor.
+    pub json_vim: VimBinding,
     pub json_draft: JsonDraft,
     /// JSON text the editor was last loaded with.
     json_baseline: String,
@@ -232,6 +235,32 @@ pub(super) struct CollectionViewState {
     /// staged edits change.
     inspector_edits_observation: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The collection's two editors, the JSON view and the aggregation
+/// pipeline, each with its own Vim binding.
+impl VimHost for DataGridPanel {
+    fn vim(&self, input: EntityId) -> Option<&VimBinding> {
+        self.collection
+            .json_vim
+            .for_input(input)
+            .or_else(|| self.collection.aggregate.pipeline_vim.for_input(input))
+    }
+
+    fn vim_mut(&mut self, input: EntityId) -> Option<&mut VimBinding> {
+        let collection = &mut self.collection;
+
+        if collection.json_vim.input_id() == input {
+            return Some(&mut collection.json_vim);
+        }
+
+        collection.aggregate.pipeline_vim.for_input_mut(input)
+    }
+
+    /// The JSON view only edits while its changes can be committed.
+    fn vim_read_only(&self, input: EntityId, cx: &App) -> bool {
+        input == self.collection.json_vim.input_id() && !self.commits_document_patches(cx)
+    }
 }
 
 impl CollectionViewState {
@@ -271,6 +300,7 @@ impl CollectionViewState {
                 .language("json")
                 .line_number(true)
         });
+        let json_vim = VimBinding::new(json_editor.clone(), window, cx);
 
         let sample_dropdown = cx.new(|_cx| {
             let items = SAMPLE_SIZES
@@ -346,6 +376,7 @@ impl CollectionViewState {
             committed: 0,
             reload_after_commit: false,
             json_editor,
+            json_vim,
             json_draft: JsonDraft::default(),
             json_baseline: String::new(),
             aggregate: aggregate::AggregateViewState::new(window, cx),
@@ -1277,6 +1308,16 @@ impl DataGridPanel {
 
     /// Whether commits go through the field-patch path instead of the
     /// generic row save.
+    /// Makes the JSON view's and the pipeline's editors follow the Vim mode
+    /// setting.
+    pub(in crate::data_grid_panel) fn follow_vim_setting(&mut self, cx: &mut Context<Self>) {
+        let json = self.collection.json_vim.input_id();
+        let pipeline = self.collection.aggregate.pipeline_vim.input_id();
+
+        VimBinding::follow_setting(self, json, cx);
+        VimBinding::follow_setting(self, pipeline, cx);
+    }
+
     pub(super) fn commits_document_patches(&self, cx: &App) -> bool {
         self.collection.raw.is_some() && self.has_document_field_patch(cx)
     }

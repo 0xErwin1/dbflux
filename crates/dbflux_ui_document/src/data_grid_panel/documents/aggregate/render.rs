@@ -16,6 +16,7 @@ use dbflux_components::primitives::{
 };
 use dbflux_components::tokens::{ChamferCut, CollectionMetrics, ModalMetrics, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_components::vim::VimBinding;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -87,6 +88,9 @@ impl DataGridPanel {
     }
 
     fn render_pipeline_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let input = self.collection.aggregate.pipeline_vim.input_id();
+        let editor_container =
+            VimBinding::capture_run_command(VimBinding::wire(div(), input, cx), input, cx);
         let theme = cx.theme().clone();
         let aggregate = &self.collection.aggregate;
         let error = aggregate.pipeline_error.clone();
@@ -106,18 +110,21 @@ impl DataGridPanel {
                     }),
             )
             .child(
-                div()
+                editor_container
                     .relative()
                     .size_full()
                     .py(CollectionMetrics::PIPELINE_EDITOR_PADDING_Y)
                     .font_family(AppFonts::MONO)
                     .text_size(CollectionMetrics::SLOT_FONT)
                     .child(
-                        Editor::new(&aggregate.pipeline_editor)
+                        aggregate
+                            .pipeline_vim
+                            .editor(false)
                             .bordered(false)
                             .size_full(),
                     ),
             );
+        let indicator = aggregate.pipeline_vim.render_indicator(cx);
 
         let error_line = error.map(|message| {
             div()
@@ -153,6 +160,7 @@ impl DataGridPanel {
                     .min_w_0()
                     .gap(CollectionMetrics::PIPELINE_ERROR_GAP)
                     .child(editor_box)
+                    .children(indicator)
                     .when_some(error_line, |column, line| column.child(line)),
             )
             .child(

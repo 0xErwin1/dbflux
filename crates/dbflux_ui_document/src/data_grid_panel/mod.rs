@@ -1480,7 +1480,7 @@ impl DataGridPanel {
             r
         };
 
-        Self {
+        let mut panel = Self {
             source,
             app_state,
             result: QueryResult::empty(),
@@ -1589,7 +1589,10 @@ impl DataGridPanel {
             close_after_apply: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
-        }
+        };
+
+        panel.follow_vim_setting(cx);
+        panel
     }
 
     /// Attach a row-action provider to this panel.
