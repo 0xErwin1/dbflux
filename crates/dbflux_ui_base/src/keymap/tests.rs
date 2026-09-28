@@ -1731,3 +1731,40 @@ fn m_opens_the_pane_actions_in_the_editor_chrome_and_the_grid_menu_in_results() 
     );
     assert!(top_action(&keymap, "m", &typing).is_none());
 }
+
+/// Shift+F10 opens the pane-actions menu from the code editor's text, in
+/// every Vim mode and without Vim, so the toolbar menu does not require
+/// leaving the editor. It types nothing, so it takes no text away.
+#[test]
+fn shift_f10_opens_the_pane_actions_from_the_code_editor_text() {
+    let keymap = native_keymap();
+
+    let mut roots = vec![root_key_context(
+        WORKSPACE_KEY_CONTEXT,
+        ContextId::Editor,
+        &[],
+    )];
+    for mode in [
+        "normal",
+        "insert",
+        "replace",
+        "visual",
+        "visual_line",
+        "visual_block",
+    ] {
+        roots.push(root_key_context(
+            WORKSPACE_KEY_CONTEXT,
+            ContextId::Editor,
+            &[(VIM_MODE_KEY.into(), mode.into())],
+        ));
+    }
+
+    for root in roots {
+        let typing = element_stack(root.clone(), &[CODE_EDITOR_KEY_CONTEXT, "Input"]);
+        let action = top_action(&keymap, "shift-f10", &typing).expect("bound");
+        assert!(
+            runs_command(action.as_ref(), Command::OpenPaneActions),
+            "{root:?}"
+        );
+    }
+}

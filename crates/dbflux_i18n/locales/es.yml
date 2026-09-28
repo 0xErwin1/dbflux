@@ -1221,6 +1221,7 @@ document:
           title: Expresión SQL cruda en SET
           body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
     context_bar:
+      pane_actions: Acciones
       file:
         saved: guardado
         unsaved: sin guardar

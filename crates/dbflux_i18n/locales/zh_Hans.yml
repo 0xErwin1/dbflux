@@ -1221,6 +1221,7 @@ document:
           title: SET 中的原生 SQL 表达式
           body: SET 子句包含原生 SQL 表达式 — 绕过参数绑定
     context_bar:
+      pane_actions: 操作
       file:
         saved: 已保存
         unsaved: 未保存

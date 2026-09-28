@@ -214,7 +214,8 @@ mod tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::PaneActionsMenu;
-    use crate::keymap::Command;
+    use crate::keymap::{Command, FocusTarget};
+    use crate::ui::document::{CodeDocument, Tab};
     use crate::ui::views::workspace::Workspace;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_document::DocumentId;
@@ -347,6 +348,61 @@ mod tests {
         );
     }
 
+    /// A script editor has no connection controls, yet Ctrl+K still lands on
+    /// its context bar, where `m` and Shift+F10 open the pane actions.
+    #[gpui::test]
+    fn ctrl_k_then_m_opens_the_pane_actions_in_a_script_editor(cx: &mut TestAppContext) {
+        let (workspace, window) = open_workspace(cx);
+
+        window.update(|window, cx| {
+            window.activate_window();
+            workspace.update(cx, |workspace, cx| {
+                let app_state = workspace.app_state.clone();
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(
+                        app_state,
+                        None,
+                        dbflux_core::QueryLanguage::Lua,
+                        window,
+                        cx,
+                    )
+                });
+                let pane = CodeDocument::into_pane(document, cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        keys(window, "ctrl-k m");
+        assert_eq!(
+            menu_ids(&workspace, window).first().map(String::as_str),
+            Some("run")
+        );
+
+        keys(window, "escape");
+        assert!(menu_ids(&workspace, window).is_empty());
+
+        keys(window, "shift-f10");
+        assert_eq!(
+            menu_ids(&workspace, window).first().map(String::as_str),
+            Some("run"),
+            "Shift+F10 opens it from the context bar too"
+        );
+
+        keys(window, "escape");
+        assert!(menu_ids(&workspace, window).is_empty());
+
+        keys(window, "enter");
+        assert_eq!(
+            menu_ids(&workspace, window).first().map(String::as_str),
+            Some("run"),
+            "Enter presses the focused pane-actions button"
+        );
+    }
+
     fn action(id: &'static str, enabled: bool) -> PaneAction {
         PaneAction {
             id: id.into(),
@@ -358,8 +414,7 @@ mod tests {
         }
     }
 
-    /// The palette entry opens the same menu, which is how a script editor,
-    /// whose context bar has no controls, reaches it.
+    /// The palette entry opens the same menu.
     #[gpui::test]
     fn the_palette_entry_opens_the_pane_actions(cx: &mut TestAppContext) {
         let (workspace, window) = open_workspace(cx);

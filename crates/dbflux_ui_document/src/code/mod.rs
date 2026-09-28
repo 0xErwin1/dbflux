@@ -125,6 +125,9 @@ enum ContextBarSlot {
     SourceTargets,
     SourceStart,
     SourceEnd,
+    /// The pane-actions button of a script editor, whose bar has no
+    /// connection controls: the bar's only stop, so Ctrl+K still lands there.
+    PaneActions,
 }
 
 /// Counts lines added and removed between two text strings using a set-based

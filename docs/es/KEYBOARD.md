@@ -93,6 +93,7 @@ foco toma `Enter` y `Space` para sí.
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
 | `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
+| `Shift+F10`                    | Abrir el menú de acciones del panel      |
 | `Enter`                        | Enfocar / ejecutar                       |
 
 (Las letras sin modificador se dejan intencionadamente para el input de texto,
@@ -112,17 +113,20 @@ búsqueda, `Tab` / `Shift+Tab` alternan entre el campo de consulta y el de
 reemplazo mientras el campo de reemplazo está visible; si no, mueven el foco
 entre paneles, igual que fuera del editor.
 
-La toolbar del editor también es un menú. Desde el editor, `Ctrl+k` mueve el foco
-a la barra de contexto de ejecución, donde `m` (o `Shift+F10`) abre el menú de
-**acciones del panel**: Ejecutar (Cancelar mientras corre una query), Ejecutar en
+La toolbar del editor también es un menú. `Shift+F10` abre el menú de **acciones
+del panel** desde el texto del editor, en cualquier modo de Vim y sin Vim.
+`Ctrl+k` mueve el foco a la barra de contexto de ejecución, donde `m` (o
+`Shift+F10`) también lo abre. Un editor de scripts (Lua, Python, Bash) no tiene
+controles de conexión, así que su barra de contexto solo contiene un botón
+**Acciones**, que `Ctrl+k` enfoca y que se pulsa con `Enter`, `m` o un clic. El
+menú lista Ejecutar (Cancelar mientras corre una query), Ejecutar en
 una pestaña nueva, Guardar, Formatear, Historial de consultas, Explicar, Gráfico,
 Actualizar y el intervalo de actualización automática, cada una con su atajo
 cuando lo tiene. Muévete con `j` / `k` y elige con `Enter`, como en cualquier
 [menú contextual](#menú-contextual); `Escape` lo cierra. La entrada de
 actualización automática abre la lista de intervalos con el foco del teclado (ver
 [Desplegables](#desplegables)). El menú también está en la command palette como
-**Abrir acciones del panel**, que es la forma de llegar a él en un editor de
-scripts, cuya barra de contexto no tiene controles.
+**Abrir acciones del panel**.
 
 ## Modo Vim (opcional)
 

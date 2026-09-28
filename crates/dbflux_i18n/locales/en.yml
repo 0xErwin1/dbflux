@@ -1221,6 +1221,7 @@ document:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
     context_bar:
+      pane_actions: Actions
       file:
         saved: saved
         unsaved: unsaved

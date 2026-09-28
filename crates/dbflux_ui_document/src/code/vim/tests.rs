@@ -3126,6 +3126,40 @@ fn tab_outside_text_entry_cycles_the_workspace_panes(cx: &mut TestAppContext) {
     assert_eq!(editor.commands().len(), 3);
 }
 
+/// Shift+F10 reaches the workspace as the pane-actions command from the
+/// editor text in Normal, Visual and Insert modes and without Vim, and
+/// leaves the buffer and the mode as they were.
+#[gpui::test]
+fn shift_f10_opens_the_pane_actions_in_every_editor_mode(
+    cx: &mut TestAppContext,
+    plain_cx: &mut TestAppContext,
+) {
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("shift-f10");
+    assert_eq!(editor.commands(), vec![Command::OpenPaneActions], "Normal");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+
+    editor.keys("v shift-f10");
+    assert_eq!(editor.commands().len(), 2, "Visual");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+
+    editor.keys("escape i shift-f10");
+    assert_eq!(
+        editor.commands().last(),
+        Some(&Command::OpenPaneActions),
+        "Insert"
+    );
+    assert_eq!(editor.commands().len(), 3);
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.text(), "abc");
+
+    let mut plain = open_editor(plain_cx, "abc", false);
+    plain.keys("shift-f10");
+    assert_eq!(plain.commands(), vec![Command::OpenPaneActions], "no Vim");
+    assert_eq!(plain.text(), "abc");
+}
+
 #[gpui::test]
 fn normal_mode_drops_ime_composition_and_commit(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abc", true);

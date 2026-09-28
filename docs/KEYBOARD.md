@@ -92,6 +92,7 @@ the next click. A focused button, checkbox or list row takes `Enter` and
 | `Ctrl+s` / `Cmd+s` | Save query |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
 | `Ctrl+/` / `Cmd+/` | Toggle line comment |
+| `Shift+F10` | Open the pane actions menu |
 | `Enter` | Focus / execute |
 
 (Unmodified letters are intentionally left to the text input so typing works.)
@@ -109,15 +110,17 @@ While text is being typed, `Tab` indents and `Shift+Tab` outdents, so use
 `Shift+Tab` move between the query and replace fields while the replace field is
 shown; otherwise they cycle focus between panels, as they do outside the editor.
 
-The editor's toolbar is also a menu. From the editor, `Ctrl+k` moves focus to the
-execution context bar, where `m` (or `Shift+F10`) opens the **pane actions**
-menu: Run (Cancel while a query runs), Run in new tab, Save, Format, Query
+The editor's toolbar is also a menu. `Shift+F10` opens the **pane actions** menu
+from the editor text, in every Vim mode and without Vim. `Ctrl+k` moves focus to
+the execution context bar, where `m` (or `Shift+F10`) opens it too. A script
+editor (Lua, Python, Bash) has no connection controls, so its context bar holds
+only an **Actions** button, which `Ctrl+k` focuses and `Enter`, `m` or a click
+presses. The menu lists Run (Cancel while a query runs), Run in new tab, Save, Format, Query
 history, Explain, Chart, Refresh and the auto-refresh interval, each with its
 shortcut when it has one. Move with `j` / `k` and choose with `Enter`, as in any
 [context menu](#context-menu); `Escape` closes it. The auto-refresh entry opens
 the interval list with keyboard focus (see [Dropdowns](#dropdowns)). The menu is
-also in the command palette as **Open pane actions**, which is the way to reach
-it in a script editor, whose context bar has no controls.
+also in the command palette as **Open pane actions**.
 
 ## Vim mode (opt-in)
 

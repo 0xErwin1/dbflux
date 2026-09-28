@@ -378,6 +378,13 @@ fn editor_layer() -> KeymapLayer {
         Command::ToggleComment,
     );
 
+    // The toolbar menu from the text itself: Shift+F10 types nothing, so it
+    // is free in every Vim mode and without Vim.
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+
     layer
 }
 

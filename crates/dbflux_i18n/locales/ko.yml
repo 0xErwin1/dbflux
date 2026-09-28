@@ -1221,6 +1221,7 @@ document:
           title: SET 절의 원시 SQL 표현식
           body: SET 절에 원시 SQL 표현식이 있습니다 — 매개변수 바인딩을 우회합니다
     context_bar:
+      pane_actions: 작업
       file:
         saved: 저장됨
         unsaved: 저장 안 됨
