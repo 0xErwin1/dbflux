@@ -10,8 +10,8 @@ use dbflux_components::typography::AppFonts;
 use dbflux_core::{LogErr, MetricDescriptor};
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, IntoElement,
-    MouseButton, Render, SharedString, Subscription, Window, div, px,
+    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, IntoElement, Render,
+    SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
 use gpui_component::input::{Editor, EditorState};
@@ -576,12 +576,9 @@ impl ModalAddPanelPicker {
             .bg(row_bg)
             .when(!is_selected, |el| el.hover(move |d| d.bg(hover_bg)))
             .cursor_pointer()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    this.toggle_chart(chart_id, cx);
-                }),
-            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_chart(chart_id, cx);
+            }))
             .child(checkbox.into_any_element())
             .child(div().flex_1().text_sm().child(chart_name))
             .into_any_element()
@@ -812,6 +809,9 @@ impl ModalAddPanelPicker {
                 let is_selected = selected.as_deref() == Some(ns.as_str());
                 let ns_for_listener = ns.clone();
                 div()
+                    .id(gpui::ElementId::Name(
+                        format!("add-panel-namespace-{ns}").into(),
+                    ))
                     .px(Spacing::SM)
                     .py(Spacing::XS)
                     .text_sm()
@@ -822,14 +822,11 @@ impl ModalAddPanelPicker {
                             .font_weight(FontWeight::SEMIBOLD)
                     })
                     .when(!is_selected, |el| el.hover(|s| s.bg(theme.muted)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            if let Some(req) = this.select_namespace(ns_for_listener.clone(), cx) {
-                                cx.emit(req);
-                            }
-                        }),
-                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(req) = this.select_namespace(ns_for_listener.clone(), cx) {
+                            cx.emit(req);
+                        }
+                    }))
                     .child(ns)
                     .into_any_element()
             })
@@ -944,6 +941,7 @@ impl ModalAddPanelPicker {
                 let label = format!("{}{}", m.metric_name, dim_summary);
 
                 div()
+                    .id(("add-panel-metric-row", idx))
                     .px(Spacing::SM)
                     .py(Spacing::XS)
                     .text_sm()
@@ -954,13 +952,10 @@ impl ModalAddPanelPicker {
                             .font_weight(FontWeight::SEMIBOLD)
                     })
                     .when(!is_selected, |el| el.hover(|s| s.bg(theme.muted)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.metric_metric_selected = Some(idx);
-                            cx.notify();
-                        }),
-                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.metric_metric_selected = Some(idx);
+                        cx.notify();
+                    }))
                     .child(label)
                     .into_any_element()
             })
