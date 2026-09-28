@@ -635,7 +635,9 @@ pendientes y el formulario de claim de un stream) y los de la barra (mostrar las
 claves como árbol o lista, el intervalo de actualización automática, el borrado
 masivo, y Detener o Buscar en todo el keyspace mientras un escaneo filtrado lee
 página por página). En los diálogos Nueva clave y Añadir miembro, `Tab` y
-`Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo.
+`Shift+Tab` recorren los campos como `j` y `k` y no salen del diálogo. Cuando la
+consola pide confirmar un comando peligroso, `Enter` en su campo vacío lo ejecuta
+y `Escape` lo cancela.
 
 ## Visor de auditoría
 

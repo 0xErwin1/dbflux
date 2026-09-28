@@ -606,7 +606,9 @@ bytes or load a large value anyway, and a stream's pending entries and claim
 form) and the toolbar's (show the keys as a tree or a list, the auto-refresh
 interval, bulk delete, and Stop or Search whole keyspace while a filtered scan
 reads page by page). In the New key and Add member dialogs `Tab` and `Shift+Tab`
-move through the fields like `j` and `k` and stay in the dialog.
+move through the fields like `j` and `k` and stay in the dialog. When the
+console asks to confirm a dangerous command, `Enter` in its empty field runs it
+and `Escape` cancels it.
 
 ## Audit viewer
 

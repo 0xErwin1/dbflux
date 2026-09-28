@@ -167,3 +167,40 @@ fn alt_keys_step_the_type_filter(cx: &mut TestAppContext) {
     );
     assert!(window.update(|_, cx| document.read(cx).type_filter.is_some()));
 }
+
+/// Enter in the empty console field answers a pending confirmation with
+/// Run anyway, as Escape answers it with Cancel.
+#[gpui::test]
+fn enter_confirms_a_pending_console_command(cx: &mut TestAppContext) {
+    let (_host, document, window) = open(cx);
+
+    keys(window, "ctrl-`");
+    window.update(|_, cx| {
+        document.update(cx, |doc, _| {
+            doc.console.pending = Some(super::console::PendingConsoleCommand {
+                command: "FLUSHDB".to_string(),
+                title: "Dangerous".to_string(),
+                body: "Deletes every key".to_string(),
+            });
+        })
+    });
+
+    keys(window, "enter");
+    assert!(
+        window.update(|_, cx| document.read(cx).console.pending.is_none()),
+        "Enter answers the confirmation"
+    );
+    let cancelled = dbflux_i18n::t!("document.key_value.console.cancelled");
+    let was_cancelled = window.update(|_, cx| {
+        document
+            .read(cx)
+            .console
+            .transcript
+            .iter()
+            .any(|entry| entry.output.iter().any(|line| line.text == cancelled))
+    });
+    assert!(
+        !was_cancelled,
+        "Enter runs the command rather than cancelling it"
+    );
+}
