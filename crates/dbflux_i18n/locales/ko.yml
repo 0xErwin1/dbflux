@@ -1835,6 +1835,8 @@ document:
     requested_at: "요청 시각"
     waiting_label: "대기"
     exec_id: "실행 %{id}"
+    pane_actions:
+      reason: "거부 사유 입력"
     status:
       pending: "대기 중"
     waiting:
@@ -3666,6 +3668,8 @@ settings:
       resize_panel_wider: "패널 넓게"
       resize_panel_shorter: "패널 낮게"
       resize_panel_taller: "패널 높게"
+      approve_execution: "대기 중인 호출 승인"
+      reject_execution: "대기 중인 호출 거부"
     context:
       global: 전역
       sidebar: 사이드바
@@ -3699,6 +3703,7 @@ settings:
       chart: "차트"
       dashboard: "대시보드"
       add_panel_picker: "패널 추가 선택기"
+      mcp_approvals: "MCP 승인"
     category:
       global: 전역
       focus: 포커스

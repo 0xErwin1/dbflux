@@ -161,6 +161,13 @@ pub enum Command {
     OpenMcpApprovals,
     #[cfg(feature = "mcp")]
     RefreshMcpGovernance,
+    /// Approves the pending MCP call selected in the approvals view.
+    #[cfg(feature = "mcp")]
+    ApproveExecution,
+    /// Rejects the pending MCP call selected in the approvals view, with the
+    /// typed reason.
+    #[cfg(feature = "mcp")]
+    RejectExecution,
 
     // === Charts / Dashboards ===
     /// Open the saved-chart fuzzy overlay (lists all SavedCharts for the current profile).
@@ -414,6 +421,10 @@ impl Command {
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "Open MCP approvals",
             #[cfg(feature = "mcp")]
+            Command::ApproveExecution => "Approve pending call",
+            #[cfg(feature = "mcp")]
+            Command::RejectExecution => "Reject pending call",
+            #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "Refresh MCP governance",
             Command::OpenSavedChart => "Open chart…",
             Command::ImportDashboard => "Import dashboard from JSON…",
@@ -597,6 +608,10 @@ impl Command {
             Command::ShowDashboardsView => "show_dashboards_view",
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals => "open_mcp_approvals",
+            #[cfg(feature = "mcp")]
+            Command::ApproveExecution => "approve_execution",
+            #[cfg(feature = "mcp")]
+            Command::RejectExecution => "reject_execution",
             #[cfg(feature = "mcp")]
             Command::RefreshMcpGovernance => "refresh_mcp_governance",
 
@@ -855,6 +870,8 @@ impl Command {
         {
             variants.push(Command::OpenMcpApprovals);
             variants.push(Command::RefreshMcpGovernance);
+            variants.push(Command::ApproveExecution);
+            variants.push(Command::RejectExecution);
         }
 
         variants
@@ -977,6 +994,9 @@ impl Command {
 
             #[cfg(feature = "mcp")]
             Command::OpenMcpApprovals | Command::RefreshMcpGovernance => "View",
+
+            #[cfg(feature = "mcp")]
+            Command::ApproveExecution | Command::RejectExecution => "Actions",
 
             Command::OpenSavedChart | Command::ImportDashboard | Command::NewDashboard => {
                 "Dashboards"
@@ -1205,6 +1225,9 @@ pub enum ContextId {
 
     /// The Add Panel dialog of a dashboard (its tabs and lists).
     AddPanelPicker,
+
+    /// The MCP approvals document (pending calls list and decision).
+    McpApprovals,
 }
 
 impl ContextId {
@@ -1247,6 +1270,7 @@ impl ContextId {
             ContextId::Chart => Some(ContextId::Global),
             ContextId::Dashboard => Some(ContextId::Global),
             ContextId::AddPanelPicker => None,
+            ContextId::McpApprovals => Some(ContextId::Global),
         }
     }
 
@@ -1336,6 +1360,7 @@ impl ContextId {
             ContextId::Chart => "Chart",
             ContextId::Dashboard => "Dashboard",
             ContextId::AddPanelPicker => "Add Panel Picker",
+            ContextId::McpApprovals => "MCP Approvals",
         }
     }
 
@@ -1375,6 +1400,7 @@ impl ContextId {
             ContextId::Chart => "chart",
             ContextId::Dashboard => "dashboard",
             ContextId::AddPanelPicker => "add_panel_picker",
+            ContextId::McpApprovals => "mcp_approvals",
         }
     }
 
@@ -1414,6 +1440,7 @@ impl ContextId {
             ContextId::Chart,
             ContextId::Dashboard,
             ContextId::AddPanelPicker,
+            ContextId::McpApprovals,
         ]
     }
 
@@ -1453,6 +1480,7 @@ impl ContextId {
             ContextId::Chart => "Chart",
             ContextId::Dashboard => "Dashboard",
             ContextId::AddPanelPicker => "AddPanelPicker",
+            ContextId::McpApprovals => "McpApprovals",
         }
     }
 
@@ -1484,6 +1512,7 @@ impl ContextId {
             ContextId::Chart => "Chart && !Input && !Dropdown",
             ContextId::Dashboard => "Dashboard && !Input && !Dropdown && !Modal",
             ContextId::AddPanelPicker => "AddPanelPicker && !Input",
+            ContextId::McpApprovals => "McpApprovals && !Input && !Modal",
             ContextId::DocumentTree => "DocumentTree && !Input",
             ContextId::DataTable => "DataTable && !Input",
             ContextId::KeyValue => "KeyValueView && !Input",

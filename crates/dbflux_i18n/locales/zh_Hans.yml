@@ -1835,6 +1835,8 @@ document:
     requested_at: "请求时间"
     waiting_label: "等待"
     exec_id: "执行 %{id}"
+    pane_actions:
+      reason: "输入拒绝原因"
     status:
       pending: "待处理"
     waiting:
@@ -3666,6 +3668,8 @@ settings:
       resize_panel_wider: "面板变宽"
       resize_panel_shorter: "面板变矮"
       resize_panel_taller: "面板变高"
+      approve_execution: "批准待处理调用"
+      reject_execution: "拒绝待处理调用"
     context:
       global: 全局
       sidebar: 侧边栏
@@ -3700,6 +3704,7 @@ settings:
       chart: "图表"
       dashboard: "仪表板"
       add_panel_picker: "添加面板选择器"
+      mcp_approvals: "MCP 审批"
     category:
       global: 全局
       focus: 聚焦

@@ -41,6 +41,7 @@ pub(super) static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(chart_layer());
     stack.add_layer(dashboard_layer());
     stack.add_layer(add_panel_picker_layer());
+    stack.add_layer(mcp_approvals_layer());
 
     stack
 });
@@ -1945,6 +1946,77 @@ fn add_panel_picker_layer() -> KeymapLayer {
 
 /// Window-level keys of the settings window. Sections handle their own
 /// navigation keys below these.
+/// Keys of the MCP approvals document: J and K move over the pending calls,
+/// A approves the selected one and R rejects it with the typed reason, Enter
+/// or I types the reason, and Escape brings the keyboard back from it.
+fn mcp_approvals_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::McpApprovals);
+
+    // Panel navigation, also from the reason field.
+    for (key, command) in [
+        ("h", Command::FocusLeft),
+        ("j", Command::FocusDown),
+        ("k", Command::FocusUp),
+        ("l", Command::FocusRight),
+    ] {
+        layer.bind_with_predicate(
+            KeyChord::new(key, Modifiers::ctrl()),
+            command,
+            "McpApprovals && !Modal",
+        );
+    }
+
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+
+    #[cfg(feature = "mcp")]
+    {
+        layer.bind(
+            KeyChord::new("a", Modifiers::none()),
+            Command::ApproveExecution,
+        );
+        layer.bind(
+            KeyChord::new("r", Modifiers::none()),
+            Command::RejectExecution,
+        );
+    }
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("i", Modifiers::none()), Command::Execute);
+    layer.bind_with_predicate(
+        KeyChord::new("escape", Modifiers::none()),
+        Command::Cancel,
+        "McpApprovals && !Modal",
+    );
+
+    layer.bind(
+        KeyChord::new("f5", Modifiers::none()),
+        Command::RefreshSchema,
+    );
+    layer.bind(
+        KeyChord::new("m", Modifiers::none()),
+        Command::OpenPaneActions,
+    );
+    layer.bind(
+        KeyChord::new("f10", Modifiers::shift()),
+        Command::OpenPaneActions,
+    );
+
+    layer
+}
+
 fn settings_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::Settings);
 

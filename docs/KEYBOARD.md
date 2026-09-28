@@ -567,6 +567,20 @@ search field, `Enter` returns the keyboard to the tree with the matches kept, so
 
 `Ctrl+j` and `t` apply while the key list has focus, not inside a text field.
 
+## MCP approvals
+
+| Keys | Action |
+|------|--------|
+| `j` / `k` (or `Down` / `Up`) | Next / previous pending call |
+| `g` / `Shift+g` (or `Home` / `End`) | First / last pending call |
+| `a` | Approve the selected call |
+| `r` | Reject the selected call, sending the typed reason |
+| `Enter` / `i` | Type the rejection reason; `Escape` returns to the list |
+| `F5` | Reload the pending calls |
+| `m` (or `Shift+F10`) | Pane actions: approve, reject, type the reason, refresh |
+
+The keys are listed under the MCP Approvals context in Settings > Keybindings.
+
 ## Text fields
 
 | Keys | Action |

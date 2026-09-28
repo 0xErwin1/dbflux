@@ -1835,6 +1835,8 @@ document:
     requested_at: "Solicitado el"
     waiting_label: "En espera"
     exec_id: "ejec %{id}"
+    pane_actions:
+      reason: "Escribir el motivo del rechazo"
     status:
       pending: "Pendiente"
     waiting:
@@ -3666,6 +3668,8 @@ settings:
       resize_panel_wider: "Ensanchar panel"
       resize_panel_shorter: "Acortar panel"
       resize_panel_taller: "Alargar panel"
+      approve_execution: "Aprobar llamada pendiente"
+      reject_execution: "Rechazar llamada pendiente"
     context:
       global: Global
       sidebar: Barra lateral
@@ -3700,6 +3704,7 @@ settings:
       chart: "Gráfico"
       dashboard: "Panel de control"
       add_panel_picker: "Selector de panel"
+      mcp_approvals: "Aprobaciones MCP"
     category:
       global: Global
       focus: Foco

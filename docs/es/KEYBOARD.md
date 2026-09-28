@@ -593,6 +593,20 @@ las coincidencias, así `n` y `Shift+n` las recorren, y `Escape` cierra la búsq
 `Ctrl+j` y `t` se aplican mientras la lista de claves tiene el foco, no dentro de
 un campo de texto.
 
+## Aprobaciones MCP
+
+| Teclas | Acción |
+|--------|--------|
+| `j` / `k` (o `Down` / `Up`) | Llamada pendiente siguiente / anterior |
+| `g` / `Shift+g` (o `Home` / `End`) | Primera / última llamada pendiente |
+| `a` | Aprobar la llamada seleccionada |
+| `r` | Rechazar la llamada seleccionada con el motivo escrito |
+| `Enter` / `i` | Escribir el motivo del rechazo; `Escape` vuelve a la lista |
+| `F5` | Recargar las llamadas pendientes |
+| `m` (o `Shift+F10`) | Acciones del panel: aprobar, rechazar, escribir el motivo, recargar |
+
+Las teclas aparecen en el contexto Aprobaciones MCP de Settings > Keybindings.
+
 ## Campos de texto
 
 | Teclas | Acción |

@@ -308,7 +308,12 @@ fn results_layer_binds_f5_to_refresh() {
 fn f5_is_bound_only_in_the_document_refresh_layers() {
     let keymap = default_keymap();
     let f5 = KeyChord::new("f5", Modifiers::none());
-    let refresh_layers = [ContextId::Results, ContextId::Chart, ContextId::Dashboard];
+    let refresh_layers = [
+        ContextId::Results,
+        ContextId::Chart,
+        ContextId::Dashboard,
+        ContextId::McpApprovals,
+    ];
 
     for context in ContextId::all_variants() {
         let bindings: Vec<Command> = keymap
@@ -2143,6 +2148,63 @@ fn dashboard_keys_select_and_act_on_panels() {
                 .is_none_or(|action| !action.as_any().is::<RunCommand>()),
             "`{keys}` is typed text in a dashboard title field"
         );
+    }
+}
+
+/// The MCP approvals keys run as commands in the view and leave the reason
+/// field its letters, while Escape brings the keyboard back from the field.
+#[test]
+fn mcp_approvals_keys_move_and_decide() {
+    let keymap = native_keymap();
+    let root = root_key_context(WORKSPACE_KEY_CONTEXT, ContextId::McpApprovals, &[]);
+    let list = element_stack(root.clone(), &[]);
+    let field = element_stack(root, &["Input"]);
+
+    #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+    let mut expected = vec![
+        ("j", Command::SelectNext),
+        ("down", Command::SelectNext),
+        ("k", Command::SelectPrev),
+        ("up", Command::SelectPrev),
+        ("g", Command::SelectFirst),
+        ("shift-g", Command::SelectLast),
+        ("enter", Command::Execute),
+        ("i", Command::Execute),
+        ("escape", Command::Cancel),
+        ("f5", Command::RefreshSchema),
+        ("m", Command::OpenPaneActions),
+        ("shift-f10", Command::OpenPaneActions),
+        ("ctrl-h", Command::FocusLeft),
+    ];
+    #[cfg(feature = "mcp")]
+    expected.extend([
+        ("a", Command::ApproveExecution),
+        ("r", Command::RejectExecution),
+    ]);
+
+    for (keys, command) in expected {
+        let action = top_action(&keymap, keys, &list)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the approvals"));
+        assert!(
+            runs_command(action.as_ref(), command),
+            "`{keys}` must run {command:?} in the approvals"
+        );
+    }
+
+    for keys in ["j", "k", "a", "r", "i", "g"] {
+        let in_field = top_action(&keymap, keys, &field);
+        assert!(
+            in_field
+                .as_ref()
+                .is_none_or(|action| !action.as_any().is::<RunCommand>()),
+            "`{keys}` is typed text in the reason field"
+        );
+    }
+
+    for (keys, command) in [("escape", Command::Cancel), ("ctrl-h", Command::FocusLeft)] {
+        let action = top_action(&keymap, keys, &field)
+            .unwrap_or_else(|| panic!("`{keys}` bound in the reason field"));
+        assert!(runs_command(action.as_ref(), command));
     }
 }
 

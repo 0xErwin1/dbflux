@@ -4130,6 +4130,38 @@ mod tab_close_request_tests {
         );
     }
 
+    /// The approvals keys run through the workspace like any key binding:
+    /// `a` approves the selected call instead of reaching `unreachable!`.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn the_approvals_keys_reach_the_approvals_tab(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        app_state.update(window, |state, _| {
+            state
+                .request_mcp_execution(
+                    "agent-a".to_string(),
+                    "conn-a".to_string(),
+                    "delete_records".to_string(),
+                    serde_json::from_value(serde_json::json!("destructive"))
+                        .expect("destructive classification"),
+                    serde_json::json!({ "table": "items" }),
+                )
+                .expect("queue a pending execution");
+        });
+        open_approvals(window, &workspace);
+
+        window.simulate_keystrokes("a");
+        window.run_until_parked();
+
+        let pending = window.update(|_, cx| {
+            app_state
+                .read(cx)
+                .list_mcp_pending_executions()
+                .expect("list pending executions")
+        });
+        assert!(pending.is_empty(), "`a` approves the selected call");
+    }
+
     /// The Migrate action opens the wizard as a tab; repeating it for the same
     /// selection focuses that tab, and a different selection gets its own.
     #[gpui::test]

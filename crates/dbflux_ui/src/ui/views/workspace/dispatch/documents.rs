@@ -178,6 +178,13 @@ impl Workspace {
                     .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
             ),
 
+            // The decisions of the MCP approvals document.
+            #[cfg(feature = "mcp")]
+            Command::ApproveExecution | Command::RejectExecution => Some(
+                self.tab_manager
+                    .update(cx, |mgr, cx| mgr.dispatch_active(cmd, window, cx)),
+            ),
+
             // Closing a window belongs to the settings window.
             Command::CloseWindow => Some(false),
 

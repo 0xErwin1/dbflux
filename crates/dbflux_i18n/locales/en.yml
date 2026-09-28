@@ -1835,6 +1835,8 @@ document:
     requested_at: "Requested at"
     waiting_label: "Waiting"
     exec_id: "exec %{id}"
+    pane_actions:
+      reason: "Type the rejection reason"
     status:
       pending: "Pending"
     waiting:
@@ -3666,6 +3668,8 @@ settings:
       resize_panel_wider: "Make panel wider"
       resize_panel_shorter: "Make panel shorter"
       resize_panel_taller: "Make panel taller"
+      approve_execution: "Approve pending call"
+      reject_execution: "Reject pending call"
     context:
       global: Global
       sidebar: Sidebar
@@ -3700,6 +3704,7 @@ settings:
       chart: "Chart"
       dashboard: "Dashboard"
       add_panel_picker: "Add Panel Picker"
+      mcp_approvals: "MCP Approvals"
     category:
       global: Global
       focus: Focus
