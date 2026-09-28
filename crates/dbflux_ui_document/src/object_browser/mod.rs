@@ -42,7 +42,7 @@ use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::primitives::TypeToConfirm;
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::AppStateEntity;
-use editor::{GuardedNavigation, ObjectEditor, PendingTextBody};
+use editor::{GuardedNavigation, ObjectEditor, PendingTextBody, UnsavedConfirmFocus};
 use gpui::*;
 use uuid::Uuid;
 
@@ -150,6 +150,8 @@ pub struct ObjectBrowserDocument {
     pending_text_body: Option<PendingTextBody>,
     /// Navigation parked behind the unsaved-edits confirmation.
     pending_navigation: Option<GuardedNavigation>,
+    /// Keyboard focus of the unsaved-edits confirmation and its buttons.
+    unsaved_confirm_focus: UnsavedConfirmFocus,
     /// Navigation cleared by a successful save, waiting for a render pass to
     /// run it (navigating between prefixes needs a `Window`).
     resume_navigation: Option<GuardedNavigation>,
@@ -256,6 +258,7 @@ impl ObjectBrowserDocument {
             editor: None,
             pending_text_body: None,
             pending_navigation: None,
+            unsaved_confirm_focus: UnsavedConfirmFocus::new(cx),
             resume_navigation: None,
             versions: ObjectVersionsState::Idle,
             bucket_details: BucketDetailsState::NotLoaded,
@@ -2091,6 +2094,157 @@ mod tests {
                 "Enter must resolve the overlay, not leave it parked"
             );
             assert_eq!(doc.state(), DocumentState::Modified);
+        });
+    }
+
+    /// Opens a keymap-hosted browser with a dirty buffer on `logs/app.log`
+    /// and parks a navigation to `logs/other.log` behind the unsaved-edits
+    /// dialog.
+    fn open_unsaved_edits_dialog(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<ObjectBrowserDocument>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use crate::keyboard_test_support::{host_document, init_keyboard_runtime};
+        use gpui::AppContext as _;
+
+        init_keyboard_runtime(cx);
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (host, window) = host_document(
+            cx,
+            move |window, cx| {
+                cx.new(|cx| {
+                    ObjectBrowserDocument::new(
+                        uuid::Uuid::new_v4(),
+                        "my-bucket".to_string(),
+                        app_state,
+                        window,
+                        cx,
+                    )
+                })
+            },
+            |doc, _cx| doc.active_context(),
+            |doc, command, window, cx| doc.dispatch_command(command, window, cx),
+        );
+        let doc = window.update(|_, cx| host.read(cx).document.clone());
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.focus(window, cx);
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+        window.run_until_parked();
+
+        doc.update(window, |doc, cx| {
+            doc.open_preview("logs/other.log".to_string(), cx);
+        });
+        window.run_until_parked();
+        assert!(window.update(|_, cx| doc.read(cx).pending_navigation_for_test().is_some()));
+
+        (doc, window)
+    }
+
+    /// Presses and releases `key`: a focused button clicks on the release.
+    fn press_key(window: &mut gpui::VisualTestContext, key: &str) {
+        let keystroke = gpui::Keystroke::parse(key).expect("valid keystroke");
+
+        window.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        window.simulate_event(gpui::KeyUpEvent { keystroke });
+        window.run_until_parked();
+    }
+
+    /// The unsaved-edits dialog opens with Save focused and keeps Tab inside
+    /// it: Tab and Shift+Tab walk its buttons, and Enter presses the focused
+    /// one, so Discard has a key too.
+    #[gpui::test]
+    fn tab_reaches_discard_in_the_unsaved_edits_dialog(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = open_unsaved_edits_dialog(cx);
+
+        press_key(window, "shift-tab");
+        press_key(window, "enter");
+
+        window.update(|_, cx| {
+            let doc = doc.read(cx);
+            assert!(
+                doc.pending_navigation_for_test().is_none(),
+                "Shift+Tab then Enter pressed Discard"
+            );
+            assert_eq!(doc.preview_key_for_test(), Some("logs/other.log"));
+            assert_ne!(doc.state(), DocumentState::Modified);
+        });
+    }
+
+    /// Tab from Save wraps to Cancel, and Escape cancels as well; neither
+    /// leaves the dialog for the listing behind it.
+    #[gpui::test]
+    fn tab_wraps_inside_the_unsaved_edits_dialog(cx: &mut gpui::TestAppContext) {
+        let (doc, window) = open_unsaved_edits_dialog(cx);
+
+        let focused = |window: &mut gpui::VisualTestContext| {
+            window.update(|window, cx| {
+                let focus = &doc.read(cx).unsaved_confirm_focus;
+                [
+                    ("save", &focus.save),
+                    ("discard", &focus.discard),
+                    ("cancel", &focus.cancel),
+                ]
+                .into_iter()
+                .find(|(_, handle)| handle.is_focused(window))
+                .map(|(name, _)| name)
+            })
+        };
+
+        assert_eq!(focused(window), Some("save"), "the dialog opens on Save");
+
+        window.simulate_keystrokes("tab");
+        assert_eq!(focused(window), Some("cancel"), "Tab wraps to Cancel");
+
+        window.simulate_keystrokes("tab");
+        assert_eq!(focused(window), Some("discard"));
+
+        window.simulate_keystrokes("shift-tab shift-tab");
+        assert_eq!(focused(window), Some("save"), "Shift+Tab wraps back");
+
+        window.simulate_keystrokes("tab");
+        press_key(window, "enter");
+
+        window.update(|_, cx| {
+            let doc = doc.read(cx);
+            assert!(
+                doc.pending_navigation_for_test().is_none(),
+                "Enter on Cancel closes the dialog"
+            );
+            assert_eq!(doc.preview_key_for_test(), Some("logs/app.log"));
+            assert_eq!(doc.state(), DocumentState::Modified);
+        });
+
+        doc.update(window, |doc, cx| {
+            doc.open_preview("logs/other.log".to_string(), cx);
+        });
+        window.run_until_parked();
+
+        press_key(window, "escape");
+        window.update(|_, cx| {
+            let doc = doc.read(cx);
+            assert!(
+                doc.pending_navigation_for_test().is_none(),
+                "Escape cancels"
+            );
+            assert_eq!(doc.preview_key_for_test(), Some("logs/app.log"));
         });
     }
 

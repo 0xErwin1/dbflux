@@ -625,6 +625,11 @@ In an object editor tab, `Escape` takes the keyboard out of the text, `Enter`
 puts it back, and `m` then lists Save, Discard, Find, the Auto / Raw
 interpretation, Reload and, for an object over the size limit, Load anyway.
 
+When you leave an object with unsaved edits, the dialog that asks what to do
+opens with **Save** focused, so `Enter` saves. `Tab` and `Shift+Tab` move
+between **Save**, **Cancel** and **Discard** without leaving the dialog, `Enter`
+or `Space` presses the focused button, and `Escape` cancels.
+
 ## Audit viewer
 
 | Keys | Action |

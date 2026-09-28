@@ -657,6 +657,11 @@ lo devuelve, y `m` lista entonces Guardar, Descartar, Buscar, la interpretación
 Automático / Raw, Recargar y, para un objeto por encima del límite de tamaño,
 Cargar de todas formas.
 
+Al salir de un objeto con ediciones sin guardar, el diálogo que pregunta qué
+hacer se abre con **Guardar** enfocado, así que `Enter` guarda. `Tab` y
+`Shift+Tab` pasan entre **Guardar**, **Cancelar** y **Descartar** sin salir del
+diálogo, `Enter` o `Space` presionan el botón enfocado y `Escape` cancela.
+
 ## Visor de auditoría
 
 | Teclas | Acción |

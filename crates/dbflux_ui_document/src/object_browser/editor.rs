@@ -32,7 +32,7 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput, InputEvent, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::Modal;
+use dbflux_components::modals::{Modal, ModalFocus};
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_core::DbError;
@@ -96,6 +96,52 @@ impl ObjectEditor {
 
     pub(super) fn is_editable(&self) -> bool {
         self.source.is_editable()
+    }
+}
+
+/// Keyboard focus of the unsaved-edits confirmation: the dialog, which traps
+/// Tab among its buttons, and the buttons themselves. The dialog opens with
+/// Save focused, so Enter saves unless the user moved to another button.
+pub(super) struct UnsavedConfirmFocus {
+    modal: ModalFocus,
+    pub(super) save: FocusHandle,
+    pub(super) discard: FocusHandle,
+    pub(super) cancel: FocusHandle,
+    open_requested: bool,
+}
+
+impl UnsavedConfirmFocus {
+    pub(super) fn new(cx: &mut App) -> Self {
+        Self {
+            modal: ModalFocus::new(cx),
+            save: cx.focus_handle(),
+            discard: cx.focus_handle(),
+            cancel: cx.focus_handle(),
+            open_requested: false,
+        }
+    }
+
+    /// Moves focus to Save on the dialog's next render. The guard parks a
+    /// navigation without a window at hand.
+    fn request_open(&mut self) {
+        self.open_requested = true;
+    }
+
+    /// Applies [`Self::request_open`]; call it while rendering the dialog.
+    pub(super) fn apply_pending(&mut self, window: &mut Window, cx: &mut App) {
+        if std::mem::take(&mut self.open_requested) {
+            self.modal.focus(Some(&self.save), window, cx);
+        }
+    }
+
+    /// Gives focus back to what had it before the dialog opened.
+    pub(super) fn restore(&mut self, cx: &mut App) {
+        self.open_requested = false;
+        self.modal.restore(cx);
+    }
+
+    pub(super) fn modal_handle(&self) -> &FocusHandle {
+        self.modal.handle()
     }
 }
 
@@ -333,6 +379,7 @@ impl ObjectBrowserDocument {
             // never resolves. The parked navigation goes with it: the prompt it
             // waits on cannot be resolved by a save that will never start.
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             self.report_save_outcome(false, cx);
             return;
         }
@@ -349,6 +396,7 @@ impl ObjectBrowserDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -445,6 +493,7 @@ impl ObjectBrowserDocument {
             // user can retry, and any parked navigation is dropped rather than
             // silently carrying the unsaved edits away.
             self.pending_navigation = None;
+            self.unsaved_confirm_focus.restore(cx);
             self.report_save_outcome(false, cx);
             cx.notify();
             return;
@@ -476,6 +525,7 @@ impl ObjectBrowserDocument {
 
         if landed {
             self.resume_navigation = self.pending_navigation.take();
+            self.unsaved_confirm_focus.restore(cx);
         }
 
         self.report_save_outcome(landed, cx);
@@ -505,12 +555,14 @@ impl ObjectBrowserDocument {
         }
 
         self.pending_navigation = Some(navigation);
+        self.unsaved_confirm_focus.request_open();
         cx.notify();
         true
     }
 
     pub(super) fn cancel_guarded_navigation(&mut self, cx: &mut Context<Self>) {
         self.pending_navigation = None;
+        self.unsaved_confirm_focus.restore(cx);
         cx.notify();
     }
 
@@ -520,6 +572,7 @@ impl ObjectBrowserDocument {
             return;
         };
 
+        self.unsaved_confirm_focus.restore(cx);
         self.discard_object_edits(window, cx);
         self.run_navigation(navigation, window, cx);
     }
@@ -771,6 +824,7 @@ impl ObjectBrowserDocument {
                     dbflux_i18n::t!("document.object_browser.editor.unsaved_confirm.cancel"),
                 )
                 .ghost()
+                .focus_handle(&self.unsaved_confirm_focus.cancel)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.cancel_guarded_navigation(cx);
                 })),
@@ -781,6 +835,7 @@ impl ObjectBrowserDocument {
                     dbflux_i18n::t!("document.object_browser.editor.footer.discard"),
                 )
                 .icon(AppIcon::RotateCcw)
+                .focus_handle(&self.unsaved_confirm_focus.discard)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.discard_and_navigate(window, cx);
                 })),
@@ -792,6 +847,7 @@ impl ObjectBrowserDocument {
                 )
                 .primary()
                 .icon(AppIcon::Save)
+                .focus_handle(&self.unsaved_confirm_focus.save)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.save_and_navigate(cx);
                 })),
@@ -810,6 +866,8 @@ impl ObjectBrowserDocument {
             action = navigation.description().as_str()
         )))
         .footer(footer)
+        .focus_handle(self.unsaved_confirm_focus.modal_handle())
+        .defer_keys_to_owner()
     }
 }
 

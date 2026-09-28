@@ -752,6 +752,10 @@ impl Render for ObjectBrowserDocument {
             self.run_navigation(navigation, window, cx);
         }
 
+        if self.pending_navigation.is_some() {
+            self.unsaved_confirm_focus.apply_pending(window, cx);
+        }
+
         // Neither needs a `Window`, but draining them here keeps every
         // toolbar/action-bar intent flowing through the same
         // `pending_* + take()` convention as the two continuations above.
